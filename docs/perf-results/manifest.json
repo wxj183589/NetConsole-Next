@@ -7,7 +7,8 @@
     "PR #8 baseline matrix used Service commit 1dcbea1f4133a2aa5b890c5baae7bbf3dd811078.",
     "G1.5 full matrix and sustained trace used the Service source at implementationCommitAtPrimaryMeasurement. Their JSON missing-ID arrays were transformed losslessly to half-open ranges after measurement; traffic generation and metrics were not changed.",
     "The 50k burst was rerun after adding compact missing-sequence ranges to the report format.",
-    "The queue2048 paired load used the same G1.5 source except the packet-count constant; the exact UdpSyslogWorker variant is stored at source/udp-syslog-worker-queue2048.cs. The earlier benchmark revision differed only in idle CPU reporting; its UDP workload command/schedule is recorded in the result parameters."
+    "The queue2048 paired load used the same G1.5 source except the packet-count constant; the exact UdpSyslogWorker variant is stored at source/udp-syslog-worker-queue2048.cs. The earlier benchmark revision differed only in idle CPU reporting; its UDP workload command/schedule is recorded in the result parameters.",
+    "A Windows-only test cleanup/assertion change was added after measurement collection; the Service source, UDP sender and performance load code were unchanged."
   ],
   "sourceSha256": {
     "src/NetConsole.Next.Service/Catalog.cs": "d2579a64423ff4c79bef359ac8bb1796f0b74fddc929f7500f99421ec7cd09b1",
@@ -19,7 +20,7 @@
     "src/NetConsole.Next.Service/UdpSyslogWorker.cs": "e44d8e746ff66ded14b5921ed12842e23c051a2fe6ab2efa30d058bfcb6d8cca",
     "src/NetConsole.Next.Service/NetConsole.Next.Service.csproj": "1d202e355aa4cecb5385304292776b2bdf8bb373d1f79239eb79f4b46ed314f5",
     "storage/schema_v3.sql": "7e79ed7277039fcda32506c66dee99b72caf4ca3f1682eb8246192994d2415e7",
-    "tests/NetConsole.Next.Service.Tests/Program.cs": "ae21922a6a9dfdecd871c657130a7723eaddf45f64df6e32f6bf886ed433d2de",
+    "tests/NetConsole.Next.Service.Tests/Program.cs": "5d82bfc4a17db125e602c69cd959ea1950da26fd37bc7a5cbb2bc4708bf373d4",
     ".github/workflows/p0.yml": "515c9ff32a4f2f9725cafc67304ffcce1657babcdef4fc41aa222182ebc17a86",
     "tests/perf_baseline.py": "87d9f47b29c722aee81eb373e19e20a13d3ae99417b220405bf5339ee33ef638",
     "tests/udp_trace_benchmark.py": "c8c3c111c24983346c904cdf332c9b0322a3948df62e6546acdff8136d905980",

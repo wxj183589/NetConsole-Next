@@ -363,8 +363,9 @@ internal static class SchedulerTests
             await worker.StopAsync(CancellationToken.None);
             Assert(catalog.GetRawCounts().Finalized == 1 && stats.Flushed == 1,
                 "cooperative stop must seal and catalog the sparse Raw segment");
+            Assert(!File.Exists(open), "a sealed Raw segment must release and rename its .open path before stop returns");
         }
-        finally { Directory.Delete(root, true); }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
     }
 
     private static void VerifiesSqliteWriteFailureRetainsRawFile()
@@ -589,6 +590,36 @@ internal static class SchedulerTests
 
     private static long DirectoryBytes(string root) => Directory.GetFiles(root, "*", SearchOption.AllDirectories)
         .Sum(path => new FileInfo(path).Length);
+
+    private static async Task DeleteTestDirectoryWithRetryAsync(string root)
+    {
+        IOException? lastIoError = null;
+        UnauthorizedAccessException? lastAccessError = null;
+        for (var attempt = 0; attempt < 20 && Directory.Exists(root); attempt++)
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+                return;
+            }
+            catch (IOException ex) when (OperatingSystem.IsWindows())
+            {
+                lastIoError = ex;
+                await Task.Delay(50);
+            }
+            catch (UnauthorizedAccessException ex) when (OperatingSystem.IsWindows())
+            {
+                lastAccessError = ex;
+                await Task.Delay(50);
+            }
+        }
+        if (Directory.Exists(root))
+        {
+            var remaining = Directory.GetFiles(root, "*.open", SearchOption.AllDirectories);
+            throw new IOException($"Could not remove test data root; remaining .open files: {string.Join(",", remaining.Select(Path.GetFileName))}",
+                lastIoError ?? (Exception?)lastAccessError);
+        }
+    }
 
     private static int GetFreeUdpPort()
     {
