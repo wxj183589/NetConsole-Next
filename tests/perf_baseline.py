@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import signal
 import socket
@@ -66,6 +67,19 @@ def directory_bytes(root):
     return sum(path.stat().st_size for path in Path(root).rglob("*") if path.is_file())
 
 
+def kernel_udp_snapshot():
+    try:
+        lines = Path("/proc/net/snmp").read_text().splitlines()
+        for header, values in zip(lines, lines[1:]):
+            if header.startswith("Udp:") and values.startswith("Udp:"):
+                keys, data = header.split()[1:], values.split()[1:]
+                counters = dict(zip(keys, map(int, data)))
+                return {key: counters.get(key) for key in ("InDatagrams", "InErrors", "RcvbufErrors", "SndbufErrors", "InCsumErrors", "MemErrors")}
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def process_snapshot(pid):
     proc_root = Path(f"/proc/{pid}")
     if not proc_root.exists():
@@ -88,6 +102,16 @@ def process_snapshot(pid):
                 "handleCount": len(list((proc_root / "fd").iterdir()))}
     except (OSError, ValueError, IndexError):
         return {}
+
+
+def effective_cpu_cores():
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota != "max":
+            return int(quota) / int(period)
+    except (OSError, ValueError, ZeroDivisionError):
+        pass
+    return float(os.cpu_count() or 1)
 
 
 def send_udp_load(port, count, payload, rate=None):
@@ -137,7 +161,7 @@ def sqlite_write_benchmark(db_path, count):
     ordered = sorted(samples)
     def percentile(value):
         return ordered[min(len(ordered) - 1, max(0, int((len(ordered) * value) + .999999)) - 1)] if ordered else None
-    return {"writes": count, "p50Ms": percentile(.50), "p95Ms": percentile(.95),
+    return {"writes": count, "p50Ms": percentile(.50), "p95Ms": percentile(.95), "p99Ms": percentile(.99),
             "maxMs": max(samples, default=None), "meanMs": sum(samples) / len(samples) if samples else None}
 
 
@@ -170,7 +194,7 @@ def seed_trusted_history(root, count):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--packets", type=int, default=100_000, help="UDP records to send; supports 100000 through 1000000")
+    parser.add_argument("--packets", type=int, default=100_000, help="UDP records to send (1 through 1000000)")
     parser.add_argument("--payload-bytes", type=int, default=256)
     parser.add_argument("--rate", type=int, default=20_000, help="paced packets/second; set 0 for an immediate burst")
     parser.add_argument("--queue-burst", type=int, default=50_000, help="additional immediate burst to probe queue saturation")
@@ -192,22 +216,32 @@ def main():
         try:
             initial = wait_health(proc, url)
             idle_start = process_snapshot(proc.pid)
+            idle_started = time.monotonic()
             time.sleep(args.idle_seconds)
+            idle_elapsed = max(.001, time.monotonic() - idle_started)
             idle_end = process_snapshot(proc.pid)
             idle_health = http_health(url)
+            idle_cpu_seconds = ((idle_end.get("cpuTicks", 0) - idle_start.get("cpuTicks", 0)) /
+                                os.sysconf("SC_CLK_TCK"))
+            effective_cores = max(.001, effective_cpu_cores())
             idle = {"durationSeconds": args.idle_seconds,
-                    "healthCpuPercent": idle_health["resources"]["processCpuPercent"],
-                    "workingSetBytes": idle_health["resources"]["workingSetBytes"],
-                    "threads": idle_health["resources"]["threadCount"],
-                    "handles": idle_end.get("handleCount"),
+                    "measuredElapsedSeconds": idle_elapsed,
+                    "processCpuPercentHostNormalized": idle_cpu_seconds / idle_elapsed / (os.cpu_count() or 1) * 100,
+                    "processCpuPercentEffectiveCoresNormalized": idle_cpu_seconds / idle_elapsed / effective_cores * 100,
+                    "healthCpuPercentSnapshot": idle_health["resources"]["processCpuPercent"],
+                    "workingSetBytes": idle_end.get("workingSetBytes"),
+                    "threads": idle_end.get("threadCount"),
+                    "fileDescriptors": idle_end.get("handleCount"),
                     "processReadBytes": (idle_end.get("physicalReadBytes", 0) - idle_start.get("physicalReadBytes", 0)),
                     "processWriteBytes": (idle_end.get("physicalWriteBytes", 0) - idle_start.get("physicalWriteBytes", 0))}
 
             before_bytes = directory_bytes(root)
+            kernel_before = kernel_udp_snapshot()
             process_before = process_snapshot(proc.pid)
             load_started = time.monotonic()
             attempts, send_seconds = send_udp_load(udp_port, args.packets, b"N" * args.payload_bytes, args.rate or None)
             ingress = wait_ingress(proc, url)
+            kernel_after_load = kernel_udp_snapshot()
             process_after = process_snapshot(proc.pid)
             first_after_bytes = directory_bytes(root)
             measured_seconds = max(.001, time.monotonic() - load_started)
@@ -216,13 +250,23 @@ def main():
             burst_start_dropped = ingress["udpDropped"]
             burst_attempts, burst_send_seconds = send_udp_load(udp_port, args.queue_burst, b"B" * args.payload_bytes, None)
             burst_ingress = wait_ingress(proc, url)
+            kernel_after_burst = kernel_udp_snapshot()
             burst_end = process_snapshot(proc.pid)
             udp = {"attempted": attempts, "sendSeconds": send_seconds,
                    "received": ingress["udpReceived"], "accepted": ingress["udpAccepted"],
                    "applicationDropped": ingress["udpDropped"], "flushed": ingress["rawFlushedRecords"],
                    "queueDepth": ingress["udpQueueDepth"], "queueCapacity": ingress["udpQueueCapacity"],
                    "queueHighWatermark": ingress["udpQueueHighWatermark"],
+                   "queueBytesHighWatermark": ingress.get("udpQueueBytesHighWatermark"),
+                   "queueByteCapacity": ingress.get("udpQueueByteCapacity"),
+                   "socketReceiveBufferRequestedBytes": initial.get("udpSocketReceiveBufferRequestedBytes"),
+                   "socketReceiveBufferEffectiveBytes": initial.get("udpSocketReceiveBufferEffectiveBytes"),
                    "rawFlushLatency": ingress["rawWriteLatency"],
+                   "rawFileSyncLatency": ingress.get("rawFileSyncLatency"),
+                   "rawSegmentSealLatency": ingress.get("rawSegmentSealLatency"),
+                   "sqliteSegmentRegistrationLatency": ingress.get("sqliteSegmentRegistrationLatency"),
+                   "hostGlobalKernelUdp": {"before": kernel_before, "afterLoad": kernel_after_load,
+                       "afterBurst": kernel_after_burst},
                    "physicalReadBytes": process_after.get("physicalReadBytes", 0) - process_before.get("physicalReadBytes", 0),
                    "physicalWriteBytes": process_after.get("physicalWriteBytes", 0) - process_before.get("physicalWriteBytes", 0),
                    "readSyscalls": process_after.get("ioReadSyscalls", 0) - process_before.get("ioReadSyscalls", 0),
@@ -233,6 +277,8 @@ def main():
                    "cpuTicks": process_after.get("cpuTicks", 0) - process_before.get("cpuTicks", 0),
                    "processCpuPercent": ((process_after.get("cpuTicks", 0) - process_before.get("cpuTicks", 0)) /
                                          os.sysconf("SC_CLK_TCK") / measured_seconds / (os.cpu_count() or 1) * 100),
+                   "processCpuPercentEffectiveCoresNormalized": ((process_after.get("cpuTicks", 0) - process_before.get("cpuTicks", 0)) /
+                                         os.sysconf("SC_CLK_TCK") / measured_seconds / max(.001, effective_cpu_cores()) * 100),
                    "durationSeconds": send_seconds,
                    "dataBytesAfterLoad": first_after_bytes - before_bytes,
                    "queueSaturationBurst": {"attempted": burst_attempts, "sendSeconds": burst_send_seconds,
@@ -268,6 +314,8 @@ def main():
 
             report = {"environment": {"os": os.name, "python": os.sys.version.split()[0],
                                        "runtime": "net10.0", "processorCount": os.cpu_count(),
+                                       "platform": platform.platform(),
+                                       "effectiveCpuCores": effective_cpu_cores(),
                                        "queueCapacity": initial["udpQueueCapacity"],
                                        "blockDeviceIops": None,
                                        "blockDeviceIopsNote": "Not available from the isolated process; process IO syscalls and physical byte counters are recorded."},

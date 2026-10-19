@@ -1,0 +1,149 @@
+{
+  "environment": {
+    "os": "posix",
+    "python": "3.12.14",
+    "runtime": "net10.0",
+    "processorCount": 3,
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "effectiveCpuCores": 2.0,
+    "queueCapacity": 8192,
+    "blockDeviceIops": null,
+    "blockDeviceIopsNote": "Not available from the isolated process; process IO syscalls and physical byte counters are recorded."
+  },
+  "idle": {
+    "durationSeconds": 6.0,
+    "measuredElapsedSeconds": 6.000130899999931,
+    "processCpuPercentHostNormalized": 0.6666521225395343,
+    "processCpuPercentEffectiveCoresNormalized": 0.9999781838093015,
+    "healthCpuPercentSnapshot": 3.4795990792482905,
+    "workingSetBytes": 83771392,
+    "threads": 19,
+    "fileDescriptors": 230,
+    "processReadBytes": 0,
+    "processWriteBytes": 0
+  },
+  "udpLoad": {
+    "attempted": 100000,
+    "sendSeconds": 20.00015703399913,
+    "received": 100000,
+    "accepted": 100000,
+    "applicationDropped": 0,
+    "flushed": 100000,
+    "queueDepth": 0,
+    "queueCapacity": 8192,
+    "queueHighWatermark": 1053,
+    "queueBytesHighWatermark": 539136,
+    "queueByteCapacity": 33554432,
+    "socketReceiveBufferRequestedBytes": 4194304,
+    "socketReceiveBufferEffectiveBytes": 8388608,
+    "rawFlushLatency": {
+      "samples": 408,
+      "windowSamples": 408,
+      "p50Ms": 0.0947,
+      "p95Ms": 0.8149,
+      "p99Ms": 2.9186,
+      "maxMs": 5.4394
+    },
+    "rawFileSyncLatency": {
+      "samples": 408,
+      "windowSamples": 408,
+      "p50Ms": 0.0947,
+      "p95Ms": 0.8149,
+      "p99Ms": 2.9186,
+      "maxMs": 5.4394
+    },
+    "rawSegmentSealLatency": {
+      "samples": 18,
+      "windowSamples": 18,
+      "p50Ms": 9.6167,
+      "p95Ms": 22.9049,
+      "p99Ms": 22.9049,
+      "maxMs": 22.9049
+    },
+    "sqliteSegmentRegistrationLatency": {
+      "samples": 18,
+      "windowSamples": 18,
+      "p50Ms": 1.3922,
+      "p95Ms": 6.3109,
+      "p99Ms": 6.3109,
+      "maxMs": 6.3109
+    },
+    "hostGlobalKernelUdp": {
+      "before": {
+        "InDatagrams": 3180287,
+        "InErrors": 383886,
+        "RcvbufErrors": 383886,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterLoad": {
+        "InDatagrams": 3280287,
+        "InErrors": 383886,
+        "RcvbufErrors": 383886,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterBurst": {
+        "InDatagrams": 3280287,
+        "InErrors": 383886,
+        "RcvbufErrors": 383886,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      }
+    },
+    "physicalReadBytes": 0,
+    "physicalWriteBytes": 0,
+    "readSyscalls": 19145,
+    "writeSyscalls": 901,
+    "workingSetBytes": 121544704,
+    "threadCount": 22,
+    "fdCount": 232,
+    "cpuTicks": 1601,
+    "processCpuPercent": 25.61348409278144,
+    "processCpuPercentEffectiveCoresNormalized": 38.42022613917216,
+    "durationSeconds": 20.00015703399913,
+    "dataBytesAfterLoad": 77813032,
+    "queueSaturationBurst": {
+      "attempted": 0,
+      "sendSeconds": 2.3467999199056067e-05,
+      "received": 0,
+      "accepted": 0,
+      "applicationDropped": 0,
+      "queueHighWatermark": 1053,
+      "queueCapacity": 8192,
+      "flushed": 0,
+      "queueDepth": 0,
+      "processPhysicalReadBytes": 0,
+      "processPhysicalWriteBytes": 0,
+      "processReadSyscalls": 87,
+      "processWriteSyscalls": 98,
+      "dataBytes": 4627
+    }
+  },
+  "sqliteWrites": {
+    "writes": 500,
+    "p50Ms": 0.006009,
+    "p95Ms": 0.008267,
+    "p99Ms": 0.032197,
+    "maxMs": 0.480889,
+    "meanMs": 0.008038454
+  },
+  "startupRecovery": {
+    "history": {
+      "files": 1000,
+      "bytes": 11016000,
+      "recordBytes": 11016
+    },
+    "wallMs": 531.2167909996788,
+    "reportedMs": 32,
+    "scannedFiles": 1019,
+    "trustedFilesSkipped": 1019,
+    "bytesRead": 0,
+    "bytesHashed": 0,
+    "dataBytes": 34961
+  },
+  "dataDirectoryBytesFinal": 91508288
+}

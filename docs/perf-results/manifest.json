@@ -1,0 +1,38 @@
+{
+  "measurementBaseCommit": "1dcbea1f4133a2aa5b890c5baae7bbf3dd811078",
+  "implementationCommitAtPrimaryMeasurement": "8c1847a2c5e5cd130461cdff2c0bf930a83e2bb4",
+  "branch": "feat/g1-5-syslog-throughput-observability",
+  "environment": "Linux 6.18.55 container; .NET 10.0.402; Python 3.12.14; 3 visible CPUs, 2.0 CPU cgroup quota; isolated temporary data roots; physical IOPS unavailable.",
+  "provenanceNotes": [
+    "PR #8 baseline matrix used Service commit 1dcbea1f4133a2aa5b890c5baae7bbf3dd811078.",
+    "G1.5 full matrix and sustained trace used the Service source at implementationCommitAtPrimaryMeasurement. Their JSON missing-ID arrays were transformed losslessly to half-open ranges after measurement; traffic generation and metrics were not changed.",
+    "The 50k burst was rerun after adding compact missing-sequence ranges to the report format.",
+    "The queue2048 paired load used the same G1.5 source except the packet-count constant; the exact UdpSyslogWorker variant is stored at source/udp-syslog-worker-queue2048.cs. The earlier benchmark revision differed only in idle CPU reporting; its UDP workload command/schedule is recorded in the result parameters."
+  ],
+  "sourceSha256": {
+    "src/NetConsole.Next.Service/Catalog.cs": "d2579a64423ff4c79bef359ac8bb1796f0b74fddc929f7500f99421ec7cd09b1",
+    "src/NetConsole.Next.Service/IngressStats.cs": "886fa8627b903247c2572699fff4f0696744219dc5acdcfa03ad904a4530f1b5",
+    "src/NetConsole.Next.Service/Program.cs": "bc23ddf188a57deaf51820c9968164235453055addd3f1a03a6e3dcd0720b912",
+    "src/NetConsole.Next.Service/RawSegmentWriter.cs": "95d86c445c87a07768f53b6813b574ac3cecd0923d8b1d602fcfb1fb33fd07ed",
+    "src/NetConsole.Next.Service/RuntimeMonitoring.cs": "ef9ce8d513be69dbcf399971210304c389e89863216acd848b2a721d743a0dcf",
+    "src/NetConsole.Next.Service/RuntimeSettings.cs": "432aa938710a1acd04501fcd1b791cef7e771838114c77798d224b454f298a37",
+    "src/NetConsole.Next.Service/UdpSyslogWorker.cs": "e44d8e746ff66ded14b5921ed12842e23c051a2fe6ab2efa30d058bfcb6d8cca",
+    "src/NetConsole.Next.Service/NetConsole.Next.Service.csproj": "1d202e355aa4cecb5385304292776b2bdf8bb373d1f79239eb79f4b46ed314f5",
+    "storage/schema_v3.sql": "7e79ed7277039fcda32506c66dee99b72caf4ca3f1682eb8246192994d2415e7",
+    "tests/NetConsole.Next.Service.Tests/Program.cs": "ae21922a6a9dfdecd871c657130a7723eaddf45f64df6e32f6bf886ed433d2de",
+    ".github/workflows/p0.yml": "515c9ff32a4f2f9725cafc67304ffcce1657babcdef4fc41aa222182ebc17a86",
+    "tests/perf_baseline.py": "87d9f47b29c722aee81eb373e19e20a13d3ae99417b220405bf5339ee33ef638",
+    "tests/udp_trace_benchmark.py": "c8c3c111c24983346c904cdf332c9b0322a3948df62e6546acdff8136d905980",
+    "tests/udp_trace_benchmark_tests.py": "865e44a14fcde3cf70b393e40810dd486aa2e267fd512d0482b1edc1153d00b4",
+    "tests/udp_trace_sender.c": "782f6aad03202b46e684ea3f13f4049c5a632173d43ded30dc3436b0ea57d290"
+  },
+  "queue2048VariantSha256": "3eccbfcecc0939226c1d57381ac8a7e40af5ae25b612be36374ce05dd239b4e9",
+  "resultsSha256": {
+    "docs/perf-results/perf-baseline-g1-5-queue2048.json": "c9be28b7486f61a852758c4ef6284b7189c2bc12ae953cedea579eb94796378d",
+    "docs/perf-results/perf-baseline-g1-5-queue8192.json": "24b1891677ede6335990864464fff4c3a7d1a3da26592346efb79674b5339a8e",
+    "docs/perf-results/udp-trace-current-8192-30s-5k-512.json": "656f4dad0d46d2eadf97b1ba49f10e3436ba933599412b059aae24ed855d96dc",
+    "docs/perf-results/udp-trace-current-8192-burst.json": "8d732a50483d5abe2af4b7fc621daee4a44864abd0ac6a63a38f1b60ffab60bb",
+    "docs/perf-results/udp-trace-current-8192-full-matrix.json": "de6839ea2fd0dbce1647826835f52a664b5deb4f9da4dd6b1c6ee1cc7b75c018",
+    "docs/perf-results/udp-trace-pr8-native-pinned.json": "c507a41d1047779b7af83658862b5aefa9464b2824d7b931030ce874cfd6e66d"
+  }
+}

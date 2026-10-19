@@ -8,6 +8,7 @@ internal sealed class RuntimeSettings
     public required int WebPort { get; init; }
     public required int SyslogPort { get; init; }
     public required IPAddress SyslogBind { get; init; }
+    public required int SyslogReceiveBufferBytes { get; init; }
 
     public static RuntimeSettings FromEnvironment()
     {
@@ -26,12 +27,14 @@ internal sealed class RuntimeSettings
         if (!IPAddress.IsLoopback(bind) &&
             Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_ALLOW_REMOTE_SYSLOG") != "1")
             throw new InvalidOperationException("Remote UDP reception requires explicit opt-in.");
+        var receiveBuffer = ParsePositiveInt("NETCONSOLE_NEXT_SYSLOG_RCVBUF_BYTES", 4 * 1024 * 1024, 64 * 1024 * 1024);
         return new RuntimeSettings
         {
             DataRoot = full,
             WebPort = ParsePort("NETCONSOLE_NEXT_WEB_PORT", 18771, false),
             SyslogPort = ParsePort("NETCONSOLE_NEXT_SYSLOG_PORT", 0, true),
-            SyslogBind = bind
+            SyslogBind = bind,
+            SyslogReceiveBufferBytes = receiveBuffer
         };
     }
 
@@ -42,5 +45,14 @@ internal sealed class RuntimeSettings
         if (!int.TryParse(raw, out var p) || p > 65535 || p < (zeroAllowed ? 0 : 1))
             throw new InvalidOperationException(key + " is invalid.");
         return p;
+    }
+
+    private static int ParsePositiveInt(string key, int fallback, int maximum)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(raw)) return fallback;
+        if (!int.TryParse(raw, out var value) || value < 64 * 1024 || value > maximum)
+            throw new InvalidOperationException($"{key} must be between 65536 and {maximum}.");
+        return value;
     }
 }

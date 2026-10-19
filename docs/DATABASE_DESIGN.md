@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v2 is implemented with an additive idempotent upgrade from v1. Linux build, startup, repeated migration, SQLite integrity and Raw reconciliation tests passed locally. Windows Service SCM lifecycle has passed on the GitHub Windows Server 2025 runner for PR #8; target OS compatibility remains pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v3 is implemented with additive idempotent upgrades from v1 and v2. Linux build, startup, repeated migration, SQLite integrity, Raw reconciliation and issue-disposition tests passed locally. Windows Service SCM lifecycle passed on a GitHub Windows Server 2025 runner for PR #8; this branch's Windows CI must rerun it. Target OS compatibility remains pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -20,7 +20,7 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 
 ## Schema versions
 
-`schema_versions` currently records v1 and v2. Startup applies the original v1 seed idempotently, adds missing v2 columns in a transaction, applies v2 tables/indexes, and records version 2. Reopening an already upgraded database is tested.
+`schema_versions` currently records v1, v2 and v3. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, then creates v3 disposition state in an idempotent transaction. Reopening an already upgraded database is tested.
 
 ### Schema v1 base
 
@@ -42,6 +42,12 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 | `task_definitions` | Minimal simulated task type, target, command request, timeout, enabled flag and restart policy. |
 | `task_runs.definition_id`, `queued_ms`, `deadline_ms`, `failure_reason` | Persist bounded scheduler lifecycle and interruption reason alongside existing timestamps/state. |
 
+### Schema v3 additions
+
+| Table | Purpose |
+| --- | --- |
+| `raw_issue_dispositions` | One append-only disposition per integrity audit. `QUARANTINED` records actor, reason, evidence reference, hash and time while retaining the original Raw bytes. `RESOLVED_VERIFIED` records a successful later full audit. Changed bytes receive a new audit; dispositions do not overwrite or erase prior evidence. |
+
 Initialization enables WAL once and verifies the resulting mode. Each later SQLite connection sets `synchronous=FULL`, foreign keys, and a 5-second busy timeout without reissuing the journal-mode pragma, avoiding needless mode checks during concurrent writes. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
 
 ## Raw write and recovery
@@ -54,4 +60,4 @@ The service writes `.raw-recovery-in-progress` with write-through before reconci
 
 An `.open` segment becomes a visible `.ndjson` recovery segment with state `INCOMPLETE`, even if its current bytes are parseable, because clean sealing was not recorded. Valid unindexed `.ndjson` is reconciled; missing catalog files become `MISSING`. Incomplete segments are never upgraded to `FINALIZED` by recovery.
 
-There is no automatic evidence retention/cleanup, backup workflow or periodic WAL checkpoint policy. Disk-full behavior is tested with an injected stream that writes a real partial `.open` file before throwing; actual device/filesystem exhaustion and power loss remain pending real-environment tests. The service reports/faults but does not promise zero data loss.
+There is no automatic evidence retention/cleanup, backup workflow or periodic WAL checkpoint policy. Disk-full behavior is tested with an injected stream that writes a real partial `.open` file before throwing; actual device/filesystem exhaustion and power loss remain pending real-environment tests. The service reports/faults but does not promise zero data loss. `QUARANTINED` is a logical Catalog disposition, not a physical move or access-control isolation.

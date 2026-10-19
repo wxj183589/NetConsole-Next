@@ -19,6 +19,9 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesExistingV1CatalogUpgradeReadsEachRawOnce();
         VerifiesIncrementalRecoverySkipsLargeTrustedHistory();
+        VerifiesQuarantineDispositionPreservesRawAndReopensHealthOnlyForAuditedIssues();
+        VerifiesIngressQueueHasAPayloadByteLimit();
+        await VerifiesSparseSyslogFlushesWithinConfiguredWindow();
         VerifiesSqliteWriteFailureRetainsRawFile();
         VerifiesSqliteBusyIsVisibleAndPreservesRawFile();
         VerifiesRawPermissionRevocationIsVisible();
@@ -84,7 +87,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 2, "v2 migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 3, "v3 migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
@@ -249,6 +252,121 @@ internal static class SchedulerTests
         finally { Directory.Delete(root, true); }
     }
 
+    private static void VerifiesQuarantineDispositionPreservesRawAndReopensHealthOnlyForAuditedIssues()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-disposition-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = TestSettings(root);
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            var open = Path.Combine(catalog.RawRoot, "syslog", "crashed.open");
+            Directory.CreateDirectory(Path.GetDirectoryName(open)!);
+            File.WriteAllText(open, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                received_ms = 1_800_000_000_001L,
+                sender_ip = "192.0.2.44",
+                sender_port = 514,
+                payload_base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("retained raw"))
+            }) + "\n");
+
+            catalog.BeginRawRecovery();
+            var recovery = catalog.RecoverRawSegments();
+            catalog.CompleteRawRecovery();
+            Assert(recovery.RecoveredOpenFiles == 1 && catalog.GetUnresolvedIntegrityIssueCount() == 1,
+                "an interrupted open segment must be visible as an unresolved, durable audit");
+            var status = new RuntimeStatus();
+            status.AssessRecovery(recovery, catalog.GetUnresolvedIntegrityIssueCount());
+            Assert(status.HealthState == "DEGRADED", "unresolved historical Raw evidence must degrade health");
+
+            var audit = catalog.RecentIntegrityAudits().Single();
+            var retained = Path.Combine(root, audit.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var originalHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(retained))).ToLowerInvariant();
+            catalog.QuarantineIntegrityAudit(audit.Id, "test-operator", "Crash artifact reviewed and retained.");
+            Assert(File.Exists(retained), "quarantine must preserve Raw bytes on disk");
+            Assert(catalog.GetIntegrityAuditCount() == 1 && catalog.GetUnresolvedIntegrityIssueCount() == 0,
+                "a disposition must remain auditable and stop counting as unresolved");
+            var disposed = catalog.GetHealthSnapshot().RecentIntegrityAudits.Single();
+            Assert(disposed.Disposition == "QUARANTINED" && disposed.DisposedBy == "test-operator" &&
+                   disposed.DispositionDetail == "Crash artifact reviewed and retained." && disposed.ObservedSha256 == originalHash,
+                "quarantine evidence must identify the actor, reason and preserved byte hash");
+            status.ReassessIntegrityIssues(catalog.GetUnresolvedIntegrityIssueCount());
+            Assert(status.HealthState == "HEALTHY", "confirmed, logically quarantined history must not permanently degrade current collection health");
+
+            var changed = File.ReadAllBytes(retained);
+            var text = Encoding.UTF8.GetString(changed);
+            const string marker = "\"payload_base64\":\"";
+            var payloadOffset = text.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+            Assert(payloadOffset > 0, "fixture Raw should include Base64 payload");
+            changed[payloadOffset] = changed[payloadOffset] == (byte)'A' ? (byte)'B' : (byte)'A';
+            File.WriteAllBytes(retained, changed);
+            var auditAgain = catalog.RecoverRawSegments();
+            Assert(catalog.GetUnresolvedIntegrityIssueCount() > 0 && File.Exists(retained),
+                "a changed quarantined Raw file must produce a new visible issue while preserving the file");
+            status.AssessRecovery(auditAgain, catalog.GetUnresolvedIntegrityIssueCount());
+            Assert(status.HealthState == "DEGRADED", "new integrity evidence must reopen degraded health");
+            using var db = OpenCatalog(root);
+            using var integrity = db.CreateCommand();
+            integrity.CommandText = "PRAGMA quick_check(1)";
+            Assert((string?)integrity.ExecuteScalar() == "ok", "disposition and subsequent audit must preserve SQLite integrity");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void VerifiesIngressQueueHasAPayloadByteLimit()
+    {
+        Assert(UdpSyslogWorker.QueueCapacity == 8192 && UdpSyslogWorker.QueueByteCapacity == 32 * 1024 * 1024,
+            "Syslog admission must keep the measured packet window and independent 32 MiB payload bound");
+        var stats = new IngressStats(queueCapacity: 4);
+        var queue = System.Threading.Channels.Channel.CreateBounded<SyslogPacket>(4);
+        var accepted = new SyslogPacket(1, "127.0.0.1", 514, new byte[10]);
+        var rejected = new SyslogPacket(2, "127.0.0.1", 514, new byte[8]);
+        stats.MarkReceived(1);
+        Assert(stats.TryQueue(queue.Writer, accepted, maximumQueuedBytes: 15), "payload fitting within byte budget must be admitted");
+        stats.MarkReceived(2);
+        Assert(!stats.TryQueue(queue.Writer, rejected, maximumQueuedBytes: 15), "byte budget must reject a packet even when packet-count capacity remains");
+        Assert(stats.Received == 2 && stats.Accepted == 1 && stats.Dropped == 1 && stats.QueueBytes == 10 &&
+               stats.QueueBytesHighWatermark == 10 && stats.QueueDepth == 1,
+            "packet and payload-byte counters must describe the same bounded queue state");
+        Assert(queue.Reader.TryRead(out var dequeued) && ReferenceEquals(dequeued, accepted), "accepted payload should remain in queue");
+        stats.MarkDequeued(dequeued!.Payload.Length);
+        Assert(stats.QueueBytes == 0 && stats.QueueDepth == 0, "dequeue must release byte and packet capacity");
+    }
+
+    private static async Task VerifiesSparseSyslogFlushesWithinConfiguredWindow()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-sparse-flush-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var port = GetFreeUdpPort();
+            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = port,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            catalog.ProbeRawWritable();
+            var stats = new IngressStats();
+            var status = new RuntimeStatus();
+            using var loggerFactory = LoggerFactory.Create(_ => { });
+            var worker = new UdpSyslogWorker(settings, catalog, new RawSegmentWriterFactory(), stats, status,
+                loggerFactory.CreateLogger<UdpSyslogWorker>());
+            using var shutdown = new CancellationTokenSource();
+            await worker.StartAsync(shutdown.Token);
+            await WaitUntil(() => status.CollectionState == "listening");
+            using (var sender = new System.Net.Sockets.UdpClient())
+                await sender.SendAsync(new byte[] { 1, 2, 3, 4 }, new IPEndPoint(IPAddress.Loopback, port));
+            await WaitUntil(() => stats.Flushed == 1, TimeSpan.FromSeconds(5));
+            var open = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            Assert(File.ReadLines(open).Count() == 1 && stats.QueueDepth == 0,
+                "a sparse packet must reach its synced open Raw segment without waiting for the next packet");
+            await worker.StopAsync(CancellationToken.None);
+            Assert(catalog.GetRawCounts().Finalized == 1 && stats.Flushed == 1,
+                "cooperative stop must seal and catalog the sparse Raw segment");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static void VerifiesSqliteWriteFailureRetainsRawFile()
     {
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-db-fail-" + Guid.NewGuid().ToString("N"));
@@ -343,7 +461,7 @@ internal static class SchedulerTests
         try
         {
             var port = GetFreeUdpPort();
-            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = port, SyslogBind = IPAddress.Loopback };
+            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = port, SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             var catalog = new Catalog(settings);
             catalog.Initialize();
             catalog.ProbeRawWritable();
@@ -379,14 +497,14 @@ internal static class SchedulerTests
 
     private static async Task MeasuresConcurrentSimulatedDeviceAndSyslogLoad()
     {
-        const int datagrams = 10_000;
+        const int datagrams = 500;
         const int deviceRuns = 40;
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-combined-load-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             var port = GetFreeUdpPort();
-            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = port, SyslogBind = IPAddress.Loopback };
+            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = port, SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             var catalog = new Catalog(settings);
             catalog.Initialize();
             catalog.ProbeRawWritable();
@@ -418,7 +536,11 @@ internal static class SchedulerTests
             using (var sender = new System.Net.Sockets.UdpClient())
             {
                 var buffer = new byte[128];
-                for (var i = 0; i < datagrams; i++) await sender.SendAsync(buffer, new IPEndPoint(IPAddress.Loopback, port));
+                for (var i = 0; i < datagrams; i++)
+                {
+                    await sender.SendAsync(buffer, new IPEndPoint(IPAddress.Loopback, port));
+                    await Task.Delay(2);
+                }
             }
             await WaitUntil(() => scheduler.Status.Active == 0 && scheduler.Status.Queued == 0 &&
                 runIds.All(id => scheduler.Get(id)?.State is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED"),
@@ -454,7 +576,8 @@ internal static class SchedulerTests
                 dataDirectoryBytes = DirectoryBytes(root)
             };
             Console.WriteLine("PERF " + System.Text.Json.JsonSerializer.Serialize(record));
-            Assert(stats.Flushed > 0, "combined load should durably flush Syslog records");
+            Assert(stats.Received == datagrams && stats.Accepted == datagrams && stats.Dropped == 0 && stats.Flushed == datagrams,
+                $"below-capacity combined load should receive, admit and durably flush every packet: {stats.Received}/{stats.Accepted}/{stats.Dropped}/{stats.Flushed}");
             Assert(stats.QueueDepth <= UdpSyslogWorker.QueueCapacity &&
                    stats.QueueHighWatermark <= UdpSyslogWorker.QueueCapacity,
                 $"queue occupancy telemetry must remain within the bounded capacity: {stats.QueueDepth}/{stats.QueueHighWatermark}");
@@ -478,7 +601,8 @@ internal static class SchedulerTests
         DataRoot = root,
         WebPort = 18771,
         SyslogPort = 0,
-        SyslogBind = IPAddress.Loopback
+        SyslogBind = IPAddress.Loopback,
+        SyslogReceiveBufferBytes = 4 * 1024 * 1024
     };
 
     private static SqliteConnection OpenCatalog(string root)

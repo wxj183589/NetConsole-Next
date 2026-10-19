@@ -1,0 +1,3622 @@
+{
+  "environment": {
+    "os": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "kernel": "6.18.55",
+    "python": "3.12.14",
+    "dotnet": "10.0.402",
+    "processorCount": 3,
+    "effectiveCpuCores": 2.0,
+    "cpuAffinity": [
+      0,
+      1,
+      2
+    ],
+    "serviceCpu": 0,
+    "senderCpu": 1,
+    "dataDirectoryIsolatedTemporary": true,
+    "attribution": "sendto success means accepted by the sender's local stack, not delivered to the service. /proc/net/snmp counters are host-global. A remaining gap is unattributed unless socket-level telemetry proves otherwise."
+  },
+  "parameters": {
+    "pps": "100,500,1000,3000,5000,10000,20000",
+    "payload_bytes": "128,256,512,1024",
+    "duration_seconds": 1.0,
+    "include_burst": false,
+    "burst_count": 50000,
+    "requested_rcvbuf": 4194304,
+    "require_lossless": false,
+    "service_dll": "/tmp/netconsole-next-pr8/src/NetConsole.Next.Service/bin/Release/net10.0/NetConsole.Next.Service.dll",
+    "output": "docs/perf-results/udp-trace-pr8-native-pinned.json"
+  },
+  "cases": [
+    {
+      "scenario": "steady",
+      "targetPps": 100,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 100,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427804322264794,
+        "elapsedSeconds": 0.99614233,
+        "achievedPps": 100.387,
+        "interSendGapMsP50": 10.030854,
+        "interSendGapMsP95": 10.244283,
+        "interSendGapMsP99": 10.4457,
+        "interSendGapMsMax": 10.4457,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 100
+      },
+      "application": {
+        "received": 100,
+        "enqueued": 100,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 2,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 100,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 100,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.138313,
+        "receiveLatencyMsP99": 2.521565,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1912154,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1912254,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 98,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.51
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 8,
+        "processCpuPercentHostNormalized": 2.1915187018703515,
+        "processCpuPercentEffectiveCoresNormalized": 3.287278052805527,
+        "workingSetPeakBytes": 80445440,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 258,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 122373,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 100,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 500,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 500,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427806140279643,
+        "elapsedSeconds": 1.03294711,
+        "achievedPps": 484.052,
+        "interSendGapMsP50": 2.022505,
+        "interSendGapMsP95": 2.328875,
+        "interSendGapMsP99": 2.887621,
+        "interSendGapMsMax": 3.668706,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 500
+      },
+      "application": {
+        "received": 500,
+        "enqueued": 500,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 14,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 500,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 500,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.070477,
+        "receiveLatencyMsP99": 4.72031,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1912254,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1912754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 480,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.294
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 17,
+        "processCpuPercentHostNormalized": 4.5264132585941415,
+        "processCpuPercentEffectiveCoresNormalized": 6.789619887891211,
+        "workingSetPeakBytes": 81190912,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 640,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 228773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 500,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 1000,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 1000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427807998667552,
+        "elapsedSeconds": 1.055279232,
+        "achievedPps": 947.616,
+        "interSendGapMsP50": 1.015682,
+        "interSendGapMsP95": 1.253799,
+        "interSendGapMsP99": 1.633741,
+        "interSendGapMsMax": 2.867439,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 1000
+      },
+      "application": {
+        "received": 1000,
+        "enqueued": 1000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 27,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 1000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 1000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.069285,
+        "receiveLatencyMsP99": 4.015378,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1912754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1913754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 963,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.152
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 24,
+        "processCpuPercentHostNormalized": 6.276054860336093,
+        "processCpuPercentEffectiveCoresNormalized": 9.41408229050414,
+        "workingSetPeakBytes": 82460672,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 1123,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 361773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 1000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 3000,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 3000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427809896251180,
+        "elapsedSeconds": 1.185869573,
+        "achievedPps": 2529.789,
+        "interSendGapMsP50": 0.34677,
+        "interSendGapMsP95": 0.615202,
+        "interSendGapMsP99": 1.136017,
+        "interSendGapMsMax": 3.428385,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 3000
+      },
+      "application": {
+        "received": 3000,
+        "enqueued": 3000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 92,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 3000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 3000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.373379,
+        "receiveLatencyMsP99": 6.031041,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1913754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1916754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 2751,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.188
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 62,
+        "processCpuPercentHostNormalized": 14.691505763231257,
+        "processCpuPercentEffectiveCoresNormalized": 22.037258644846887,
+        "workingSetPeakBytes": 86368256,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 57,
+        "processWriteSyscalls": 2931,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 894741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 3000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 5000,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 5000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427812009981045,
+        "elapsedSeconds": 1.281630784,
+        "achievedPps": 3901.28,
+        "interSendGapMsP50": 0.210793,
+        "interSendGapMsP95": 0.420487,
+        "interSendGapMsP99": 0.947109,
+        "interSendGapMsMax": 20.265678,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 5000
+      },
+      "application": {
+        "received": 5000,
+        "enqueued": 5000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 90,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 5000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 5000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.258716,
+        "receiveLatencyMsP99": 3.294451,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1916754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1921754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 4506,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 4.304
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 88,
+        "processCpuPercentHostNormalized": 19.513675513327897,
+        "processCpuPercentEffectiveCoresNormalized": 29.270513269991845,
+        "workingSetPeakBytes": 90611712,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 57,
+        "processWriteSyscalls": 4686,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 1426741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 5000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 10000,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 10000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427814519155023,
+        "elapsedSeconds": 1.561325875,
+        "achievedPps": 6404.813,
+        "interSendGapMsP50": 0.109664,
+        "interSendGapMsP95": 0.257469,
+        "interSendGapMsP99": 0.92789,
+        "interSendGapMsMax": 46.46583,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 10000
+      },
+      "application": {
+        "received": 10000,
+        "enqueued": 10000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 146,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 10000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 10000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.751748,
+        "receiveLatencyMsP99": 6.697738,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1921754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1931754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 8075,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.202
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 114,
+        "processCpuPercentHostNormalized": 21.300099760759753,
+        "processCpuPercentEffectiveCoresNormalized": 31.95014964113963,
+        "workingSetPeakBytes": 101511168,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 63,
+        "processWriteSyscalls": 8276,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 2757710,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 10000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 20000,
+      "payloadBytes": 128,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 20000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427817010840124,
+        "elapsedSeconds": 1.600689944,
+        "achievedPps": 12494.612,
+        "interSendGapMsP50": 0.05959,
+        "interSendGapMsP95": 0.155694,
+        "interSendGapMsP99": 0.456054,
+        "interSendGapMsMax": 3.360602,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 20000
+      },
+      "application": {
+        "received": 19929,
+        "enqueued": 19929,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 565,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 19929,
+        "missingSequenceCount": 71,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 19929,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.368806,
+        "receiveLatencyMsP99": 11.767812,
+        "missingSequenceRanges": [
+          [
+            16026,
+            16097
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 71,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1931754,
+        "NoPorts": 10,
+        "InErrors": 193304,
+        "RcvbufErrors": 193304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1951683,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 13133,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 20.877
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 140,
+        "processCpuPercentHostNormalized": 25.542974834036496,
+        "processCpuPercentEffectiveCoresNormalized": 38.31446225105475,
+        "workingSetPeakBytes": 123535360,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 1118,
+        "processWriteSyscalls": 13364,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 5398824,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 19929,
+        "NoPorts": 0,
+        "InErrors": 71,
+        "RcvbufErrors": 71,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 100,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 100,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427819637180608,
+        "elapsedSeconds": 1.014048445,
+        "achievedPps": 98.615,
+        "interSendGapMsP50": 10.03139,
+        "interSendGapMsP95": 10.416317,
+        "interSendGapMsP99": 22.51658,
+        "interSendGapMsMax": 22.51658,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 100
+      },
+      "application": {
+        "received": 100,
+        "enqueued": 100,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 1,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 100,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 100,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.240119,
+        "receiveLatencyMsP99": 3.768946,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1951683,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1951783,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 100,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.404
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 8,
+        "processCpuPercentHostNormalized": 2.1542967832675948,
+        "processCpuPercentEffectiveCoresNormalized": 3.231445174901392,
+        "workingSetPeakBytes": 80232448,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 260,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 139573,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 100,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 500,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 500,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427821514017265,
+        "elapsedSeconds": 1.044372606,
+        "achievedPps": 478.756,
+        "interSendGapMsP50": 2.023417,
+        "interSendGapMsP95": 2.348224,
+        "interSendGapMsP99": 3.17433,
+        "interSendGapMsMax": 9.1875,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 500
+      },
+      "application": {
+        "received": 500,
+        "enqueued": 500,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 11,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 500,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 500,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.388485,
+        "receiveLatencyMsP99": 15.513592,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1951783,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1952283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 473,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.351
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 20,
+        "processCpuPercentHostNormalized": 5.270357744315423,
+        "processCpuPercentEffectiveCoresNormalized": 7.905536616473134,
+        "workingSetPeakBytes": 81408000,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 633,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 314773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 500,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 1000,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 1000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427823417769098,
+        "elapsedSeconds": 1.050535287,
+        "achievedPps": 951.896,
+        "interSendGapMsP50": 1.015635,
+        "interSendGapMsP95": 1.170438,
+        "interSendGapMsP99": 1.555454,
+        "interSendGapMsMax": 3.57393,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 1000
+      },
+      "application": {
+        "received": 1000,
+        "enqueued": 1000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 10,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 1000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 1000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.608679,
+        "receiveLatencyMsP99": 4.073627,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1952283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1953283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 943,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 6.264
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 25,
+        "processCpuPercentHostNormalized": 6.546820574463576,
+        "processCpuPercentEffectiveCoresNormalized": 9.820230861695363,
+        "workingSetPeakBytes": 82661376,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 54,
+        "processWriteSyscalls": 1105,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 533773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 1000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 3000,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 3000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427825330251020,
+        "elapsedSeconds": 1.14139315,
+        "achievedPps": 2628.367,
+        "interSendGapMsP50": 0.34619,
+        "interSendGapMsP95": 0.523562,
+        "interSendGapMsP99": 0.941302,
+        "interSendGapMsMax": 3.109322,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 3000
+      },
+      "application": {
+        "received": 3000,
+        "enqueued": 3000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 84,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 3000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 3000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.125582,
+        "receiveLatencyMsP99": 5.762561,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1953283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1956283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 2821,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.405
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 55,
+        "processCpuPercentHostNormalized": 13.451866504601561,
+        "processCpuPercentEffectiveCoresNormalized": 20.177799756902342,
+        "workingSetPeakBytes": 88449024,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 57,
+        "processWriteSyscalls": 3002,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 1410741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 3000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 5000,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 5000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427827304483642,
+        "elapsedSeconds": 1.227435223,
+        "achievedPps": 4073.535,
+        "interSendGapMsP50": 0.210856,
+        "interSendGapMsP95": 0.3827,
+        "interSendGapMsP99": 0.780817,
+        "interSendGapMsMax": 2.633637,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 5000
+      },
+      "application": {
+        "received": 5000,
+        "enqueued": 5000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 50,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 5000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 5000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.371844,
+        "receiveLatencyMsP99": 4.308023,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1956283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1961283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 4438,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.541
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 78,
+        "processCpuPercentHostNormalized": 17.939560314459083,
+        "processCpuPercentEffectiveCoresNormalized": 26.909340471688626,
+        "workingSetPeakBytes": 95268864,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 62,
+        "processWriteSyscalls": 4621,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 2286741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 5000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 10000,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 10000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427829434309330,
+        "elapsedSeconds": 1.800259612,
+        "achievedPps": 5554.754,
+        "interSendGapMsP50": 0.110265,
+        "interSendGapMsP95": 0.416485,
+        "interSendGapMsP99": 1.730916,
+        "interSendGapMsMax": 15.46876,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 10000
+      },
+      "application": {
+        "received": 10000,
+        "enqueued": 10000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 148,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 10000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 10000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.780414,
+        "receiveLatencyMsP99": 8.987976,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1961283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1971283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 7942,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 17.818
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 111,
+        "processCpuPercentHostNormalized": 18.28227619907268,
+        "processCpuPercentEffectiveCoresNormalized": 27.42341429860902,
+        "workingSetPeakBytes": 113680384,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 1124,
+        "processWriteSyscalls": 8188,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 4478678,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 10000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 20000,
+      "payloadBytes": 256,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 20000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427832277465967,
+        "elapsedSeconds": 1.604100454,
+        "achievedPps": 12468.047,
+        "interSendGapMsP50": 0.059997,
+        "interSendGapMsP95": 0.152371,
+        "interSendGapMsP99": 0.39867,
+        "interSendGapMsMax": 35.641274,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 20000
+      },
+      "application": {
+        "received": 19161,
+        "enqueued": 19161,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 293,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 19161,
+        "missingSequenceCount": 839,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 19161,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.369967,
+        "receiveLatencyMsP99": 15.656879,
+        "missingSequenceRanges": [
+          [
+            1512,
+            1594
+          ],
+          [
+            9258,
+            9956
+          ],
+          [
+            10523,
+            10582
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 839,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1971283,
+        "NoPorts": 10,
+        "InErrors": 193375,
+        "RcvbufErrors": 193375,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1990444,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 12314,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 60.913
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 141,
+        "processCpuPercentHostNormalized": 25.63862502367294,
+        "processCpuPercentEffectiveCoresNormalized": 38.457937535509416,
+        "workingSetPeakBytes": 137543680,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 2158,
+        "processWriteSyscalls": 12565,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 8490228,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 19161,
+        "NoPorts": 0,
+        "InErrors": 839,
+        "RcvbufErrors": 839,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 100,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 100,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427834941419031,
+        "elapsedSeconds": 1.033075337,
+        "achievedPps": 96.798,
+        "interSendGapMsP50": 10.03287,
+        "interSendGapMsP95": 11.53502,
+        "interSendGapMsP99": 27.332758,
+        "interSendGapMsMax": 27.332758,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 100
+      },
+      "application": {
+        "received": 100,
+        "enqueued": 100,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 2,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 100,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 100,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.36444,
+        "receiveLatencyMsP99": 4.53845,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1990444,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1990544,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 99,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 7.426
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 10,
+        "processCpuPercentHostNormalized": 2.6177031182988713,
+        "processCpuPercentEffectiveCoresNormalized": 3.9265546774483076,
+        "workingSetPeakBytes": 80379904,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 232,
+        "processReadSyscalls": 56,
+        "processWriteSyscalls": 261,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 173573,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 100,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 500,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 500,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427836880304280,
+        "elapsedSeconds": 1.136286263,
+        "achievedPps": 440.03,
+        "interSendGapMsP50": 2.022754,
+        "interSendGapMsP95": 2.631608,
+        "interSendGapMsP99": 6.211092,
+        "interSendGapMsMax": 51.09952,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 500
+      },
+      "application": {
+        "received": 500,
+        "enqueued": 500,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 13,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 500,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 500,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 6.077051,
+        "receiveLatencyMsP99": 19.938164,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1990544,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1991044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 448,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 3.298
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 22,
+        "processCpuPercentHostNormalized": 5.409528014678108,
+        "processCpuPercentEffectiveCoresNormalized": 8.114292022017162,
+        "workingSetPeakBytes": 82395136,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 62,
+        "processWriteSyscalls": 630,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 485741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 500,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 1000,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 1000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427838894625460,
+        "elapsedSeconds": 1.056011861,
+        "achievedPps": 946.959,
+        "interSendGapMsP50": 1.016278,
+        "interSendGapMsP95": 1.198858,
+        "interSendGapMsP99": 1.711951,
+        "interSendGapMsMax": 3.421414,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 1000
+      },
+      "application": {
+        "received": 1000,
+        "enqueued": 1000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 18,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 1000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 1000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.580087,
+        "receiveLatencyMsP99": 5.245061,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1991044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1992044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 943,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 5.299
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 27,
+        "processCpuPercentHostNormalized": 7.045450110201203,
+        "processCpuPercentEffectiveCoresNormalized": 10.568175165301803,
+        "workingSetPeakBytes": 84103168,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 56,
+        "processWriteSyscalls": 1105,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 873773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 1000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 3000,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 3000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427840817737633,
+        "elapsedSeconds": 1.230089825,
+        "achievedPps": 2438.846,
+        "interSendGapMsP50": 0.34724,
+        "interSendGapMsP95": 0.584415,
+        "interSendGapMsP99": 1.011332,
+        "interSendGapMsMax": 48.441789,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 3000
+      },
+      "application": {
+        "received": 3000,
+        "enqueued": 3000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 32,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 3000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 3000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.103139,
+        "receiveLatencyMsP99": 1.731318,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1992044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 1995044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 2828,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 4.623
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 67,
+        "processCpuPercentHostNormalized": 15.323495881357665,
+        "processCpuPercentEffectiveCoresNormalized": 22.985243822036498,
+        "workingSetPeakBytes": 94064640,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 62,
+        "processWriteSyscalls": 3010,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 2430742,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 3000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 5000,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 5000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427842949541132,
+        "elapsedSeconds": 1.420019251,
+        "achievedPps": 3521.079,
+        "interSendGapMsP50": 0.211436,
+        "interSendGapMsP95": 0.348887,
+        "interSendGapMsP99": 0.908683,
+        "interSendGapMsMax": 102.322876,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 5000
+      },
+      "application": {
+        "received": 5000,
+        "enqueued": 5000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 95,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 5000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 5000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.236079,
+        "receiveLatencyMsP99": 9.752454,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 1995044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2000044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 4516,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 59.015
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 75,
+        "processCpuPercentHostNormalized": 15.230468599222382,
+        "processCpuPercentEffectiveCoresNormalized": 22.845702898833576,
+        "workingSetPeakBytes": 103690240,
+        "threadsPeak": 18,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 73,
+        "processWriteSyscalls": 4723,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 3987710,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 5000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 10000,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 10000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427845289684770,
+        "elapsedSeconds": 1.397951876,
+        "achievedPps": 7153.322,
+        "interSendGapMsP50": 0.110944,
+        "interSendGapMsP95": 0.239965,
+        "interSendGapMsP99": 0.632547,
+        "interSendGapMsMax": 4.187567,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 10000
+      },
+      "application": {
+        "received": 9996,
+        "enqueued": 9996,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 242,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 9996,
+        "missingSequenceCount": 4,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 9996,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.722776,
+        "receiveLatencyMsP99": 10.606283,
+        "missingSequenceRanges": [
+          [
+            5558,
+            5562
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 4,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2000044,
+        "NoPorts": 10,
+        "InErrors": 194214,
+        "RcvbufErrors": 194214,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2010040,
+        "NoPorts": 10,
+        "InErrors": 194218,
+        "RcvbufErrors": 194218,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 7954,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 20.298
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 116,
+        "processCpuPercentHostNormalized": 23.918747473796,
+        "processCpuPercentEffectiveCoresNormalized": 35.878121210694,
+        "workingSetPeakBytes": 130183168,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 1118,
+        "processWriteSyscalls": 8190,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 7874597,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 9996,
+        "NoPorts": 0,
+        "InErrors": 4,
+        "RcvbufErrors": 4,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 20000,
+      "payloadBytes": 512,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 20000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427847613677823,
+        "elapsedSeconds": 1.558950401,
+        "achievedPps": 12829.145,
+        "interSendGapMsP50": 0.060733,
+        "interSendGapMsP95": 0.14747,
+        "interSendGapMsP99": 0.37558,
+        "interSendGapMsMax": 3.301948,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 20000
+      },
+      "application": {
+        "received": 19856,
+        "enqueued": 19856,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 363,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 19856,
+        "missingSequenceCount": 144,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 19856,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 1.565127,
+        "receiveLatencyMsP99": 7.248354,
+        "missingSequenceRanges": [
+          [
+            5558,
+            5702
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 144,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2010040,
+        "NoPorts": 10,
+        "InErrors": 194218,
+        "RcvbufErrors": 194218,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2029896,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 10749,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 22.376
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 145,
+        "processCpuPercentHostNormalized": 27.112635945711244,
+        "processCpuPercentEffectiveCoresNormalized": 40.66895391856687,
+        "workingSetPeakBytes": 170672128,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 3193,
+        "processWriteSyscalls": 11055,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 15545677,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 19856,
+        "NoPorts": 0,
+        "InErrors": 144,
+        "RcvbufErrors": 144,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 100,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 100,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427850252102940,
+        "elapsedSeconds": 1.003151468,
+        "achievedPps": 99.686,
+        "interSendGapMsP50": 10.033778,
+        "interSendGapMsP95": 10.67905,
+        "interSendGapMsP99": 13.582638,
+        "interSendGapMsMax": 13.582638,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 100
+      },
+      "application": {
+        "received": 100,
+        "enqueued": 100,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 1,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 100,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 100,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.444229,
+        "receiveLatencyMsP99": 1.897012,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2029896,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2029996,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 99,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.291
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 9,
+        "processCpuPercentHostNormalized": 2.436478796813,
+        "processCpuPercentEffectiveCoresNormalized": 3.6547181952195,
+        "workingSetPeakBytes": 80695296,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 260,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 241973,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 100,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 500,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 500,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427852110331340,
+        "elapsedSeconds": 1.0472338,
+        "achievedPps": 477.448,
+        "interSendGapMsP50": 2.023569,
+        "interSendGapMsP95": 2.333013,
+        "interSendGapMsP99": 4.077283,
+        "interSendGapMsMax": 7.032495,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 500
+      },
+      "application": {
+        "received": 500,
+        "enqueued": 500,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 14,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 500,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 500,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.197063,
+        "receiveLatencyMsP99": 5.312921,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2029996,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2030496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 484,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.708
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 19,
+        "processCpuPercentHostNormalized": 5.008986000937825,
+        "processCpuPercentEffectiveCoresNormalized": 7.513479001406738,
+        "workingSetPeakBytes": 83824640,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 51,
+        "processWriteSyscalls": 644,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 826773,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 500,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 1000,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 1000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427854019359498,
+        "elapsedSeconds": 1.136064136,
+        "achievedPps": 880.232,
+        "interSendGapMsP50": 1.02316,
+        "interSendGapMsP95": 1.640994,
+        "interSendGapMsP99": 2.74138,
+        "interSendGapMsMax": 9.689769,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 1000
+      },
+      "application": {
+        "received": 1000,
+        "enqueued": 1000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 43,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 1000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 1000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 4.06982,
+        "receiveLatencyMsP99": 17.556268,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2030496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2031496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 862,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 2.003
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 37,
+        "processCpuPercentHostNormalized": 9.083274565161032,
+        "processCpuPercentEffectiveCoresNormalized": 13.624911847741547,
+        "workingSetPeakBytes": 87867392,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 57,
+        "processWriteSyscalls": 1044,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 1558741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 1000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 3000,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 3000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427856021524341,
+        "elapsedSeconds": 1.139817203,
+        "achievedPps": 2632.001,
+        "interSendGapMsP50": 0.349025,
+        "interSendGapMsP95": 0.510771,
+        "interSendGapMsP99": 0.903552,
+        "interSendGapMsMax": 3.625264,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 3000
+      },
+      "application": {
+        "received": 3000,
+        "enqueued": 3000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 65,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 3000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 3000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 0.572233,
+        "receiveLatencyMsP99": 3.141386,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2031496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2034496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 2624,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 22.98
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 58,
+        "processCpuPercentHostNormalized": 14.15677166176644,
+        "processCpuPercentEffectiveCoresNormalized": 21.23515749264966,
+        "workingSetPeakBytes": 107704320,
+        "threadsPeak": 18,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 1113,
+        "processWriteSyscalls": 2837,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 4482741,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 3000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 5000,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 5000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427858145188328,
+        "elapsedSeconds": 1.686393163,
+        "achievedPps": 2964.908,
+        "interSendGapMsP50": 0.213048,
+        "interSendGapMsP95": 0.44681,
+        "interSendGapMsP99": 1.446586,
+        "interSendGapMsMax": 160.058371,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 5000
+      },
+      "application": {
+        "received": 5000,
+        "enqueued": 5000,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 69,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 5000,
+        "missingSequenceCount": 0,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 5000,
+        "receiveLatencyMsP50": 0.0,
+        "receiveLatencyMsP95": 4.282171,
+        "receiveLatencyMsP99": 18.250882,
+        "missingSequenceRanges": []
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 0,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2034496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2039496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 3769,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 23.664
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 114,
+        "processCpuPercentHostNormalized": 19.868219807500807,
+        "processCpuPercentEffectiveCoresNormalized": 29.802329711251215,
+        "workingSetPeakBytes": 123535360,
+        "threadsPeak": 17,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 1118,
+        "processWriteSyscalls": 4005,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 7407710,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 5000,
+        "NoPorts": 0,
+        "InErrors": 0,
+        "RcvbufErrors": 0,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 10000,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 10000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427866717255047,
+        "elapsedSeconds": 6.474290627,
+        "achievedPps": 1544.571,
+        "interSendGapMsP50": 0.112672,
+        "interSendGapMsP95": 0.508555,
+        "interSendGapMsP99": 4.26726,
+        "interSendGapMsMax": 546.268189,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 10000
+      },
+      "application": {
+        "received": 9425,
+        "enqueued": 9425,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 158,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 9425,
+        "missingSequenceCount": 575,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 9425,
+        "receiveLatencyMsP50": 0.144172,
+        "receiveLatencyMsP95": 67.060804,
+        "receiveLatencyMsP99": 288.874571,
+        "missingSequenceRanges": [
+          [
+            176,
+            212
+          ],
+          [
+            2997,
+            3033
+          ],
+          [
+            5258,
+            5284
+          ],
+          [
+            5713,
+            5730
+          ],
+          [
+            6064,
+            6190
+          ],
+          [
+            6291,
+            6350
+          ],
+          [
+            6635,
+            6682
+          ],
+          [
+            7700,
+            7704
+          ],
+          [
+            8720,
+            8738
+          ],
+          [
+            9070,
+            9130
+          ],
+          [
+            9369,
+            9380
+          ],
+          [
+            9404,
+            9411
+          ],
+          [
+            9514,
+            9537
+          ],
+          [
+            9561,
+            9563
+          ],
+          [
+            9662,
+            9675
+          ],
+          [
+            9796,
+            9805
+          ],
+          [
+            9919,
+            10000
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 575,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2039496,
+        "NoPorts": 10,
+        "InErrors": 194362,
+        "RcvbufErrors": 194362,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2048921,
+        "NoPorts": 10,
+        "InErrors": 194937,
+        "RcvbufErrors": 194937,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 3314,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 48.755
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 497,
+        "processCpuPercentHostNormalized": 22.952535183086606,
+        "processCpuPercentEffectiveCoresNormalized": 34.42880277462991,
+        "workingSetPeakBytes": 158281728,
+        "threadsPeak": 19,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 3283,
+        "processWriteSyscalls": 3844,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 13882877,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 9425,
+        "NoPorts": 0,
+        "InErrors": 575,
+        "RcvbufErrors": 575,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    },
+    {
+      "scenario": "steady",
+      "targetPps": 20000,
+      "payloadBytes": 1024,
+      "durationTargetSeconds": 1.0,
+      "sender": {
+        "sendSuccessCalls": 20000,
+        "sendFailedSequences": [],
+        "startedWallNs": 1792427876982916299,
+        "elapsedSeconds": 1.583227237,
+        "achievedPps": 12632.425,
+        "interSendGapMsP50": 0.061943,
+        "interSendGapMsP95": 0.152163,
+        "interSendGapMsP99": 0.380423,
+        "interSendGapMsMax": 10.072381,
+        "interSendGapsBelow10us": 0,
+        "interSendGapsBelow50us": 0,
+        "sequenceStart": 0,
+        "sequenceEndExclusive": 20000
+      },
+      "application": {
+        "received": 17596,
+        "enqueued": 17596,
+        "activeDrops": 0,
+        "queueDepth": 0,
+        "queueHighWatermarkProcessCumulative": 247,
+        "queueDepthByteHighWatermark": null,
+        "queueCapacityPackets": 2048,
+        "queueCapacityBytes": null
+      },
+      "raw": {
+        "persisted": 17596,
+        "missingSequenceCount": 2404,
+        "duplicateRecords": 0,
+        "orderInversions": 0,
+        "validChecksums": 17596,
+        "receiveLatencyMsP50": 0.714659,
+        "receiveLatencyMsP95": 9.431945,
+        "receiveLatencyMsP99": 14.862489,
+        "missingSequenceRanges": [
+          [
+            168,
+            245
+          ],
+          [
+            293,
+            305
+          ],
+          [
+            403,
+            422
+          ],
+          [
+            853,
+            885
+          ],
+          [
+            3109,
+            3316
+          ],
+          [
+            6270,
+            6272
+          ],
+          [
+            9103,
+            9225
+          ],
+          [
+            9431,
+            9468
+          ],
+          [
+            9676,
+            9718
+          ],
+          [
+            9822,
+            9826
+          ],
+          [
+            9935,
+            9974
+          ],
+          [
+            10072,
+            10105
+          ],
+          [
+            10215,
+            10242
+          ],
+          [
+            10350,
+            10378
+          ],
+          [
+            10522,
+            10612
+          ],
+          [
+            10722,
+            10738
+          ],
+          [
+            10864,
+            10890
+          ],
+          [
+            10997,
+            11018
+          ],
+          [
+            11125,
+            11185
+          ],
+          [
+            11302,
+            11349
+          ],
+          [
+            11457,
+            11493
+          ],
+          [
+            11901,
+            11904
+          ],
+          [
+            12012,
+            12026
+          ],
+          [
+            12123,
+            12156
+          ],
+          [
+            12364,
+            12406
+          ],
+          [
+            12524,
+            12583
+          ],
+          [
+            12690,
+            12704
+          ],
+          [
+            12808,
+            12908
+          ],
+          [
+            13696,
+            13723
+          ],
+          [
+            13836,
+            13923
+          ],
+          [
+            14047,
+            14122
+          ],
+          [
+            14250,
+            14411
+          ],
+          [
+            14524,
+            14590
+          ],
+          [
+            14698,
+            14741
+          ],
+          [
+            14845,
+            14872
+          ],
+          [
+            14981,
+            15020
+          ],
+          [
+            15126,
+            15160
+          ],
+          [
+            15259,
+            15292
+          ],
+          [
+            16224,
+            16228
+          ],
+          [
+            16345,
+            16473
+          ],
+          [
+            16756,
+            16785
+          ],
+          [
+            16912,
+            16913
+          ],
+          [
+            17027,
+            17049
+          ],
+          [
+            17145,
+            17152
+          ],
+          [
+            17521,
+            17561
+          ],
+          [
+            17681,
+            17785
+          ],
+          [
+            17891,
+            17910
+          ],
+          [
+            18018,
+            18029
+          ],
+          [
+            18241,
+            18260
+          ],
+          [
+            18379,
+            18407
+          ],
+          [
+            18956,
+            18989
+          ],
+          [
+            19289,
+            19312
+          ],
+          [
+            19421,
+            19430
+          ],
+          [
+            19640,
+            19733
+          ]
+        ]
+      },
+      "consistency": {
+        "sendSuccessMinusAppReceived": 2404,
+        "appReceivedEqualsEnqueuedPlusDrops": true,
+        "enqueuedEqualsPersisted": true
+      },
+      "kernelUdpHostGlobalBefore": {
+        "InDatagrams": 2048921,
+        "NoPorts": 10,
+        "InErrors": 194937,
+        "RcvbufErrors": 194937,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelUdpHostGlobalAfter": {
+        "InDatagrams": 2066517,
+        "NoPorts": 10,
+        "InErrors": 197341,
+        "RcvbufErrors": 197341,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      },
+      "kernelSocket": {
+        "available": true,
+        "raw": "Recv-Q Send-Q Local Address:Port Peer Address:Port",
+        "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"
+      },
+      "socketReceiveBuffer": {
+        "requestedBytes": null,
+        "effectiveBytes": null
+      },
+      "rawFileSyncLatencyMs": {
+        "samples": 1532,
+        "p50Ms": 1,
+        "p95Ms": 1,
+        "maxMs": 20.242
+      },
+      "rawSegmentSealLatencyMs": null,
+      "sqliteSegmentRegistrationLatencyMs": null,
+      "resources": {
+        "cpuTicks": 156,
+        "processCpuPercentHostNormalized": 28.66151261898957,
+        "processCpuPercentEffectiveCoresNormalized": 42.99226892848436,
+        "workingSetPeakBytes": 213614592,
+        "threadsPeak": 16,
+        "fileDescriptorsPeak": 231,
+        "processReadSyscalls": 6313,
+        "processWriteSyscalls": 2330,
+        "physicalReadBytes": 0,
+        "physicalWriteBytes": 0,
+        "reportedCpuPeakPercent": 100
+      },
+      "blockDevice": {
+        "before": null,
+        "after": null,
+        "writeIops": null,
+        "note": "Container overlay mounts may not expose the backing device; null means unavailable."
+      },
+      "dataDirectoryBytes": 25823062,
+      "windowCounters": {
+        "note": "Per-service cumulative counters start at zero in each isolated case."
+      },
+      "kernelUdpHostGlobalDelta": {
+        "InDatagrams": 17596,
+        "NoPorts": 0,
+        "InErrors": 2404,
+        "RcvbufErrors": 2404,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "IgnoredMulti": 0,
+        "MemErrors": 0
+      }
+    }
+  ]
+}
