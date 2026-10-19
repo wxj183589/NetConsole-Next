@@ -22,8 +22,9 @@ catalog.Initialize();
 var recovery = catalog.RecoverRawSegments();
 if (recovery.FailedFiles > 0)
     app.Logger.LogWarning("Raw recovery left {FailedFiles} file(s) untouched because they could not be inspected.", recovery.FailedFiles);
-app.Logger.LogInformation("Raw recovery scanned {ScannedFiles} file(s), recovered {OpenFiles} open file(s), repaired {RepairedFiles} tail(s), and found {MissingFiles} missing catalog file(s).",
-    recovery.ScannedFiles, recovery.RecoveredOpenFiles, recovery.RepairedTailFiles, recovery.MissingFiles);
+app.Logger.LogInformation("Raw recovery scanned {ScannedFiles} file(s), recovered {OpenFiles} open file(s), preserved {EvidenceFiles} recovery evidence file(s) ({EvidenceBytes} bytes), repaired {RepairedFiles} tail(s), and found {MissingFiles} missing catalog file(s).",
+    recovery.ScannedFiles, recovery.RecoveredOpenFiles, recovery.RecoveryEvidenceFiles, recovery.RecoveryEvidenceBytes,
+    recovery.RepairedTailFiles, recovery.MissingFiles);
 
 var processStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 app.MapGet("/", () => Results.Text("NetConsole Next Core service"));

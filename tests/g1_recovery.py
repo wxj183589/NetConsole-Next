@@ -139,6 +139,8 @@ def main():
         assert current["recovery"]["indexedOrphanFiles"] == 2, current["recovery"]
         assert current["recovery"]["repairedTailFiles"] == 2, current["recovery"]
         assert current["recovery"]["discardedTailBytes"] > 0, current["recovery"]
+        assert current["recovery"]["recoveryEvidenceFiles"] == 2, current["recovery"]
+        assert current["recovery"]["recoveryEvidenceBytes"] == current["recovery"]["discardedTailBytes"], current["recovery"]
         assert current["recovery"]["missingFiles"] == 1, current["recovery"]
         assert current["openSegmentsOnDisk"] == 0, current
         assert current["resources"]["workingSetBytes"] > 0, current["resources"]
@@ -167,6 +169,21 @@ def main():
         assert ("CORE_SERVICE", "INTERRUPTED") in runs, runs
         assert ("SYSLOG_UDP", "INTERRUPTED") in runs, runs
 
+        evidence_root = root / "recovery-evidence"
+        evidence_files = sorted(evidence_root.glob("*.tail.bin"))
+        metadata_files = sorted(evidence_root.glob("*.json"))
+        assert len(evidence_files) == len(metadata_files) == 2, (evidence_files, metadata_files)
+        evidence_bytes = {path.read_bytes() for path in evidence_files}
+        assert evidence_bytes == {b'{"received_ms":broken-tail', b'{"received_ms":not-json'}, evidence_bytes
+        for metadata_path in metadata_files:
+            metadata = json.loads(metadata_path.read_text())
+            evidence_path = evidence_root / (metadata_path.stem + ".tail.bin")
+            content = evidence_path.read_bytes()
+            assert metadata["tailBytes"] == len(content), metadata
+            assert metadata["tailSha256"] == hashlib.sha256(content).hexdigest(), metadata
+            assert metadata["sourceRelativePath"].startswith("raw/syslog/"), metadata
+        assert not list(evidence_root.glob("*.tmp-*")), evidence_root
+
         second_root = Path(temp) / "second-instance-data"
         competing, _, _ = start_service(repo, dll, second_root)
         competing.wait(timeout=10)
@@ -175,11 +192,36 @@ def main():
         assert not second_root.exists(), "second service should be rejected before creating another data root"
 
         stop_service(second)
+        third, third_url, _ = start_service(repo, dll, root)
+        repeated = health(third, third_url)
+        assert repeated["recovery"]["repairedTailFiles"] == 0, repeated["recovery"]
+        assert repeated["recovery"]["recoveryEvidenceFiles"] == 0, repeated["recovery"]
+        assert len(list(evidence_root.glob("*.tail.bin"))) == 2
+        with sqlite3.connect(root / "catalog.db") as db:
+            assert db.execute("SELECT COUNT(*) FROM raw_segments").fetchone()[0] == len(rows)
+        stop_service(third)
         with sqlite3.connect(root / "catalog.db") as db:
             states = db.execute("SELECT task_type,state FROM task_runs ORDER BY started_ms").fetchall()
-        assert ("CORE_SERVICE", "STOPPED") in states, states
-        assert ("SYSLOG_UDP", "STOPPED") in states, states
-        print("PASS: crash recovery, tail truncation, orphan/missing catalog reconciliation, single instance, lifecycle and resource status")
+        assert states.count(("CORE_SERVICE", "STOPPED")) == 2, states
+        assert states.count(("SYSLOG_UDP", "STOPPED")) == 2, states
+
+        unsafe_root = Path(temp) / "evidence-write-failure-data"
+        unsafe_root.mkdir()
+        (unsafe_root / ".netconsole-next-root").write_text("NETCONSOLE_NEXT_V1\n")
+        unsafe_raw = unsafe_root / "raw" / "syslog" / "unsafe-tail.ndjson"
+        unsafe_raw.parent.mkdir(parents=True)
+        unsafe_original = make_record(b"keep-me", 1_800_000_003_000) + b'{"received_ms":damaged'
+        unsafe_raw.write_bytes(unsafe_original)
+        outside = Path(temp) / "outside-evidence"
+        outside.mkdir()
+        (unsafe_root / "recovery-evidence").symlink_to(outside, target_is_directory=True)
+        unsafe, unsafe_url, _ = start_service(repo, dll, unsafe_root)
+        unsafe_health = health(unsafe, unsafe_url)
+        assert unsafe_health["recovery"]["failedFiles"] == 1, unsafe_health["recovery"]
+        assert unsafe_raw.read_bytes() == unsafe_original, "failed evidence preservation must not truncate the source Raw file"
+        assert not list(outside.iterdir()), outside
+        stop_service(unsafe)
+        print("PASS: crash recovery, tail evidence preservation, repeat recovery, orphan/missing catalog reconciliation, single instance, lifecycle and resource status")
 
 
 if __name__ == "__main__":

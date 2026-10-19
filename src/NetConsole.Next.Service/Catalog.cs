@@ -11,19 +11,21 @@ internal sealed record RawRecoverySummary(
     int IndexedOrphanFiles,
     int RepairedTailFiles,
     long DiscardedTailBytes,
+    int RecoveryEvidenceFiles,
+    long RecoveryEvidenceBytes,
     int MissingFiles,
     int FailedFiles);
 
 internal sealed record RawCatalogCounts(int Finalized, int Incomplete, int Missing);
 internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskType, string State, long? StartedMs, long? EndedMs);
-internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs, long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes);
+internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs, long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes, string? EvidencePath);
 
 internal sealed class Catalog(RuntimeSettings settings)
 {
     private const int MaximumLineBytes = 128 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
     public string RawRoot => Path.Combine(settings.DataRoot, "raw");
-    public RawRecoverySummary RecoverySummary { get; private set; } = new(0, 0, 0, 0, 0, 0, 0);
+    public RawRecoverySummary RecoverySummary { get; private set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
     public string IntegrityStatus { get; private set; } = "unchecked";
 
     public void Initialize()
@@ -95,8 +97,8 @@ internal sealed class Catalog(RuntimeSettings settings)
     public RawRecoverySummary RecoverRawSegments()
     {
         var indexed = ReadIndexedSegments();
-        int missing = 0, recoveredOpen = 0, indexedOrphans = 0, repaired = 0, failed = 0, scanned = 0;
-        long discarded = 0;
+        int missing = 0, recoveredOpen = 0, indexedOrphans = 0, repaired = 0, failed = 0, scanned = 0, evidenceFiles = 0;
+        long discarded = 0, evidenceBytes = 0;
 
         foreach (var row in indexed.Values)
         {
@@ -128,7 +130,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         }
         catch (IOException)
         {
-            RecoverySummary = new(0, 0, 0, 0, 0, missing, 1);
+            RecoverySummary = new(0, 0, 0, 0, 0, 0, 0, missing, 1);
             return RecoverySummary;
         }
 
@@ -144,7 +146,15 @@ internal sealed class Catalog(RuntimeSettings settings)
                 }
                 var inspection = InspectAndRepair(originalPath);
                 discarded += inspection.DiscardedTailBytes;
-                if (inspection.CorruptTail) repaired++;
+                if (inspection.CorruptTail)
+                {
+                    repaired++;
+                    if (inspection.DiscardedTailBytes > 0)
+                    {
+                        evidenceFiles++;
+                        evidenceBytes += inspection.DiscardedTailBytes;
+                    }
+                }
 
                 var publishedPath = Path.ChangeExtension(originalPath, ".ndjson");
                 if (File.Exists(publishedPath))
@@ -173,7 +183,15 @@ internal sealed class Catalog(RuntimeSettings settings)
                 var relative = RelativeRawPath(path);
                 var inspection = InspectAndRepair(path);
                 discarded += inspection.DiscardedTailBytes;
-                if (inspection.CorruptTail) repaired++;
+                if (inspection.CorruptTail)
+                {
+                    repaired++;
+                    if (inspection.DiscardedTailBytes > 0)
+                    {
+                        evidenceFiles++;
+                        evidenceBytes += inspection.DiscardedTailBytes;
+                    }
+                }
 
                 var wasIndexed = indexed.TryGetValue(relative, out var row);
                 var sameAsCatalog = wasIndexed && row!.State == "FINALIZED" &&
@@ -190,7 +208,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             }
         }
 
-        RecoverySummary = new(scanned, recoveredOpen, indexedOrphans, repaired, discarded, missing, failed);
+        RecoverySummary = new(scanned, recoveredOpen, indexedOrphans, repaired, discarded, evidenceFiles, evidenceBytes, missing, failed);
         return RecoverySummary;
     }
 
@@ -211,7 +229,7 @@ internal sealed class Catalog(RuntimeSettings settings)
 
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
     {
-        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0), "FINALIZED");
+        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null), "FINALIZED");
     }
 
     public void EndTaskRun(string id, string state)
@@ -344,7 +362,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.ExecuteNonQuery();
     }
 
-    private static RawSegmentInspection InspectAndRepair(string path)
+    private RawSegmentInspection InspectAndRepair(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 65536, FileOptions.SequentialScan);
         var originalLength = stream.Length;
@@ -393,8 +411,11 @@ internal sealed class Catalog(RuntimeSettings settings)
         if (line.Length != 0) corrupt = true; // Only newline-terminated records are durable records.
 
     Finished:
+        string? evidencePath = null;
         if (corrupt)
         {
+            if (originalLength > validBytes)
+                evidencePath = PreserveTailEvidence(path, stream, validBytes, originalLength);
             stream.SetLength(validBytes);
             stream.Flush(flushToDisk: true);
         }
@@ -402,7 +423,140 @@ internal sealed class Catalog(RuntimeSettings settings)
         stream.Position = 0;
         var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         return new(recordCount, recordCount == 0 ? 0 : first, last, byteCount, hash, corrupt,
-            Math.Max(0, originalLength - byteCount));
+            Math.Max(0, originalLength - byteCount), evidencePath);
+    }
+
+    private string PreserveTailEvidence(string sourcePath, FileStream source, long offset, long originalLength)
+    {
+        var relativeSourcePath = RelativeRawPath(sourcePath);
+        var evidenceRoot = Path.Combine(settings.DataRoot, "recovery-evidence");
+        Directory.CreateDirectory(evidenceRoot);
+        if ((File.GetAttributes(evidenceRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Recovery evidence directory cannot be a symbolic link or reparse point.");
+
+        var tailLength = originalLength - offset;
+        source.Position = offset;
+        var tailHash = HashRange(source, tailLength);
+        var identityMaterial = System.Text.Encoding.UTF8.GetBytes($"{relativeSourcePath}\n{offset}\n{tailHash}");
+        var identity = Convert.ToHexString(SHA256.HashData(identityMaterial)).ToLowerInvariant();
+        var evidencePath = Path.Combine(evidenceRoot, identity + ".tail.bin");
+        var metadataPath = Path.Combine(evidenceRoot, identity + ".json");
+
+        if (File.Exists(evidencePath) && (File.GetAttributes(evidencePath) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Recovery evidence cannot be a symbolic link or reparse point.");
+        if (File.Exists(metadataPath) && (File.GetAttributes(metadataPath) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Recovery evidence metadata cannot be a symbolic link or reparse point.");
+
+        if (!File.Exists(evidencePath))
+        {
+            var temporaryPath = evidencePath + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                source.Position = offset;
+                using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                           65536, FileOptions.SequentialScan | FileOptions.WriteThrough))
+                {
+                    CopyRange(source, output, tailLength);
+                    output.Flush(flushToDisk: true);
+                }
+                if (new FileInfo(temporaryPath).Length != tailLength || !FileHashMatches(temporaryPath, tailHash))
+                    throw new IOException("Recovery evidence verification failed; the damaged Raw source was left untouched.");
+                try
+                {
+                    File.Move(temporaryPath, evidencePath);
+                }
+                catch (IOException) when (File.Exists(evidencePath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+        }
+
+        if (!FileHashMatches(evidencePath, tailHash) || new FileInfo(evidencePath).Length != tailLength)
+            throw new IOException("Existing recovery evidence does not match the damaged Raw tail; the source was left untouched.");
+
+        if (!File.Exists(metadataPath))
+        {
+            var metadata = JsonSerializer.Serialize(new
+            {
+                sourceRelativePath = relativeSourcePath,
+                originalLength,
+                tailOffset = offset,
+                tailBytes = tailLength,
+                tailSha256 = tailHash,
+                preservedAtMs = UtcNowMs()
+            }, new JsonSerializerOptions { WriteIndented = true });
+            WriteDurableNewFile(metadataPath, metadata);
+        }
+
+        return evidencePath;
+    }
+
+    private static string HashRange(Stream stream, long length)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[65536];
+        var remaining = length;
+        while (remaining > 0)
+        {
+            var read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+            if (read == 0) throw new EndOfStreamException("Raw tail changed while recovery evidence was being hashed.");
+            hash.AppendData(buffer, 0, read);
+            remaining -= read;
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static void CopyRange(Stream source, Stream destination, long length)
+    {
+        var buffer = new byte[65536];
+        var remaining = length;
+        while (remaining > 0)
+        {
+            var read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+            if (read == 0) throw new EndOfStreamException("Raw tail changed while recovery evidence was being copied.");
+            destination.Write(buffer, 0, read);
+            remaining -= read;
+        }
+    }
+
+    private static bool FileHashMatches(string path, string expectedHash)
+    {
+        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+        var actualHash = Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
+        return string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void WriteDurableNewFile(string path, string contents)
+    {
+        var temporaryPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                       4096, FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream))
+            {
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+            try
+            {
+                File.Move(temporaryPath, path);
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                // Another recovery pass already created the immutable metadata.
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
     }
 
     private static bool TryReadRecord(byte[] line, out long timestamp)
