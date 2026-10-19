@@ -17,6 +17,7 @@ jobs:
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
       - run: python3 tests/smoke.py
       - run: python3 tests/g1_recovery.py
+      - run: python3 tests/perf_baseline.py --packets 10000 --queue-burst 5000 --history-files 100 --sqlite-writes 100 --idle-seconds 1 --rate 10000
   windows:
     runs-on: windows-latest
     steps:
@@ -28,3 +29,6 @@ jobs:
       - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
       - run: dotnet run --project src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release -- --help
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
+      - name: Publish, install, and exercise Windows Service through SCM
+        shell: pwsh
+        run: ./tests/windows_service_lifecycle.ps1

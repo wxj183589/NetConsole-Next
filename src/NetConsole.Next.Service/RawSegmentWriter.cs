@@ -6,13 +6,23 @@ namespace NetConsole.Next.Service;
 
 internal sealed record SyslogPacket(long ReceivedMs, string SenderIp, int SenderPort, byte[] Payload);
 
+internal interface IRawSegmentWriterFactory
+{
+    RawSegmentWriter Create(Catalog catalog);
+}
+
+internal sealed class RawSegmentWriterFactory : IRawSegmentWriterFactory
+{
+    public RawSegmentWriter Create(Catalog catalog) => new(catalog);
+}
+
 // Append-only P0 raw writer. Roll at 4MiB, seal before indexing; retain files on catalog errors.
 internal sealed class RawSegmentWriter
 {
     private readonly Catalog _catalog;
     private readonly string _openPath;
     private readonly string _relativePath;
-    private readonly FileStream _stream;
+    private readonly Stream _stream;
     private readonly StreamWriter _writer;
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
@@ -20,7 +30,7 @@ internal sealed class RawSegmentWriter
 
     public long Bytes => _bytes;
 
-    public RawSegmentWriter(Catalog catalog)
+    public RawSegmentWriter(Catalog catalog, Func<string, Stream>? streamFactory = null)
     {
         _catalog = catalog;
         var now = DateTimeOffset.UtcNow;
@@ -30,7 +40,9 @@ internal sealed class RawSegmentWriter
         var name = now.ToString("HHmmssfff") + "-" + Guid.NewGuid().ToString("N");
         _openPath = Path.Combine(folder, name + ".open");
         _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson");
-        _stream = new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous);
+        _stream = streamFactory is null
+            ? new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)
+            : streamFactory(_openPath);
         _writer = new StreamWriter(_stream, new UTF8Encoding(false), 32768);
     }
 
@@ -55,7 +67,8 @@ internal sealed class RawSegmentWriter
     {
         if (_closed) throw new InvalidOperationException("A closed Raw segment cannot be flushed.");
         await _writer.FlushAsync();
-        _stream.Flush(flushToDisk: true);
+        if (_stream is FileStream file) file.Flush(flushToDisk: true);
+        else _stream.Flush();
     }
 
     public async Task PreserveOpenAsync()
@@ -63,8 +76,9 @@ internal sealed class RawSegmentWriter
         if (_closed) return;
         try { await _writer.FlushAsync(); }
         catch (IOException) { }
-        await _writer.DisposeAsync();
-        _closed = true;
+        try { await _writer.DisposeAsync(); }
+        catch (IOException) { }
+        finally { _closed = true; }
     }
 
     public async Task SealAsync()

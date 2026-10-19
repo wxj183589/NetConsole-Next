@@ -7,11 +7,36 @@ internal sealed class RuntimeStatus
     private string _serviceState = "starting";
     private string _collectionState = "starting";
     private string? _collectionError;
+    private string _healthState = "HEALTHY";
+    private string? _healthError;
 
     public string ServiceState => Volatile.Read(ref _serviceState);
     public string CollectionState => Volatile.Read(ref _collectionState);
     public string? CollectionError => Volatile.Read(ref _collectionError);
+    public string HealthState => Volatile.Read(ref _healthState);
+    public string? HealthError => Volatile.Read(ref _healthError);
+    public bool CollectionAllowed => HealthState != "FAULTED";
     public void SetService(string state) => Interlocked.Exchange(ref _serviceState, state);
+    public void SetHealth(string state, string? error = null)
+    {
+        Interlocked.Exchange(ref _healthState, state);
+        Interlocked.Exchange(ref _healthError, error);
+    }
+    public void SetFaulted(string error)
+    {
+        Interlocked.Exchange(ref _healthState, "FAULTED");
+        Interlocked.Exchange(ref _healthError, error);
+        SetCollection("faulted", error);
+    }
+    public void AssessRecovery(RawRecoverySummary recovery, RawCatalogCounts catalogCounts)
+    {
+        if (HealthState == "FAULTED") return;
+        if (recovery.Issues.Any(issue => issue.Critical))
+            SetFaulted("Critical storage/recovery failure; new collection is disabled.");
+        else if (recovery.FailedFiles > 0 || recovery.MissingFiles > 0 || catalogCounts.Incomplete > 0 || catalogCounts.Missing > 0 || recovery.RecoveredOpenFiles > 0 ||
+                 recovery.RepairedTailFiles > 0 || recovery.Issues.Count > 0)
+            SetHealth("DEGRADED", "Raw recovery found historical data that needs attention.");
+    }
     public void SetCollection(string state, string? error = null)
     {
         Interlocked.Exchange(ref _collectionState, state);
@@ -129,6 +154,12 @@ internal sealed class ServiceRunLifecycle(Catalog catalog, RuntimeStatus status,
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (!catalog.Available)
+        {
+            status.SetService("running");
+            logger.LogCritical("Service host is running in FAULTED diagnostic mode without SQLite; no collection tasks will start.");
+            return Task.CompletedTask;
+        }
         _runId = catalog.StartTaskRun(null, "CORE_SERVICE");
         status.SetService("running");
         logger.LogInformation("Core service run {RunId} started.", _runId);
@@ -141,5 +172,40 @@ internal sealed class ServiceRunLifecycle(Catalog catalog, RuntimeStatus status,
         status.SetService("stopped");
         logger.LogInformation("Core service stopped.");
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class RawIntegrityAuditService(Catalog catalog, RuntimeStatus status,
+    ILogger<RawIntegrityAuditService> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!catalog.Available) return;
+        try { await Task.Delay(TimeSpan.FromMinutes(10), stoppingToken); }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var result = catalog.AuditOneFinalizedSegment();
+                if (result is not null)
+                {
+                    logger.LogInformation("Low-priority Raw integrity audit: {Result}", result);
+                    if (result.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                        result.Contains("mismatch", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (status.HealthState == "HEALTHY") status.SetHealth("DEGRADED", "A low-priority Raw integrity audit found an issue.");
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                if (status.HealthState == "HEALTHY") status.SetHealth("DEGRADED", "Low-priority Raw integrity audit failed.");
+                logger.LogWarning(ex, "Low-priority Raw integrity audit failed; Raw files were retained.");
+            }
+            try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+        }
     }
 }

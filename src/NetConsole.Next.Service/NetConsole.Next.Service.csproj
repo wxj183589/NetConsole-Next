@@ -9,5 +9,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.4" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <EmbeddedResource Include="../../storage/schema_v1.sql" LogicalName="schema_v1.sql" />
+    <EmbeddedResource Include="../../storage/schema_v2.sql" LogicalName="schema_v2.sql" />
   </ItemGroup>
 </Project>

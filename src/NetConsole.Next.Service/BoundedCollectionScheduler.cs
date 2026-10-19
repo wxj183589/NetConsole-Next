@@ -36,6 +36,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private static readonly TimeSpan MinimumTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaximumTimeout = TimeSpan.FromMinutes(10);
     private readonly IDeviceSessionFactory _sessionFactory;
+    private readonly Catalog? _catalog;
     private readonly Channel<WorkItem> _queue;
     private readonly ConcurrentDictionary<string, WorkItem> _items = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
@@ -47,11 +48,12 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private long _accepted;
     private long _rejected;
 
-    public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity)
+    public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity, Catalog? catalog = null)
     {
         if (maxConcurrency is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
         if (queueCapacity is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
         _sessionFactory = sessionFactory;
+        _catalog = catalog;
         MaxConcurrency = maxConcurrency;
         QueueCapacity = queueCapacity;
         _queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(queueCapacity)
@@ -68,12 +70,26 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     public int MaxConcurrency { get; }
 
     public bool TrySchedule(DeviceCollectionRequest request, out string id)
+        => TryScheduleCore(request, null, out id);
+
+    public bool TryScheduleDefinition(string definitionId, out string id)
+    {
+        if (_catalog is null) throw new InvalidOperationException("A Catalog is required for persisted task definitions.");
+        var definition = _catalog.GetTaskDefinition(definitionId)
+            ?? throw new KeyNotFoundException($"Task definition '{definitionId}' does not exist.");
+        if (!definition.Enabled) throw new InvalidOperationException("Disabled task definitions cannot be scheduled.");
+        if (definition.RestartPolicy != "NEVER") throw new InvalidOperationException("Unsupported task restart policy.");
+        var request = new DeviceCollectionRequest(definition.Target, definition.Command,
+            TimeSpan.FromMilliseconds(definition.TimeoutMs));
+        return TryScheduleCore(request, definitionId, out id);
+    }
+
+    private bool TryScheduleCore(DeviceCollectionRequest request, string? definitionId, out string id)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
         var submittedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        id = Guid.NewGuid().ToString("N");
-        var item = new WorkItem(id, request, submittedMs);
+        id = string.Empty;
 
         lock (_gate)
         {
@@ -83,6 +99,15 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 return false;
             }
 
+            if (Volatile.Read(ref _queued) >= QueueCapacity)
+            {
+                Interlocked.Increment(ref _rejected);
+                return false;
+            }
+
+            id = definitionId is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definitionId);
+            var item = new WorkItem(id, request, submittedMs, definitionId is not null);
+
             PruneCompletedHistory();
             _items[id] = item;
             Interlocked.Increment(ref _queued);
@@ -90,6 +115,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 Interlocked.Decrement(ref _queued);
                 _items.TryRemove(id, out _);
+                if (item.Persisted) PersistState(item, "CANCELLED", "Queue admission failed.");
                 Interlocked.Increment(ref _rejected);
                 return false;
             }
@@ -121,7 +147,10 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 if (IsTerminal(item.Snapshot.State)) return false;
                 item.CancelRequested = true;
                 if (item.Snapshot.State == "QUEUED")
+                {
                     item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
+                    PersistState(item, "CANCELLED", null);
+                }
                 item.Cancellation.Cancel();
                 return true;
             }
@@ -144,7 +173,10 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 item.CancelRequested = true;
                 if (item.Snapshot.State == "QUEUED")
+                {
                     item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
+                    PersistState(item, "CANCELLED", null);
+                }
             }
             item.Cancellation.Cancel();
         }
@@ -165,7 +197,12 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 Interlocked.Decrement(ref _queued);
                 if (!TryBegin(item)) continue;
-                await ExecuteAsync(item);
+                try { await ExecuteAsync(item); }
+                catch (Exception ex)
+                {
+                    Interlocked.Decrement(ref _active);
+                    SetTerminal(item, "FAILED", null, $"Scheduler:{ex.GetType().Name}", false);
+                }
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
@@ -180,6 +217,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         {
             if (item.Snapshot.State != "QUEUED") return false;
             item.Snapshot = item.Snapshot with { State = "CONNECTING", StartedMs = UtcNowMs() };
+            if (item.Persisted) PersistState(item, "CONNECTING", null);
             Interlocked.Increment(ref _active);
             return true;
         }
@@ -237,6 +275,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         {
             if (!IsTerminal(item.Snapshot.State)) item.Snapshot = item.Snapshot with { State = state };
         }
+        if (item.Persisted && state == "RUNNING") PersistState(item, state, null);
     }
 
     private void SetTerminal(WorkItem item, string state, string? result, string? error, bool timeoutRequested)
@@ -257,7 +296,18 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             }
             item.Snapshot = item.Snapshot with { State = state, Result = result, Error = error, EndedMs = UtcNowMs() };
         }
+        if (item.Persisted) PersistState(item, state, error);
         lock (_gate) PruneCompletedHistory();
+    }
+
+    private void PersistState(WorkItem item, string state, string? reason)
+    {
+        if (!item.Persisted || _catalog is null) return;
+        try { _catalog.TransitionTaskRun(item.Snapshot.Id, state, reason); }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            // The Raw/SQLite service-level gate handles storage failures; scheduler state remains visible in memory.
+        }
     }
 
     private void PruneCompletedHistory()
@@ -283,11 +333,12 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private static bool IsTerminal(string state) => state is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED";
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    private sealed class WorkItem(string id, DeviceCollectionRequest request, long submittedMs)
+    private sealed class WorkItem(string id, DeviceCollectionRequest request, long submittedMs, bool persisted)
     {
         public object Gate { get; } = new();
         public CancellationTokenSource Cancellation { get; } = new();
         public DeviceCollectionRequest Request { get; } = request;
+        public bool Persisted { get; } = persisted;
         public bool CancelRequested { get; set; }
         public DeviceCollectionSnapshot Snapshot { get; set; } = new(id, request.Target, request.Command, "QUEUED", null, null, submittedMs, null, null);
     }

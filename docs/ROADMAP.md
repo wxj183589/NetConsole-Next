@@ -1,26 +1,29 @@
 # 里程碑与验收门禁
 
-## P0 采集底座（当前）
+## P0 采集底座（已实现原型）
 - 新仓库初始化、明确的隔离数据根、独立 Core 原型。
 - SQLite v1 Schema、Raw 原始字节保真、UDP 本机接收、受限队列与计数。
 - Web loopback 健康检查，不是可远程访问的业务 Web。
 - 基本构建及端到端 smoke。未通过长期运行、断电和真实工业设备验证。
 
-## P1 稳定与可靠采集
-- 正式 Windows Service、受控本机 Manager、单实例和安全启停。
-- 停机/掉电/磁盘满恢复、Raw 与 SQLite 对账、按源滚动分段和持久任务。
-- H3C SSH/SNMP、AC/FIT-AP、Online MR、Syslog、长 Ping；真实采集回归。
-- 2核4GB 与 4核8GB 72小时和7天实测，CPU、工作集、IO、丢包量、数据缺口需记录。
-- Windows 10/11、8/8.1、Server2012/R2 单独兼容矩阵；非 Win10 系统不能以构建成功代替验收。
+## G1 稳定性收口（当前优先）
 
-### G1 基础实现状态
-- 已有启动对账：恢复 `.open`、补登未索引 `.ndjson`、验证行与 SHA-256、标记缺失段；损坏尾部保留完整前缀并记为 `INCOMPLETE`。
-- 已有运行记录和单实例互斥；健康 API 暴露队列、收发计数、最近持久化时间、进程资源、磁盘可用空间和 Raw 状态计数。
-- 已有 Windows Service 宿主适配、专用虚拟服务账户安装脚本/卸载脚本、重启恢复配置、本机滚动日志和 Local Manager 的服务启停/重启及本机目录命令；Windows CI 的构建、模拟生命周期测试、Manager CLI help 和 PowerShell 语法已通过。
-- **仍待验证：**SCM 对虚拟服务账户 ACL、真实服务启停/异常恢复和卸载行为必须在目标 Windows 主机验收；本机 CLI 的服务控制权限依赖执行账户的 SCM ACL。
-- 损坏 Raw 尾部在截断前先写入并校验 `recovery-evidence/` 证据文件；集成测试验证字节与 SHA-256，并检查重复启动不会重复登记段或再次修改证据。
-- 有界设备采集调度器支持有限并发/队列、会话连接与释放、超时、排队/运行中取消及有限状态历史；模拟 Echo 会话已纳入 Linux/Windows 自动测试，SSH/SNMP 驱动和设备协议仍未接入。
-- **仍待验证：**Windows 服务真实安装/启停和权限、Windows Service 恢复策略、目标旧 Windows 兼容性、长时间掉电/磁盘满测试及 72 小时/7 天负载验收。Linux 自动测试不能替代这些目标环境验证。
+- 已加入 schema v2 幂等升级、Raw 文件检查点和恢复中断标记。启动仍会枚举目录和核验路径/元数据；已登记且状态为 `FINALIZED`、大小与修改时间未变的文件不读取正文、不重写 Catalog。v1 文件首启仍完整验证；低优先级任务每次最多完整复检一个历史段。
+- 未登记、`.open`、缺失、状态异常、检查点变化或校验不匹配文件仍会读取并校验。损坏尾部先持久化并校验证据，再修复有效前缀；完整校验差异写入 `raw_integrity_audits` 并将段标记为 `INCOMPLETE`。
+- 健康状态区分 `HEALTHY`、`DEGRADED`、`FAULTED`。数据库/恢复根目录或 Raw 写入能力故障阻止新的采集；单个历史段问题可降级继续采集。
+- 有界调度器可持久化任务 Definition/Run、排队/执行状态、超时、取消和失败原因。进程重启把排队/运行中任务标记为 `INTERRUPTED`，默认不自动重放。设备执行只使用模拟会话。
+- Linux 上已有 SQLite busy/write fail、Raw 权限拒绝、采集中磁盘写失败、恢复中强杀、重复启动和 1,000 文件检查点用例。GitHub Windows Server 2025 工作流已实际通过 EXE 发布、虚拟账户/ProgramData ACL、Local Manager/SCM 生命周期、强杀恢复和卸载后保留数据。
+- 100,000 条 UDP 和 1,000 个历史段的云端负载结果记录在 [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)。该容器测量不替代目标工业主机验收。
+
+## G2 可靠设备采集（G1 门禁通过后）
+
+- 模拟设备调度验证完成后再接 SSH/SNMP 只读采集、Syslog 多来源和 MR 实时采集。
+- 持久调度目前是内部模型/调度核心，没有设备驱动、自动重试、远程控制或业务任务 Web 页面。
+- 在 2核4GB 与 4核8GB 目标主机执行 72 小时和 7 天测试，记录 CPU、工作集、IO、丢包量和数据缺口。
+- Windows 10/11、8/8.1、Server2012/R2 单独建立兼容矩阵；非 Win10 系统不能以构建成功代替验收。
+
+### G1 尚未关闭的验收项
+- **待真实环境：**Windows 10/11 与旧 Windows 版本兼容、真正磁盘耗尽/突然断电、72 小时/7 天工业主机负载；Windows Server 2025 CI 与 Linux 故障注入不替代这些验证。
 
 ## P2-P5
 - P2：按成熟开源模式重新设计工具集和可选 HTTP/FTP/TFTP/WebDAV/SFTP Server。

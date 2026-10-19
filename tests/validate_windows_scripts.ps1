@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 $repository = Split-Path -Parent $PSScriptRoot
 $scripts = @(
     (Join-Path $repository "scripts/install-service.ps1"),
-    (Join-Path $repository "scripts/uninstall-service.ps1")
+    (Join-Path $repository "scripts/uninstall-service.ps1"),
+    (Join-Path $repository "tests/windows_service_lifecycle.ps1")
 )
 
 foreach ($path in $scripts) {

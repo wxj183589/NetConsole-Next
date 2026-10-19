@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/NetConsole.Next.Service/NetConsole.Next.Service.csproj" />
+    <EmbeddedResource Include="../../storage/schema_v1.sql" LogicalName="NetConsole.Next.Service.Tests.schema_v1.sql" />
   </ItemGroup>
 </Project>
