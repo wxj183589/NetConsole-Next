@@ -17,7 +17,7 @@
 
 设备采集框架当前提供有界调度队列、最大并发限制、连接会话接口、超时、取消和状态历史上限，并以模拟设备命令回显测试验证生命周期。该框架尚未连接 SSH/SNMP，也没有真实设备适配器。
 
-Windows Service 与本机 Local Manager CLI 已有基础代码：Service Control Manager 启停适配、安装脚本，以及 `status`、`start`、`stop`、`open-data` 命令。实际 Windows 安装、服务账户/权限和目标主机行为仍待验证。
+Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，服务仅获得发布目录读取/执行权限和隔离数据根修改权限，并配置 SCM 自动恢复；Local Manager 提供 `status`、`start`、`stop`、`restart`、`open-web`、`open-data`、`open-raw`、`open-logs` 和 `open-published`。Service 写入 5 MiB 分段、最多保留 14 个文件的本机滚动日志。Windows CI 检查构建、Manager 帮助命令和安装/卸载 PowerShell 语法；真实安装、服务账户 ACL、SCM 恢复行为仍待目标 Windows 实机验证。
 
 **未实现：**Web 登录认证与业务界面、SSH/SNMP、文件服务、长周期运行和设备回归。不能宣称真实现场的数据完整性或 UDP 零丢包。
 
@@ -64,12 +64,21 @@ dotnet publish src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Rel
 .\scripts\install-service.ps1 -ServiceExecutable .\src\NetConsole.Next.Service\bin\Release\net10.0\win-x64\publish\NetConsole.Next.Service.exe
 ~~~
 
+卸载仅移除 Windows 服务登记，不删除发布文件或数据目录：
+
+~~~powershell
+.\scripts\uninstall-service.ps1
+~~~
+
 Windows 默认新数据根为 `%ProgramData%\NetConsoleNext\data`；若目录非空且没有合法标记，Service 会拒绝启动。Local Manager 是本机命令行工具，不开放远程控制：
 
 ~~~powershell
 dotnet run --project src/NetConsole.Next.LocalManager -- status
 dotnet run --project src/NetConsole.Next.LocalManager -- start
+dotnet run --project src/NetConsole.Next.LocalManager -- restart
 dotnet run --project src/NetConsole.Next.LocalManager -- open-data
+dotnet run --project src/NetConsole.Next.LocalManager -- open-raw
+dotnet run --project src/NetConsole.Next.LocalManager -- open-logs
 ~~~
 
 健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。

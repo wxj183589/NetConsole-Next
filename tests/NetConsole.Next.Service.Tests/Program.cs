@@ -1,4 +1,5 @@
 using NetConsole.Next.Service;
+using Microsoft.Extensions.Logging;
 
 await SchedulerTests.RunAsync();
 
@@ -11,6 +12,7 @@ internal static class SchedulerTests
         await TimesOutAndDisposesSession();
         await ReportsConnectionFailuresAndDisposesSession();
         await StopsActiveSessionsDuringSchedulerShutdown();
+        VerifiesRollingLogSizeAndRetention();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded collection scheduling, queue rejection, timeout, cancellation and session lifecycle");
     }
@@ -110,6 +112,24 @@ internal static class SchedulerTests
         Assert(factory.DisposedCount == 1, "shutdown must dispose the active device session");
         Assert(scheduler.Status.Active == 0 && scheduler.Status.Queued == 0, scheduler.Status.ToString()!);
         Assert(!scheduler.Cancel(id), "shutdown scheduler must not accept cancellation after disposal");
+    }
+
+    private static void VerifiesRollingLogSizeAndRetention()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-logs-" + Guid.NewGuid().ToString("N"));
+        var diagnostics = new FileLogDiagnostics();
+        using (var provider = new RollingFileLoggerProvider(root, diagnostics, maximumFileBytes: 1024, retainedFileCount: 2))
+        {
+            var logger = provider.CreateLogger("LogRotationTest");
+            for (var i = 0; i < 30; i++) logger.LogInformation("entry-{Entry} {Payload}", i, new string('x', 96));
+        }
+
+        var files = Directory.GetFiles(Path.Combine(root, "logs"), "service-*.log");
+        Assert(files.Length == 2, $"expected two retained log files, found {files.Length}");
+        Assert(files.All(path => new FileInfo(path).Length <= 1024), "a log exceeded its configured file size limit");
+        Assert(files.Any(path => File.ReadAllText(path).Contains("entry-29", StringComparison.Ordinal)), "latest log record was pruned");
+        Assert(diagnostics.WriteFailures == 0, $"logger reported {diagnostics.WriteFailures} write failures");
+        Directory.Delete(root, recursive: true);
     }
 
     private static void RejectsInvalidRequests()

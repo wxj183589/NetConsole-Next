@@ -11,10 +11,11 @@ NetConsole.Next.Service
   ├─ UDP Syslog receiver → bounded channel → Raw NDJSON segment writer
   ├─ SQLite catalog and startup Raw reconciliation
   ├─ process, queue, collection and disk-free monitoring
+  ├─ bounded, count-retained local rolling logs
   └─ bounded device collection scheduler core (not yet wired to a device driver/API)
 
 NetConsole.Next.LocalManager
-  └─ local CLI for Windows service status/start/stop and opening the isolated data root
+  └─ local CLI for Windows service status/start/stop/restart and opening loopback/data directories
 ```
 
 The Service has no UI dependency. The Web endpoint binds to `127.0.0.1`; remote management authentication and authorization are not implemented. UDP remote binding requires explicit opt-in. The Local Manager is a local process and does not own the Service lifetime.
@@ -29,4 +30,4 @@ Syslog is the only connected collector. `BoundedCollectionScheduler` provides fi
 
 ## State and limits
 
-The service run and Syslog run are written to `task_runs`. Startup marks stale `RUNNING` tasks `INTERRUPTED`. Resource snapshots and scheduler snapshots are in memory; scheduler history is capped at 256 completed requests. SQLite uses WAL and `synchronous=FULL`; there is not yet a versioned migration runner, managed backup/restore, explicit checkpoint policy, authenticated Web UI, or supported-target Windows service installation evidence.
+The service run and Syslog run are written to `task_runs`. Startup marks stale `RUNNING` tasks `INTERRUPTED`. Resource snapshots and scheduler snapshots are in memory; scheduler history is capped at 256 completed requests. SQLite uses WAL and `synchronous=FULL`; the file logger rotates at 5 MiB and retains at most 14 service log files. The Windows installer assigns a dedicated virtual service account with read/execute access to the publish directory and modify access to the isolated data root. There is not yet a versioned migration runner, managed backup/restore, explicit checkpoint policy, authenticated Web UI, or supported-target Windows service installation evidence.

@@ -1,0 +1,12 @@
+name: Windows deployment script syntax
+on:
+  push:
+  pull_request:
+
+jobs:
+  powershell-parse:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tests/validate_windows_scripts.ps1
+        shell: pwsh

@@ -146,6 +146,9 @@ def main():
         assert current["resources"]["workingSetBytes"] > 0, current["resources"]
         assert current["resources"]["threadCount"] > 0, current["resources"]
         assert "dataVolumeFreeBytes" in current["resources"], current["resources"]
+        assert current["logWriteFailures"] == 0, current
+        assert list((root / "logs").glob("service-*.log")), "service should persist a rolling log file"
+        assert (root / "published").is_dir(), "published files directory should be prepared at startup"
 
         recovered = list((root / "raw").rglob("*.ndjson"))
         recovered_open = [path for path in recovered if "recovery-test" not in path.parts]

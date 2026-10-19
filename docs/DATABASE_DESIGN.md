@@ -10,6 +10,8 @@ Status: schema v1 is `CI_VERIFIED` for initialization, SQLite integrity checks, 
 ├── catalog.db                 # SQLite authority for sources, Raw manifest and task runs
 ├── catalog.db-wal / -shm      # SQLite-managed WAL files while open
 ├── raw/syslog/YYYY/MM/DD/     # Raw NDJSON segments (.open while writing, .ndjson after seal)
+├── logs/                      # rolling service diagnostics (5 MiB segments, 14-file cap)
+├── published/ inbox/ archive/ backup/ # prepared isolated directories; optional services are not implemented
 └── recovery-evidence/         # verified corrupt-tail bytes and JSON metadata
 ```
 

@@ -12,6 +12,7 @@ builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
+builder.Services.AddSingleton<FileLogDiagnostics>();
 builder.Services.AddHostedService<ServiceRunLifecycle>();
 builder.Services.AddHostedService<ProcessResourceMonitor>();
 builder.Services.AddHostedService<UdpSyslogWorker>();
@@ -19,6 +20,10 @@ builder.Services.AddHostedService<UdpSyslogWorker>();
 var app = builder.Build();
 var catalog = app.Services.GetRequiredService<Catalog>();
 catalog.Initialize();
+var fileLogDiagnostics = app.Services.GetRequiredService<FileLogDiagnostics>();
+var fileLoggerProvider = new RollingFileLoggerProvider(settings.DataRoot, fileLogDiagnostics);
+app.Services.GetRequiredService<ILoggerFactory>().AddProvider(fileLoggerProvider);
+app.Lifetime.ApplicationStopped.Register(fileLoggerProvider.Dispose);
 var recovery = catalog.RecoverRawSegments();
 if (recovery.FailedFiles > 0)
     app.Logger.LogWarning("Raw recovery left {FailedFiles} file(s) untouched because they could not be inspected.", recovery.FailedFiles);
@@ -29,7 +34,7 @@ app.Logger.LogInformation("Raw recovery scanned {ScannedFiles} file(s), recovere
 var processStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 app.MapGet("/", () => Results.Text("NetConsole Next Core service"));
 app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress, Catalog rawCatalog,
-    RuntimeStatus status, RuntimeResources resources) =>
+    RuntimeStatus status, RuntimeResources resources, FileLogDiagnostics logDiagnostics) =>
 {
     var resource = resources.Snapshot;
     var segments = rawCatalog.GetRawCounts();
@@ -53,6 +58,7 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         openSegmentsOnDisk = rawCatalog.OpenSegmentCount(),
         rawSegments = segments,
         sqliteIntegrityAtStartup = rawCatalog.IntegrityStatus,
+        logWriteFailures = logDiagnostics.WriteFailures,
         recovery = rawCatalog.RecoverySummary,
         resources = resource
     });
