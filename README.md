@@ -15,6 +15,8 @@
 
 当前实现包括：SQLite Schema v1、数据目录安全标识、本机 loopback 健康 API、可选 UDP Syslog、有界接收队列、Raw NDJSON 二进制保真、受控结束时封段与 SQLite 索引。G1 基础增加了启动时 Raw/SQLite 对账、遗留 `.open` 恢复、有效 NDJSON 前缀校验与损坏尾部截断、未索引段补登、缺失文件标记、任务运行记录、跨进程单实例锁，以及进程资源和采集状态快照。
 
+设备采集框架当前提供有界调度队列、最大并发限制、连接会话接口、超时、取消和状态历史上限，并以模拟设备命令回显测试验证生命周期。该框架尚未连接 SSH/SNMP，也没有真实设备适配器。
+
 Windows Service 与本机 Local Manager CLI 已有基础代码：Service Control Manager 启停适配、安装脚本，以及 `status`、`start`、`stop`、`open-data` 命令。实际 Windows 安装、服务账户/权限和目标主机行为仍待验证。
 
 **未实现：**Web 登录认证与业务界面、SSH/SNMP、文件服务、长周期运行和设备回归。不能宣称真实现场的数据完整性或 UDP 零丢包。
@@ -46,6 +48,7 @@ dotnet run --project src/NetConsole.Next.Service
 ~~~sh
 dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
 dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
+dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
 python3 tests/smoke.py
 python3 tests/g1_recovery.py
 ~~~
@@ -72,5 +75,7 @@ dotnet run --project src/NetConsole.Next.LocalManager -- open-data
 健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。
 
 参见 [ADR](docs/ADR-0001.md)、[路线与门禁](docs/ROADMAP.md)。
+
+实现与验收记录见 [当前架构](docs/ARCHITECTURE.md)、[数据库设计](docs/DATABASE_DESIGN.md)、[功能迁移矩阵](docs/FEATURE_MIGRATION_MATRIX.md)、[兼容性矩阵](docs/COMPATIBILITY_MATRIX.md)、[性能基线](docs/PERFORMANCE_BASELINE.md)、[测试证据](docs/TEST_EVIDENCE.md) 与 [开源引用和依赖登记](docs/OPEN_SOURCE_REFERENCES.md)。
 
 现有正式产品：[NetConsole](https://github.com/wxj183589/NetConsole)。
