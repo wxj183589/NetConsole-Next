@@ -5,7 +5,7 @@ Current Service and Local Manager target `net10.0`. Build success on a current r
 | Environment | Build / automated evidence | Real runtime / service evidence | Status |
 | --- | --- | --- | --- |
 | Ubuntu GitHub runner | Service, Local Manager, scheduler test harness, Syslog smoke and G1 recovery tests | Linux process-level behavior covered; not a production support claim | `CI_VERIFIED` |
-| Windows GitHub runner | Service and Local Manager build passed on G1; scheduler harness run is pending this branch's Actions result | Windows Service installation, account ACL, SCM recovery and upgrade not exercised | `COMPATIBILITY_PENDING` |
+| Windows GitHub runner | Service, Local Manager, and scheduler harness passed in Actions run 39258222423 | Windows Service installation, account ACL, SCM recovery and upgrade not exercised | `COMPATIBILITY_PENDING` |
 | Windows 10 x64 | No target-machine evidence yet | Service lifecycle, ProgramData permissions, installer/uninstaller and long run pending | `COMPATIBILITY_PENDING` |
 | Windows 11 x64 | No target-machine evidence yet | Service lifecycle, permissions, installer/uninstaller and long run pending | `COMPATIBILITY_PENDING` |
 | Windows Server 2012 / 2012 R2 | No target-machine evidence yet | Runtime support not declared; requires supported-host/runtime research and a real VM | `BLOCKED` pending runtime decision |
