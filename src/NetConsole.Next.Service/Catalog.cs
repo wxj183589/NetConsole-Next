@@ -1,12 +1,30 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service;
 
+internal sealed record RawRecoverySummary(
+    int ScannedFiles,
+    int RecoveredOpenFiles,
+    int IndexedOrphanFiles,
+    int RepairedTailFiles,
+    long DiscardedTailBytes,
+    int MissingFiles,
+    int FailedFiles);
+
+internal sealed record RawCatalogCounts(int Finalized, int Incomplete, int Missing);
+internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskType, string State, long? StartedMs, long? EndedMs);
+internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs, long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes);
+
 internal sealed class Catalog(RuntimeSettings settings)
 {
+    private const int MaximumLineBytes = 128 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
     public string RawRoot => Path.Combine(settings.DataRoot, "raw");
+    public RawRecoverySummary RecoverySummary { get; private set; } = new(0, 0, 0, 0, 0, 0, 0);
+    public string IntegrityStatus { get; private set; } = "unchecked";
 
     public void Initialize()
     {
@@ -19,23 +37,51 @@ internal sealed class Catalog(RuntimeSettings settings)
             File.WriteAllText(marker, "NETCONSOLE_NEXT_V1\n");
         }
         else if (File.ReadAllText(marker).Trim() != "NETCONSOLE_NEXT_V1")
+        {
             throw new InvalidOperationException("Data directory marker is unknown.");
+        }
 
         Directory.CreateDirectory(RawRoot);
+        if ((File.GetAttributes(RawRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Raw data root cannot be a symbolic link or reparse point.");
         using var db = Open();
+        using (var integrity = db.CreateCommand())
+        {
+            integrity.CommandText = "PRAGMA quick_check(1)";
+            var result = integrity.ExecuteScalar()?.ToString();
+            if (!string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("SQLite catalog integrity check failed; preserving the data root without starting collection.");
+        }
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v1.sql")
             ?? throw new InvalidOperationException("Embedded schema_v1.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.CommandText = reader.ReadToEnd();
         command.ExecuteNonQuery();
+
+        using (var foreignKeys = db.CreateCommand())
+        {
+            foreignKeys.CommandText = "PRAGMA foreign_key_check";
+            using var violations = foreignKeys.ExecuteReader();
+            if (violations.Read())
+                throw new InvalidDataException("SQLite catalog foreign-key check failed; preserving the data root without starting collection.");
+        }
+        IntegrityStatus = "ok";
+
+        // A RUNNING row after process restart did not receive a cooperative stop.
+        using var interrupted = db.CreateCommand();
+        interrupted.CommandText = "UPDATE task_runs SET state='INTERRUPTED', ended_ms=$now WHERE state='RUNNING'";
+        interrupted.Parameters.AddWithValue("$now", UtcNowMs());
+        interrupted.ExecuteNonQuery();
     }
 
     private SqliteConnection Open()
     {
         var db = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = DatabasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
         }.ToString());
         db.Open();
         using var command = db.CreateCommand();
@@ -44,27 +90,342 @@ internal sealed class Catalog(RuntimeSettings settings)
         return db;
     }
 
+    public RawRecoverySummary RecoverRawSegments()
+    {
+        var indexed = ReadIndexedSegments();
+        int missing = 0, recoveredOpen = 0, indexedOrphans = 0, repaired = 0, failed = 0, scanned = 0;
+        long discarded = 0;
+
+        foreach (var row in indexed.Values)
+        {
+            try
+            {
+                if (!TryResolveRawPath(row.RelativePath, out var path) || !File.Exists(path))
+                {
+                    MarkMissing(row.RelativePath);
+                    missing++;
+                }
+                else if (ContainsReparsePoint(path))
+                {
+                    failed++;
+                }
+            }
+            catch (IOException)
+            {
+                MarkMissing(row.RelativePath);
+                missing++;
+            }
+        }
+
+        string[] openFiles;
+        string[] finalizedFiles;
+        try
+        {
+            openFiles = Directory.EnumerateFiles(RawRoot, "*.open", SearchOption.AllDirectories).ToArray();
+            finalizedFiles = Directory.EnumerateFiles(RawRoot, "*.ndjson", SearchOption.AllDirectories).ToArray();
+        }
+        catch (IOException)
+        {
+            RecoverySummary = new(0, 0, 0, 0, 0, missing, 1);
+            return RecoverySummary;
+        }
+
+        foreach (var originalPath in openFiles)
+        {
+            scanned++;
+            try
+            {
+                if (ContainsReparsePoint(originalPath))
+                {
+                    failed++;
+                    continue;
+                }
+                var inspection = InspectAndRepair(originalPath);
+                discarded += inspection.DiscardedTailBytes;
+                if (inspection.CorruptTail) repaired++;
+
+                var publishedPath = Path.ChangeExtension(originalPath, ".ndjson");
+                if (File.Exists(publishedPath))
+                    publishedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + ".recovered-" + Guid.NewGuid().ToString("N") + ".ndjson");
+                File.Move(originalPath, publishedPath);
+                var relative = RelativeRawPath(publishedPath);
+                UpsertRecoveredSegment(relative, inspection, "INCOMPLETE");
+                recoveredOpen++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
+            {
+                failed++;
+            }
+        }
+
+        foreach (var path in finalizedFiles)
+        {
+            scanned++;
+            try
+            {
+                if (ContainsReparsePoint(path))
+                {
+                    failed++;
+                    continue;
+                }
+                var relative = RelativeRawPath(path);
+                var inspection = InspectAndRepair(path);
+                discarded += inspection.DiscardedTailBytes;
+                if (inspection.CorruptTail) repaired++;
+
+                var wasIndexed = indexed.TryGetValue(relative, out var row);
+                var sameAsCatalog = wasIndexed && row!.State == "FINALIZED" &&
+                    row.RecordCount == inspection.RecordCount && row.ByteCount == inspection.ByteCount &&
+                    string.Equals(row.Sha256, inspection.Sha256, StringComparison.OrdinalIgnoreCase);
+                var state = sameAsCatalog && !inspection.CorruptTail ? "FINALIZED" :
+                    (!wasIndexed && !inspection.CorruptTail ? "FINALIZED" : "INCOMPLETE");
+                UpsertRecoveredSegment(relative, inspection, state);
+                if (!wasIndexed) indexedOrphans++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
+            {
+                failed++;
+            }
+        }
+
+        RecoverySummary = new(scanned, recoveredOpen, indexedOrphans, repaired, discarded, missing, failed);
+        return RecoverySummary;
+    }
+
+    public string StartTaskRun(string? sourceId, string taskType)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"INSERT INTO task_runs(id,source_id,task_type,state,started_ms)
+            VALUES($id,$source,$type,'RUNNING',$now)";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$source", (object?)sourceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$type", taskType);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.ExecuteNonQuery();
+        return id;
+    }
+
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
+    {
+        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0), "FINALIZED");
+    }
+
+    public void EndTaskRun(string id, string state)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE task_runs SET state=$state, ended_ms=$now WHERE id=$id AND state='RUNNING'";
+        command.Parameters.AddWithValue("$state", state);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<TaskRunSnapshot> RecentTaskRuns(int limit = 25)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT id,source_id,task_type,state,started_ms,ended_ms
+            FROM task_runs ORDER BY started_ms DESC LIMIT $limit";
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
+        using var reader = command.ExecuteReader();
+        var result = new List<TaskRunSnapshot>();
+        while (reader.Read())
+        {
+            result.Add(new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                reader.IsDBNull(5) ? null : reader.GetInt64(5)));
+        }
+        return result;
+    }
+
+    public RawCatalogCounts GetRawCounts()
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT state,COUNT(*) FROM raw_segments GROUP BY state";
+        using var reader = command.ExecuteReader();
+        int finalized = 0, incomplete = 0, missing = 0;
+        while (reader.Read())
+        {
+            switch (reader.GetString(0))
+            {
+                case "FINALIZED": finalized = reader.GetInt32(1); break;
+                case "INCOMPLETE": incomplete = reader.GetInt32(1); break;
+                case "MISSING": missing = reader.GetInt32(1); break;
+            }
+        }
+        return new(finalized, incomplete, missing);
+    }
+
+    public int OpenSegmentCount() => Directory.Exists(RawRoot)
+        ? Directory.EnumerateFiles(RawRoot, "*.open", SearchOption.AllDirectories).Take(10001).Count()
+        : 0;
+
+    private Dictionary<string, IndexedSegment> ReadIndexedSegments()
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT relative_path,state,record_count,byte_count,sha256 FROM raw_segments";
+        using var reader = command.ExecuteReader();
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var result = new Dictionary<string, IndexedSegment>(pathComparer);
+        while (reader.Read())
+        {
+            var relative = reader.GetString(0).Replace('\\', '/');
+            result[relative] = new(relative, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4));
+        }
+        return result;
+    }
+
+    private bool TryResolveRawPath(string relative, out string path)
+    {
+        path = string.Empty;
+        if (Path.IsPathRooted(relative)) return false;
+        var candidate = Path.GetFullPath(Path.Combine(settings.DataRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
+        var rawRoot = Path.GetFullPath(RawRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!candidate.StartsWith(rawRoot, comparison)) return false;
+        path = candidate;
+        return true;
+    }
+
+    private bool ContainsReparsePoint(string path)
+    {
+        var rawRoot = Path.GetFullPath(RawRoot);
+        var current = Path.GetFullPath(path);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        while (true)
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            if (string.Equals(current, rawRoot, comparison)) return false;
+            current = Directory.GetParent(current)?.FullName
+                ?? throw new IOException("Raw file escaped the raw data root.");
+        }
+    }
+
+    private string RelativeRawPath(string path) => Path.GetRelativePath(settings.DataRoot, path).Replace('\\', '/');
+
+    private void MarkMissing(string relative)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE raw_segments SET state='MISSING' WHERE relative_path=$path";
+        command.Parameters.AddWithValue("$path", relative);
+        command.ExecuteNonQuery();
+    }
+
+    private void UpsertRecoveredSegment(string relative, RawSegmentInspection info, string state)
     {
         using var db = Open();
         using var command = db.CreateCommand();
         command.CommandText = @"INSERT INTO raw_segments
-            (id,source_id,relative_path,state,first_received_ms,last_received_ms,
-             record_count,byte_count,sha256,sealed_ms)
-            VALUES ($id,'syslog-local',$path,'FINALIZED',$first,$last,$count,$bytes,$sha,$now)";
+            (id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,sealed_ms)
+            VALUES($id,'syslog-local',$path,$state,$first,$last,$count,$bytes,$sha,$now)
+            ON CONFLICT(relative_path) DO UPDATE SET
+              state=excluded.state, first_received_ms=excluded.first_received_ms,
+              last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
+              byte_count=excluded.byte_count, sha256=excluded.sha256, sealed_ms=excluded.sealed_ms";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
-        command.Parameters.AddWithValue("$path", relative.Replace('\\', '/'));
-        command.Parameters.AddWithValue("$first", first);
-        command.Parameters.AddWithValue("$last", last);
-        command.Parameters.AddWithValue("$count", count);
-        command.Parameters.AddWithValue("$bytes", bytes);
-        command.Parameters.AddWithValue("$sha", sha);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$path", relative);
+        command.Parameters.AddWithValue("$state", state);
+        command.Parameters.AddWithValue("$first", info.RecordCount == 0 ? DBNull.Value : info.FirstReceivedMs);
+        command.Parameters.AddWithValue("$last", info.RecordCount == 0 ? DBNull.Value : info.LastReceivedMs);
+        command.Parameters.AddWithValue("$count", info.RecordCount);
+        command.Parameters.AddWithValue("$bytes", info.ByteCount);
+        command.Parameters.AddWithValue("$sha", info.Sha256);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
         command.ExecuteNonQuery();
     }
 
-    // Includes live .open files; pending crash recovery needs a future G1 scanner.
-    public int OpenSegmentCount() => Directory.Exists(RawRoot)
-        ? Directory.EnumerateFiles(RawRoot, "*.open", SearchOption.AllDirectories).Take(10001).Count()
-        : 0;
+    private static RawSegmentInspection InspectAndRepair(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 65536, FileOptions.SequentialScan);
+        var originalLength = stream.Length;
+        long validBytes = 0, recordCount = 0, first = long.MaxValue, last = 0, consumed = 0;
+        bool corrupt = false;
+        using var line = new MemoryStream();
+        var buffer = new byte[65536];
+
+        while (true)
+        {
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read == 0) break;
+            for (var i = 0; i < read; i++)
+            {
+                var current = buffer[i];
+                consumed++;
+                if (current == (byte)'\n')
+                {
+                    var lineBytes = line.ToArray();
+                    line.SetLength(0);
+                    line.Position = 0;
+                    if (lineBytes.Length > 0 && lineBytes[^1] == (byte)'\r')
+                        Array.Resize(ref lineBytes, lineBytes.Length - 1);
+                    if (!TryReadRecord(lineBytes, out var timestamp))
+                    {
+                        corrupt = true;
+                        goto Finished;
+                    }
+                    validBytes = consumed;
+                    recordCount++;
+                    first = Math.Min(first, timestamp);
+                    last = Math.Max(last, timestamp);
+                }
+                else
+                {
+                    if (line.Length >= MaximumLineBytes)
+                    {
+                        corrupt = true;
+                        goto Finished;
+                    }
+                    line.WriteByte(current);
+                }
+            }
+        }
+
+        if (line.Length != 0) corrupt = true; // Only newline-terminated records are durable records.
+
+    Finished:
+        if (corrupt)
+        {
+            stream.SetLength(validBytes);
+            stream.Flush(flushToDisk: true);
+        }
+        var byteCount = corrupt ? validBytes : originalLength;
+        stream.Position = 0;
+        var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        return new(recordCount, recordCount == 0 ? 0 : first, last, byteCount, hash, corrupt,
+            Math.Max(0, originalLength - byteCount));
+    }
+
+    private static bool TryReadRecord(byte[] line, out long timestamp)
+    {
+        timestamp = 0;
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("received_ms", out var received) || !received.TryGetInt64(out timestamp) ||
+                !root.TryGetProperty("sender_ip", out var sender) || sender.ValueKind != JsonValueKind.String ||
+                !System.Net.IPAddress.TryParse(sender.GetString(), out _) ||
+                !root.TryGetProperty("sender_port", out var port) || !port.TryGetInt32(out var senderPort) || senderPort is < 0 or > 65535 ||
+                !root.TryGetProperty("payload_base64", out var payload) || payload.ValueKind != JsonValueKind.String)
+                return false;
+            _ = Convert.FromBase64String(payload.GetString() ?? string.Empty);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    private sealed record IndexedSegment(string RelativePath, string State, long? RecordCount, long ByteCount, string? Sha256);
 }

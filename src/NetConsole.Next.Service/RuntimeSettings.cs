@@ -12,6 +12,8 @@ internal sealed class RuntimeSettings
     public static RuntimeSettings FromEnvironment()
     {
         var root = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_DATA_ROOT");
+        if (string.IsNullOrWhiteSpace(root) && OperatingSystem.IsWindows())
+            root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NetConsoleNext", "data");
         if (string.IsNullOrWhiteSpace(root))
             throw new InvalidOperationException("Set NETCONSOLE_NEXT_DATA_ROOT to an isolated new directory.");
         var full = Path.GetFullPath(root);

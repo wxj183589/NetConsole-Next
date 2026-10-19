@@ -1,4 +1,4 @@
-name: P0 Compile and Linux Ingress Smoke
+name: G1 Build and Linux Recovery Tests
 on:
   push:
   pull_request:
@@ -12,7 +12,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+      - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
       - run: python3 tests/smoke.py
+      - run: python3 tests/g1_recovery.py
   windows:
     runs-on: windows-latest
     steps:
@@ -21,3 +23,4 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+      - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release

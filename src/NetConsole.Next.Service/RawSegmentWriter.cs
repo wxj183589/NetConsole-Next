@@ -16,7 +16,7 @@ internal sealed class RawSegmentWriter
     private readonly StreamWriter _writer;
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
-    private bool _sealed;
+    private bool _sealed, _closed;
 
     public long Bytes => _bytes;
 
@@ -53,8 +53,18 @@ internal sealed class RawSegmentWriter
 
     public async Task FlushAsync()
     {
+        if (_closed) throw new InvalidOperationException("A closed Raw segment cannot be flushed.");
         await _writer.FlushAsync();
         _stream.Flush(flushToDisk: true);
+    }
+
+    public async Task PreserveOpenAsync()
+    {
+        if (_closed) return;
+        try { await _writer.FlushAsync(); }
+        catch (IOException) { }
+        await _writer.DisposeAsync();
+        _closed = true;
     }
 
     public async Task SealAsync()
@@ -62,14 +72,14 @@ internal sealed class RawSegmentWriter
         if (_sealed) return;
         await FlushAsync();
         await _writer.DisposeAsync();
+        _closed = true;
         string checksum;
         using (var sha = SHA256.Create())
         using (var input = File.OpenRead(_openPath))
             checksum = Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
         var published = _openPath[..^".open".Length] + ".ndjson";
         File.Move(_openPath, published);
-        // If the DB write fails, the final file is deliberately preserved.
-        // G1 must reconcile sealed/unindexed and abandoned .open files on startup.
+        // If the DB write fails, the final file is deliberately preserved for reconciliation.
         _catalog.RegisterFinalizedSegment(_relativePath, _records,
             _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length);
         _sealed = true;

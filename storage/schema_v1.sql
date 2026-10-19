@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS task_runs(
  state TEXT NOT NULL,
  started_ms INTEGER, ended_ms INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_task_runs_state ON task_runs(state,started_ms);
+CREATE INDEX IF NOT EXISTS idx_task_runs_source_time ON task_runs(source_id,started_ms);
 CREATE TABLE IF NOT EXISTS audit_events(
  id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL,
  action TEXT NOT NULL, outcome TEXT NOT NULL,
