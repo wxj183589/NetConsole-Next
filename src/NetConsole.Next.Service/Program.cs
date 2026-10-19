@@ -41,8 +41,7 @@ try
 
     var recovery = catalog.RecoverRawSegments();
     runtimeStatus.AssessRecovery(recovery, catalog.GetUnresolvedIntegrityIssueCount());
-    if (catalog.InterruptedTaskRuns > 0 && runtimeStatus.HealthState == "HEALTHY")
-        runtimeStatus.SetHealth("DEGRADED", "One or more task runs were interrupted by the previous process exit.");
+    runtimeStatus.SetInterruptedTaskRuns(catalog.InterruptedTaskRuns);
     if (!recovery.Issues.Any(issue => issue.Critical)) catalog.CompleteRawRecovery();
     if (recovery.FailedFiles > 0)
         app.Logger.LogWarning("Raw recovery left {FailedFiles} file(s) untouched; inspect recovery.issues and raw_integrity_audits.", recovery.FailedFiles);

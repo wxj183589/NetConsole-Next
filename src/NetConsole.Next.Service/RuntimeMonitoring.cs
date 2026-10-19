@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace NetConsole.Next.Service;
@@ -7,43 +8,62 @@ internal sealed class RuntimeStatus
     private string _serviceState = "starting";
     private string _collectionState = "starting";
     private string? _collectionError;
-    private string _healthState = "HEALTHY";
-    private string? _healthError;
+    private string? _faultError;
+    private readonly ConcurrentDictionary<string, string> _degradationReasons = new(StringComparer.Ordinal);
 
     public string ServiceState => Volatile.Read(ref _serviceState);
     public string CollectionState => Volatile.Read(ref _collectionState);
     public string? CollectionError => Volatile.Read(ref _collectionError);
-    public string HealthState => Volatile.Read(ref _healthState);
-    public string? HealthError => Volatile.Read(ref _healthError);
+    public string HealthState => Volatile.Read(ref _faultError) is not null ? "FAULTED" :
+        _degradationReasons.IsEmpty ? "HEALTHY" : "DEGRADED";
+    public string? HealthError => Volatile.Read(ref _faultError) ??
+        (_degradationReasons.IsEmpty ? null : string.Join("; ", _degradationReasons.OrderBy(x => x.Key).Select(x => x.Value)));
     public bool CollectionAllowed => HealthState != "FAULTED";
     public void SetService(string state) => Interlocked.Exchange(ref _serviceState, state);
     public void SetHealth(string state, string? error = null)
     {
-        Interlocked.Exchange(ref _healthState, state);
-        Interlocked.Exchange(ref _healthError, error);
+        if (state == "FAULTED")
+        {
+            SetFaulted(error ?? "Service health is faulted.");
+            return;
+        }
+        if (state == "DEGRADED") SetDegradation("general", error ?? "Service health is degraded.");
+        else if (state == "HEALTHY") ClearDegradation("general");
+        else throw new ArgumentOutOfRangeException(nameof(state), state, "Unsupported health state.");
     }
     public void SetFaulted(string error)
     {
-        Interlocked.Exchange(ref _healthState, "FAULTED");
-        Interlocked.Exchange(ref _healthError, error);
+        Interlocked.Exchange(ref _faultError, error);
         SetCollection("faulted", error);
     }
+    public void SetDegradation(string key, string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(key)) throw new ArgumentException("A degradation key is required.", nameof(key));
+        if (reason is null) _degradationReasons.TryRemove(key, out _);
+        else _degradationReasons[key] = reason;
+    }
+    public void ClearDegradation(string key) => _degradationReasons.TryRemove(key, out _);
+    public void SetInterruptedTaskRuns(int count) => SetDegradation("interrupted-task-runs",
+        count > 0 ? $"{count} task run(s) were interrupted by the previous process exit; automatic replay is disabled." : null);
     public void AssessRecovery(RawRecoverySummary recovery, int unresolvedIntegrityIssues)
     {
         if (HealthState == "FAULTED") return;
         if (recovery.Issues.Any(issue => issue.Critical))
             SetFaulted("Critical storage/recovery failure; new collection is disabled.");
-        else if (unresolvedIntegrityIssues > 0 || recovery.Issues.Any(issue => issue.Category == "RECOVERY_INTERRUPTED"))
-            SetHealth("DEGRADED", "Raw recovery found historical data that needs attention.");
+        else
+        {
+            ReassessIntegrityIssues(unresolvedIntegrityIssues);
+            if (recovery.Issues.Any(issue => issue.Category == "RECOVERY_INTERRUPTED"))
+                SetDegradation("recovery-interrupted", "The previous Raw recovery was interrupted; this process completed its replay and remains DEGRADED until a clean restart.");
+        }
     }
 
     public void ReassessIntegrityIssues(int unresolvedIntegrityIssues)
     {
         if (HealthState == "FAULTED") return;
-        if (unresolvedIntegrityIssues > 0)
-            SetHealth("DEGRADED", "Raw recovery found historical data that needs attention.");
-        else if (HealthError == "Raw recovery found historical data that needs attention.")
-            SetHealth("HEALTHY");
+        SetDegradation("raw-integrity", unresolvedIntegrityIssues > 0
+            ? $"{unresolvedIntegrityIssues} unresolved Raw integrity issue(s) need attention."
+            : null);
     }
     public void SetCollection(string state, string? error = null)
     {
@@ -199,17 +219,15 @@ internal sealed class RawIntegrityAuditService(Catalog catalog, RuntimeStatus st
                 var result = catalog.AuditOneFinalizedSegment();
                 if (result is not null)
                 {
-                    logger.LogInformation("Low-priority Raw integrity audit: {Result}", result);
-                    if (result.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-                        result.Contains("mismatch", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (status.HealthState == "HEALTHY") status.SetHealth("DEGRADED", "A low-priority Raw integrity audit found an issue.");
-                    }
+                    logger.LogInformation("Low-priority Raw integrity audit {Outcome} for {RelativePath}: {Detail}",
+                        result.Outcome, result.RelativePath, result.Detail);
+                    status.ClearDegradation("raw-maintenance-runtime");
+                    status.ReassessIntegrityIssues(catalog.GetUnresolvedIntegrityIssueCount());
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
             {
-                if (status.HealthState == "HEALTHY") status.SetHealth("DEGRADED", "Low-priority Raw integrity audit failed.");
+                status.SetDegradation("raw-maintenance-runtime", "Low-priority Raw integrity audit failed; the next completed audit must clear this state.");
                 logger.LogWarning(ex, "Low-priority Raw integrity audit failed; Raw files were retained.");
             }
             try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }

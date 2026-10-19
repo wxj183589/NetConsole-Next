@@ -1,6 +1,7 @@
 using NetConsole.Next.Service;
 using Microsoft.Extensions.Logging;
 using Microsoft.Data.Sqlite;
+using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -19,7 +20,9 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesExistingV1CatalogUpgradeReadsEachRawOnce();
         VerifiesIncrementalRecoverySkipsLargeTrustedHistory();
+        VerifiesMaintenanceFailureCanResolveAfterVerifiedRetry();
         VerifiesQuarantineDispositionPreservesRawAndReopensHealthOnlyForAuditedIssues();
+        VerifiesFlushWaitDeadlineIsClamped();
         VerifiesIngressQueueHasAPayloadByteLimit();
         await VerifiesSparseSyslogFlushesWithinConfiguredWindow();
         VerifiesSqliteWriteFailureRetainsRawFile();
@@ -245,9 +248,46 @@ internal static class SchedulerTests
                 prioritize.ExecuteNonQuery();
             }
             var audit = catalog.AuditOneFinalizedSegment();
-            Assert(audit?.Contains("mismatch", StringComparison.OrdinalIgnoreCase) == true, audit ?? "expected low-priority audit to detect same-size, same-time tampering");
+            Assert(audit?.Outcome == "INTEGRITY_ISSUE", audit?.Detail ?? "expected low-priority audit to detect same-size, same-time tampering");
             Assert(catalog.GetRawCounts().Incomplete == 1 && File.Exists(tampered), "maintenance audit must retain and mark changed Raw evidence");
             Assert(catalog.GetIntegrityAuditCount() == 1, "checksum mismatch should have a durable audit record");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void VerifiesMaintenanceFailureCanResolveAfterVerifiedRetry()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-maintenance-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var relative = "raw/syslog/2026/10/19/retry.ndjson";
+            var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var raw = Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                received_ms = 1_800_000_000_010L,
+                sender_ip = "192.0.2.60",
+                sender_port = 514,
+                payload_base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("maintenance retry fixture"))
+            }) + "\n");
+            File.WriteAllBytes(path, raw);
+            Assert(catalog.RecoverRawSegments().IndexedOrphanFiles == 1, "valid fixture should be indexed before maintenance");
+
+            var displaced = Path.Combine(root, "temporarily-unavailable.ndjson");
+            File.Move(path, displaced);
+            var failed = catalog.AuditOneFinalizedSegment();
+            Assert(failed?.Outcome == "FAILED" && catalog.GetUnresolvedIntegrityIssueCount() == 1,
+                "transiently missing maintenance input should record a visible unresolved audit");
+
+            File.Move(displaced, path);
+            var verified = catalog.AuditOneFinalizedSegment();
+            Assert(verified?.Outcome == "VERIFIED" && catalog.GetUnresolvedIntegrityIssueCount() == 0,
+                "a later full verification should resolve the prior MAINTENANCE_FAILED audit");
+            Assert(catalog.RecentIntegrityAudits().Single().Disposition == "RESOLVED_VERIFIED",
+                "successful retry should preserve an explicit auditable resolution");
         }
         finally { Directory.Delete(root, true); }
     }
@@ -283,6 +323,7 @@ internal static class SchedulerTests
             var audit = catalog.RecentIntegrityAudits().Single();
             var retained = Path.Combine(root, audit.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             var originalHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(retained))).ToLowerInvariant();
+            status.SetInterruptedTaskRuns(1);
             catalog.QuarantineIntegrityAudit(audit.Id, "test-operator", "Crash artifact reviewed and retained.");
             Assert(File.Exists(retained), "quarantine must preserve Raw bytes on disk");
             Assert(catalog.GetIntegrityAuditCount() == 1 && catalog.GetUnresolvedIntegrityIssueCount() == 0,
@@ -292,6 +333,9 @@ internal static class SchedulerTests
                    disposed.DispositionDetail == "Crash artifact reviewed and retained." && disposed.ObservedSha256 == originalHash,
                 "quarantine evidence must identify the actor, reason and preserved byte hash");
             status.ReassessIntegrityIssues(catalog.GetUnresolvedIntegrityIssueCount());
+            Assert(status.HealthState == "DEGRADED" && status.HealthError?.Contains("task run", StringComparison.OrdinalIgnoreCase) == true,
+                "clearing the Raw issue must preserve the independent interrupted-task degradation");
+            status.SetInterruptedTaskRuns(0);
             Assert(status.HealthState == "HEALTHY", "confirmed, logically quarantined history must not permanently degrade current collection health");
 
             var changed = File.ReadAllBytes(retained);
@@ -334,6 +378,16 @@ internal static class SchedulerTests
         Assert(stats.QueueBytes == 0 && stats.QueueDepth == 0, "dequeue must release byte and packet capacity");
     }
 
+    private static void VerifiesFlushWaitDeadlineIsClamped()
+    {
+        var oldTimestamp = Stopwatch.GetTimestamp() - 2 * Stopwatch.Frequency;
+        Assert(UdpSyslogWorker.RemainingFlushDelay(oldTimestamp) == TimeSpan.Zero,
+            "a delayed writer must clamp an expired flush deadline instead of passing a negative timer duration");
+        var current = UdpSyslogWorker.RemainingFlushDelay(Stopwatch.GetTimestamp());
+        Assert(current >= TimeSpan.Zero && current <= UdpSyslogWorker.MaximumUnflushedDelay,
+            "a live pending batch must retain a bounded nonnegative flush wait");
+    }
+
     private static async Task VerifiesSparseSyslogFlushesWithinConfiguredWindow()
     {
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-sparse-flush-" + Guid.NewGuid().ToString("N"));
@@ -352,18 +406,37 @@ internal static class SchedulerTests
             var worker = new UdpSyslogWorker(settings, catalog, new RawSegmentWriterFactory(), stats, status,
                 loggerFactory.CreateLogger<UdpSyslogWorker>());
             using var shutdown = new CancellationTokenSource();
-            await worker.StartAsync(shutdown.Token);
-            await WaitUntil(() => status.CollectionState == "listening");
-            using (var sender = new System.Net.Sockets.UdpClient())
-                await sender.SendAsync(new byte[] { 1, 2, 3, 4 }, new IPEndPoint(IPAddress.Loopback, port));
-            await WaitUntil(() => stats.Flushed == 1, TimeSpan.FromSeconds(5));
-            var open = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
-            Assert(File.ReadLines(open).Count() == 1 && stats.QueueDepth == 0,
-                "a sparse packet must reach its synced open Raw segment without waiting for the next packet");
-            await worker.StopAsync(CancellationToken.None);
-            Assert(catalog.GetRawCounts().Finalized == 1 && stats.Flushed == 1,
-                "cooperative stop must seal and catalog the sparse Raw segment");
-            Assert(!File.Exists(open), "a sealed Raw segment must release and rename its .open path before stop returns");
+            var workerStarted = false;
+            var workerStopped = false;
+            try
+            {
+                await worker.StartAsync(shutdown.Token);
+                workerStarted = true;
+                await WaitUntil(() => status.CollectionState == "listening");
+                using (var sender = new System.Net.Sockets.UdpClient())
+                    await sender.SendAsync(new byte[] { 1, 2, 3, 4 }, new IPEndPoint(IPAddress.Loopback, port));
+                await WaitUntil(() => stats.Flushed == 1, TimeSpan.FromSeconds(5));
+                var open = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+                Assert(new FileInfo(open).Length > 0 && stats.QueueDepth == 0,
+                    "a sparse packet must reach its synced open Raw segment without waiting for the next packet");
+                await worker.StopAsync(CancellationToken.None);
+                workerStopped = true;
+                Assert(catalog.GetRawCounts().Finalized == 1 && stats.Flushed == 1,
+                    "cooperative stop must seal and catalog the sparse Raw segment");
+                Assert(!File.Exists(open) && Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Length == 0,
+                    "a sealed Raw segment must release and rename every .open path before stop returns");
+                var finalized = Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories).Single();
+                Assert(File.ReadLines(finalized).Count() == 1,
+                    "a synced sparse packet must remain readable after cooperative seal");
+            }
+            finally
+            {
+                if (workerStarted && !workerStopped)
+                {
+                    try { await worker.StopAsync(CancellationToken.None); }
+                    catch (Exception ex) { Console.Error.WriteLine($"WARN: sparse Syslog worker stop failed during test cleanup: {ex.Message}"); }
+                }
+            }
         }
         finally
         {

@@ -126,6 +126,12 @@ internal sealed class UdpSyslogWorker(
         }
     }
 
+    internal static TimeSpan RemainingFlushDelay(long pendingSinceTimestamp)
+    {
+        var remaining = MaximumUnflushedDelay - Stopwatch.GetElapsedTime(pendingSinceTimestamp);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
     private async Task WriteQueue(ChannelReader<SyslogPacket> queue)
     {
         RawSegmentWriter? segment = null;
@@ -167,7 +173,7 @@ internal sealed class UdpSyslogWorker(
                     continue;
                 }
 
-                using var waitTimeout = new CancellationTokenSource(MaximumUnflushedDelay - Stopwatch.GetElapsedTime(pendingSince));
+                using var waitTimeout = new CancellationTokenSource(RemainingFlushDelay(pendingSince));
                 var ready = queue.WaitToReadAsync(waitTimeout.Token).AsTask();
                 try
                 {

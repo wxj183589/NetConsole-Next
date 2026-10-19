@@ -38,6 +38,7 @@ internal sealed record CatalogHealthSnapshot(RawCatalogCounts RawSegments, int I
 internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs,
     long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes, string? EvidencePath,
     long BytesRead, long BytesHashed);
+internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
 
 internal sealed class Catalog(RuntimeSettings settings)
 {
@@ -707,7 +708,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         return new(new(finalized, incomplete, missing), auditCount, unresolvedCount, audits);
     }
 
-    public string? AuditOneFinalizedSegment()
+    public RawMaintenanceAuditResult? AuditOneFinalizedSegment()
     {
         using var db = Open();
         using var command = db.CreateCommand();
@@ -730,9 +731,10 @@ internal sealed class Catalog(RuntimeSettings settings)
             {
                 RecordIntegrityAudit(row.RelativePath, row, inspection, inspection.CorruptTail ? "MAINTENANCE_CORRUPTION" : "MAINTENANCE_CHECKSUM_MISMATCH");
                 UpsertRecoveredSegment(row.RelativePath, inspection, "INCOMPLETE");
-                return $"{row.RelativePath}: checksum/record integrity mismatch; file marked INCOMPLETE";
+                return new(row.RelativePath, "INTEGRITY_ISSUE", "Checksum/record integrity mismatch; file marked INCOMPLETE.");
             }
 
+            ResolveVerifiedIntegrityAudits(row.RelativePath, inspection.Sha256);
             using var updateDb = Open();
             using var update = updateDb.CreateCommand();
             var info = new FileInfo(path);
@@ -743,7 +745,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             update.Parameters.AddWithValue("$ticks", info.LastWriteTimeUtc.Ticks);
             update.Parameters.AddWithValue("$path", row.RelativePath);
             update.ExecuteNonQuery();
-            return $"{row.RelativePath}: full integrity audit passed ({inspection.BytesRead} bytes read)";
+            return new(row.RelativePath, "VERIFIED", $"Full integrity audit passed ({inspection.BytesRead} bytes read).");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
         {
@@ -754,7 +756,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             update.Parameters.AddWithValue("$now", UtcNowMs());
             update.Parameters.AddWithValue("$path", row.RelativePath);
             update.ExecuteNonQuery();
-            return $"{row.RelativePath}: full integrity audit failed ({ex.GetType().Name})";
+            return new(row.RelativePath, "FAILED", $"Full integrity audit failed ({ex.GetType().Name}).");
         }
     }
 
@@ -919,7 +921,7 @@ internal sealed class Catalog(RuntimeSettings settings)
                 'A later complete verification succeeded; the Raw bytes remain retained.',a.evidence_path,$sha,$now
             FROM raw_integrity_audits a LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id
             WHERE a.relative_path=$path AND d.audit_id IS NULL
-              AND a.reason IN ('MISSING_RAW','REPARSE_POINT','HISTORICAL_RAW','OPEN_RECOVERY_FAILED','FINALIZED_RECOVERY_FAILED')";
+              AND a.reason IN ('MISSING_RAW','REPARSE_POINT','HISTORICAL_RAW','OPEN_RECOVERY_FAILED','FINALIZED_RECOVERY_FAILED','MAINTENANCE_FAILED')";
         command.Parameters.AddWithValue("$path", relative);
         command.Parameters.AddWithValue("$sha", observedSha);
         command.Parameters.AddWithValue("$now", UtcNowMs());
