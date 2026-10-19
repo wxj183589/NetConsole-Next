@@ -40,7 +40,9 @@ try
     app.Lifetime.ApplicationStopped.Register(fileLoggerProvider.Dispose);
 
     var recovery = catalog.RecoverRawSegments();
-    runtimeStatus.AssessRecovery(recovery);
+    runtimeStatus.AssessRecovery(recovery, catalog.GetRawCounts());
+    if (catalog.InterruptedTaskRuns > 0 && runtimeStatus.HealthState == "HEALTHY")
+        runtimeStatus.SetHealth("DEGRADED", "One or more task runs were interrupted by the previous process exit.");
     if (!recovery.Issues.Any(issue => issue.Critical)) catalog.CompleteRawRecovery();
     if (recovery.FailedFiles > 0)
         app.Logger.LogWarning("Raw recovery left {FailedFiles} file(s) untouched; inspect recovery.issues and raw_integrity_audits.", recovery.FailedFiles);
@@ -98,6 +100,7 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         rawWriteAvailable = rawCatalog.RawWriteAvailable,
         logWriteFailures = logDiagnostics.WriteFailures,
         recovery = rawCatalog.RecoverySummary,
+        interruptedTaskRunsAtStartup = rawCatalog.InterruptedTaskRuns,
         integrityAuditCount = storage?.IntegrityAuditCount,
         recentIntegrityAudits = storage?.RecentIntegrityAudits,
         resources = resource

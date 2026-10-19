@@ -12,7 +12,7 @@
 - 未登记、`.open`、缺失、状态异常、检查点变化或校验不匹配文件仍会读取并校验。损坏尾部先持久化并校验证据，再修复有效前缀；完整校验差异写入 `raw_integrity_audits` 并将段标记为 `INCOMPLETE`。
 - 健康状态区分 `HEALTHY`、`DEGRADED`、`FAULTED`。数据库/恢复根目录或 Raw 写入能力故障阻止新的采集；单个历史段问题可降级继续采集。
 - 有界调度器可持久化任务 Definition/Run、排队/执行状态、超时、取消和失败原因。进程重启把排队/运行中任务标记为 `INTERRUPTED`，默认不自动重放。设备执行只使用模拟会话。
-- Linux 上已有 SQLite busy/write fail、Raw 权限拒绝、采集中磁盘写失败、恢复中强杀、重复启动和 1,000 文件检查点用例。Windows 工作流新增了 EXE 发布、虚拟账户/ACL、Local Manager 与 SCM 生命周期及强杀后自动恢复的实操步骤；本次 CI 尚未返回前标记为 `PENDING_WINDOWS_CI`。
+- Linux 上已有 SQLite busy/write fail、Raw 权限拒绝、采集中磁盘写失败、恢复中强杀、重复启动和 1,000 文件检查点用例。GitHub Windows Server 2025 工作流已实际通过 EXE 发布、虚拟账户/ProgramData ACL、Local Manager/SCM 生命周期、强杀恢复和卸载后保留数据。
 - 100,000 条 UDP 和 1,000 个历史段的云端负载结果记录在 [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)。该容器测量不替代目标工业主机验收。
 
 ## G2 可靠设备采集（G1 门禁通过后）
@@ -23,8 +23,7 @@
 - Windows 10/11、8/8.1、Server2012/R2 单独建立兼容矩阵；非 Win10 系统不能以构建成功代替验收。
 
 ### G1 尚未关闭的验收项
-- **待 Windows CI：**本次提交新增服务 EXE 发布/安装、虚拟账户与 ProgramData ACL、Local Manager SCM 操作、异常退出恢复和卸载保留数据测试。
-- **待真实环境：**旧 Windows 版本兼容、真正磁盘耗尽/突然断电、72 小时/7 天工业主机负载；Linux 故障注入不替代这些验证。
+- **待真实环境：**Windows 10/11 与旧 Windows 版本兼容、真正磁盘耗尽/突然断电、72 小时/7 天工业主机负载；Windows Server 2025 CI 与 Linux 故障注入不替代这些验证。
 
 ## P2-P5
 - P2：按成熟开源模式重新设计工具集和可选 HTTP/FTP/TFTP/WebDAV/SFTP Server。

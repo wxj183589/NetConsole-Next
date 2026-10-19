@@ -28,12 +28,12 @@ internal sealed class RuntimeStatus
         Interlocked.Exchange(ref _healthError, error);
         SetCollection("faulted", error);
     }
-    public void AssessRecovery(RawRecoverySummary recovery)
+    public void AssessRecovery(RawRecoverySummary recovery, RawCatalogCounts catalogCounts)
     {
         if (HealthState == "FAULTED") return;
         if (recovery.Issues.Any(issue => issue.Critical))
             SetFaulted("Critical storage/recovery failure; new collection is disabled.");
-        else if (recovery.FailedFiles > 0 || recovery.MissingFiles > 0 || recovery.RecoveredOpenFiles > 0 ||
+        else if (recovery.FailedFiles > 0 || recovery.MissingFiles > 0 || catalogCounts.Incomplete > 0 || catalogCounts.Missing > 0 || recovery.RecoveredOpenFiles > 0 ||
                  recovery.RepairedTailFiles > 0 || recovery.Issues.Count > 0)
             SetHealth("DEGRADED", "Raw recovery found historical data that needs attention.");
     }

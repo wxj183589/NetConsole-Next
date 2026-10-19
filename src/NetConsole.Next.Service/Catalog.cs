@@ -48,6 +48,7 @@ internal sealed class Catalog(RuntimeSettings settings)
     public bool RawWriteAvailable { get; private set; }
     public string? StorageFailure { get; private set; }
     public bool RecoveryWasInterrupted { get; private set; }
+    public int InterruptedTaskRuns { get; private set; }
     private string RecoveryMarkerPath => Path.Combine(settings.DataRoot, ".raw-recovery-in-progress");
 
     public void Initialize()
@@ -78,6 +79,13 @@ internal sealed class Catalog(RuntimeSettings settings)
             throw new InvalidOperationException("Raw recovery marker cannot be a symbolic link or reparse point.");
         RecoveryWasInterrupted = File.Exists(RecoveryMarkerPath);
         using var db = Open();
+        using (var journal = db.CreateCommand())
+        {
+            journal.CommandText = "PRAGMA journal_mode=WAL";
+            var mode = journal.ExecuteScalar()?.ToString();
+            if (!string.Equals(mode, "wal", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("SQLite could not enable WAL mode for the isolated catalog.");
+        }
         using (var integrity = db.CreateCommand())
         {
             integrity.CommandText = "PRAGMA quick_check(1)";
@@ -103,7 +111,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             failure_reason='Process terminated before completion; automatic replay is disabled.'
             WHERE state IN ('QUEUED','CONNECTING','RUNNING')";
         interrupted.Parameters.AddWithValue("$now", UtcNowMs());
-        interrupted.ExecuteNonQuery();
+        InterruptedTaskRuns = interrupted.ExecuteNonQuery();
         Available = true;
         StorageFailure = null;
     }
@@ -176,7 +184,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         }.ToString());
         db.Open();
         using var command = db.CreateCommand();
-        command.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;";
+        command.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;";
         command.ExecuteNonQuery();
         return db;
     }

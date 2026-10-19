@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v2 is implemented with an additive idempotent upgrade from v1. Linux build, startup, repeated migration, SQLite integrity and Raw reconciliation tests passed locally. Windows Service CI is pending for the current branch. Backup/restore remains `NOT_STARTED`.
+Status: schema v2 is implemented with an additive idempotent upgrade from v1. Linux build, startup, repeated migration, SQLite integrity and Raw reconciliation tests passed locally. Windows Service SCM lifecycle has passed on the GitHub Windows Server 2025 runner for PR #8; target OS compatibility remains pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -42,7 +42,7 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 | `task_definitions` | Minimal simulated task type, target, command request, timeout, enabled flag and restart policy. |
 | `task_runs.definition_id`, `queued_ms`, `deadline_ms`, `failure_reason` | Persist bounded scheduler lifecycle and interruption reason alongside existing timestamps/state. |
 
-SQLite connections enable WAL, `synchronous=FULL`, foreign keys, and a 5-second busy timeout before requesting journal mode. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
+Initialization enables WAL once and verifies the resulting mode. Each later SQLite connection sets `synchronous=FULL`, foreign keys, and a 5-second busy timeout without reissuing the journal-mode pragma, avoiding needless mode checks during concurrent writes. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
 
 ## Raw write and recovery
 
@@ -50,7 +50,7 @@ Syslog payload bytes are Base64 encoded in newline-terminated JSON records. Reco
 
 Every startup enumerates `.open` and `.ndjson` paths to discover unindexed files and compare indexed state. A `FINALIZED` row is trusted for startup only when the expected SHA exists and file size plus last-write UTC ticks equal its post-verification checkpoint. In that case startup performs filesystem metadata checks but reads zero file contents and writes no catalog row. v1 rows have no checkpoint, so the first v2 startup fully validates them. A size/time change, `INCOMPLETE`/`MISSING` state, `.open`, orphan, or path error forces full inspection; a checksum mismatch is appended to `raw_integrity_audits` and the Raw file remains on disk marked `INCOMPLETE`.
 
-The service writes `.raw-recovery-in-progress` with write-through before reconciliation. A process killed during recovery leaves the marker; the next startup replays the scan and reports `RECOVERY_INTERRUPTED`. On successful noncritical completion it clears the marker. A critical SQLite/raw-root error leaves it for another attempt. A low-priority audit begins after ten minutes, then fully inspects at most one finalized segment per minute, including a segment whose same-size rewrite preserved its last-write timestamp.
+The service writes `.raw-recovery-in-progress` with write-through before reconciliation. A process killed during recovery leaves the marker; the next startup replays the scan and reports `RECOVERY_INTERRUPTED`. On successful noncritical completion it clears the marker. A critical SQLite/raw-root error leaves it for another attempt. Persisted `INCOMPLETE`/`MISSING` segments and task runs changed to `INTERRUPTED` also keep the health state degraded on later starts. A low-priority audit begins after ten minutes, then fully inspects at most one finalized segment per minute, including a segment whose same-size rewrite preserved its last-write timestamp.
 
 An `.open` segment becomes a visible `.ndjson` recovery segment with state `INCOMPLETE`, even if its current bytes are parseable, because clean sealing was not recorded. Valid unindexed `.ndjson` is reconciled; missing catalog files become `MISSING`. Incomplete segments are never upgraded to `FINALIZED` by recovery.
 

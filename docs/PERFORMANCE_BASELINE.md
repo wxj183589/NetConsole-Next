@@ -18,15 +18,15 @@ Environment: Linux container, .NET 10, Python 3.12.14, 3 visible processors, iso
 
 | Scenario | Measured result |
 | --- | --- |
-| Idle, 6 seconds | Health CPU sample 4.92%; working set 93,831,168 bytes; 19 threads; 230 process file descriptors. This includes a single short sample and is not a long-run idle average. |
-| UDP, 100,000 attempted at 20,000/s | 95,145 received, 95,145 queued, 0 application drops, 95,145 flushed; 0 queue depth at end; high watermark 708/2,048. 41,678,352 bytes of data-root growth. |
-| Raw flush latency during UDP | 18,091 samples; histogram p50/p95 upper bound 1 ms; max 748.626 ms. An earlier run of the same profile measured max 30.275 ms, so the shared-host maximum is variable. |
-| Process under UDP load | 45.06% normalized CPU; working set 107,704,320 bytes; 25 threads; 231 file descriptors; 9,610 read syscalls and 18,534 write syscalls. Kernel physical byte counters reported 0 in this container. |
-| Immediate queue burst, 50,000 attempted | 9,537 received/accepted/flushed, 0 application drops, high watermark 1,756/2,048. 40,463 sends were not observed by the application; no attribution is made. |
-| SQLite, 500 single-row commits | p50 0.006760 ms, p95 0.013685 ms, max 2.523610 ms, mean 0.018214 ms. This is a local SQLite probe table on the container filesystem. |
-| Startup with 1,000 trusted 11,016-byte Raw files | 1,011 files scanned/skipped, 0 content bytes read, 0 bytes hashed, Catalog recovery 271 ms, process-start-to-health 1,948 ms. Data-root growth 34,962 bytes. |
-| Final data root | 59,517,979 bytes after UDP load, recovery fixtures and SQLite probe writes. |
+| Idle, 6 seconds | Health CPU sample 4.59%; working set 82,489,344 bytes; 19 threads; 230 process file descriptors. This includes a single short sample and is not a long-run idle average. |
+| UDP, 100,000 attempted at 20,000/s | 97,029 received, 97,029 queued, 0 application drops, 97,029 flushed; 0 queue depth at end; high watermark 617/2,048. 42,503,759 bytes of data-root growth. |
+| Raw flush latency during UDP | 18,740 samples; histogram p50/p95 upper bound 1 ms; max 28.751 ms. Shared-host maximum varied widely in earlier runs. |
+| Process under UDP load | 46.00% normalized CPU; working set 95,875,072 bytes; 25 threads; 231 file descriptors; 10,664 read syscalls and 19,212 write syscalls. Kernel physical byte counters reported 0 in this container. |
+| Immediate queue burst, 50,000 attempted | 24,013 received, 23,173 accepted/flushed, 840 application drops, high watermark 2,048/2,048. Queue returned to 0. The remaining send gap is not attributed. |
+| SQLite, 500 single-row commits | p50 0.006414 ms, p95 0.046193 ms, max 1.226618 ms, mean 0.019499 ms. This is a local SQLite probe table on the container filesystem. |
+| Startup with 1,000 trusted 11,016-byte Raw files | 1,013 files scanned/skipped, 0 content bytes read, 0 bytes hashed, Catalog recovery 69 ms, measured process restart wall time 1,577 ms. Data-root growth 34,961 bytes. |
+| Final data root | 66,315,739 bytes after UDP load, recovery fixtures and SQLite probe writes. |
 
-This run does not establish performance on 2-core/4-GB or 4-core/8-GB hardware, physical IOPS, kernel UDP loss, 72-hour stability, real disk exhaustion, or Windows behavior. The burst did not fill the UDP ingress queue; the scheduler unit test separately filled its bounded device queue and verified rejection. Flush maximum varied from 30 ms to 749 ms across runs on the shared host, which is why these measurements do not support a low-configuration performance claim.
+This run does not establish performance on 2-core/4-GB or 4-core/8-GB hardware, physical IOPS, kernel UDP loss, 72-hour stability, real disk exhaustion, or Windows behavior. The burst filled the UDP queue and produced 840 application drops; the scheduler unit test separately filled its bounded device queue and verified rejection. These measurements do not support a low-configuration performance claim.
 
 Next baseline should run on the specified low-configuration industrial host and add 72-hour/7-day runs plus platform-supported block-device IOPS. Continuous field runs remain separate gates.

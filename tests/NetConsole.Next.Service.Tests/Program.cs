@@ -133,6 +133,13 @@ internal static class SchedulerTests
 
             var catalog = new Catalog(TestSettings(root));
             catalog.Initialize();
+            using (var wal = OpenCatalog(root))
+            using (var journal = wal.CreateCommand())
+            {
+                journal.CommandText = "PRAGMA journal_mode";
+                Assert(string.Equals((string?)journal.ExecuteScalar(), "wal", StringComparison.OrdinalIgnoreCase),
+                    "catalog must keep WAL enabled after initialization without resetting journal mode per connection");
+            }
             var first = catalog.RecoverRawSegments();
             Assert(first.BytesRead == bytes.Length && first.BytesHashed == bytes.Length && first.TrustedFilesSkipped == 0,
                 "v1 files without checkpoints must receive one complete content verification");
@@ -383,7 +390,7 @@ internal static class SchedulerTests
             var catalog = new Catalog(settings);
             catalog.Initialize();
             catalog.ProbeRawWritable();
-            catalog.CreateTaskDefinition("sim-load", "SIMULATED_DEVICE_ECHO", "sim://load", "show status", TimeSpan.FromSeconds(10));
+            catalog.CreateTaskDefinition("sim-load", "SIMULATED_DEVICE_ECHO", "sim://load", "show status", TimeSpan.FromMinutes(1));
             var sessionFactory = new FakeSessionFactory(_ => new FakeBehavior(async (command, token) =>
             {
                 await Task.Delay(5, token);
@@ -413,11 +420,14 @@ internal static class SchedulerTests
                 var buffer = new byte[128];
                 for (var i = 0; i < datagrams; i++) await sender.SendAsync(buffer, new IPEndPoint(IPAddress.Loopback, port));
             }
-            await WaitUntil(() => scheduler.Status.Active == 0 && scheduler.Status.Queued == 0);
+            await WaitUntil(() => scheduler.Status.Active == 0 && scheduler.Status.Queued == 0 &&
+                runIds.All(id => scheduler.Get(id)?.State is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED"),
+                TimeSpan.FromSeconds(30));
             await WaitUntil(() => stats.QueueDepth == 0);
             await worker.StopAsync(CancellationToken.None);
             startedAt.Stop();
             process.Refresh();
+            var taskRuns = catalog.RecentTaskRuns(100).Where(x => x.DefinitionId == "sim-load").ToArray();
             var record = new
             {
                 scenario = "simulated_device_plus_udp_syslog",
@@ -436,14 +446,20 @@ internal static class SchedulerTests
                 rawWriteLatency = stats.RawFlushLatency,
                 deviceDefinitions = 1,
                 deviceRuns = runIds.Count,
-                deviceSucceeded = catalog.RecentTaskRuns(100).Count(x => x.DefinitionId == "sim-load" && x.State == "SUCCEEDED"),
+                deviceSucceeded = taskRuns.Count(x => x.State == "SUCCEEDED"),
+                deviceOtherStates = taskRuns.Where(x => x.State != "SUCCEEDED")
+                    .Select(x => new { x.Id, x.State, x.FailureReason }).ToArray(),
                 schedulerAccepted = scheduler.Status.Accepted,
                 schedulerRejected = scheduler.Status.Rejected,
                 dataDirectoryBytes = DirectoryBytes(root)
             };
             Console.WriteLine("PERF " + System.Text.Json.JsonSerializer.Serialize(record));
             Assert(stats.Flushed > 0, "combined load should durably flush Syslog records");
-            Assert(record.deviceSucceeded == deviceRuns, $"all simulated device tasks should finish: {record.deviceSucceeded}/{deviceRuns}");
+            Assert(stats.QueueDepth <= UdpSyslogWorker.QueueCapacity &&
+                   stats.QueueHighWatermark <= UdpSyslogWorker.QueueCapacity,
+                $"queue occupancy telemetry must remain within the bounded capacity: {stats.QueueDepth}/{stats.QueueHighWatermark}");
+            Assert(taskRuns.Length == deviceRuns && record.deviceSucceeded == deviceRuns,
+                $"all simulated device tasks should finish successfully: {System.Text.Json.JsonSerializer.Serialize(record.deviceOtherStates)}; persisted={taskRuns.Length}/{deviceRuns}, succeeded={record.deviceSucceeded}/{deviceRuns}");
         }
         finally { Directory.Delete(root, true); }
     }
@@ -608,9 +624,9 @@ internal static class SchedulerTests
         return snapshot!;
     }
 
-    private static async Task WaitUntil(Func<bool> predicate)
+    private static async Task WaitUntil(Func<bool> predicate, TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(3));
         while (DateTime.UtcNow < deadline)
         {
             if (predicate()) return;

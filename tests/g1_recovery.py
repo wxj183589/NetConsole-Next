@@ -52,17 +52,23 @@ def start_service(repo, dll, root):
     return proc, f"http://127.0.0.1:{web_port}", udp_port
 
 
-def health(proc, base_url, timeout=15):
+def health(proc, base_url, timeout=15, collection_state=None):
     deadline = time.monotonic() + timeout
+    last_health = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             output = proc.stdout.read() if proc.stdout else ""
             raise AssertionError(f"service exited with {proc.returncode}:\n{output[-4000:]}")
         try:
             with urllib.request.urlopen(base_url + "/api/system/health", timeout=1) as response:
-                return json.load(response)
+                last_health = json.load(response)
+                if collection_state is None or last_health["collectionState"] == collection_state:
+                    return last_health
         except Exception:
-            time.sleep(.1)
+            pass
+        time.sleep(.1)
+    if last_health is not None:
+        raise AssertionError(f"collection did not reach {collection_state!r}: {last_health}")
     raise AssertionError("service did not expose its health endpoint")
 
 
@@ -97,7 +103,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="netconsole-next-g1-") as temp:
         root = Path(temp) / "service-data"
         first, first_url, first_udp = start_service(repo, dll, root)
-        health(first, first_url)
+        health(first, first_url, collection_state="listening")
         payload = b"recovery-check\x00\xff\r\n"
         send_datagram(first_udp, payload)
         deadline = time.monotonic() + 10
@@ -131,7 +137,7 @@ def main():
                 VALUES('missing-test','syslog-local',?,'FINALIZED',1,10,'bad')""", (missing_path,))
 
         second, second_url, second_udp = start_service(repo, dll, root)
-        current = health(second, second_url)
+        current = health(second, second_url, collection_state="listening")
         assert current["serviceState"] == "running", current
         assert current["collectionState"] == "listening", current
         assert current["sqliteIntegrityAtStartup"] == "ok", current
@@ -196,7 +202,9 @@ def main():
 
         stop_service(second)
         third, third_url, _ = start_service(repo, dll, root)
-        repeated = health(third, third_url)
+        repeated = health(third, third_url, collection_state="listening")
+        assert repeated["healthState"] == "DEGRADED", repeated
+        assert repeated["rawSegments"]["incomplete"] >= 2, repeated["rawSegments"]
         assert repeated["recovery"]["repairedTailFiles"] == 0, repeated["recovery"]
         assert repeated["recovery"]["recoveryEvidenceFiles"] == 0, repeated["recovery"]
         assert len(list(evidence_root.glob("*.tail.bin"))) == 2
@@ -219,7 +227,7 @@ def main():
         outside.mkdir()
         (unsafe_root / "recovery-evidence").symlink_to(outside, target_is_directory=True)
         unsafe, unsafe_url, _ = start_service(repo, dll, unsafe_root)
-        unsafe_health = health(unsafe, unsafe_url)
+        unsafe_health = health(unsafe, unsafe_url, collection_state="listening")
         assert unsafe_health["recovery"]["failedFiles"] == 1, unsafe_health["recovery"]
         assert unsafe_health["healthState"] == "DEGRADED", unsafe_health
         assert unsafe_health["collectionState"] == "listening", unsafe_health
@@ -235,13 +243,13 @@ def main():
         os.chmod(denied_raw, 0o500)
         try:
             denied, denied_url, denied_udp = start_service(repo, dll, denied_root)
-            denied_health = health(denied, denied_url)
+            denied_health = health(denied, denied_url, collection_state="faulted")
             assert denied_health["healthState"] == "FAULTED", denied_health
             assert denied_health["rawWriteAvailable"] is False, denied_health
             assert denied_health["collectionState"] == "faulted", denied_health
             send_datagram(denied_udp, b"must-not-be-accepted")
             time.sleep(.2)
-            after_denied = health(denied, denied_url)
+            after_denied = health(denied, denied_url, collection_state="faulted")
             assert after_denied["udpAccepted"] == 0 and after_denied["rawFlushedRecords"] == 0, after_denied
             stop_service(denied)
         finally:
@@ -269,7 +277,7 @@ def main():
         assert recovery_marker.is_file(), "forced termination during recovery must leave a replay marker"
 
         resumed, resumed_url, _ = start_service(repo, dll, interrupted_root)
-        resumed_health = health(resumed, resumed_url, timeout=30)
+        resumed_health = health(resumed, resumed_url, timeout=30, collection_state="listening")
         assert resumed_health["healthState"] == "DEGRADED", resumed_health
         assert resumed_health["recovery"]["indexedOrphanFiles"] == file_count, resumed_health["recovery"]
         assert any(issue["category"] == "RECOVERY_INTERRUPTED" for issue in resumed_health["recovery"]["issues"]), resumed_health["recovery"]

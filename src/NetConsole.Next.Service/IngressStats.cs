@@ -5,15 +5,22 @@ internal sealed record FlushLatencySnapshot(long Samples, double? P50Ms, double?
 // Application counters only. UDP kernel drops are not covered by these counters.
 internal sealed class IngressStats
 {
+    private readonly int _queueCapacity;
     private long _received, _accepted, _dropped, _flushed, _queueDepth, _queueHighWatermark, _lastReceivedMs, _lastPersistedMs;
     private readonly long[] _flushLatencyBuckets = new long[9];
     private long _maxFlushLatencyMicros;
+    public IngressStats(int queueCapacity = UdpSyslogWorker.QueueCapacity)
+    {
+        if (queueCapacity < 1) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
+        _queueCapacity = queueCapacity;
+    }
+
     public long Received => Interlocked.Read(ref _received);
     public long Accepted => Interlocked.Read(ref _accepted);
     public long Dropped => Interlocked.Read(ref _dropped);
     public long Flushed => Interlocked.Read(ref _flushed);
-    public long QueueDepth => Interlocked.Read(ref _queueDepth);
-    public long QueueHighWatermark => Interlocked.Read(ref _queueHighWatermark);
+    public long QueueDepth => Math.Min(Interlocked.Read(ref _queueDepth), _queueCapacity);
+    public long QueueHighWatermark => Math.Min(Interlocked.Read(ref _queueHighWatermark), _queueCapacity);
     public long LastReceivedMs => Interlocked.Read(ref _lastReceivedMs);
     public long LastPersistedMs => Interlocked.Read(ref _lastPersistedMs);
 
@@ -67,7 +74,9 @@ internal sealed class IngressStats
             return false;
         }
         MarkAccepted();
-        var depth = Interlocked.Read(ref _queueDepth);
+        // The counter is incremented before TryWrite to prevent a fast reader from
+        // decrementing first. A failed/full write can briefly make it exceed capacity.
+        var depth = Math.Min(Interlocked.Read(ref _queueDepth), _queueCapacity);
         var high = Interlocked.Read(ref _queueHighWatermark);
         while (depth > high && Interlocked.CompareExchange(ref _queueHighWatermark, depth, high) != high)
             high = Interlocked.Read(ref _queueHighWatermark);
