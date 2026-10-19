@@ -365,7 +365,16 @@ internal static class SchedulerTests
                 "cooperative stop must seal and catalog the sparse Raw segment");
             Assert(!File.Exists(open), "a sealed Raw segment must release and rename its .open path before stop returns");
         }
-        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+        finally
+        {
+            try { await DeleteTestDirectoryWithRetryAsync(root); }
+            catch (IOException ex) when (OperatingSystem.IsWindows())
+            {
+                // Cleanup is best effort here so a Windows file-lock diagnostic does not
+                // replace the assertion or exception that caused the test to fail.
+                Console.Error.WriteLine($"WARN: test directory cleanup was blocked: {ex.Message}");
+            }
+        }
     }
 
     private static void VerifiesSqliteWriteFailureRetainsRawFile()
@@ -595,7 +604,7 @@ internal static class SchedulerTests
     {
         IOException? lastIoError = null;
         UnauthorizedAccessException? lastAccessError = null;
-        for (var attempt = 0; attempt < 20 && Directory.Exists(root); attempt++)
+        for (var attempt = 0; attempt < 100 && Directory.Exists(root); attempt++)
         {
             try
             {
@@ -605,12 +614,12 @@ internal static class SchedulerTests
             catch (IOException ex) when (OperatingSystem.IsWindows())
             {
                 lastIoError = ex;
-                await Task.Delay(50);
+                await Task.Delay(100);
             }
             catch (UnauthorizedAccessException ex) when (OperatingSystem.IsWindows())
             {
                 lastAccessError = ex;
-                await Task.Delay(50);
+                await Task.Delay(100);
             }
         }
         if (Directory.Exists(root))
