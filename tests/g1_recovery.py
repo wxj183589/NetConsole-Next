@@ -134,7 +134,7 @@ def main():
         current = health(second, second_url)
         assert current["serviceState"] == "running", current
         assert current["collectionState"] == "listening", current
-        assert current["sqliteIntegrity"] == "ok", current
+        assert current["sqliteIntegrityAtStartup"] == "ok", current
         assert current["recovery"]["recoveredOpenFiles"] == 1, current["recovery"]
         assert current["recovery"]["indexedOrphanFiles"] == 2, current["recovery"]
         assert current["recovery"]["repairedTailFiles"] == 2, current["recovery"]

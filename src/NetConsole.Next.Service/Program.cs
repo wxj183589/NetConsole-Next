@@ -51,7 +51,7 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         lastPersistedMs = ingress.LastPersistedMs == 0 ? (long?)null : ingress.LastPersistedMs,
         openSegmentsOnDisk = rawCatalog.OpenSegmentCount(),
         rawSegments = segments,
-        sqliteIntegrity = rawCatalog.IntegrityStatus,
+        sqliteIntegrityAtStartup = rawCatalog.IntegrityStatus,
         recovery = rawCatalog.RecoverySummary,
         resources = resource
     });

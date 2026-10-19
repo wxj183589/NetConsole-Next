@@ -29,6 +29,8 @@ internal sealed class Catalog(RuntimeSettings settings)
     public void Initialize()
     {
         Directory.CreateDirectory(settings.DataRoot);
+        if ((File.GetAttributes(settings.DataRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Data root cannot be a symbolic link or reparse point.");
         var marker = Path.Combine(settings.DataRoot, ".netconsole-next-root");
         if (!File.Exists(marker))
         {
@@ -328,7 +330,8 @@ internal sealed class Catalog(RuntimeSettings settings)
             ON CONFLICT(relative_path) DO UPDATE SET
               state=excluded.state, first_received_ms=excluded.first_received_ms,
               last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
-              byte_count=excluded.byte_count, sha256=excluded.sha256, sealed_ms=excluded.sealed_ms";
+              byte_count=excluded.byte_count, sha256=excluded.sha256,
+              sealed_ms=COALESCE(raw_segments.sealed_ms,excluded.sealed_ms)";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
         command.Parameters.AddWithValue("$path", relative);
         command.Parameters.AddWithValue("$state", state);
