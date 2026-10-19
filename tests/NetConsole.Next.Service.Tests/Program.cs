@@ -18,6 +18,8 @@ internal static class SchedulerTests
         await ReportsConnectionFailuresAndDisposesSession();
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
+        VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
+        await PersistsH3cTaskOutputAsVerifiedRaw();
         VerifiesExistingV1CatalogUpgradeReadsEachRawOnce();
         VerifiesIncrementalRecoverySkipsLargeTrustedHistory();
         VerifiesMaintenanceFailureCanResolveAfterVerifiedRetry();
@@ -32,7 +34,153 @@ internal static class SchedulerTests
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesRollingLogSizeAndRetention();
         RejectsInvalidRequests();
-        Console.WriteLine("PASS: bounded/persisted scheduling, migration, incremental Raw recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
+        Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
+    }
+
+    private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()
+    {
+        var fixtures = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c");
+        var version = H3cComwareParser.ParseVersion(File.ReadAllText(Path.Combine(fixtures, "display_version.txt")));
+        Assert(version.Recognized && version.Vendor == "H3C Comware" && version.Version == "7.1.070" &&
+               version.Release == "6607P20", version.ToString()!);
+
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(File.ReadAllText(Path.Combine(fixtures, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count == 4, interfaces.ToString()!);
+        Assert(interfaces.Interfaces.Single(x => x.InterfaceName == "GE1/0/1").IpAddress == "192.0.2.10",
+            "route-mode Comware interface should parse its IP address");
+        var bridgePort = interfaces.Interfaces.Single(x => x.InterfaceName == "GE1/0/2");
+        Assert(bridgePort.LinkStatus == "DOWN" && bridgePort.Speed == "auto" && bridgePort.Vlan == "20",
+            bridgePort.ToString()!);
+
+        var fingerprint = Convert.ToBase64String(Enumerable.Range(0, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+        Assert(H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, fingerprint), "SHA256 pin should match SSH.NET fingerprint form");
+        Assert(!H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, new string('A', 43)), "wrong host key must not match");
+        AssertThrows<ArgumentException>(() => H3cHostKeyFingerprint.Normalize("MD5:aa:bb"));
+
+        var connectionInfo = new Renci.SshNet.ConnectionInfo("192.0.2.1", 22, "lab",
+            new Renci.SshNet.PasswordAuthenticationMethod("lab", "unit-test-placeholder"));
+        H3cSshAlgorithmPolicy.Apply(connectionInfo);
+        Assert(!connectionInfo.KeyExchangeAlgorithms.ContainsKey("diffie-hellman-group1-sha1") &&
+               !connectionInfo.Encryptions.ContainsKey("3des-cbc") &&
+               !connectionInfo.HmacAlgorithms.ContainsKey("hmac-sha1") &&
+               !connectionInfo.HostKeyAlgorithms.ContainsKey("ssh-rsa"), "weak SSH algorithms must be removed from the connection allowlist");
+    }
+
+    private static async Task PersistsH3cTaskOutputAsVerifiedRaw()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-h3c-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = TestSettings(root);
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            catalog.ProbeRawWritable();
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.10", 22, "readonly", "LAB_SWITCH_A",
+                fingerprint, true, 0, 0));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateH3cDeviceProfile(new(profileId,
+                "192.0.2.11", 22, "readonly", "LAB_SWITCH_A", fingerprint, true, 0, 0)));
+            var noSecretSession = new H3cSshDeviceSessionFactory(catalog, new FixedH3cCredentialProvider(null)).Create(profileId);
+            try
+            {
+                await noSecretSession.ConnectAsync(CancellationToken.None);
+                throw new InvalidOperationException("Missing H3C secret must fail before opening a network connection.");
+            }
+            catch (H3cCredentialUnavailableException) { }
+            finally { await noSecretSession.DisposeAsync(); }
+            AssertThrows<ArgumentException>(() => catalog.CreateTaskDefinition("h3c-denied", "H3C_SSH_READONLY",
+                profileId, "display current-configuration", TimeSpan.FromSeconds(10)));
+            catalog.CreateTaskDefinition("h3c-version", "H3C_SSH_READONLY", profileId,
+                H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(10));
+
+            var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "display_version.txt"));
+            var fakeFactory = new FakeSessionFactory(_ => new FakeBehavior((_, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                return Task.FromResult(output);
+            }));
+            var sink = new H3cTaskRawResultSink(catalog);
+            await using (var scheduler = new BoundedCollectionScheduler(fakeFactory, 1, 2, catalog, resultSink: sink))
+            {
+                Assert(scheduler.TryScheduleDefinition("h3c-version", out var runId), "persisted H3C task should be admitted");
+                var terminal = await WaitTerminal(scheduler, runId);
+                Assert(terminal.State == "SUCCEEDED", terminal.ToString()!);
+            }
+
+            var persisted = catalog.RecentTaskRuns().Single(x => x.TaskType == "H3C_SSH_READONLY");
+            Assert(persisted.State == "SUCCEEDED" && persisted.SourceId == "h3c-" + profileId &&
+                   persisted.RawOutputPath is not null && persisted.RawOutputSha256 is { Length: 64 } &&
+                   persisted.RawOutputBytes == Encoding.UTF8.GetByteCount(output), persisted.ToString()!);
+            var rawPath = Path.Combine(root, persisted.RawOutputPath!.Replace('/', Path.DirectorySeparatorChar));
+            var rawBytes = File.ReadAllBytes(rawPath);
+            Assert(Convert.ToHexString(SHA256.HashData(rawBytes)).Equals(
+                ReadRawSegmentSha(root, persisted.RawOutputPath), StringComparison.OrdinalIgnoreCase), "sealed H3C Raw checksum should match Catalog");
+            using (var rawDocument = System.Text.Json.JsonDocument.Parse(rawBytes.AsMemory(0, rawBytes.Length - 1)))
+            {
+                var record = rawDocument.RootElement;
+                Assert(record.GetProperty("record_type").GetString() == "h3c_command" &&
+                       record.GetProperty("source_id").GetString() == persisted.SourceId &&
+                       record.GetProperty("task_run_id").GetString() == persisted.Id &&
+                       record.GetProperty("command").GetString() == H3cCommandPolicy.DisplayVersion,
+                    "Raw record should be attributable to source, command and persisted run");
+                var roundTrip = Convert.FromBase64String(record.GetProperty("output_utf8_base64").GetString()!);
+                Assert(roundTrip.SequenceEqual(Encoding.UTF8.GetBytes(output)), "Raw should preserve the command response UTF-8 bytes");
+                Assert(record.GetProperty("output_sha256").GetString() == persisted.RawOutputSha256,
+                    "result manifest and Raw output hashes should match");
+            }
+            const string fakeSecret = "synthetic-test-secret-never-for-a-device";
+            const string secretKey = "NETCONSOLE_NEXT_CREDENTIAL_LAB_SWITCH_A";
+            var previousSecret = Environment.GetEnvironmentVariable(secretKey);
+            try
+            {
+                Environment.SetEnvironmentVariable(secretKey, fakeSecret);
+                Assert(new EnvironmentH3cCredentialProvider().GetPassword("LAB_SWITCH_A") == fakeSecret,
+                    "the test provider should resolve a credential by reference only at use time");
+                Assert(File.ReadAllBytes(Path.Combine(root, "catalog.db")).AsSpan().IndexOf(Encoding.UTF8.GetBytes(fakeSecret)) < 0,
+                    "credential material must not be persisted in the catalog");
+            }
+            finally { Environment.SetEnvironmentVariable(secretKey, previousSecret); }
+            var recovered = new Catalog(settings);
+            recovered.Initialize();
+            var recovery = recovered.RecoverRawSegments();
+            Assert(recovery.FailedFiles == 0 && recovery.TrustedFilesSkipped == 1,
+                $"verified H3C Raw should be a trusted, idempotent recovery entry: {recovery}");
+            var afterRecovery = recovered.RecentTaskRuns().Single(x => x.Id == persisted.Id);
+            Assert(afterRecovery.State == "SUCCEEDED" && afterRecovery.RawOutputPath == persisted.RawOutputPath,
+                "recovery should preserve task output index and terminal state");
+            var cleanRawSize = new FileInfo(rawPath).Length;
+            using (var damaged = new FileStream(rawPath, FileMode.Append, FileAccess.Write, FileShare.None))
+            {
+                damaged.Write(Encoding.UTF8.GetBytes("{\"record_type\":\"h3c_command\",\"bad\":\n"));
+                damaged.Flush(flushToDisk: true);
+            }
+            var damagedRecovery = recovered.RecoverRawSegments();
+            Assert(damagedRecovery.RepairedTailFiles == 1 && damagedRecovery.RecoveryEvidenceFiles == 1 &&
+                   damagedRecovery.FailedFiles == 0, $"damaged H3C tail should be repaired with evidence: {damagedRecovery}");
+            Assert(File.Exists(rawPath) && new FileInfo(rawPath).Length == cleanRawSize,
+                "verified H3C prefix must remain in place and the damaged suffix must not delete valid Raw");
+            var damagedAudit = recovered.RecentIntegrityAudits(20).Single(x => x.Reason == "CORRUPT_TAIL_REPAIRED");
+            Assert(damagedAudit.EvidencePath is not null &&
+                   File.Exists(Path.Combine(root, damagedAudit.EvidencePath.Replace('/', Path.DirectorySeparatorChar))),
+                "damaged H3C tail evidence should remain on disk and be indexed");
+            Assert(recovered.GetHealthSnapshot().UnresolvedIntegrityIssues > 0,
+                "H3C Raw corruption should remain visible as a degraded historical issue");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string ReadRawSegmentSha(string root, string relativePath)
+    {
+        using var db = OpenCatalog(root);
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT sha256 FROM raw_segments WHERE relative_path=$path AND state='FINALIZED'";
+        command.Parameters.AddWithValue("$path", relativePath);
+        return Convert.ToString(command.ExecuteScalar()) ?? throw new InvalidOperationException("H3C Raw segment was not finalized in SQLite.");
     }
 
     private static async Task PersistsDefinitionsRunsAndRestartState()
@@ -45,6 +193,12 @@ internal static class SchedulerTests
             var catalog = new Catalog(settings);
             catalog.Initialize();
             catalog.Initialize(); // migration must be safe to repeat
+            catalog.CreateTaskDefinition("sim-echo-1", "SIMULATED_DEVICE_ECHO", "sim://device-1",
+                "show version", TimeSpan.FromSeconds(3));
+            var staleDefinition = catalog.GetTaskDefinition("sim-echo-1")!;
+            catalog.CreateTaskDefinition("sim-echo-1", "SIMULATED_DEVICE_ECHO", "sim://device-1",
+                "show interfaces", TimeSpan.FromSeconds(3));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateTaskRun(staleDefinition));
             catalog.CreateTaskDefinition("sim-echo-1", "SIMULATED_DEVICE_ECHO", "sim://device-1",
                 "show version", TimeSpan.FromSeconds(3));
             var factory = new FakeSessionFactory(_ => new FakeBehavior((command, _) => Task.FromResult("echo:" + command)));
@@ -90,7 +244,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 3, "v3 migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 4, "v4 migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
@@ -941,6 +1095,11 @@ internal static class SchedulerTests
     }
 
     private sealed record FakeBehavior(Func<string, CancellationToken, Task<string>> Execute, bool FailConnect = false);
+
+    private sealed class FixedH3cCredentialProvider(string? value) : IH3cCredentialProvider
+    {
+        public string? GetPassword(string reference) => value;
+    }
 
     private sealed class FailAfterBytesWriterFactory(long byteLimit) : IRawSegmentWriterFactory
     {

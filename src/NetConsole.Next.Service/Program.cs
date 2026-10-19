@@ -10,6 +10,21 @@ builder.WebHost.UseUrls($"http://127.0.0.1:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
+builder.Services.AddSingleton<IH3cCredentialProvider, EnvironmentH3cCredentialProvider>();
+builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
+builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
+    sp.GetRequiredService<Catalog>(), ex =>
+    {
+        sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
+        sp.GetRequiredService<RuntimeStatus>().SetFaulted($"H3C_RAW_PERSISTENCE_FAILED: {ex.GetType().Name}");
+    }));
+builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
+    sp.GetRequiredService<IDeviceSessionFactory>(), maxConcurrency: 2, queueCapacity: 128,
+    sp.GetRequiredService<Catalog>(), ex =>
+    {
+        sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
+        sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
+    }, sp.GetRequiredService<ITaskResultSink>()));
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
@@ -81,6 +96,7 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         processId = Environment.ProcessId,
         startedAtMs = processStartedAt,
         syslogEnabled = runtime.SyslogPort > 0,
+        h3cCollectionEnabled = runtime.H3cEnabled,
         collectionState = status.CollectionState,
         collectionError = status.CollectionError,
         udpReceived = ingress.Received,
@@ -115,6 +131,60 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
     });
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+if (settings.H3cEnabled)
+{
+    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentH3cDeviceProfiles()));
+    app.MapPost("/api/system/h3c/profiles", (H3cProfileRequest request, Catalog rawCatalog) =>
+    {
+        try
+        {
+            rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
+                request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0));
+            return Results.Created($"/api/system/h3c/profiles/{request.Id}", rawCatalog.GetH3cDeviceProfile(request.Id));
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." });
+        }
+    });
+    app.MapPost("/api/system/h3c/task-definitions", (H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    {
+        if (request.TimeoutMs is < 100 or > 600000)
+            return Results.BadRequest(new { error = "timeoutMs must be between 100 and 600000." });
+        try
+        {
+            rawCatalog.CreateTaskDefinition(request.Id, "H3C_SSH_READONLY", request.ProfileId,
+                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled);
+            return Results.Created($"/api/system/tasks/definitions/{request.Id}",
+                rawCatalog.GetTaskDefinition(request.Id));
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            return Results.Conflict(new { error = $"Task definition could not be saved ({ex.GetType().Name})." });
+        }
+    });
+    app.MapPost("/api/system/tasks/{definitionId}/runs", (string definitionId, Catalog rawCatalog,
+        RuntimeStatus status, BoundedCollectionScheduler scheduler) =>
+    {
+        if (!rawCatalog.Available || !rawCatalog.RawWriteAvailable || !status.CollectionAllowed)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        try
+        {
+            if (rawCatalog.GetTaskDefinition(definitionId)?.TaskType != "H3C_SSH_READONLY")
+                return Results.NotFound();
+            if (!scheduler.TryScheduleDefinition(definitionId, out var runId))
+                return Results.Problem("The bounded collection queue is full or shutting down.", statusCode: StatusCodes.Status429TooManyRequests);
+            return Results.Accepted("/api/system/tasks", new { runId });
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+}
 app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
     (string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
     {
@@ -134,3 +204,7 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
 app.Run();
 
 internal sealed record RawIssueQuarantineRequest(string Actor, string Detail);
+internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
+    string CredentialReference, string HostKeySha256, bool Enabled = true);
+internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
+    long TimeoutMs = 30000, bool Enabled = true);

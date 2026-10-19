@@ -1,6 +1,6 @@
 # NetConsole Next
 
-**未来主力仓库；当前处于 P0/G1 稳定性原型阶段，不可作为生产采集软件。**
+**未来主力仓库；当前处于 P0/G1.5 稳定性与 G2 基础采集开发阶段，不可作为生产采集软件。**
 
 ## 产品方向
 
@@ -15,11 +15,11 @@
 
 当前实现包括：SQLite Schema v1、数据目录安全标识、本机 loopback 健康 API、可选 UDP Syslog、有界接收队列、Raw NDJSON 二进制保真、受控结束时封段与 SQLite 索引。G1 基础增加了启动时 Raw/SQLite 对账、遗留 `.open` 恢复、有效 NDJSON 前缀校验与损坏尾部截断、未索引段补登、缺失文件标记、任务运行记录、跨进程单实例锁，以及进程资源和采集状态快照。
 
-设备采集框架当前提供有界调度队列、最大并发限制、连接会话接口、超时、取消和状态历史上限，并以模拟设备命令回显测试验证生命周期。该框架尚未连接 SSH/SNMP，也没有真实设备适配器。
+设备采集框架提供有界调度队列、最大并发限制、持久 Task Definition/Run、超时、取消和失败记录。当前 G2 开发分支加入 H3C Comware SSH 初始只读组件，仅允许 `display version` 和 `display interface brief`，使用 SHA-256 Host Key pin、算法 allowlist、模拟回显与脱敏 golden tests；真实设备尚未连接，不能视为现场验收通过。SSH 功能默认关闭，需显式设置 `NETCONSOLE_NEXT_H3C_ENABLED=1`；密码只通过 credential reference 从进程环境读取，不写入 SQLite，但受控 Secret Store 尚未完成。
 
-Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，服务仅获得发布目录读取/执行权限和隔离数据根修改权限，并配置 SCM 自动恢复；Local Manager 提供 `status`、`start`、`stop`、`restart`、`open-web`、`open-data`、`open-raw`、`open-logs` 和 `open-published`。Service 写入 5 MiB 分段、最多保留 14 个文件的本机滚动日志。Windows CI 检查构建、Manager 帮助命令和安装/卸载 PowerShell 语法；真实安装、服务账户 ACL、SCM 恢复行为仍待目标 Windows 实机验证。
+Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，服务仅获得发布目录读取/执行权限和隔离数据根修改权限，并配置 SCM 自动恢复；Local Manager 提供 `status`、`start`、`stop`、`restart`、`open-web`、`open-data`、`open-raw`、`open-logs` 和 `open-published`。Windows Server 2025 CI 已实际验证 Service EXE 发布安装、ProgramData ACL、SCM 启停/重启/异常恢复和卸载保留数据。Windows 10/11、旧 Windows 和低配置工业机仍待实机验证。
 
-**未实现：**Web 登录认证与业务界面、SSH/SNMP、文件服务、长周期运行和设备回归。不能宣称真实现场的数据完整性或 UDP 零丢包。
+**未实现或待验收：**Web 登录认证与业务界面、SNMP、Syslog 多来源、MR 采集、文件服务、受控 Secret Store、真实 H3C 设备回归和长周期运行。不能宣称真实现场的数据完整性、UDP 零丢包或工业机性能达标。
 
 ### .NET 10 原型本地运行
 

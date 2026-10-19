@@ -1,6 +1,6 @@
 # Performance baseline
 
-Status: reproducible Linux container measurements are available. They describe this cloud runner, not an industrial Mini host or production deployment. A larger PPS parameter is not evidence of achieved throughput: all tables below report the sender's measured rate.
+Status: reproducible Linux container measurements are available for the G1.5 Syslog path. They describe this cloud runner, not an industrial Mini host or production deployment. A larger PPS parameter is not evidence of achieved throughput: all tables below report the sender's measured rate. The G2 H3C work has only synthetic correctness tests; no SSH/device throughput, CPU, memory or session-lifetime measurement is available.
 
 ## Environment and accounting
 
@@ -62,6 +62,12 @@ Raw NDJSON is serialized into reusable UTF-8 staging memory without constructing
 The 100,000-record 8,192-queue probe recorded Raw sync p50 0.095 ms, p95 0.815 ms, p99 2.919 ms, max 5.439 ms; segment seal p50 9.617 ms, p95 22.905 ms, max 22.905 ms; SQLite segment-registration p50 1.392 ms, p95 6.311 ms, max 6.311 ms. A separate 500 single-row SQLite FULL-sync probe measured p50 0.0060 ms, p95 0.0083 ms, p99 0.0322 ms and max 0.481 ms on this container.
 
 With 1,000 pre-indexed, trusted historical 11,016-byte Raw files (11,016,000 B), startup scanned 1,019 paths and trusted-skipped 1,019, read/hashed 0 file-content bytes, and reported Catalog recovery in 32 ms; complete process restart wall time was 531 ms. This demonstrates the checkpoint fast path for this fixture size, not adversarial metadata mutation detection or a production directory-scale guarantee. A later low-priority audit is still required to detect same-size/same-timestamp edits.
+
+### G2 branch Syslog regression sample
+
+Command: `python3 tests/perf_baseline.py --packets 100000 --payload-bytes 512 --rate 5000 --queue-burst 0 --history-files 1000 --sqlite-writes 500 --output docs/perf-results/g2-h3c-raw-writer-regression.json`. This is one current-branch regression sample after Raw Writer generalization; it is not a statistically sufficient before/after claim and it does not measure SSH/device collection.
+
+The paced sender completed 100,000 local `sendto` calls in 20.000 s. The Service received, admitted and flushed all 100,000 with zero application drops. The requested 4 MiB receive buffer reported 8 MiB effective; the host-global `RcvbufErrors` counter did not increase in the test interval. Queue high-water was 275 packets / 140,800 payload bytes. Process CPU was 25.95% host-normalized / 38.93% of the two-core quota; working set was 113,979,392 B, 21 threads and 231 file descriptors. The data root grew 77,813,033 B during the Syslog load. Raw sync latency was p50/p95/p99 0.0861/0.3984/0.7898 ms (max 1.9238); segment seal p50/p95 7.1079/22.2286 ms; SQLite registration p50/p95 1.2838/5.3368 ms. A separate 500-commit SQLite FULL-sync probe measured p50/p95/p99 0.0088/0.0148/0.1039 ms (max 0.3604). At startup, 1,019 indexed files were scanned/trusted-skipped, 0 content bytes read or hashed, Catalog recovery took 32 ms and full restart wall time was 562 ms. Physical IOPS were unavailable. The exact environment and full counters are in the linked JSON result.
 
 ## Durability and limits
 

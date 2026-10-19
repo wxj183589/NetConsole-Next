@@ -26,7 +26,8 @@ internal sealed record RecoveryIssue(string RelativePath, string Category, bool 
 
 internal sealed record RawCatalogCounts(int Finalized, int Incomplete, int Missing);
 internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskType, string State,
-    long? QueuedMs, long? StartedMs, long? DeadlineMs, long? EndedMs, string? FailureReason, string? DefinitionId);
+    long? QueuedMs, long? StartedMs, long? DeadlineMs, long? EndedMs, string? FailureReason, string? DefinitionId,
+    string? RawOutputPath, string? RawOutputSha256, long? RawOutputBytes, string? ParsedResultJson);
 internal sealed record TaskDefinitionSnapshot(string Id, string TaskType, string Target, string Command,
     long TimeoutMs, bool Enabled, string RestartPolicy);
 internal sealed record RawIntegrityAuditSnapshot(string Id, string RelativePath, long DetectedMs, string Reason,
@@ -37,12 +38,12 @@ internal sealed record CatalogHealthSnapshot(RawCatalogCounts RawSegments, int I
     IReadOnlyList<RawIntegrityAuditSnapshot> RecentIntegrityAudits);
 internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs,
     long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes, string? EvidencePath,
-    long BytesRead, long BytesHashed);
+    long BytesRead, long BytesHashed, string SourceId = "syslog-local", string? DeviceHost = null);
 internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
 
 internal sealed class Catalog(RuntimeSettings settings)
 {
-    private const int MaximumLineBytes = 128 * 1024;
+    private const int MaximumLineBytes = 512 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
     public string RawRoot => Path.Combine(settings.DataRoot, "raw");
     public RawRecoverySummary RecoverySummary { get; private set; } = EmptyRecovery();
@@ -99,6 +100,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         ApplyEmbeddedSchema(db, "schema_v1.sql");
         ApplyV2Migration(db);
         ApplyV3Migration(db);
+        ApplyV4Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -179,6 +181,19 @@ internal sealed class Catalog(RuntimeSettings settings)
             version.Parameters.AddWithValue("$now", UtcNowMs());
             version.ExecuteNonQuery();
         }
+        transaction.Commit();
+    }
+
+    private static void ApplyV4Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v4.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v4.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
         transaction.Commit();
     }
 
@@ -446,16 +461,121 @@ internal sealed class Catalog(RuntimeSettings settings)
         RecoveryWasInterrupted = false;
     }
 
+    public void CreateH3cDeviceProfile(H3cDeviceProfileSnapshot profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (!Guid.TryParseExact(profile.Id, "N", out _))
+            throw new ArgumentException("H3C profile id must be a 32-character GUID.", nameof(profile));
+        if (!string.Equals(profile.Id, profile.Id.ToLowerInvariant(), StringComparison.Ordinal))
+            throw new ArgumentException("H3C profile id must use lowercase hexadecimal characters.", nameof(profile));
+        if (string.IsNullOrWhiteSpace(profile.Host) || profile.Host.Length > 253 ||
+            profile.Host.Any(char.IsControl) || profile.Host.Any(char.IsWhiteSpace) ||
+            Uri.CheckHostName(profile.Host) == UriHostNameType.Unknown)
+            throw new ArgumentException("H3C host must be a valid IP address or DNS hostname.", nameof(profile));
+        if (profile.Port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(profile), "H3C SSH port must be 1-65535.");
+        if (string.IsNullOrWhiteSpace(profile.Username) || profile.Username.Length > 64 ||
+            profile.Username.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
+            throw new ArgumentException("H3C username contains unsupported characters.", nameof(profile));
+        if (!H3cCredentialReference.IsValid(profile.CredentialReference))
+            throw new ArgumentException("Credential reference must match [A-Z][A-Z0-9_]{0,63}.", nameof(profile));
+        var fingerprint = H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
+        var sourceId = "h3c-" + profile.Id;
+        var now = UtcNowMs();
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = @"SELECT host,port,username,credential_reference,host_key_sha256
+                FROM h3c_device_profiles WHERE id=$id";
+            existing.Parameters.AddWithValue("$id", profile.Id);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read() && (reader.GetString(0) != profile.Host || reader.GetInt32(1) != profile.Port ||
+                reader.GetString(2) != profile.Username || reader.GetString(3) != profile.CredentialReference ||
+                reader.GetString(4) != fingerprint))
+                throw new InvalidOperationException("H3C connection identity is immutable; create a new profile id for host, credential-reference or host-key changes.");
+        }
+        using (var source = db.CreateCommand())
+        {
+            source.Transaction = transaction;
+            source.CommandText = @"INSERT INTO collection_sources(id,site_id,kind,label,enabled)
+                VALUES($source,'local','H3C_SSH',$label,$enabled)
+                ON CONFLICT(id) DO UPDATE SET label=excluded.label,enabled=excluded.enabled";
+            source.Parameters.AddWithValue("$source", sourceId);
+            source.Parameters.AddWithValue("$label", $"H3C {profile.Host}:{profile.Port}");
+            source.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
+            source.ExecuteNonQuery();
+        }
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO h3c_device_profiles
+                (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms)
+                VALUES($id,$source,$host,$port,$username,$credential,$fingerprint,$enabled,$created,$updated)
+                ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,host=excluded.host,port=excluded.port,
+                    username=excluded.username,credential_reference=excluded.credential_reference,
+                    host_key_sha256=excluded.host_key_sha256,enabled=excluded.enabled,updated_ms=excluded.updated_ms";
+            insert.Parameters.AddWithValue("$id", profile.Id);
+            insert.Parameters.AddWithValue("$source", sourceId);
+            insert.Parameters.AddWithValue("$host", profile.Host);
+            insert.Parameters.AddWithValue("$port", profile.Port);
+            insert.Parameters.AddWithValue("$username", profile.Username);
+            insert.Parameters.AddWithValue("$credential", profile.CredentialReference);
+            insert.Parameters.AddWithValue("$fingerprint", fingerprint);
+            insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
+            insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
+            insert.Parameters.AddWithValue("$updated", now);
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    public H3cDeviceProfileSnapshot? GetH3cDeviceProfile(string id)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms
+            FROM h3c_device_profiles WHERE id=$id";
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
+                reader.GetString(4), reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8))
+            : null;
+    }
+
+    public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms
+            FROM h3c_device_profiles ORDER BY updated_ms DESC LIMIT $limit";
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
+        using var reader = command.ExecuteReader();
+        var profiles = new List<H3cDeviceProfileSnapshot>();
+        while (reader.Read())
+            profiles.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
+                reader.GetString(4), reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8)));
+        return profiles;
+    }
+
     public void CreateTaskDefinition(string id, string taskType, string target, string command,
         TimeSpan timeout, bool enabled = true, string restartPolicy = "NEVER")
     {
-        if (taskType != "SIMULATED_DEVICE_ECHO")
-            throw new ArgumentException("Only simulated device tasks are enabled in this G1 build.", nameof(taskType));
+        if (taskType is not ("SIMULATED_DEVICE_ECHO" or "H3C_SSH_READONLY"))
+            throw new ArgumentException("Unsupported task type.", nameof(taskType));
         if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Any(char.IsControl)) throw new ArgumentException("Task definition id is invalid.", nameof(id));
         if (string.IsNullOrWhiteSpace(target) || target.Length > 253 || target.Any(char.IsControl)) throw new ArgumentException("Task target is invalid.", nameof(target));
         if (string.IsNullOrWhiteSpace(command) || command.Length > 4096 || command.Contains('\r') || command.Contains('\n')) throw new ArgumentException("Task command must be one line.", nameof(command));
         if (timeout < TimeSpan.FromMilliseconds(100) || timeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(timeout));
         if (restartPolicy != "NEVER") throw new ArgumentException("G1 restart policy only supports NEVER; interrupted runs require an explicit retry.", nameof(restartPolicy));
+        if (taskType == "H3C_SSH_READONLY")
+        {
+            if (!H3cCommandPolicy.IsAllowed(command))
+                throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+            var profile = GetH3cDeviceProfile(target);
+            if (profile is null || !profile.Enabled) throw new ArgumentException("Enabled H3C device profile was not found.", nameof(target));
+        }
         var now = UtcNowMs();
         using var db = Open();
         using var insert = db.CreateCommand();
@@ -494,18 +614,53 @@ internal sealed class Catalog(RuntimeSettings settings)
     public string CreateTaskRun(string definitionId)
     {
         var definition = GetTaskDefinition(definitionId) ?? throw new KeyNotFoundException($"Task definition '{definitionId}' does not exist.");
+        return CreateTaskRun(definition);
+    }
+
+    public string CreateTaskRun(TaskDefinitionSnapshot definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
         if (!definition.Enabled) throw new InvalidOperationException("Disabled task definitions cannot be scheduled.");
         var id = Guid.NewGuid().ToString("N");
         var now = UtcNowMs();
         using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using (var current = db.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandText = @"SELECT task_type,target,request_json,timeout_ms,enabled,restart_policy
+                FROM task_definitions WHERE id=$id";
+            current.Parameters.AddWithValue("$id", definition.Id);
+            using var reader = current.ExecuteReader();
+            if (!reader.Read()) throw new KeyNotFoundException($"Task definition '{definition.Id}' does not exist.");
+            using var request = JsonDocument.Parse(reader.GetString(2));
+            var currentCommand = request.RootElement.GetProperty("command").GetString() ?? string.Empty;
+            if (reader.GetString(0) != definition.TaskType || reader.GetString(1) != definition.Target ||
+                currentCommand != definition.Command || reader.GetInt64(3) != definition.TimeoutMs ||
+                (reader.GetInt32(4) != 0) != definition.Enabled || reader.GetString(5) != definition.RestartPolicy)
+                throw new InvalidOperationException("Task definition changed during queue admission; reload it and retry.");
+        }
+        string? sourceId = null;
+        if (definition.TaskType == "H3C_SSH_READONLY")
+        {
+            using var profile = db.CreateCommand();
+            profile.Transaction = transaction;
+            profile.CommandText = "SELECT source_id FROM h3c_device_profiles WHERE id=$id AND enabled=1";
+            profile.Parameters.AddWithValue("$id", definition.Target);
+            sourceId = Convert.ToString(profile.ExecuteScalar());
+            if (sourceId is null) throw new InvalidOperationException("Enabled H3C profile disappeared before task-run admission.");
+        }
         using var command = db.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = @"INSERT INTO task_runs(id,source_id,task_type,state,queued_ms,deadline_ms,definition_id)
-            VALUES($id,NULL,$type,'QUEUED',$now,NULL,$definition)";
+            VALUES($id,$source,$type,'QUEUED',$now,NULL,$definition)";
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$source", (object?)sourceId ?? DBNull.Value);
         command.Parameters.AddWithValue("$type", definition.TaskType);
         command.Parameters.AddWithValue("$now", now);
-        command.Parameters.AddWithValue("$definition", definitionId);
+        command.Parameters.AddWithValue("$definition", definition.Id);
         command.ExecuteNonQuery();
+        transaction.Commit();
         return id;
     }
 
@@ -533,9 +688,69 @@ internal sealed class Catalog(RuntimeSettings settings)
             throw new InvalidOperationException($"Task run '{id}' did not accept the requested '{nextState}' transition.");
     }
 
-    public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
+    public void RegisterTaskRunRawOutput(string runId, string relativePath, string commandText,
+        long outputByteCount, string outputSha256, string rawSegmentSha256, long capturedMs, string parsedJson)
     {
-        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null, 0, 0), "FINALIZED");
+        if (!H3cCommandPolicy.IsAllowed(commandText)) throw new ArgumentException("Raw output command is not allowlisted.", nameof(commandText));
+        if (outputByteCount is < 0 or > 256 * 1024) throw new ArgumentOutOfRangeException(nameof(outputByteCount));
+        if (outputSha256.Length != 64 || outputSha256.Any(c => !Uri.IsHexDigit(c))) throw new ArgumentException("Raw output SHA256 is invalid.", nameof(outputSha256));
+        if (rawSegmentSha256.Length != 64 || rawSegmentSha256.Any(c => !Uri.IsHexDigit(c))) throw new ArgumentException("Raw segment SHA256 is invalid.", nameof(rawSegmentSha256));
+        using (JsonDocument.Parse(parsedJson)) { }
+        if (!TryResolveRawPath(relativePath, out var fullPath) || !File.Exists(fullPath))
+            throw new IOException("Sealed H3C Raw output path is missing or unsafe.");
+        var rawBytes = File.ReadAllBytes(fullPath);
+        if (rawBytes.Length is < 2 or > MaximumLineBytes || rawBytes[^1] != (byte)'\n' ||
+            rawBytes.AsSpan(0, rawBytes.Length - 1).Contains((byte)'\n') ||
+            !TryReadRecord(rawBytes.AsSpan(0, rawBytes.Length - 1).ToArray(), out _, out var recordSourceId, out var recordDeviceHost))
+            throw new InvalidDataException("Sealed H3C Raw file must contain exactly one complete verified command record.");
+        var actualSegmentSha = Convert.ToHexString(SHA256.HashData(rawBytes)).ToLowerInvariant();
+        if (!string.Equals(actualSegmentSha, rawSegmentSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Sealed H3C Raw bytes do not match the supplied segment checksum.");
+        string rawProfileId;
+        string rawDeviceHost;
+        using (var rawDocument = JsonDocument.Parse(rawBytes.AsMemory(0, rawBytes.Length - 1)))
+        {
+            var record = rawDocument.RootElement;
+            rawProfileId = record.GetProperty("device_profile_id").GetString() ?? string.Empty;
+            rawDeviceHost = recordDeviceHost ?? string.Empty;
+            if (record.GetProperty("task_run_id").GetString() != runId ||
+                record.GetProperty("command").GetString() != commandText ||
+                record.GetProperty("output_byte_count").GetInt32() != outputByteCount ||
+                !string.Equals(record.GetProperty("output_sha256").GetString(), outputSha256, StringComparison.OrdinalIgnoreCase) ||
+                record.GetProperty("captured_ms").GetInt64() != capturedMs ||
+                !string.Equals(recordSourceId, "h3c-" + record.GetProperty("device_profile_id").GetString(), StringComparison.Ordinal))
+                throw new InvalidDataException("Sealed H3C Raw record does not match the task output manifest.");
+        }
+
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"INSERT INTO task_run_raw_outputs(task_run_id,relative_path,command,byte_count,sha256,raw_segment_sha256,parsed_json,captured_ms)
+            SELECT t.id,r.relative_path,$command,$bytes,$outputSha,$segmentSha,$parsed,$captured
+            FROM task_runs t JOIN task_definitions d ON d.id=t.definition_id
+            JOIN h3c_device_profiles p ON p.source_id=t.source_id
+            JOIN raw_segments r ON r.relative_path=$path
+            WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND d.task_type=t.task_type
+              AND json_extract(d.request_json,'$.command')=$command
+              AND d.target=p.id AND p.id=$profile AND p.host=$host
+              AND r.state='FINALIZED' AND r.record_count=1 AND r.source_id=t.source_id AND r.sha256=$segmentSha";
+        command.Parameters.AddWithValue("$command", commandText);
+        command.Parameters.AddWithValue("$bytes", outputByteCount);
+        command.Parameters.AddWithValue("$outputSha", outputSha256);
+        command.Parameters.AddWithValue("$segmentSha", rawSegmentSha256);
+        command.Parameters.AddWithValue("$parsed", parsedJson);
+        command.Parameters.AddWithValue("$captured", capturedMs);
+        command.Parameters.AddWithValue("$path", relativePath);
+        command.Parameters.AddWithValue("$run", runId);
+        command.Parameters.AddWithValue("$profile", rawProfileId);
+        command.Parameters.AddWithValue("$host", rawDeviceHost);
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("H3C Raw output did not match the task run, command or sealed segment manifest.");
+    }
+
+    public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes,
+        string sourceId = "syslog-local")
+    {
+        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null, 0, 0, sourceId), "FINALIZED");
     }
 
     public void MarkUnavailable(Exception exception)
@@ -560,8 +775,10 @@ internal sealed class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,source_id,task_type,state,queued_ms,started_ms,deadline_ms,ended_ms,failure_reason,definition_id
-            FROM task_runs ORDER BY COALESCE(queued_ms,started_ms) DESC LIMIT $limit";
+        command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
+                o.relative_path,o.sha256,o.byte_count,o.parsed_json
+            FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id
+            ORDER BY COALESCE(t.queued_ms,t.started_ms) DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
         using var reader = command.ExecuteReader();
         var result = new List<TaskRunSnapshot>();
@@ -571,7 +788,11 @@ internal sealed class Catalog(RuntimeSettings settings)
                 reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt64(4),
                 reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
                 reader.IsDBNull(7) ? null : reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.IsDBNull(9) ? null : reader.GetString(9)));
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                reader.IsDBNull(13) ? null : reader.GetString(13)));
         }
         return result;
     }
@@ -848,6 +1069,7 @@ internal sealed class Catalog(RuntimeSettings settings)
 
     private void UpsertRecoveredSegment(string relative, RawSegmentInspection info, string state)
     {
+        ValidateRawSourcePath(relative, info.SourceId, info.DeviceHost);
         var filePath = Path.Combine(settings.DataRoot, relative.Replace('/', Path.DirectorySeparatorChar));
         var file = new FileInfo(filePath);
         var checkpointSize = file.Exists ? file.Length : info.ByteCount;
@@ -857,15 +1079,17 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.CommandText = @"INSERT INTO raw_segments
             (id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,sealed_ms,
              checkpoint_size,checkpoint_write_ticks,last_verified_ms)
-            VALUES($id,'syslog-local',$path,$state,$first,$last,$count,$bytes,$sha,$now,$size,$ticks,$now)
+            VALUES($id,$source,$path,$state,$first,$last,$count,$bytes,$sha,$now,$size,$ticks,$now)
             ON CONFLICT(relative_path) DO UPDATE SET
               state=excluded.state, first_received_ms=excluded.first_received_ms,
               last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
               byte_count=excluded.byte_count, sha256=excluded.sha256,
               checkpoint_size=excluded.checkpoint_size,checkpoint_write_ticks=excluded.checkpoint_write_ticks,
               last_verified_ms=excluded.last_verified_ms,
-              sealed_ms=COALESCE(raw_segments.sealed_ms,excluded.sealed_ms)";
+              sealed_ms=COALESCE(raw_segments.sealed_ms,excluded.sealed_ms)
+            WHERE raw_segments.source_id=excluded.source_id";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+        command.Parameters.AddWithValue("$source", info.SourceId);
         command.Parameters.AddWithValue("$path", relative);
         command.Parameters.AddWithValue("$state", state);
         command.Parameters.AddWithValue("$first", info.RecordCount == 0 ? DBNull.Value : info.FirstReceivedMs);
@@ -876,7 +1100,45 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$now", UtcNowMs());
         command.Parameters.AddWithValue("$size", checkpointSize);
         command.Parameters.AddWithValue("$ticks", checkpointTicks);
-        command.ExecuteNonQuery();
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidDataException("Raw segment source identity changed for an indexed path; preserving the file for investigation.");
+    }
+
+    private void ValidateRawSourcePath(string relative, string sourceId, string? deviceHost = null)
+    {
+        var parts = relative.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3 || parts[0] != "raw")
+            throw new InvalidDataException("Raw segment path is outside a supported source folder.");
+        if (sourceId == "syslog-local" && parts[1] == "syslog") return;
+        if (!sourceId.StartsWith("h3c-", StringComparison.Ordinal) || parts[1] != "h3c" || parts.Length < 4 ||
+            !Guid.TryParseExact(sourceId[4..], "N", out _) || parts[2] != sourceId[4..])
+            throw new InvalidDataException("Raw content source identity does not match its isolated source folder.");
+
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT host FROM h3c_device_profiles WHERE id=$id AND source_id=$source";
+        command.Parameters.AddWithValue("$id", sourceId[4..]);
+        command.Parameters.AddWithValue("$source", sourceId);
+        var profileHost = Convert.ToString(command.ExecuteScalar());
+        if (profileHost is null)
+            throw new InvalidDataException("H3C Raw output references an unknown device profile/source.");
+        if (deviceHost is not null && !string.Equals(profileHost, deviceHost, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("H3C Raw device host does not match its immutable profile.");
+    }
+
+    private string ResolveEmptyRawSource(string path)
+    {
+        var relative = RelativeRawPath(path);
+        var parts = relative.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 3 && parts[0] == "raw" && parts[1] == "syslog") return "syslog-local";
+        if (parts.Length >= 4 && parts[0] == "raw" && parts[1] == "h3c" &&
+            Guid.TryParseExact(parts[2], "N", out _) && parts[2] == parts[2].ToLowerInvariant())
+        {
+            var source = "h3c-" + parts[2];
+            ValidateRawSourcePath(relative, source);
+            return source;
+        }
+        throw new InvalidDataException("Raw file contains no valid record and has no verifiable source identity.");
     }
 
     private void RecordIntegrityAudit(string relative, IndexedSegment? expected, RawSegmentInspection? observed,
@@ -934,6 +1196,8 @@ internal sealed class Catalog(RuntimeSettings settings)
         using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 65536, FileOptions.SequentialScan);
         var originalLength = stream.Length;
         long validBytes = 0, recordCount = 0, first = long.MaxValue, last = 0, consumed = 0;
+        string? segmentSourceId = null;
+        string? segmentDeviceHost = null;
         bool corrupt = false;
         using var line = new MemoryStream();
         var buffer = new byte[65536];
@@ -953,11 +1217,15 @@ internal sealed class Catalog(RuntimeSettings settings)
                     line.Position = 0;
                     if (lineBytes.Length > 0 && lineBytes[^1] == (byte)'\r')
                         Array.Resize(ref lineBytes, lineBytes.Length - 1);
-                    if (!TryReadRecord(lineBytes, out var timestamp))
+                    if (!TryReadRecord(lineBytes, out var timestamp, out var recordSourceId, out var recordDeviceHost) ||
+                        (segmentSourceId is not null && !string.Equals(segmentSourceId, recordSourceId, StringComparison.Ordinal)) ||
+                        (segmentDeviceHost is not null && !string.Equals(segmentDeviceHost, recordDeviceHost, StringComparison.OrdinalIgnoreCase)))
                     {
                         corrupt = true;
                         goto Finished;
                     }
+                    segmentSourceId ??= recordSourceId;
+                    segmentDeviceHost ??= recordDeviceHost;
                     validBytes = consumed;
                     recordCount++;
                     first = Math.Min(first, timestamp);
@@ -989,8 +1257,9 @@ internal sealed class Catalog(RuntimeSettings settings)
         var byteCount = corrupt ? validBytes : originalLength;
         stream.Position = 0;
         var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var sourceId = segmentSourceId ?? ResolveEmptyRawSource(path);
         return new(recordCount, recordCount == 0 ? 0 : first, last, byteCount, hash, corrupt,
-            Math.Max(0, originalLength - byteCount), evidencePath, originalLength, byteCount);
+            Math.Max(0, originalLength - byteCount), evidencePath, originalLength, byteCount, sourceId, segmentDeviceHost);
     }
 
     private string PreserveTailEvidence(string sourcePath, FileStream source, long offset, long originalLength)
@@ -1126,21 +1395,59 @@ internal sealed class Catalog(RuntimeSettings settings)
         }
     }
 
-    private static bool TryReadRecord(byte[] line, out long timestamp)
+    private static bool TryReadRecord(byte[] line, out long timestamp, out string sourceId, out string? deviceHost)
     {
         timestamp = 0;
+        sourceId = string.Empty;
+        deviceHost = null;
         try
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("received_ms", out var received) || !received.TryGetInt64(out timestamp) ||
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (root.TryGetProperty("record_type", out var type))
+            {
+                if (type.ValueKind != JsonValueKind.String || type.GetString() != "h3c_command" ||
+                    !root.TryGetProperty("captured_ms", out var captured) || !captured.TryGetInt64(out timestamp) || timestamp <= 0 ||
+                    !root.TryGetProperty("source_id", out var source) || source.ValueKind != JsonValueKind.String ||
+                    !root.TryGetProperty("device_profile_id", out var profile) || profile.ValueKind != JsonValueKind.String ||
+                    !Guid.TryParseExact(profile.GetString(), "N", out _) ||
+                    !root.TryGetProperty("task_run_id", out var run) || run.ValueKind != JsonValueKind.String ||
+                    !Guid.TryParseExact(run.GetString(), "N", out _) ||
+                    !root.TryGetProperty("device_host", out var host) || host.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(host.GetString()) || host.GetString()!.Length > 253 ||
+                    host.GetString()!.Any(char.IsControl) || host.GetString()!.Any(char.IsWhiteSpace) ||
+                    Uri.CheckHostName(host.GetString()) == UriHostNameType.Unknown ||
+                    !root.TryGetProperty("command", out var command) || command.ValueKind != JsonValueKind.String ||
+                    !H3cCommandPolicy.IsAllowed(command.GetString() ?? string.Empty) ||
+                    !root.TryGetProperty("output_byte_count", out var byteCount) || !byteCount.TryGetInt32(out var count) ||
+                    count is < 0 or > H3cRawOutput.MaximumBytes ||
+                    !root.TryGetProperty("output_sha256", out var outputHash) || outputHash.ValueKind != JsonValueKind.String ||
+                    !root.TryGetProperty("output_utf8_base64", out var output) || output.ValueKind != JsonValueKind.String)
+                    return false;
+                sourceId = source.GetString() ?? string.Empty;
+                deviceHost = host.GetString();
+                var profileId = profile.GetString()!;
+                if (!string.Equals(sourceId, "h3c-" + profileId, StringComparison.Ordinal) ||
+                    !string.Equals(profileId, profileId.ToLowerInvariant(), StringComparison.Ordinal)) return false;
+                var outputBytes = Convert.FromBase64String(output.GetString() ?? string.Empty);
+                if (outputBytes.Length != count) return false;
+                var expectedHash = outputHash.GetString() ?? string.Empty;
+                if (expectedHash.Length != 64 || expectedHash.Any(c => !Uri.IsHexDigit(c))) return false;
+                var actualHash = SHA256.HashData(outputBytes);
+                return CryptographicOperations.FixedTimeEquals(actualHash,
+                    Convert.FromHexString(expectedHash));
+            }
+
+            if (!root.TryGetProperty("received_ms", out var received) || !received.TryGetInt64(out timestamp) || timestamp <= 0 ||
                 !root.TryGetProperty("sender_ip", out var sender) || sender.ValueKind != JsonValueKind.String ||
                 !System.Net.IPAddress.TryParse(sender.GetString(), out _) ||
                 !root.TryGetProperty("sender_port", out var port) || !port.TryGetInt32(out var senderPort) || senderPort is < 0 or > 65535 ||
                 !root.TryGetProperty("payload_base64", out var payload) || payload.ValueKind != JsonValueKind.String)
                 return false;
-            _ = Convert.FromBase64String(payload.GetString() ?? string.Empty);
+            var payloadBytes = Convert.FromBase64String(payload.GetString() ?? string.Empty);
+            if (payloadBytes.Length > 65507) return false;
+            sourceId = "syslog-local";
             return true;
         }
         catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
