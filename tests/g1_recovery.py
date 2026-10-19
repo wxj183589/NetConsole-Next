@@ -221,10 +221,69 @@ def main():
         unsafe, unsafe_url, _ = start_service(repo, dll, unsafe_root)
         unsafe_health = health(unsafe, unsafe_url)
         assert unsafe_health["recovery"]["failedFiles"] == 1, unsafe_health["recovery"]
+        assert unsafe_health["healthState"] == "DEGRADED", unsafe_health
+        assert unsafe_health["collectionState"] == "listening", unsafe_health
         assert unsafe_raw.read_bytes() == unsafe_original, "failed evidence preservation must not truncate the source Raw file"
         assert not list(outside.iterdir()), outside
         stop_service(unsafe)
-        print("PASS: crash recovery, tail evidence preservation, repeat recovery, orphan/missing catalog reconciliation, single instance, lifecycle and resource status")
+
+        denied_root = Path(temp) / "raw-permission-revoked"
+        denied_root.mkdir()
+        (denied_root / ".netconsole-next-root").write_text("NETCONSOLE_NEXT_V1\n")
+        denied_raw = denied_root / "raw"
+        denied_raw.mkdir()
+        os.chmod(denied_raw, 0o500)
+        try:
+            denied, denied_url, denied_udp = start_service(repo, dll, denied_root)
+            denied_health = health(denied, denied_url)
+            assert denied_health["healthState"] == "FAULTED", denied_health
+            assert denied_health["rawWriteAvailable"] is False, denied_health
+            assert denied_health["collectionState"] == "faulted", denied_health
+            send_datagram(denied_udp, b"must-not-be-accepted")
+            time.sleep(.2)
+            after_denied = health(denied, denied_url)
+            assert after_denied["udpAccepted"] == 0 and after_denied["rawFlushedRecords"] == 0, after_denied
+            stop_service(denied)
+        finally:
+            os.chmod(denied_raw, 0o700)
+
+        interrupted_root = Path(temp) / "killed-during-recovery"
+        interrupted_root.mkdir()
+        (interrupted_root / ".netconsole-next-root").write_text("NETCONSOLE_NEXT_V1\n")
+        interrupted_raw = interrupted_root / "raw" / "syslog" / "recovery-interrupt"
+        interrupted_raw.mkdir(parents=True)
+        recovery_payload = b"R" * (48 * 1024)
+        file_count = 500
+        for index in range(file_count):
+            (interrupted_raw / f"orphan-{index:04d}.ndjson").write_bytes(
+                make_record(recovery_payload, 1_800_000_100_000 + index))
+        interrupted, interrupted_url, _ = start_service(repo, dll, interrupted_root)
+        recovery_marker = interrupted_root / ".raw-recovery-in-progress"
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not recovery_marker.exists() and interrupted.poll() is None:
+            time.sleep(.002)
+        assert recovery_marker.is_file(), "service did not publish its durable recovery marker"
+        time.sleep(.03)
+        interrupted.kill()
+        interrupted.wait(timeout=10)
+        assert recovery_marker.is_file(), "forced termination during recovery must leave a replay marker"
+
+        resumed, resumed_url, _ = start_service(repo, dll, interrupted_root)
+        resumed_health = health(resumed, resumed_url, timeout=30)
+        assert resumed_health["healthState"] == "DEGRADED", resumed_health
+        assert resumed_health["recovery"]["indexedOrphanFiles"] == file_count, resumed_health["recovery"]
+        assert any(issue["category"] == "RECOVERY_INTERRUPTED" for issue in resumed_health["recovery"]["issues"]), resumed_health["recovery"]
+        assert not recovery_marker.exists(), "successful replay should clear the recovery marker"
+        with sqlite3.connect(interrupted_root / "catalog.db") as db:
+            assert db.execute("SELECT COUNT(*) FROM raw_segments").fetchone()[0] == file_count
+            assert db.execute("PRAGMA quick_check(1)").fetchone()[0] == "ok"
+        first_orphan = interrupted_raw / "orphan-0000.ndjson"
+        last_orphan = interrupted_raw / f"orphan-{file_count - 1:04d}.ndjson"
+        for raw_path in (first_orphan, last_orphan):
+            assert raw_path.exists() and len(raw_path.read_bytes()) > 48 * 1024
+        stop_service(resumed)
+
+        print("PASS: crash recovery, evidence preservation, repeat recovery, orphan/missing reconciliation, single instance, persistent task recovery, Raw permission gate and resource status")
 
 
 if __name__ == "__main__":

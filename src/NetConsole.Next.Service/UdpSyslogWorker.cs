@@ -1,12 +1,14 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
+using System.Diagnostics;
 
 namespace NetConsole.Next.Service;
 
 internal sealed class UdpSyslogWorker(
     RuntimeSettings settings,
     Catalog catalog,
+    IRawSegmentWriterFactory writerFactory,
     IngressStats stats,
     RuntimeStatus runtimeStatus,
     ILogger<UdpSyslogWorker> logger) : BackgroundService
@@ -15,6 +17,14 @@ internal sealed class UdpSyslogWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (!catalog.Available || !catalog.RawWriteAvailable || !runtimeStatus.CollectionAllowed)
+        {
+            runtimeStatus.SetCollection("faulted", catalog.StorageFailure ?? "Raw storage is unavailable.");
+            runtimeStatus.SetFaulted(catalog.StorageFailure ?? "Raw storage is unavailable; collection is disabled.");
+            logger.LogCritical("UDP collection is disabled because Raw storage is not safe for new writes.");
+            return;
+        }
+
         if (settings.SyslogPort == 0)
         {
             runtimeStatus.SetCollection("disabled");
@@ -45,7 +55,16 @@ internal sealed class UdpSyslogWorker(
             {
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    var datagram = await udp.ReceiveAsync(listenerCancellation.Token);
+                    if (!runtimeStatus.CollectionAllowed) break;
+                    using var receiveTimeout = CancellationTokenSource.CreateLinkedTokenSource(listenerCancellation.Token);
+                    receiveTimeout.CancelAfter(TimeSpan.FromMilliseconds(500));
+                    UdpReceiveResult datagram;
+                    try { datagram = await udp.ReceiveAsync(receiveTimeout.Token); }
+                    catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested &&
+                                                               !listenerCancellation.IsCancellationRequested)
+                    {
+                        continue;
+                    }
                     var receivedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     stats.MarkReceived(receivedMs);
                     var record = new SyslogPacket(receivedMs,
@@ -81,14 +100,21 @@ internal sealed class UdpSyslogWorker(
         catch (Exception ex)
         {
             failed = true;
-            runtimeStatus.SetCollection("faulted", ex.GetType().Name);
+            runtimeStatus.SetFaulted($"RAW_OR_CATALOG_WRITE_FAILED: {ex.GetType().Name}");
             logger.LogError(ex, "UDP Syslog collection failed.");
-            throw;
         }
         finally
         {
-            if (taskRunId is not null) catalog.EndTaskRun(taskRunId, failed ? "FAILED" : "STOPPED");
-            if (!failed) runtimeStatus.SetCollection("stopped");
+            if (taskRunId is not null)
+            {
+                try { catalog.EndTaskRun(taskRunId, failed ? "FAILED" : "STOPPED"); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+                {
+                    runtimeStatus.SetFaulted($"SQLITE_WRITE_FAILED: {ex.GetType().Name}");
+                    logger.LogCritical(ex, "Could not persist the Syslog task terminal state.");
+                }
+            }
+            if (!failed && runtimeStatus.CollectionAllowed) runtimeStatus.SetCollection("stopped");
         }
     }
 
@@ -104,17 +130,24 @@ internal sealed class UdpSyslogWorker(
                 while (inBatch < 128 && queue.TryRead(out var datagram))
                 {
                     stats.MarkDequeued();
-                    segment ??= new RawSegmentWriter(catalog);
+                    segment ??= writerFactory.Create(catalog);
                     await segment.AppendAsync(datagram);
                     inBatch++;
                     if (segment.Bytes >= 4 * 1024 * 1024)
                     {
+                        var sealStarted = Stopwatch.GetTimestamp();
                         await segment.SealAsync();
+                        stats.RecordRawFlushLatency((Stopwatch.GetTimestamp() - sealStarted) * 1000d / Stopwatch.Frequency);
                         segment = null;
                     }
                 }
                 if (inBatch == 0) continue;
-                if (segment is not null) await segment.FlushAsync();
+                if (segment is not null)
+                {
+                    var flushStarted = Stopwatch.GetTimestamp();
+                    await segment.FlushAsync();
+                    stats.RecordRawFlushLatency((Stopwatch.GetTimestamp() - flushStarted) * 1000d / Stopwatch.Frequency);
+                }
                 stats.MarkFlushed(inBatch);
             }
             drained = true;
