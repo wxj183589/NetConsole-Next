@@ -279,7 +279,8 @@ def main():
         resumed, resumed_url, _ = start_service(repo, dll, interrupted_root)
         resumed_health = health(resumed, resumed_url, timeout=30, collection_state="listening")
         assert resumed_health["healthState"] == "DEGRADED", resumed_health
-        assert resumed_health["recovery"]["indexedOrphanFiles"] == file_count, resumed_health["recovery"]
+        assert resumed_health["recovery"]["indexedOrphanFiles"] + resumed_health["recovery"]["trustedFilesSkipped"] == file_count, resumed_health["recovery"]
+        assert resumed_health["recovery"]["scannedFiles"] == file_count, resumed_health["recovery"]
         assert any(issue["category"] == "RECOVERY_INTERRUPTED" for issue in resumed_health["recovery"]["issues"]), resumed_health["recovery"]
         assert not recovery_marker.exists(), "successful replay should clear the recovery marker"
         with sqlite3.connect(interrupted_root / "catalog.db") as db:
