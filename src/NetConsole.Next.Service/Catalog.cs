@@ -522,14 +522,15 @@ internal sealed class Catalog(RuntimeSettings settings)
                 THEN $now+(SELECT timeout_ms FROM task_definitions WHERE id=definition_id) ELSE deadline_ms END,
             ended_ms=CASE WHEN $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED') THEN $now ELSE ended_ms END,
             failure_reason=$reason
-            WHERE id=$id AND ((state='QUEUED' AND $next IN ('CONNECTING','CANCELLED')) OR
+            WHERE id=$id AND ((state='QUEUED' AND $next IN ('CONNECTING','FAILED','CANCELLED')) OR
               (state='CONNECTING' AND $next IN ('RUNNING','FAILED','TIMED_OUT','CANCELLED')) OR
               (state='RUNNING' AND $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED')))";
         command.Parameters.AddWithValue("$next", nextState);
         command.Parameters.AddWithValue("$now", now);
         command.Parameters.AddWithValue("$reason", (object?)failureReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$id", id);
-        command.ExecuteNonQuery();
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"Task run '{id}' did not accept the requested '{nextState}' transition.");
     }
 
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
