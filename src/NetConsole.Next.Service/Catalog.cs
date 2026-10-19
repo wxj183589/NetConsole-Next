@@ -45,9 +45,13 @@ internal sealed class Catalog(RuntimeSettings settings)
             throw new InvalidOperationException("Data directory marker is unknown.");
         }
 
-        Directory.CreateDirectory(RawRoot);
-        if ((File.GetAttributes(RawRoot) & FileAttributes.ReparsePoint) != 0)
-            throw new InvalidOperationException("Raw data root cannot be a symbolic link or reparse point.");
+        foreach (var directoryName in new[] { "raw", "published", "inbox", "archive", "backup" })
+        {
+            var directory = Path.Combine(settings.DataRoot, directoryName);
+            Directory.CreateDirectory(directory);
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"{directoryName} data directory cannot be a symbolic link or reparse point.");
+        }
         using var db = Open();
         using (var integrity = db.CreateCommand())
         {
