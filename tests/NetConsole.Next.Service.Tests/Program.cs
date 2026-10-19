@@ -10,6 +10,7 @@ internal static class SchedulerTests
         await CancelsQueuedAndRunningRequests();
         await TimesOutAndDisposesSession();
         await ReportsConnectionFailuresAndDisposesSession();
+        await StopsActiveSessionsDuringSchedulerShutdown();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded collection scheduling, queue rejection, timeout, cancellation and session lifecycle");
     }
@@ -90,6 +91,25 @@ internal static class SchedulerTests
         var failed = await WaitTerminal(scheduler, id);
         Assert(failed.State == "FAILED" && failed.Error == "IOException", failed.ToString()!);
         Assert(factory.DisposedCount == 1, "failed connection session should be disposed");
+    }
+
+    private static async Task StopsActiveSessionsDuringSchedulerShutdown()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new FakeSessionFactory(_ => new FakeBehavior(async (_, token) =>
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return "unreachable";
+        }));
+        var scheduler = new BoundedCollectionScheduler(factory, maxConcurrency: 1, queueCapacity: 1);
+        Assert(scheduler.TrySchedule(Request("device-shutdown", "display version"), out var id), "shutdown request should be accepted");
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await scheduler.DisposeAsync();
+        Assert(scheduler.Get(id)?.State == "CANCELLED", scheduler.Get(id)?.ToString() ?? "shutdown task disappeared");
+        Assert(factory.DisposedCount == 1, "shutdown must dispose the active device session");
+        Assert(scheduler.Status.Active == 0 && scheduler.Status.Queued == 0, scheduler.Status.ToString()!);
+        Assert(!scheduler.Cancel(id), "shutdown scheduler must not accept cancellation after disposal");
     }
 
     private static void RejectsInvalidRequests()
