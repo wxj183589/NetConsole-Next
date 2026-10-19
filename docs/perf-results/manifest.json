@@ -35,5 +35,28 @@
     "docs/perf-results/udp-trace-current-8192-burst.json": "8d732a50483d5abe2af4b7fc621daee4a44864abd0ac6a63a38f1b60ffab60bb",
     "docs/perf-results/udp-trace-current-8192-full-matrix.json": "de6839ea2fd0dbce1647826835f52a664b5deb4f9da4dd6b1c6ee1cc7b75c018",
     "docs/perf-results/udp-trace-pr8-native-pinned.json": "c507a41d1047779b7af83658862b5aefa9464b2824d7b931030ce874cfd6e66d"
-  }
+  },
+  "supplementalMeasurements": [
+    {
+      "result": "docs/perf-results/g2-h3c-raw-writer-regression.json",
+      "resultSha256": "5c1f7ba1598902890e8077d98ab20d09fb72a82f21d5f0747ffdad323046f6bc",
+      "implementationCommit": "37b43eb73aa30d7dc9a65198a354ad84d8355cb4",
+      "measurementCommand": "tests/perf_baseline.py --packets 100000 --payload-bytes 512 --rate 5000 --queue-burst 0 --history-files 1000 --sqlite-writes 500 --output docs/perf-results/g2-h3c-raw-writer-regression.json",
+      "environment": "Linux 6.18.55 container; .NET 10.0.402; Python 3.12.14; 3 visible CPUs, 2.0 CPU cgroup quota; isolated temporary data roots; physical IOPS unavailable.",
+      "sourceSha256": {
+        "src/NetConsole.Next.Service/Catalog.cs": "04d4c1de3d6afba50330dde2f07fb65b30b61f56826b6d05a85f505ff59244da",
+        "src/NetConsole.Next.Service/Program.cs": "916fe1b3be6c133bbdc8183b0cc502983f3413d0446f5bc519dfa0dbd0b70a44",
+        "src/NetConsole.Next.Service/RawSegmentWriter.cs": "48ab4abb1f5b86d672686ca5ef3f8559e42523170e5f4e0499c6ad88139388f8",
+        "src/NetConsole.Next.Service/RuntimeSettings.cs": "e8f6e144af78243b986de9a44d13ee7b6937ca9f45b3edd3c1ff68f18817eb5f",
+        "src/NetConsole.Next.Service/UdpSyslogWorker.cs": "2ef3892771748d6077db73e780783a9fca0a36201c9336f8172cbc4f9215a293",
+        "src/NetConsole.Next.Service/NetConsole.Next.Service.csproj": "2b31d733ad9c57b8a472441777f3eb0b9f719b3603480f2cc359590ac6c7d95d",
+        "tests/perf_baseline.py": "87d9f47b29c722aee81eb373e19e20a13d3ae99417b220405bf5339ee33ef638"
+      },
+      "provenanceNotes": [
+        "This is a Syslog-only regression sample from the G2 working tree represented by implementationCommit; no SSH session, credential lookup, or H3C device was used.",
+        "The G2 implementation added opt-in H3C collection and did not alter the UDP receive loop, Syslog batch writer, or performance harness after this sample was measured.",
+        "The sample is one Linux runner observation and does not claim an industrial-host target or statistically significant performance improvement."
+      ]
+    }
+  ]
 }

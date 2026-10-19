@@ -17,16 +17,18 @@
 - Schema v3 记录 Raw 完整性问题处置。`QUARANTINED` 是保留原文件和哈希的逻辑处置；后续内容变化会新建审计并重新降级健康状态。
 - 当前 Linux 容器提供了 100,000 条同速率前后对比、28 组 PPS/载荷追踪矩阵、30 秒稳态和 50,000 条/载荷突发诊断；详细结果和计数口径在 [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)。旧的 2,048 队列在同一 100k/5k PPS 测试中应用丢弃 11,460 条，8,192 队列版本收到并持久化 100,000 条。该容器测量不替代低配置主机验收。
 
-## G2 可靠设备采集（基础实现待独立 PR）
+## G2 可靠设备采集（基础组件进行中）
 
-- 下一步用独立 PR 实现 H3C Comware SSH 最小只读采集、脱敏回显 golden tests、超时/取消/Host Key 验证和任务结果 Raw 指针；模拟设备完成测试，未授权前不连接现场设备。
-- 正式 SSH/SNMP 采集、Syslog 多来源和 MR 实时采集仍须通过 G1 数据安全门禁和目标设备验证。
-- 持久调度目前是内部模型/调度核心，没有设备驱动、自动重试、远程控制或业务任务 Web 页面。
+- 当前独立开发分支已加入 H3C Comware SSH 初始只读适配器：默认关闭、SHA-256 Host Key pin、现代算法 allowlist、最多两条固定命令、256 KiB 输出边界、任务持久化、Raw 回显和 SQLite 结果指针；模拟会话与合成 Comware golden fixtures 有自动测试。当前分支 Windows/Linux CI 和 PR 尚待完成。
+- 凭据 provider 当前只通过环境变量引用读取，不保存密码；这属于启动原型，Windows Credential Manager/DPAPI 或其他受控 Secret Store、轮换和现场部署策略仍未实现。
+- H3C stdout 的 SSH.NET 解码/编码路径、分页行为、平台命令和算法需在脱敏的目标 Comware 设备上实测；当前未连接设备，标记 `PENDING_REAL_ENVIRONMENT`。输出触发分页或超过 256 KiB 会使任务失败，避免把截断结果报告为成功。
+- 正式现场 SSH/SNMP 采集、Syslog 多来源和 MR 实时采集仍须通过 G1 数据安全门禁、凭据管理评审和目标设备验证。
+- 持久调度仍为本机有界队列；没有分布式调度、自动重试、远程控制或业务任务 Web 页面。
 - 在 2核4GB 与 4核8GB 目标主机执行 72 小时和 7 天测试，记录 CPU、工作集、IO、丢包量和数据缺口。
-- Windows 10/11、8/8.1、Server2012/R2 单独建立兼容矩阵；非 Win10 系统不能以构建成功代替验收。
+- Windows 10/11、8/8.1、Server 2012/R2 单独建立兼容矩阵；当前 G2 分支未运行 Windows CI 前，不把其 SSH.NET 编译结果标记 `VERIFIED`；非 Win10 系统不能以构建成功代替验收。
 
 ### G1 尚未关闭的验收项
-- **待真实环境：**Windows 10/11 Service 安装/权限/升级，低配置工业主机 72 小时/7 天负载、物理磁盘耗尽/断电。Windows Server 2012/R2 当前已无 ESU；Windows 8/8.1 没有受支持的现代 .NET 10 路径。Server 2025 CI 与 Linux 故障注入不替代目标机验证。
+- **待真实环境：**Windows 10/11 Service 安装/权限/升级，H3C SSH/Host Key/认证/Comware CLI，低配置工业主机 72 小时/7 天负载、物理磁盘耗尽/断电。Windows Server 2012/R2 当前已无 ESU；Windows 8/8.1 没有受支持的现代 .NET 10 路径。Server 2025 CI 与 Linux 故障注入不替代目标机验证。
 
 ## P2-P5
 - P2：按成熟开源模式重新设计工具集和可选 HTTP/FTP/TFTP/WebDAV/SFTP Server。

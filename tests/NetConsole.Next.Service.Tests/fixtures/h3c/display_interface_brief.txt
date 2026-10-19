@@ -1,0 +1,9 @@
+Brief information on interfaces in route mode:
+Interface            Link Protocol Primary IP      Description
+GE1/0/1               UP   UP       192.0.2.10      sanitized-uplink
+Vlan-interface10      UP   UP       198.51.100.1    sanitized-management
+
+Brief information on interfaces in bridge mode:
+Interface            Link Speed     Duplex Type PVID Description
+GE1/0/2               DOWN auto      A      A    20   sanitized-access-port
+XGE1/0/1              UP   10G(a)    F(a)   T    10   --

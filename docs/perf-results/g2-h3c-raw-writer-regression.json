@@ -1,0 +1,149 @@
+{
+  "environment": {
+    "os": "posix",
+    "python": "3.12.14",
+    "runtime": "net10.0",
+    "processorCount": 3,
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "effectiveCpuCores": 2.0,
+    "queueCapacity": 8192,
+    "blockDeviceIops": null,
+    "blockDeviceIopsNote": "Not available from the isolated process; process IO syscalls and physical byte counters are recorded."
+  },
+  "idle": {
+    "durationSeconds": 5,
+    "measuredElapsedSeconds": 5.000124307000078,
+    "processCpuPercentHostNormalized": 0.6666500928120388,
+    "processCpuPercentEffectiveCoresNormalized": 0.9999751392180583,
+    "healthCpuPercentSnapshot": 3.5986205706980723,
+    "workingSetBytes": 83619840,
+    "threads": 19,
+    "fileDescriptors": 230,
+    "processReadBytes": 0,
+    "processWriteBytes": 0
+  },
+  "udpLoad": {
+    "attempted": 100000,
+    "sendSeconds": 20.000151993001055,
+    "received": 100000,
+    "accepted": 100000,
+    "applicationDropped": 0,
+    "flushed": 100000,
+    "queueDepth": 0,
+    "queueCapacity": 8192,
+    "queueHighWatermark": 275,
+    "queueBytesHighWatermark": 140800,
+    "queueByteCapacity": 33554432,
+    "socketReceiveBufferRequestedBytes": 4194304,
+    "socketReceiveBufferEffectiveBytes": 8388608,
+    "rawFlushLatency": {
+      "samples": 408,
+      "windowSamples": 408,
+      "p50Ms": 0.0861,
+      "p95Ms": 0.3984,
+      "p99Ms": 0.7898,
+      "maxMs": 1.9238
+    },
+    "rawFileSyncLatency": {
+      "samples": 408,
+      "windowSamples": 408,
+      "p50Ms": 0.0861,
+      "p95Ms": 0.3984,
+      "p99Ms": 0.7898,
+      "maxMs": 1.9238
+    },
+    "rawSegmentSealLatency": {
+      "samples": 18,
+      "windowSamples": 18,
+      "p50Ms": 7.1079,
+      "p95Ms": 22.2286,
+      "p99Ms": 22.2286,
+      "maxMs": 22.2286
+    },
+    "sqliteSegmentRegistrationLatency": {
+      "samples": 18,
+      "windowSamples": 18,
+      "p50Ms": 1.2838,
+      "p95Ms": 5.3368,
+      "p99Ms": 5.3368,
+      "maxMs": 5.3368
+    },
+    "hostGlobalKernelUdp": {
+      "before": {
+        "InDatagrams": 3580407,
+        "InErrors": 490304,
+        "RcvbufErrors": 490304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterLoad": {
+        "InDatagrams": 3680407,
+        "InErrors": 490304,
+        "RcvbufErrors": 490304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterBurst": {
+        "InDatagrams": 3680407,
+        "InErrors": 490304,
+        "RcvbufErrors": 490304,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      }
+    },
+    "physicalReadBytes": 0,
+    "physicalWriteBytes": 0,
+    "readSyscalls": 19196,
+    "writeSyscalls": 899,
+    "workingSetBytes": 113979392,
+    "threadCount": 21,
+    "fdCount": 231,
+    "cpuTicks": 1622,
+    "processCpuPercent": 25.952139027061644,
+    "processCpuPercentEffectiveCoresNormalized": 38.928208540592465,
+    "durationSeconds": 20.000151993001055,
+    "dataBytesAfterLoad": 77813033,
+    "queueSaturationBurst": {
+      "attempted": 0,
+      "sendSeconds": 2.5282999558839947e-05,
+      "received": 0,
+      "accepted": 0,
+      "applicationDropped": 0,
+      "queueHighWatermark": 275,
+      "queueCapacity": 8192,
+      "flushed": 0,
+      "queueDepth": 0,
+      "processPhysicalReadBytes": 0,
+      "processPhysicalWriteBytes": 0,
+      "processReadSyscalls": 95,
+      "processWriteSyscalls": 100,
+      "dataBytes": 4840
+    }
+  },
+  "sqliteWrites": {
+    "writes": 500,
+    "p50Ms": 0.008794,
+    "p95Ms": 0.01479,
+    "p99Ms": 0.103899,
+    "maxMs": 0.360373,
+    "meanMs": 0.0122112
+  },
+  "startupRecovery": {
+    "history": {
+      "files": 1000,
+      "bytes": 11016000,
+      "recordBytes": 11016
+    },
+    "wallMs": 561.875641997176,
+    "reportedMs": 32,
+    "scannedFiles": 1019,
+    "trustedFilesSkipped": 1019,
+    "bytesRead": 0,
+    "bytesHashed": 0,
+    "dataBytes": 34961
+  },
+  "dataDirectoryBytesFinal": 91541033
+}

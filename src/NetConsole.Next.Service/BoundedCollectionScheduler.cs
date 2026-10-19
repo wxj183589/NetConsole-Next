@@ -29,6 +29,11 @@ internal interface IDeviceSession : IAsyncDisposable
     Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
 }
 
+internal interface ITaskResultSink
+{
+    Task PersistAsync(string runId, TaskDefinitionSnapshot definition, string output);
+}
+
 // Shared bounded execution core for future SSH/SNMP collectors. It never runs a shell command itself.
 internal sealed class BoundedCollectionScheduler : IAsyncDisposable
 {
@@ -38,6 +43,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private readonly IDeviceSessionFactory _sessionFactory;
     private readonly Catalog? _catalog;
     private readonly Action<Exception>? _persistenceFailure;
+    private readonly ITaskResultSink? _resultSink;
     private readonly Channel<WorkItem> _queue;
     private readonly ConcurrentDictionary<string, WorkItem> _items = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
@@ -50,13 +56,14 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private long _rejected;
 
     public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity,
-        Catalog? catalog = null, Action<Exception>? persistenceFailure = null)
+        Catalog? catalog = null, Action<Exception>? persistenceFailure = null, ITaskResultSink? resultSink = null)
     {
         if (maxConcurrency is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
         if (queueCapacity is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
         _sessionFactory = sessionFactory;
         _catalog = catalog;
         _persistenceFailure = persistenceFailure;
+        _resultSink = resultSink;
         MaxConcurrency = maxConcurrency;
         QueueCapacity = queueCapacity;
         _queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(queueCapacity)
@@ -84,10 +91,10 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         if (definition.RestartPolicy != "NEVER") throw new InvalidOperationException("Unsupported task restart policy.");
         var request = new DeviceCollectionRequest(definition.Target, definition.Command,
             TimeSpan.FromMilliseconds(definition.TimeoutMs));
-        return TryScheduleCore(request, definitionId, out id);
+        return TryScheduleCore(request, definition, out id);
     }
 
-    private bool TryScheduleCore(DeviceCollectionRequest request, string? definitionId, out string id)
+    private bool TryScheduleCore(DeviceCollectionRequest request, TaskDefinitionSnapshot? definition, out string id)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -108,8 +115,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 return false;
             }
 
-            id = definitionId is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definitionId);
-            var item = new WorkItem(id, request, submittedMs, definitionId is not null);
+            id = definition is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definition);
+            var item = new WorkItem(id, request, submittedMs, definition, definition is not null);
 
             PruneCompletedHistory();
             _items[id] = item;
@@ -280,6 +287,21 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             }
         }
 
+        if (terminalState == "SUCCEEDED" && item.Definition?.TaskType == "H3C_SSH_READONLY")
+        {
+            try
+            {
+                if (_resultSink is null)
+                    throw new InvalidOperationException("H3C task cannot complete without a durable Raw result sink.");
+                await _resultSink.PersistAsync(item.Snapshot.Id, item.Definition, result ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                terminalState = "FAILED";
+                error = $"ResultPersistence:{ex.GetType().Name}";
+            }
+        }
+
         SetTerminal(item, terminalState, result, error, timeout.IsCancellationRequested);
     }
 
@@ -356,11 +378,13 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private static bool IsTerminal(string state) => state is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED";
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    private sealed class WorkItem(string id, DeviceCollectionRequest request, long submittedMs, bool persisted)
+    private sealed class WorkItem(string id, DeviceCollectionRequest request, long submittedMs,
+        TaskDefinitionSnapshot? definition, bool persisted)
     {
         public object Gate { get; } = new();
         public CancellationTokenSource Cancellation { get; } = new();
         public DeviceCollectionRequest Request { get; } = request;
+        public TaskDefinitionSnapshot? Definition { get; } = definition;
         public bool Persisted { get; } = persisted;
         public bool CancelRequested { get; set; }
         public DeviceCollectionSnapshot Snapshot { get; set; } = new(id, request.Target, request.Command, "QUEUED", null, null, submittedMs, null, null);
