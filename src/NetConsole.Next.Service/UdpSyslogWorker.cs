@@ -13,7 +13,13 @@ internal sealed class UdpSyslogWorker(
     RuntimeStatus runtimeStatus,
     ILogger<UdpSyslogWorker> logger) : BackgroundService
 {
-    internal const int QueueCapacity = 2048;
+    // The independent byte budget remains the hard payload-memory bound. This count limit
+    // lets small datagrams ride out the measured sub-second to ~1 s segment-seal stalls.
+    internal const int QueueCapacity = 8192;
+    internal const long QueueByteCapacity = 32 * 1024 * 1024;
+    internal const int FlushBatchRecords = 256;
+    internal const long FlushBatchBytes = 256 * 1024;
+    internal static readonly TimeSpan MaximumUnflushedDelay = TimeSpan.FromMilliseconds(100);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -39,6 +45,8 @@ internal sealed class UdpSyslogWorker(
         {
             taskRunId = catalog.StartTaskRun("syslog-local", "SYSLOG_UDP");
             using var udp = new UdpClient(new IPEndPoint(settings.SyslogBind, settings.SyslogPort));
+            udp.Client.ReceiveBufferSize = settings.SyslogReceiveBufferBytes;
+            stats.SetSocketReceiveBuffer(settings.SyslogReceiveBufferBytes, udp.Client.ReceiveBufferSize);
             var queue = Channel.CreateBounded<SyslogPacket>(new BoundedChannelOptions(QueueCapacity)
             {
                 SingleReader = true,
@@ -69,7 +77,7 @@ internal sealed class UdpSyslogWorker(
                     stats.MarkReceived(receivedMs);
                     var record = new SyslogPacket(receivedMs,
                         datagram.RemoteEndPoint.Address.ToString(), datagram.RemoteEndPoint.Port, datagram.Buffer);
-                    stats.TryQueue(queue.Writer, record);
+                    stats.TryQueue(queue.Writer, record, QueueByteCapacity);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -118,39 +126,79 @@ internal sealed class UdpSyslogWorker(
         }
     }
 
+    internal static TimeSpan RemainingFlushDelay(long pendingSinceTimestamp)
+    {
+        var remaining = MaximumUnflushedDelay - Stopwatch.GetElapsedTime(pendingSinceTimestamp);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
     private async Task WriteQueue(ChannelReader<SyslogPacket> queue)
     {
         RawSegmentWriter? segment = null;
         var drained = false;
+        var pendingRecords = 0;
+        long pendingBytes = 0;
+        var pendingSince = 0L;
         try
         {
-            while (await queue.WaitToReadAsync())
+            while (true)
             {
-                var inBatch = 0;
-                while (inBatch < 128 && queue.TryRead(out var datagram))
+                while (pendingRecords < FlushBatchRecords && queue.TryRead(out var datagram))
                 {
-                    stats.MarkDequeued();
+                    stats.MarkDequeued(datagram.Payload.Length);
                     segment ??= writerFactory.Create(catalog);
+                    var beforeBytes = segment.Bytes;
                     await segment.AppendAsync(datagram);
-                    inBatch++;
+                    pendingRecords++;
+                    pendingBytes += segment.Bytes - beforeBytes;
+                    if (pendingSince == 0) pendingSince = Stopwatch.GetTimestamp();
                     if (segment.Bytes >= 4 * 1024 * 1024)
                     {
-                        var sealStarted = Stopwatch.GetTimestamp();
-                        await segment.SealAsync();
-                        stats.RecordRawFlushLatency((Stopwatch.GetTimestamp() - sealStarted) * 1000d / Stopwatch.Frequency);
-                        segment = null;
+                        await FlushPendingAsync(sealSegment: true);
+                        break;
+                    }
+                    if (pendingBytes >= FlushBatchBytes) break;
+                }
+
+                if (pendingRecords > 0 && (pendingRecords >= FlushBatchRecords || pendingBytes >= FlushBatchBytes ||
+                    Stopwatch.GetElapsedTime(pendingSince) >= MaximumUnflushedDelay))
+                {
+                    await FlushPendingAsync(sealSegment: false);
+                    continue;
+                }
+
+                if (pendingRecords == 0)
+                {
+                    if (!await queue.WaitToReadAsync()) break;
+                    continue;
+                }
+
+                using var waitTimeout = new CancellationTokenSource(RemainingFlushDelay(pendingSince));
+                var ready = queue.WaitToReadAsync(waitTimeout.Token).AsTask();
+                try
+                {
+                    if (!await ready)
+                    {
+                        await FlushPendingAsync(sealSegment: true);
+                        break;
                     }
                 }
-                if (inBatch == 0) continue;
-                if (segment is not null)
+                catch (OperationCanceledException) when (waitTimeout.IsCancellationRequested)
                 {
-                    var flushStarted = Stopwatch.GetTimestamp();
-                    await segment.FlushAsync();
-                    stats.RecordRawFlushLatency((Stopwatch.GetTimestamp() - flushStarted) * 1000d / Stopwatch.Frequency);
+                    await FlushPendingAsync(sealSegment: false);
                 }
-                stats.MarkFlushed(inBatch);
             }
             drained = true;
+
+            if (pendingRecords > 0)
+                await FlushPendingAsync(sealSegment: true);
+            else if (segment is not null)
+            {
+                await segment.SealAsync();
+                stats.RecordSegmentSealLatency(segment.LastSealDurationMs);
+                stats.RecordCatalogWriteLatency(segment.LastCatalogWriteDurationMs);
+                segment = null;
+            }
         }
         finally
         {
@@ -159,6 +207,28 @@ internal sealed class UdpSyslogWorker(
                 if (drained) await segment.SealAsync();
                 else await segment.PreserveOpenAsync();
             }
+        }
+
+        async Task FlushPendingAsync(bool sealSegment)
+        {
+            if (segment is null || pendingRecords == 0) return;
+            if (sealSegment)
+            {
+                await segment.SealAsync();
+                stats.RecordRawFlushLatency(segment.LastSyncDurationMs);
+                stats.RecordSegmentSealLatency(segment.LastSealDurationMs);
+                stats.RecordCatalogWriteLatency(segment.LastCatalogWriteDurationMs);
+                segment = null;
+            }
+            else
+            {
+                await segment.FlushAsync();
+                stats.RecordRawFlushLatency(segment.LastSyncDurationMs);
+            }
+            stats.MarkFlushed(pendingRecords);
+            pendingRecords = 0;
+            pendingBytes = 0;
+            pendingSince = 0;
         }
     }
 }

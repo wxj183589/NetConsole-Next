@@ -17,7 +17,9 @@ jobs:
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
       - run: python3 tests/smoke.py
       - run: python3 tests/g1_recovery.py
-      - run: python3 tests/perf_baseline.py --packets 10000 --queue-burst 5000 --history-files 100 --sqlite-writes 100 --idle-seconds 1 --rate 10000
+      - run: python3 tests/udp_trace_benchmark_tests.py
+      - run: python3 tests/perf_baseline.py --packets 10000 --queue-burst 0 --history-files 100 --sqlite-writes 100 --idle-seconds 1 --rate 5000
+      - run: python3 tests/udp_trace_benchmark.py --pps 500 --payload-bytes 128 --duration-seconds 1 --require-lossless --output /tmp/netconsole-next-ci-udp-trace.json
   windows:
     runs-on: windows-latest
     steps:

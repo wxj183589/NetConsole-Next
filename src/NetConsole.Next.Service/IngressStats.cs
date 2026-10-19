@@ -1,14 +1,53 @@
 namespace NetConsole.Next.Service;
 
-internal sealed record FlushLatencySnapshot(long Samples, double? P50Ms, double? P95Ms, double MaxMs);
+internal sealed record FlushLatencySnapshot(long Samples, int WindowSamples, double? P50Ms, double? P95Ms, double? P99Ms, double MaxMs);
+
+internal sealed class LatencyWindow
+{
+    private readonly object _gate = new();
+    private readonly double[] _values = new double[4096];
+    private int _next, _count;
+    private long _total;
+    private double _max;
+
+    public void Record(double milliseconds)
+    {
+        lock (_gate)
+        {
+            _values[_next] = milliseconds;
+            _next = (_next + 1) % _values.Length;
+            _count = Math.Min(_count + 1, _values.Length);
+            _total++;
+            _max = Math.Max(_max, milliseconds);
+        }
+    }
+
+    public FlushLatencySnapshot Snapshot
+    {
+        get
+        {
+            lock (_gate)
+            {
+                var values = _values.Take(_count).Order().ToArray();
+                return new(_total, _count, Percentile(values, .50), Percentile(values, .95), Percentile(values, .99), _max);
+            }
+        }
+    }
+
+    private static double? Percentile(double[] values, double ratio) => values.Length == 0
+        ? null : values[Math.Clamp((int)Math.Ceiling(values.Length * ratio) - 1, 0, values.Length - 1)];
+}
 
 // Application counters only. UDP kernel drops are not covered by these counters.
 internal sealed class IngressStats
 {
     private readonly int _queueCapacity;
-    private long _received, _accepted, _dropped, _flushed, _queueDepth, _queueHighWatermark, _lastReceivedMs, _lastPersistedMs;
-    private readonly long[] _flushLatencyBuckets = new long[9];
-    private long _maxFlushLatencyMicros;
+    private readonly object _queueGate = new();
+    private long _received, _accepted, _dropped, _flushed, _queueDepth, _queueHighWatermark, _queueBytes, _queueBytesHighWatermark, _lastReceivedMs, _lastPersistedMs;
+    private int _requestedSocketReceiveBufferBytes, _effectiveSocketReceiveBufferBytes;
+    private readonly LatencyWindow _rawSyncLatency = new();
+    private readonly LatencyWindow _segmentSealLatency = new();
+    private readonly LatencyWindow _catalogWriteLatency = new();
     public IngressStats(int queueCapacity = UdpSyslogWorker.QueueCapacity)
     {
         if (queueCapacity < 1) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
@@ -21,33 +60,29 @@ internal sealed class IngressStats
     public long Flushed => Interlocked.Read(ref _flushed);
     public long QueueDepth => Math.Min(Interlocked.Read(ref _queueDepth), _queueCapacity);
     public long QueueHighWatermark => Math.Min(Interlocked.Read(ref _queueHighWatermark), _queueCapacity);
+    public long QueueBytes => Interlocked.Read(ref _queueBytes);
+    public long QueueBytesHighWatermark => Interlocked.Read(ref _queueBytesHighWatermark);
+    public int RequestedSocketReceiveBufferBytes => Volatile.Read(ref _requestedSocketReceiveBufferBytes);
+    public int EffectiveSocketReceiveBufferBytes => Volatile.Read(ref _effectiveSocketReceiveBufferBytes);
     public long LastReceivedMs => Interlocked.Read(ref _lastReceivedMs);
     public long LastPersistedMs => Interlocked.Read(ref _lastPersistedMs);
 
-    public void RecordRawFlushLatency(double elapsedMs)
+    public void SetSocketReceiveBuffer(int requested, int effective)
     {
-        var bucket = elapsedMs switch
-        {
-            <= 1 => 0, <= 2 => 1, <= 5 => 2, <= 10 => 3, <= 25 => 4,
-            <= 50 => 5, <= 100 => 6, <= 500 => 7, _ => 8
-        };
-        Interlocked.Increment(ref _flushLatencyBuckets[bucket]);
-        var micros = (long)Math.Max(0, elapsedMs * 1000);
-        var current = Interlocked.Read(ref _maxFlushLatencyMicros);
-        while (micros > current && Interlocked.CompareExchange(ref _maxFlushLatencyMicros, micros, current) != current)
-            current = Interlocked.Read(ref _maxFlushLatencyMicros);
+        Volatile.Write(ref _requestedSocketReceiveBufferBytes, requested);
+        Volatile.Write(ref _effectiveSocketReceiveBufferBytes, effective);
     }
 
-    public FlushLatencySnapshot RawFlushLatency
+    public void RecordRawFlushLatency(double elapsedMs)
     {
-        get
-        {
-            var counts = _flushLatencyBuckets.Select(bucket => Interlocked.Read(ref bucket)).ToArray();
-            var total = counts.Sum();
-            return new(total, Percentile(counts, total, .50), Percentile(counts, total, .95),
-                Interlocked.Read(ref _maxFlushLatencyMicros) / 1000d);
-        }
+        _rawSyncLatency.Record(elapsedMs);
     }
+
+    public void RecordSegmentSealLatency(double elapsedMs) => _segmentSealLatency.Record(elapsedMs);
+    public void RecordCatalogWriteLatency(double elapsedMs) => _catalogWriteLatency.Record(elapsedMs);
+    public FlushLatencySnapshot RawFlushLatency => _rawSyncLatency.Snapshot;
+    public FlushLatencySnapshot SegmentSealLatency => _segmentSealLatency.Snapshot;
+    public FlushLatencySnapshot CatalogWriteLatency => _catalogWriteLatency.Snapshot;
 
     public void MarkReceived(long atMs)
     {
@@ -57,43 +92,46 @@ internal sealed class IngressStats
 
     public void MarkAccepted() => Interlocked.Increment(ref _accepted);
     public void MarkDropped() => Interlocked.Increment(ref _dropped);
-    public void MarkDequeued() => Interlocked.Decrement(ref _queueDepth);
+    public void MarkDequeued(int payloadBytes)
+    {
+        lock (_queueGate)
+        {
+            Interlocked.Decrement(ref _queueDepth);
+            Interlocked.Add(ref _queueBytes, -payloadBytes);
+        }
+    }
     public void MarkFlushed(int count)
     {
         Interlocked.Add(ref _flushed, count);
         Interlocked.Exchange(ref _lastPersistedMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
-    public bool TryQueue(System.Threading.Channels.ChannelWriter<SyslogPacket> writer, SyslogPacket packet)
+    public bool TryQueue(System.Threading.Channels.ChannelWriter<SyslogPacket> writer, SyslogPacket packet,
+        long maximumQueuedBytes = 32 * 1024 * 1024)
     {
-        Interlocked.Increment(ref _queueDepth);
-        if (!writer.TryWrite(packet))
+        lock (_queueGate)
         {
-            Interlocked.Decrement(ref _queueDepth);
-            MarkDropped();
-            return false;
+            var depth = Interlocked.Read(ref _queueDepth);
+            var bytes = Interlocked.Read(ref _queueBytes);
+            if (depth >= _queueCapacity || packet.Payload.Length > maximumQueuedBytes - bytes || !writer.TryWrite(packet))
+            {
+                MarkDropped();
+                return false;
+            }
+            Interlocked.Increment(ref _queueDepth);
+            var currentBytes = Interlocked.Add(ref _queueBytes, packet.Payload.Length);
+            Interlocked.Increment(ref _accepted);
+            UpdateHighWatermark(ref _queueHighWatermark, depth + 1);
+            UpdateHighWatermark(ref _queueBytesHighWatermark, currentBytes);
+            return true;
         }
-        MarkAccepted();
-        // The counter is incremented before TryWrite to prevent a fast reader from
-        // decrementing first. A failed/full write can briefly make it exceed capacity.
-        var depth = Math.Min(Interlocked.Read(ref _queueDepth), _queueCapacity);
-        var high = Interlocked.Read(ref _queueHighWatermark);
-        while (depth > high && Interlocked.CompareExchange(ref _queueHighWatermark, depth, high) != high)
-            high = Interlocked.Read(ref _queueHighWatermark);
-        return true;
     }
 
-    private static double? Percentile(long[] counts, long total, double percentile)
+    private static void UpdateHighWatermark(ref long watermark, long value)
     {
-        if (total == 0) return null;
-        var threshold = (long)Math.Ceiling(total * percentile);
-        long observed = 0;
-        double[] upperBounds = [1, 2, 5, 10, 25, 50, 100, 500, double.PositiveInfinity];
-        for (var i = 0; i < counts.Length; i++)
-        {
-            observed += counts[i];
-            if (observed >= threshold) return double.IsPositiveInfinity(upperBounds[i]) ? null : upperBounds[i];
-        }
-        return null;
+        var current = Interlocked.Read(ref watermark);
+        while (value > current && Interlocked.CompareExchange(ref watermark, value, current) != current)
+            current = Interlocked.Read(ref watermark);
     }
+
 }

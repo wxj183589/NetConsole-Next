@@ -29,13 +29,16 @@ internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskT
     long? QueuedMs, long? StartedMs, long? DeadlineMs, long? EndedMs, string? FailureReason, string? DefinitionId);
 internal sealed record TaskDefinitionSnapshot(string Id, string TaskType, string Target, string Command,
     long TimeoutMs, bool Enabled, string RestartPolicy);
-internal sealed record RawIntegrityAuditSnapshot(string RelativePath, long DetectedMs, string Reason,
-    string? ExpectedSha256, string? ObservedSha256, long? ExpectedBytes, long? ObservedBytes, string? EvidencePath, string Detail);
+internal sealed record RawIntegrityAuditSnapshot(string Id, string RelativePath, long DetectedMs, string Reason,
+    string? ExpectedSha256, string? ObservedSha256, long? ExpectedBytes, long? ObservedBytes, string? EvidencePath,
+    string Detail, string? Disposition, string? DisposedBy, string? DispositionDetail, long? DisposedMs);
 internal sealed record CatalogHealthSnapshot(RawCatalogCounts RawSegments, int IntegrityAuditCount,
+    int UnresolvedIntegrityIssues,
     IReadOnlyList<RawIntegrityAuditSnapshot> RecentIntegrityAudits);
 internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs,
     long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes, string? EvidencePath,
     long BytesRead, long BytesHashed);
+internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
 
 internal sealed class Catalog(RuntimeSettings settings)
 {
@@ -95,6 +98,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         }
         ApplyEmbeddedSchema(db, "schema_v1.sql");
         ApplyV2Migration(db);
+        ApplyV3Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -150,6 +154,28 @@ internal sealed class Catalog(RuntimeSettings settings)
         {
             version.Transaction = transaction;
             version.CommandText = "INSERT OR IGNORE INTO schema_versions(version,applied_ms) VALUES(2,$now)";
+            version.Parameters.AddWithValue("$now", UtcNowMs());
+            version.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    private static void ApplyV3Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v3.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v3.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using (var command = db.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = reader.ReadToEnd();
+            command.ExecuteNonQuery();
+        }
+        using (var version = db.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = "INSERT OR IGNORE INTO schema_versions(version,applied_ms) VALUES(3,$now)";
             version.Parameters.AddWithValue("$now", UtcNowMs());
             version.ExecuteNonQuery();
         }
@@ -214,11 +240,14 @@ internal sealed class Catalog(RuntimeSettings settings)
                 {
                     if (row.State != "MISSING") MarkMissing(row.RelativePath);
                     missing++;
+                    RecordIntegrityAudit(row.RelativePath, row, null, "MISSING_RAW", "Catalog entry exists but its Raw file is missing.");
                     issues.Add(new(row.RelativePath, "MISSING_RAW", false, "Catalog entry exists but its Raw file is missing."));
                 }
                 else if (ContainsReparsePoint(path))
                 {
                     failed++;
+                    RecordIntegrityAudit(row.RelativePath, row, null, "REPARSE_POINT",
+                        "Raw file or a parent directory is a symbolic link/reparse point; the file was not opened.");
                     issues.Add(new(row.RelativePath, "REPARSE_POINT", false, "Raw file or a parent directory is a symbolic link/reparse point; file was not opened."));
                 }
             }
@@ -231,6 +260,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             {
                 failed++;
+                RecordIntegrityAudit(row.RelativePath, row, null, "HISTORICAL_RAW", $"{ex.GetType().Name}: {ex.Message}");
                 AddIssue(row.RelativePath, "HISTORICAL_RAW", false, ex);
             }
         }
@@ -259,9 +289,14 @@ internal sealed class Catalog(RuntimeSettings settings)
                 if (ContainsReparsePoint(originalPath))
                     throw new IOException("Raw file or a parent directory is a symbolic link/reparse point.");
                 var inspection = InspectAndRepair(originalPath);
+                ResolveVerifiedIntegrityAudits(relative, inspection.Sha256);
                 bytesRead += inspection.BytesRead;
                 bytesHashed += inspection.BytesHashed;
                 discarded += inspection.DiscardedTailBytes;
+                var publishedPath = Path.ChangeExtension(originalPath, ".ndjson");
+                if (File.Exists(publishedPath))
+                    publishedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + ".recovered-" + Guid.NewGuid().ToString("N") + ".ndjson");
+                var recoveredRelative = RelativeRawPath(publishedPath);
                 if (inspection.CorruptTail)
                 {
                     repaired++;
@@ -270,14 +305,16 @@ internal sealed class Catalog(RuntimeSettings settings)
                         evidenceFiles++;
                         evidenceBytes += inspection.DiscardedTailBytes;
                     }
-                    RecordIntegrityAudit(relative, null, inspection, "OPEN_TAIL_REPAIRED");
+                    RecordIntegrityAudit(recoveredRelative, null, inspection, "OPEN_TAIL_REPAIRED");
+                }
+                else
+                {
+                    RecordIntegrityAudit(recoveredRelative, null, inspection, "OPEN_SEGMENT_RECOVERED",
+                        "An unsealed Raw segment was reconciled after process interruption; the original bytes were retained.");
                 }
 
-                var publishedPath = Path.ChangeExtension(originalPath, ".ndjson");
-                if (File.Exists(publishedPath))
-                    publishedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + ".recovered-" + Guid.NewGuid().ToString("N") + ".ndjson");
                 File.Move(originalPath, publishedPath);
-                relative = RelativeRawPath(publishedPath);
+                relative = recoveredRelative;
                 UpsertRecoveredSegment(relative, inspection, "INCOMPLETE");
                 recoveredOpen++;
             }
@@ -285,6 +322,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             {
                 failed++;
                 var critical = ex is SqliteException;
+                if (!critical) RecordIntegrityAudit(relative, null, null, "OPEN_RECOVERY_FAILED", $"{ex.GetType().Name}: {ex.Message}");
                 AddIssue(relative, critical ? "CATALOG_WRITE" : "HISTORICAL_RAW", critical, ex);
                 if (critical) break;
             }
@@ -294,11 +332,11 @@ internal sealed class Catalog(RuntimeSettings settings)
         {
             scanned++;
             var relative = RelativeRawPath(path);
+            var wasIndexed = indexed.TryGetValue(relative, out var row);
             try
             {
                 if (ContainsReparsePoint(path))
                     throw new IOException("Raw file or a parent directory is a symbolic link/reparse point.");
-                var wasIndexed = indexed.TryGetValue(relative, out var row);
                 var info = new FileInfo(path);
                 if (wasIndexed && row!.State == "FINALIZED" && row.Sha256 is not null &&
                     row.CheckpointSize == info.Length && row.CheckpointWriteTicks == info.LastWriteTimeUtc.Ticks)
@@ -324,6 +362,8 @@ internal sealed class Catalog(RuntimeSettings settings)
                 var sameAsCatalog = wasIndexed && row!.RecordCount == inspection.RecordCount &&
                     row.ByteCount == inspection.ByteCount &&
                     string.Equals(row.Sha256, inspection.Sha256, StringComparison.OrdinalIgnoreCase);
+                if (sameAsCatalog && !inspection.CorruptTail)
+                    ResolveVerifiedIntegrityAudits(relative, inspection.Sha256);
                 if (wasIndexed && row!.Sha256 is not null && !sameAsCatalog)
                 {
                     RecordIntegrityAudit(relative, row, inspection, "CHECKSUM_OR_LENGTH_MISMATCH");
@@ -342,6 +382,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             {
                 failed++;
                 var critical = ex is SqliteException;
+                if (!critical) RecordIntegrityAudit(relative, wasIndexed ? row : null, null, "FINALIZED_RECOVERY_FAILED", $"{ex.GetType().Name}: {ex.Message}");
                 AddIssue(relative, critical ? "CATALOG_WRITE" : "HISTORICAL_RAW", critical, ex);
                 if (critical) break;
             }
@@ -481,14 +522,15 @@ internal sealed class Catalog(RuntimeSettings settings)
                 THEN $now+(SELECT timeout_ms FROM task_definitions WHERE id=definition_id) ELSE deadline_ms END,
             ended_ms=CASE WHEN $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED') THEN $now ELSE ended_ms END,
             failure_reason=$reason
-            WHERE id=$id AND ((state='QUEUED' AND $next IN ('CONNECTING','CANCELLED')) OR
+            WHERE id=$id AND ((state='QUEUED' AND $next IN ('CONNECTING','FAILED','CANCELLED')) OR
               (state='CONNECTING' AND $next IN ('RUNNING','FAILED','TIMED_OUT','CANCELLED')) OR
               (state='RUNNING' AND $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED')))";
         command.Parameters.AddWithValue("$next", nextState);
         command.Parameters.AddWithValue("$now", now);
         command.Parameters.AddWithValue("$reason", (object?)failureReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$id", id);
-        command.ExecuteNonQuery();
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"Task run '{id}' did not accept the requested '{nextState}' transition.");
     }
 
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
@@ -561,6 +603,73 @@ internal sealed class Catalog(RuntimeSettings settings)
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    public int GetUnresolvedIntegrityIssueCount()
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT
+            (SELECT COUNT(*) FROM raw_integrity_audits a
+             LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id WHERE d.audit_id IS NULL) +
+            (SELECT COUNT(*) FROM raw_segments s WHERE s.state IN ('INCOMPLETE','MISSING')
+             AND NOT EXISTS(SELECT 1 FROM raw_integrity_audits a WHERE a.relative_path=s.relative_path))";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    public bool HasUnresolvedRecoveryMarker => RecoveryWasInterrupted;
+
+    public void QuarantineIntegrityAudit(string auditId, string actor, string detail)
+    {
+        if (string.IsNullOrWhiteSpace(actor) || actor.Length > 128)
+            throw new ArgumentException("Actor is required and must be at most 128 characters.", nameof(actor));
+        if (string.IsNullOrWhiteSpace(detail) || detail.Length > 2048)
+            throw new ArgumentException("Disposition detail is required and must be at most 2048 characters.", nameof(detail));
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT 1 FROM raw_issue_dispositions WHERE audit_id=$audit";
+            existing.Parameters.AddWithValue("$audit", auditId);
+            if (existing.ExecuteScalar() is not null)
+                throw new InvalidOperationException($"Raw integrity audit '{auditId}' already has a disposition.");
+        }
+        string? observedSha, expectedSha, evidence;
+        string relativePath;
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = "SELECT relative_path,observed_sha256,expected_sha256,evidence_path FROM raw_integrity_audits WHERE id=$id";
+            read.Parameters.AddWithValue("$id", auditId);
+            using var reader = read.ExecuteReader();
+            if (!reader.Read()) throw new KeyNotFoundException($"Raw integrity audit '{auditId}' does not exist.");
+            relativePath = reader.GetString(0);
+            observedSha = reader.IsDBNull(1) ? null : reader.GetString(1);
+            expectedSha = reader.IsDBNull(2) ? null : reader.GetString(2);
+            evidence = reader.IsDBNull(3) ? null : reader.GetString(3);
+        }
+        if (!TryResolveRawPath(relativePath, out var rawPath) || !File.Exists(rawPath) || ContainsReparsePoint(rawPath))
+            throw new InvalidOperationException("Raw bytes are unavailable or unsafe; a missing file cannot be quarantined as retained evidence.");
+        var expectedCurrentHash = observedSha ?? expectedSha;
+        if (expectedCurrentHash is null || !FileHashMatches(rawPath, expectedCurrentHash))
+            throw new InvalidOperationException("Raw bytes changed since this audit or have no verified checksum; rerun recovery before disposition.");
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO raw_issue_dispositions
+                (id,audit_id,disposition,actor,detail,evidence_path,observed_sha256,disposed_ms)
+                VALUES($id,$audit,'QUARANTINED',$actor,$detail,$evidence,$sha,$now)";
+            insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+            insert.Parameters.AddWithValue("$audit", auditId);
+            insert.Parameters.AddWithValue("$actor", actor.Trim());
+            insert.Parameters.AddWithValue("$detail", detail.Trim());
+            insert.Parameters.AddWithValue("$evidence", (object?)evidence ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$sha", (object?)observedSha ?? (expectedSha is null ? DBNull.Value : expectedSha));
+            insert.Parameters.AddWithValue("$now", UtcNowMs());
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
     public CatalogHealthSnapshot GetHealthSnapshot()
     {
         using var db = Open();
@@ -585,23 +694,22 @@ internal sealed class Catalog(RuntimeSettings settings)
             command.CommandText = "SELECT COUNT(*) FROM raw_integrity_audits";
             auditCount = Convert.ToInt32(command.ExecuteScalar());
         }
+        var unresolvedCount = GetUnresolvedIntegrityIssueCount();
         var audits = new List<RawIntegrityAuditSnapshot>();
         using (var command = db.CreateCommand())
         {
-            command.CommandText = @"SELECT relative_path,detected_ms,reason,expected_sha256,observed_sha256,
-                expected_bytes,observed_bytes,evidence_path,detail FROM raw_integrity_audits
-                ORDER BY detected_ms DESC LIMIT 10";
+            command.CommandText = @"SELECT a.id,a.relative_path,a.detected_ms,a.reason,a.expected_sha256,a.observed_sha256,
+                a.expected_bytes,a.observed_bytes,a.evidence_path,a.detail,d.disposition,d.actor,d.detail,d.disposed_ms
+                FROM raw_integrity_audits a LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id
+                ORDER BY a.detected_ms DESC LIMIT 10";
             using var reader = command.ExecuteReader();
             while (reader.Read())
-                audits.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                    reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8)));
+                audits.Add(ReadIntegrityAudit(reader));
         }
-        return new(new(finalized, incomplete, missing), auditCount, audits);
+        return new(new(finalized, incomplete, missing), auditCount, unresolvedCount, audits);
     }
 
-    public string? AuditOneFinalizedSegment()
+    public RawMaintenanceAuditResult? AuditOneFinalizedSegment()
     {
         using var db = Open();
         using var command = db.CreateCommand();
@@ -624,9 +732,10 @@ internal sealed class Catalog(RuntimeSettings settings)
             {
                 RecordIntegrityAudit(row.RelativePath, row, inspection, inspection.CorruptTail ? "MAINTENANCE_CORRUPTION" : "MAINTENANCE_CHECKSUM_MISMATCH");
                 UpsertRecoveredSegment(row.RelativePath, inspection, "INCOMPLETE");
-                return $"{row.RelativePath}: checksum/record integrity mismatch; file marked INCOMPLETE";
+                return new(row.RelativePath, "INTEGRITY_ISSUE", "Checksum/record integrity mismatch; file marked INCOMPLETE.");
             }
 
+            ResolveVerifiedIntegrityAudits(row.RelativePath, inspection.Sha256);
             using var updateDb = Open();
             using var update = updateDb.CreateCommand();
             var info = new FileInfo(path);
@@ -637,7 +746,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             update.Parameters.AddWithValue("$ticks", info.LastWriteTimeUtc.Ticks);
             update.Parameters.AddWithValue("$path", row.RelativePath);
             update.ExecuteNonQuery();
-            return $"{row.RelativePath}: full integrity audit passed ({inspection.BytesRead} bytes read)";
+            return new(row.RelativePath, "VERIFIED", $"Full integrity audit passed ({inspection.BytesRead} bytes read).");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
         {
@@ -648,7 +757,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             update.Parameters.AddWithValue("$now", UtcNowMs());
             update.Parameters.AddWithValue("$path", row.RelativePath);
             update.ExecuteNonQuery();
-            return $"{row.RelativePath}: full integrity audit failed ({ex.GetType().Name})";
+            return new(row.RelativePath, "FAILED", $"Full integrity audit failed ({ex.GetType().Name}).");
         }
     }
 
@@ -656,19 +765,25 @@ internal sealed class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT relative_path,detected_ms,reason,expected_sha256,observed_sha256,
-            expected_bytes,observed_bytes,evidence_path,detail FROM raw_integrity_audits
-            ORDER BY detected_ms DESC LIMIT $limit";
+        command.CommandText = @"SELECT a.id,a.relative_path,a.detected_ms,a.reason,a.expected_sha256,a.observed_sha256,
+            a.expected_bytes,a.observed_bytes,a.evidence_path,a.detail,d.disposition,d.actor,d.detail,d.disposed_ms
+            FROM raw_integrity_audits a LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id
+            ORDER BY a.detected_ms DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 50));
         using var reader = command.ExecuteReader();
         var audits = new List<RawIntegrityAuditSnapshot>();
         while (reader.Read())
-            audits.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8)));
+            audits.Add(ReadIntegrityAudit(reader));
         return audits;
     }
+
+    private static RawIntegrityAuditSnapshot ReadIntegrityAudit(SqliteDataReader reader) => new(
+        reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5),
+        reader.IsDBNull(6) ? null : reader.GetInt64(6), reader.IsDBNull(7) ? null : reader.GetInt64(7),
+        reader.IsDBNull(8) ? null : reader.GetString(8), reader.GetString(9),
+        reader.IsDBNull(10) ? null : reader.GetString(10), reader.IsDBNull(11) ? null : reader.GetString(11),
+        reader.IsDBNull(12) ? null : reader.GetString(12), reader.IsDBNull(13) ? null : reader.GetInt64(13));
 
     public int OpenSegmentCount() => Directory.Exists(RawRoot)
         ? Directory.EnumerateFiles(RawRoot, "*.open", SearchOption.AllDirectories).Take(10001).Count()
@@ -768,6 +883,18 @@ internal sealed class Catalog(RuntimeSettings settings)
         string reason, string? detail = null)
     {
         using var db = Open();
+        using (var exists = db.CreateCommand())
+        {
+            exists.CommandText = @"SELECT 1 FROM raw_integrity_audits a
+                LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id
+                WHERE a.relative_path=$path AND a.reason=$reason AND a.expected_sha256 IS $expectedSha
+                  AND a.observed_sha256 IS $observedSha AND d.audit_id IS NULL LIMIT 1";
+            exists.Parameters.AddWithValue("$path", relative);
+            exists.Parameters.AddWithValue("$reason", reason);
+            exists.Parameters.AddWithValue("$expectedSha", (object?)expected?.Sha256 ?? DBNull.Value);
+            exists.Parameters.AddWithValue("$observedSha", (object?)observed?.Sha256 ?? DBNull.Value);
+            if (exists.ExecuteScalar() is not null) return;
+        }
         using var command = db.CreateCommand();
         command.CommandText = @"INSERT INTO raw_integrity_audits
             (id,relative_path,detected_ms,reason,expected_sha256,observed_sha256,expected_bytes,observed_bytes,evidence_path,detail)
@@ -782,6 +909,23 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$observedBytes", (object?)observed?.ByteCount ?? DBNull.Value);
         command.Parameters.AddWithValue("$evidence", (object?)observed?.EvidencePath ?? DBNull.Value);
         command.Parameters.AddWithValue("$detail", detail ?? string.Empty);
+        command.ExecuteNonQuery();
+    }
+
+    private void ResolveVerifiedIntegrityAudits(string relative, string observedSha)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"INSERT INTO raw_issue_dispositions
+            (id,audit_id,disposition,actor,detail,evidence_path,observed_sha256,disposed_ms)
+            SELECT lower(hex(randomblob(16))),a.id,'RESOLVED_VERIFIED','system-integrity-auditor',
+                'A later complete verification succeeded; the Raw bytes remain retained.',a.evidence_path,$sha,$now
+            FROM raw_integrity_audits a LEFT JOIN raw_issue_dispositions d ON d.audit_id=a.id
+            WHERE a.relative_path=$path AND d.audit_id IS NULL
+              AND a.reason IN ('MISSING_RAW','REPARSE_POINT','HISTORICAL_RAW','OPEN_RECOVERY_FAILED','FINALIZED_RECOVERY_FAILED','MAINTENANCE_FAILED')";
+        command.Parameters.AddWithValue("$path", relative);
+        command.Parameters.AddWithValue("$sha", observedSha);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
         command.ExecuteNonQuery();
     }
 

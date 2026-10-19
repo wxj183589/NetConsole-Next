@@ -1,5 +1,6 @@
+using System.Buffers;
+using System.Diagnostics;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace NetConsole.Next.Service;
@@ -23,12 +24,16 @@ internal sealed class RawSegmentWriter
     private readonly string _openPath;
     private readonly string _relativePath;
     private readonly Stream _stream;
-    private readonly StreamWriter _writer;
+    private readonly MemoryStream _stagedBytes = new(256 * 1024);
+    private readonly ArrayBufferWriter<byte> _jsonBytes = new(4096);
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
-    private bool _sealed, _closed;
+    private bool _sealed, _closed, _dirty;
 
     public long Bytes => _bytes;
+    public double LastSyncDurationMs { get; private set; }
+    public double LastSealDurationMs { get; private set; }
+    public double LastCatalogWriteDurationMs { get; private set; }
 
     public RawSegmentWriter(Catalog catalog, Func<string, Stream>? streamFactory = null)
     {
@@ -43,40 +48,55 @@ internal sealed class RawSegmentWriter
         _stream = streamFactory is null
             ? new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)
             : streamFactory(_openPath);
-        _writer = new StreamWriter(_stream, new UTF8Encoding(false), 32768);
     }
 
-    public async Task AppendAsync(SyslogPacket packet)
+    public Task AppendAsync(SyslogPacket packet)
     {
         if (_sealed) throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
-        var line = JsonSerializer.Serialize(new
+        _jsonBytes.Clear();
+        using (var json = new Utf8JsonWriter(_jsonBytes))
         {
-            received_ms = packet.ReceivedMs,
-            sender_ip = packet.SenderIp,
-            sender_port = packet.SenderPort,
-            payload_base64 = Convert.ToBase64String(packet.Payload)
-        });
-        await _writer.WriteLineAsync(line);
-        _bytes += Encoding.UTF8.GetByteCount(line) + 1;
+            json.WriteStartObject();
+            json.WriteNumber("received_ms", packet.ReceivedMs);
+            json.WriteString("sender_ip", packet.SenderIp);
+            json.WriteNumber("sender_port", packet.SenderPort);
+            json.WriteBase64String("payload_base64", packet.Payload);
+            json.WriteEndObject();
+        }
+        _stagedBytes.Write(_jsonBytes.WrittenSpan);
+        _stagedBytes.WriteByte((byte)'\n');
+        _bytes += _jsonBytes.WrittenCount + 1;
+        _dirty = true;
         _first = Math.Min(_first, packet.ReceivedMs);
         _last = Math.Max(_last, packet.ReceivedMs);
         _records++;
+        return Task.CompletedTask;
     }
 
     public async Task FlushAsync()
     {
         if (_closed) throw new InvalidOperationException("A closed Raw segment cannot be flushed.");
-        await _writer.FlushAsync();
+        var started = Stopwatch.GetTimestamp();
+        if (_stagedBytes.Length > 0)
+        {
+            _stagedBytes.Position = 0;
+            await _stagedBytes.CopyToAsync(_stream);
+            _stagedBytes.SetLength(0);
+            _stagedBytes.Position = 0;
+        }
+        await _stream.FlushAsync();
         if (_stream is FileStream file) file.Flush(flushToDisk: true);
         else _stream.Flush();
+        LastSyncDurationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _dirty = false;
     }
 
     public async Task PreserveOpenAsync()
     {
         if (_closed) return;
-        try { await _writer.FlushAsync(); }
+        try { await FlushAsync(); }
         catch (IOException) { }
-        try { await _writer.DisposeAsync(); }
+        try { await _stream.DisposeAsync(); }
         catch (IOException) { }
         finally { _closed = true; }
     }
@@ -84,8 +104,9 @@ internal sealed class RawSegmentWriter
     public async Task SealAsync()
     {
         if (_sealed) return;
-        await FlushAsync();
-        await _writer.DisposeAsync();
+        var sealStarted = Stopwatch.GetTimestamp();
+        if (_dirty) await FlushAsync();
+        await _stream.DisposeAsync();
         _closed = true;
         string checksum;
         using (var sha = SHA256.Create())
@@ -94,8 +115,12 @@ internal sealed class RawSegmentWriter
         var published = _openPath[..^".open".Length] + ".ndjson";
         File.Move(_openPath, published);
         // If the DB write fails, the final file is deliberately preserved for reconciliation.
+        var catalogStarted = Stopwatch.GetTimestamp();
         _catalog.RegisterFinalizedSegment(_relativePath, _records,
             _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length);
+        LastCatalogWriteDurationMs = Stopwatch.GetElapsedTime(catalogStarted).TotalMilliseconds;
+        LastSealDurationMs = Stopwatch.GetElapsedTime(sealStarted).TotalMilliseconds;
         _sealed = true;
     }
+
 }

@@ -37,6 +37,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private static readonly TimeSpan MaximumTimeout = TimeSpan.FromMinutes(10);
     private readonly IDeviceSessionFactory _sessionFactory;
     private readonly Catalog? _catalog;
+    private readonly Action<Exception>? _persistenceFailure;
     private readonly Channel<WorkItem> _queue;
     private readonly ConcurrentDictionary<string, WorkItem> _items = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
@@ -48,12 +49,14 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private long _accepted;
     private long _rejected;
 
-    public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity, Catalog? catalog = null)
+    public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity,
+        Catalog? catalog = null, Action<Exception>? persistenceFailure = null)
     {
         if (maxConcurrency is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
         if (queueCapacity is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
         _sessionFactory = sessionFactory;
         _catalog = catalog;
+        _persistenceFailure = persistenceFailure;
         MaxConcurrency = maxConcurrency;
         QueueCapacity = queueCapacity;
         _queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(queueCapacity)
@@ -196,12 +199,24 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             await foreach (var item in _queue.Reader.ReadAllAsync(_shutdown.Token))
             {
                 Interlocked.Decrement(ref _queued);
-                if (!TryBegin(item)) continue;
-                try { await ExecuteAsync(item); }
+                var active = false;
+                try
+                {
+                    if (!TryBegin(item)) continue;
+                    active = true;
+                    await ExecuteAsync(item);
+                }
                 catch (Exception ex)
                 {
-                    Interlocked.Decrement(ref _active);
-                    SetTerminal(item, "FAILED", null, $"Scheduler:{ex.GetType().Name}", false);
+                    try { SetTerminal(item, "FAILED", null, $"Scheduler:{ex.GetType().Name}", false); }
+                    catch (Exception persistenceError)
+                    {
+                        SetTerminalInMemory(item, "FAILED", null, $"TaskStatePersistence:{persistenceError.GetType().Name}");
+                    }
+                }
+                finally
+                {
+                    if (active) Interlocked.Decrement(ref _active);
                 }
             }
         }
@@ -265,7 +280,6 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             }
         }
 
-        Interlocked.Decrement(ref _active);
         SetTerminal(item, terminalState, result, error, timeout.IsCancellationRequested);
     }
 
@@ -300,13 +314,22 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         lock (_gate) PruneCompletedHistory();
     }
 
+    private void SetTerminalInMemory(WorkItem item, string state, string? result, string? error)
+    {
+        lock (item.Gate)
+            item.Snapshot = item.Snapshot with { State = state, Result = result, Error = error, EndedMs = UtcNowMs() };
+        lock (_gate) PruneCompletedHistory();
+    }
+
     private void PersistState(WorkItem item, string state, string? reason)
     {
         if (!item.Persisted || _catalog is null) return;
         try { _catalog.TransitionTaskRun(item.Snapshot.Id, state, reason); }
-        catch (Microsoft.Data.Sqlite.SqliteException)
+        catch (Exception ex)
         {
-            // The Raw/SQLite service-level gate handles storage failures; scheduler state remains visible in memory.
+            try { _persistenceFailure?.Invoke(ex); }
+            catch { /* Preserve the original persistence exception. */ }
+            throw;
         }
     }
 

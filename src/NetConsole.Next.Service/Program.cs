@@ -40,9 +40,8 @@ try
     app.Lifetime.ApplicationStopped.Register(fileLoggerProvider.Dispose);
 
     var recovery = catalog.RecoverRawSegments();
-    runtimeStatus.AssessRecovery(recovery, catalog.GetRawCounts());
-    if (catalog.InterruptedTaskRuns > 0 && runtimeStatus.HealthState == "HEALTHY")
-        runtimeStatus.SetHealth("DEGRADED", "One or more task runs were interrupted by the previous process exit.");
+    runtimeStatus.AssessRecovery(recovery, catalog.GetUnresolvedIntegrityIssueCount());
+    runtimeStatus.SetInterruptedTaskRuns(catalog.InterruptedTaskRuns);
     if (!recovery.Issues.Any(issue => issue.Critical)) catalog.CompleteRawRecovery();
     if (recovery.FailedFiles > 0)
         app.Logger.LogWarning("Raw recovery left {FailedFiles} file(s) untouched; inspect recovery.issues and raw_integrity_audits.", recovery.FailedFiles);
@@ -90,8 +89,16 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         udpQueueDepth = ingress.QueueDepth,
         udpQueueHighWatermark = ingress.QueueHighWatermark,
         udpQueueCapacity = UdpSyslogWorker.QueueCapacity,
+        udpQueueBytes = ingress.QueueBytes,
+        udpQueueBytesHighWatermark = ingress.QueueBytesHighWatermark,
+        udpQueueByteCapacity = UdpSyslogWorker.QueueByteCapacity,
+        udpSocketReceiveBufferRequestedBytes = ingress.RequestedSocketReceiveBufferBytes,
+        udpSocketReceiveBufferEffectiveBytes = ingress.EffectiveSocketReceiveBufferBytes,
         rawFlushedRecords = ingress.Flushed,
         rawWriteLatency = ingress.RawFlushLatency,
+        rawFileSyncLatency = ingress.RawFlushLatency,
+        rawSegmentSealLatency = ingress.SegmentSealLatency,
+        sqliteSegmentRegistrationLatency = ingress.CatalogWriteLatency,
         lastReceivedMs = ingress.LastReceivedMs == 0 ? (long?)null : ingress.LastReceivedMs,
         lastPersistedMs = ingress.LastPersistedMs == 0 ? (long?)null : ingress.LastPersistedMs,
         openSegmentsOnDisk = rawCatalog.OpenSegmentCount(),
@@ -102,10 +109,28 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         recovery = rawCatalog.RecoverySummary,
         interruptedTaskRunsAtStartup = rawCatalog.InterruptedTaskRuns,
         integrityAuditCount = storage?.IntegrityAuditCount,
+        unresolvedIntegrityIssues = storage?.UnresolvedIntegrityIssues,
         recentIntegrityAudits = storage?.RecentIntegrityAudits,
         resources = resource
     });
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
+    (string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
+    {
+        try
+        {
+            rawCatalog.QuarantineIntegrityAudit(auditId, request.Actor, request.Detail);
+            var unresolved = rawCatalog.GetUnresolvedIntegrityIssueCount();
+            status.ReassessIntegrityIssues(unresolved);
+            return Results.Ok(new { auditId, disposition = "QUARANTINED", unresolvedIntegrityIssues = unresolved,
+                note = "Catalog quarantine is recorded; Raw and tail evidence remain on disk." });
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
 
 app.Run();
+
+internal sealed record RawIssueQuarantineRequest(string Actor, string Detail);
