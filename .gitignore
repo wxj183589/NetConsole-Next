@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+.local-data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.open
+*.ndjson
+*.log
+__pycache__/
+.DS_Store
