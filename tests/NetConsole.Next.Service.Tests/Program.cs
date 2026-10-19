@@ -79,7 +79,7 @@ internal static class SchedulerTests
             Assert(persistedTimeout.State == "TIMED_OUT" && persistedTimeout.DeadlineMs is not null &&
                    persistedTimeout.FailureReason?.Contains("timeout", StringComparison.OrdinalIgnoreCase) == true,
                 persistedTimeout.ToString()!);
-            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db") }.ToString()))
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db"), Pooling = false }.ToString()))
             {
                 db.Open();
                 using var version = db.CreateCommand();
@@ -115,7 +115,7 @@ internal static class SchedulerTests
                 ?? throw new InvalidOperationException("Embedded v1 schema test fixture was not found.");
             using (schemaStream)
             using (var reader = new StreamReader(schemaStream))
-            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db") }.ToString()))
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db"), Pooling = false }.ToString()))
             {
                 db.Open();
                 using var apply = db.CreateCommand();
@@ -171,7 +171,7 @@ internal static class SchedulerTests
                 payload_base64 = payload
             }) + "\n");
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db") }.ToString()))
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(root, "catalog.db"), Pooling = false }.ToString()))
             {
                 db.Open();
                 using var transaction = db.BeginTransaction();
