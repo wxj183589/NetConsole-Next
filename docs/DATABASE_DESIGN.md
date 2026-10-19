@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v4 is implemented with additive idempotent upgrades from v1-v3. Linux Release build, repeated migration, SQLite integrity, Raw reconciliation, issue-disposition and synthetic H3C task-output tests passed locally. G2 Windows CI is pending on this branch. Target OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v4 is implemented with additive idempotent upgrades from v1-v3. Linux Release build, repeated migration, SQLite integrity, Raw reconciliation, issue-disposition and synthetic H3C task-output tests passed locally. G2 Linux and Windows Server 2025 CI (including SCM lifecycle) passed in run `39297383055`. Target OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
