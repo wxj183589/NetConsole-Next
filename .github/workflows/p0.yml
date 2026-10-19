@@ -1,0 +1,23 @@
+name: P0 Compile and Linux Ingress Smoke
+on:
+  push:
+  pull_request:
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+      - run: python3 tests/smoke.py
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
