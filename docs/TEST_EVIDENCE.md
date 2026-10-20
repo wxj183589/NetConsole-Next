@@ -4,7 +4,7 @@ Evidence is scoped to the stated code and environment. CI or simulation does not
 
 ## G2.1 current branch evidence
 
-Development branch `feat/g2-1-h3c-ssh-hardening`, based on the open PR #10 head `e41f87333373da46957078f735da21613fe5fe92`. Local Linux checks below were rerun against implementation commit `99d5d836f3f89a6131888e226ffff02ea4624117` on 2026-10-20. Current-branch Windows CI is not yet complete; it must pass before this row is upgraded from `PENDING_CI`.
+Development branch `feat/g2-1-h3c-ssh-hardening`, based on the open PR #10 head `e41f87333373da46957078f735da21613fe5fe92`. Linux builds, functional tests and SSH wire simulation were rerun against branch HEAD `1a61da71333aa56e5fb813f393297728306145c6` on 2026-10-20. The attached standalone load artifacts record Service implementation commit `99d5d836f3f89a6131888e226ffff02ea4624117`; the following commit changed Local Manager redirected password input, Windows lifecycle assertions and evidence only. Current-branch Windows CI is not yet complete; it must pass before this row is upgraded from `PENDING_CI`.
 
 | Evidence | Environment / command | Current result | What it does not establish |
 | --- | --- | --- | --- |
