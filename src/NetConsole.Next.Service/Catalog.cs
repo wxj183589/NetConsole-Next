@@ -497,7 +497,8 @@ internal sealed class Catalog(RuntimeSettings settings)
                 JOIN raw_segments r ON r.relative_path=$path
                 WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND d.task_type=t.task_type
                   AND json_extract(d.request_json,'$.command')=$command AND d.target=p.id AND p.id=$profile
-                  AND p.host=$host AND t.source_id=$source AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
+                  AND p.host=$host AND t.source_id=$source AND r.source_id=t.source_id
+                  AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
                   AND r.task_run_id=$run AND r.sha256=$segmentSha AND r.byte_count=$segmentBytes";
             insert.Parameters.AddWithValue("$command", commandText);
             insert.Parameters.AddWithValue("$bytes", outputBytes.Length);
@@ -514,9 +515,56 @@ internal sealed class Catalog(RuntimeSettings settings)
             insert.Parameters.AddWithValue("$source", sourceId);
             insert.Parameters.AddWithValue("$segmentBytes", bytes.Length);
             if (insert.ExecuteNonQuery() != 1)
-                throw new InvalidDataException("H3C Raw result did not match its persisted task definition and source.");
+            {
+                var mismatches = ExplainH3cManifestLinkMismatch(db, transaction, candidate.RunId, candidate.RelativePath,
+                    commandText, profileId, deviceHost ?? string.Empty, sourceId, segmentSha, bytes.Length);
+                throw new InvalidDataException("H3C Raw result did not match its persisted task definition and source" +
+                    (mismatches.Count == 0 ? "." : $" (mismatch: {string.Join(",", mismatches)})."));
+            }
             transaction.Commit();
         }
+    }
+
+    private static IReadOnlyList<string> ExplainH3cManifestLinkMismatch(SqliteConnection db,
+        SqliteTransaction transaction, string runId,
+        string relativePath, string commandText, string profileId, string deviceHost, string sourceId,
+        string segmentSha, int segmentBytes)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"SELECT
+            CASE WHEN t.task_type='H3C_SSH_READONLY' THEN 1 ELSE 0 END,
+            CASE WHEN d.task_type=t.task_type THEN 1 ELSE 0 END,
+            CASE WHEN json_extract(d.request_json,'$.command')=$command THEN 1 ELSE 0 END,
+            CASE WHEN d.target=p.id THEN 1 ELSE 0 END,
+            CASE WHEN p.id=$profile THEN 1 ELSE 0 END,
+            CASE WHEN p.host=$host THEN 1 ELSE 0 END,
+            CASE WHEN t.source_id=$source THEN 1 ELSE 0 END,
+            CASE WHEN r.source_id=t.source_id THEN 1 ELSE 0 END,
+            CASE WHEN r.state IN ('FINALIZED','INCOMPLETE') THEN 1 ELSE 0 END,
+            CASE WHEN r.record_count=1 THEN 1 ELSE 0 END,
+            CASE WHEN r.task_run_id=$run THEN 1 ELSE 0 END,
+            CASE WHEN r.sha256=$segmentSha THEN 1 ELSE 0 END,
+            CASE WHEN r.byte_count=$segmentBytes THEN 1 ELSE 0 END
+            FROM task_runs t
+            LEFT JOIN task_definitions d ON d.id=t.definition_id
+            LEFT JOIN h3c_device_profiles p ON p.source_id=t.source_id
+            LEFT JOIN raw_segments r ON r.relative_path=$path
+            WHERE t.id=$run";
+        command.Parameters.AddWithValue("$command", commandText);
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$host", deviceHost);
+        command.Parameters.AddWithValue("$source", sourceId);
+        command.Parameters.AddWithValue("$segmentSha", segmentSha);
+        command.Parameters.AddWithValue("$segmentBytes", segmentBytes);
+        command.Parameters.AddWithValue("$path", relativePath);
+        command.Parameters.AddWithValue("$run", runId);
+        var names = new[] { "task_type", "definition_type", "definition_command", "definition_target",
+            "profile_id", "profile_host", "task_source", "raw_source", "raw_state", "raw_record_count",
+            "raw_task_run", "raw_checksum", "raw_length" };
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return names;
+        return names.Where((_, index) => reader.GetInt64(index) != 1).ToArray();
     }
 
     public string StartTaskRun(string? sourceId, string taskType)
