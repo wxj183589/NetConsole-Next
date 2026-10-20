@@ -486,7 +486,9 @@ internal static class SchedulerTests
             recovered.Initialize();
             var recovery = recovered.RecoverRawSegments();
             Assert(recovery.FailedFiles == 0 && recovery.TrustedFilesSkipped == 4 && recovery.RecoveredOpenFiles == 1,
-                $"verified indexed H3C output and crash recovery should reconcile idempotently: {recovery}");
+                $"verified indexed H3C output and crash recovery should reconcile idempotently: {recovery}; " +
+                string.Join(" | ", recovery.Issues.Select(issue =>
+                    $"{issue.Category}:{issue.RelativePath}:{issue.Detail}")));
             var afterRecovery = recovered.RecentTaskRuns().Single(x => x.Id == persisted.Id);
             Assert(afterRecovery.State == "SUCCEEDED" && afterRecovery.RawOutputPath == persisted.RawOutputPath &&
                    afterRecovery.CaptureStatus == "COMPLETE" && afterRecovery.ParseStatus == "PARSED",
