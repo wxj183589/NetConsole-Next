@@ -1,8 +1,10 @@
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
+using NetConsole.Next.Credentials;
 
 namespace NetConsole.Next.Service;
 
@@ -27,7 +29,8 @@ internal sealed record RecoveryIssue(string RelativePath, string Category, bool 
 internal sealed record RawCatalogCounts(int Finalized, int Incomplete, int Missing);
 internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskType, string State,
     long? QueuedMs, long? StartedMs, long? DeadlineMs, long? EndedMs, string? FailureReason, string? DefinitionId,
-    string? RawOutputPath, string? RawOutputSha256, long? RawOutputBytes, string? ParsedResultJson);
+    string? RawOutputPath, string? RawOutputSha256, long? RawOutputBytes, string? ParsedResultJson,
+    string? CaptureStatus, string? ParseStatus);
 internal sealed record TaskDefinitionSnapshot(string Id, string TaskType, string Target, string Command,
     long TimeoutMs, bool Enabled, string RestartPolicy);
 internal sealed record RawIntegrityAuditSnapshot(string Id, string RelativePath, long DetectedMs, string Reason,
@@ -38,7 +41,8 @@ internal sealed record CatalogHealthSnapshot(RawCatalogCounts RawSegments, int I
     IReadOnlyList<RawIntegrityAuditSnapshot> RecentIntegrityAudits);
 internal sealed record RawSegmentInspection(long RecordCount, long FirstReceivedMs, long LastReceivedMs,
     long ByteCount, string Sha256, bool CorruptTail, long DiscardedTailBytes, string? EvidencePath,
-    long BytesRead, long BytesHashed, string SourceId = "syslog-local", string? DeviceHost = null);
+    long BytesRead, long BytesHashed, string SourceId = "syslog-local", string? DeviceHost = null,
+    string? TaskRunId = null, string CaptureStatus = "COMPLETE");
 internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
 
 internal sealed class Catalog(RuntimeSettings settings)
@@ -71,6 +75,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         {
             throw new InvalidOperationException("Data directory marker is unknown.");
         }
+        _ = LocalApiTokenStore.GetOrCreate(settings.DataRoot);
 
         foreach (var directoryName in new[] { "raw", "published", "inbox", "archive", "backup" })
         {
@@ -101,6 +106,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         ApplyV2Migration(db);
         ApplyV3Migration(db);
         ApplyV4Migration(db);
+        ApplyV5Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -189,6 +195,22 @@ internal sealed class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v4.sql")
             ?? throw new InvalidOperationException("Embedded schema_v4.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV5Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        AddColumnIfMissing(db, transaction, "raw_segments", "task_run_id", "TEXT REFERENCES task_runs(id)");
+        AddColumnIfMissing(db, transaction, "task_run_raw_outputs", "capture_status", "TEXT NOT NULL DEFAULT 'COMPLETE'");
+        AddColumnIfMissing(db, transaction, "task_run_raw_outputs", "parse_status", "TEXT NOT NULL DEFAULT 'UNCLASSIFIED'");
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v5.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v5.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -356,8 +378,11 @@ internal sealed class Catalog(RuntimeSettings settings)
                 if (wasIndexed && row!.State == "FINALIZED" && row.Sha256 is not null &&
                     row.CheckpointSize == info.Length && row.CheckpointWriteTicks == info.LastWriteTimeUtc.Ticks)
                 {
-                    trusted++;
-                    continue;
+                    if (!row.SourceId.StartsWith("h3c-", StringComparison.Ordinal) || row.HasTaskOutputManifest)
+                    {
+                        trusted++;
+                        continue;
+                    }
                 }
 
                 var inspection = InspectAndRepair(path);
@@ -403,10 +428,95 @@ internal sealed class Catalog(RuntimeSettings settings)
             }
         }
 
+        try
+        {
+            RecoverH3cOutputManifests();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
+        {
+            failed++;
+            var critical = ex is SqliteException;
+            AddIssue("h3c-task-results", critical ? "CATALOG_WRITE" : "H3C_RESULT_RECONCILIATION", critical, ex);
+        }
+
         timer.Stop();
         RecoverySummary = new(scanned, recoveredOpen, indexedOrphans, repaired, discarded, evidenceFiles,
             evidenceBytes, missing, failed, bytesRead, bytesHashed, trusted, timer.ElapsedMilliseconds, issues);
         return RecoverySummary;
+    }
+
+    private void RecoverH3cOutputManifests()
+    {
+        var candidates = new List<(string RunId, string RelativePath, string SegmentSha)>();
+        using (var db = Open())
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = @"SELECT r.task_run_id,r.relative_path,r.sha256
+                FROM raw_segments r JOIN task_runs t ON t.id=r.task_run_id
+                WHERE r.source_id LIKE 'h3c-%' AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
+                  AND r.task_run_id IS NOT NULL
+                  AND NOT EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.task_run_id=r.task_run_id)";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                candidates.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (!TryResolveRawPath(candidate.RelativePath, out var path) || !File.Exists(path) || ContainsReparsePoint(path))
+                throw new IOException("H3C result Raw segment is missing or unsafe during manifest recovery.");
+            var bytes = File.ReadAllBytes(path);
+            if (bytes.Length is < 2 or > MaximumLineBytes || bytes[^1] != (byte)'\n' ||
+                bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n'))
+                throw new InvalidDataException("H3C result Raw segment is not one complete NDJSON record.");
+            var segmentSha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            if (!string.Equals(segmentSha, candidate.SegmentSha, StringComparison.OrdinalIgnoreCase) ||
+                !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out var sourceId,
+                    out var deviceHost, out var recordRunId, out var captureStatus) || recordRunId != candidate.RunId)
+                throw new InvalidDataException("H3C result Raw record does not match its catalog identity or checksum.");
+
+            using var document = JsonDocument.Parse(bytes.AsMemory(0, bytes.Length - 1));
+            var record = document.RootElement;
+            var commandText = record.GetProperty("command").GetString() ?? string.Empty;
+            var profileId = record.GetProperty("device_profile_id").GetString() ?? string.Empty;
+            var outputBytes = Convert.FromBase64String(record.GetProperty("output_utf8_base64").GetString() ?? string.Empty);
+            var output = new System.Text.UTF8Encoding(false, true).GetString(outputBytes);
+            var parse = captureStatus == "PARTIAL"
+                ? new H3cParseResult("PARTIAL", "{}")
+                : H3cComwareParser.Parse(commandText, output);
+            var parsedAt = record.GetProperty("captured_ms").GetInt64();
+            using var db = Open();
+            using var transaction = db.BeginTransaction();
+            using var insert = db.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT OR IGNORE INTO task_run_raw_outputs
+                (task_run_id,relative_path,command,byte_count,sha256,raw_segment_sha256,parsed_json,captured_ms,capture_status,parse_status)
+                SELECT t.id,r.relative_path,$command,$bytes,$outputSha,$segmentSha,$parsed,$captured,$capture,$parse
+                FROM task_runs t JOIN task_definitions d ON d.id=t.definition_id
+                JOIN h3c_device_profiles p ON p.source_id=t.source_id
+                JOIN raw_segments r ON r.relative_path=$path
+                WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND d.task_type=t.task_type
+                  AND json_extract(d.request_json,'$.command')=$command AND d.target=p.id AND p.id=$profile
+                  AND p.host=$host AND t.source_id=$source AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
+                  AND r.task_run_id=$run AND r.sha256=$segmentSha AND r.byte_count=$segmentBytes";
+            insert.Parameters.AddWithValue("$command", commandText);
+            insert.Parameters.AddWithValue("$bytes", outputBytes.Length);
+            insert.Parameters.AddWithValue("$outputSha", record.GetProperty("output_sha256").GetString()!);
+            insert.Parameters.AddWithValue("$segmentSha", segmentSha);
+            insert.Parameters.AddWithValue("$parsed", parse.Json);
+            insert.Parameters.AddWithValue("$captured", parsedAt);
+            insert.Parameters.AddWithValue("$capture", captureStatus);
+            insert.Parameters.AddWithValue("$parse", parse.Status);
+            insert.Parameters.AddWithValue("$path", candidate.RelativePath);
+            insert.Parameters.AddWithValue("$run", candidate.RunId);
+            insert.Parameters.AddWithValue("$profile", profileId);
+            insert.Parameters.AddWithValue("$host", deviceHost ?? string.Empty);
+            insert.Parameters.AddWithValue("$source", sourceId);
+            insert.Parameters.AddWithValue("$segmentBytes", bytes.Length);
+            if (insert.ExecuteNonQuery() != 1)
+                throw new InvalidDataException("H3C Raw result did not match its persisted task definition and source.");
+            transaction.Commit();
+        }
     }
 
     public string StartTaskRun(string? sourceId, string taskType)
@@ -688,23 +798,31 @@ internal sealed class Catalog(RuntimeSettings settings)
             throw new InvalidOperationException($"Task run '{id}' did not accept the requested '{nextState}' transition.");
     }
 
-    public void RegisterTaskRunRawOutput(string runId, string relativePath, string commandText,
-        long outputByteCount, string outputSha256, string rawSegmentSha256, long capturedMs, string parsedJson)
+    public void CompleteTaskRunWithRawOutput(string runId, H3cRawOutputManifest manifest,
+        string terminalState, string? failureReason)
     {
-        if (!H3cCommandPolicy.IsAllowed(commandText)) throw new ArgumentException("Raw output command is not allowlisted.", nameof(commandText));
-        if (outputByteCount is < 0 or > 256 * 1024) throw new ArgumentOutOfRangeException(nameof(outputByteCount));
-        if (outputSha256.Length != 64 || outputSha256.Any(c => !Uri.IsHexDigit(c))) throw new ArgumentException("Raw output SHA256 is invalid.", nameof(outputSha256));
-        if (rawSegmentSha256.Length != 64 || rawSegmentSha256.Any(c => !Uri.IsHexDigit(c))) throw new ArgumentException("Raw segment SHA256 is invalid.", nameof(rawSegmentSha256));
-        using (JsonDocument.Parse(parsedJson)) { }
-        if (!TryResolveRawPath(relativePath, out var fullPath) || !File.Exists(fullPath))
+        if (terminalState is not ("SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED"))
+            throw new ArgumentException("H3C task completion requires a terminal state.", nameof(terminalState));
+        if (manifest.CaptureStatus is not ("COMPLETE" or "PARTIAL") ||
+            manifest.ParseStatus is not ("PARSED" or "EMPTY" or "UNRECOGNIZED" or "PARTIAL"))
+            throw new ArgumentException("H3C capture and parse statuses are invalid.", nameof(manifest));
+        if (manifest.CaptureStatus == "PARTIAL" && terminalState == "SUCCEEDED")
+            throw new InvalidOperationException("Partial H3C capture cannot transition to SUCCEEDED.");
+        if (!H3cCommandPolicy.IsAllowed(manifest.Command)) throw new ArgumentException("Raw output command is not allowlisted.", nameof(manifest));
+        if (manifest.ByteCount is < 0 or > H3cRawOutput.MaximumBytes) throw new ArgumentOutOfRangeException(nameof(manifest));
+        if (!IsSha256(manifest.OutputSha256) || !IsSha256(manifest.SegmentSha256))
+            throw new ArgumentException("H3C output manifest checksum is invalid.", nameof(manifest));
+        using (JsonDocument.Parse(manifest.ParsedJson)) { }
+        if (!TryResolveRawPath(manifest.RelativePath, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
             throw new IOException("Sealed H3C Raw output path is missing or unsafe.");
         var rawBytes = File.ReadAllBytes(fullPath);
         if (rawBytes.Length is < 2 or > MaximumLineBytes || rawBytes[^1] != (byte)'\n' ||
             rawBytes.AsSpan(0, rawBytes.Length - 1).Contains((byte)'\n') ||
-            !TryReadRecord(rawBytes.AsSpan(0, rawBytes.Length - 1).ToArray(), out _, out var recordSourceId, out var recordDeviceHost))
+            !TryReadRecord(rawBytes.AsSpan(0, rawBytes.Length - 1).ToArray(), out _, out var recordSourceId,
+                out var recordDeviceHost, out var rawRunId, out var rawCaptureStatus))
             throw new InvalidDataException("Sealed H3C Raw file must contain exactly one complete verified command record.");
         var actualSegmentSha = Convert.ToHexString(SHA256.HashData(rawBytes)).ToLowerInvariant();
-        if (!string.Equals(actualSegmentSha, rawSegmentSha256, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(actualSegmentSha, manifest.SegmentSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Sealed H3C Raw bytes do not match the supplied segment checksum.");
         string rawProfileId;
         string rawDeviceHost;
@@ -713,44 +831,88 @@ internal sealed class Catalog(RuntimeSettings settings)
             var record = rawDocument.RootElement;
             rawProfileId = record.GetProperty("device_profile_id").GetString() ?? string.Empty;
             rawDeviceHost = recordDeviceHost ?? string.Empty;
-            if (record.GetProperty("task_run_id").GetString() != runId ||
-                record.GetProperty("command").GetString() != commandText ||
-                record.GetProperty("output_byte_count").GetInt32() != outputByteCount ||
-                !string.Equals(record.GetProperty("output_sha256").GetString(), outputSha256, StringComparison.OrdinalIgnoreCase) ||
-                record.GetProperty("captured_ms").GetInt64() != capturedMs ||
+            if (rawRunId != runId || rawCaptureStatus != manifest.CaptureStatus ||
+                record.GetProperty("command").GetString() != manifest.Command ||
+                record.GetProperty("output_byte_count").GetInt32() != manifest.ByteCount ||
+                !string.Equals(record.GetProperty("output_sha256").GetString(), manifest.OutputSha256, StringComparison.OrdinalIgnoreCase) ||
+                record.GetProperty("captured_ms").GetInt64() != manifest.CapturedMs ||
                 !string.Equals(recordSourceId, "h3c-" + record.GetProperty("device_profile_id").GetString(), StringComparison.Ordinal))
                 throw new InvalidDataException("Sealed H3C Raw record does not match the task output manifest.");
         }
 
         using var db = Open();
-        using var command = db.CreateCommand();
-        command.CommandText = @"INSERT INTO task_run_raw_outputs(task_run_id,relative_path,command,byte_count,sha256,raw_segment_sha256,parsed_json,captured_ms)
-            SELECT t.id,r.relative_path,$command,$bytes,$outputSha,$segmentSha,$parsed,$captured
+        using var transaction = db.BeginTransaction();
+        using (var insert = db.CreateCommand())
+        {
+        insert.Transaction = transaction;
+        insert.CommandText = @"INSERT OR IGNORE INTO task_run_raw_outputs
+            (task_run_id,relative_path,command,byte_count,sha256,raw_segment_sha256,parsed_json,captured_ms,capture_status,parse_status)
+            SELECT t.id,r.relative_path,$command,$bytes,$outputSha,$segmentSha,$parsed,$captured,$capture,$parse
             FROM task_runs t JOIN task_definitions d ON d.id=t.definition_id
             JOIN h3c_device_profiles p ON p.source_id=t.source_id
             JOIN raw_segments r ON r.relative_path=$path
             WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND d.task_type=t.task_type
               AND json_extract(d.request_json,'$.command')=$command
               AND d.target=p.id AND p.id=$profile AND p.host=$host
-              AND r.state='FINALIZED' AND r.record_count=1 AND r.source_id=t.source_id AND r.sha256=$segmentSha";
-        command.Parameters.AddWithValue("$command", commandText);
-        command.Parameters.AddWithValue("$bytes", outputByteCount);
-        command.Parameters.AddWithValue("$outputSha", outputSha256);
-        command.Parameters.AddWithValue("$segmentSha", rawSegmentSha256);
-        command.Parameters.AddWithValue("$parsed", parsedJson);
-        command.Parameters.AddWithValue("$captured", capturedMs);
-        command.Parameters.AddWithValue("$path", relativePath);
-        command.Parameters.AddWithValue("$run", runId);
-        command.Parameters.AddWithValue("$profile", rawProfileId);
-        command.Parameters.AddWithValue("$host", rawDeviceHost);
-        if (command.ExecuteNonQuery() != 1)
+              AND t.state='RUNNING' AND r.state='FINALIZED' AND r.record_count=1 AND r.source_id=t.source_id
+              AND r.task_run_id=$run AND r.sha256=$segmentSha AND r.byte_count=$segmentBytes";
+        AddManifestParameters(insert, runId, manifest, rawProfileId, rawDeviceHost);
+        insert.Parameters.AddWithValue("$segmentBytes", rawBytes.Length);
+        insert.ExecuteNonQuery();
+        }
+        using (var verify = db.CreateCommand())
+        {
+            verify.Transaction = transaction;
+            verify.CommandText = @"SELECT relative_path,command,byte_count,sha256,raw_segment_sha256,parsed_json,captured_ms,capture_status,parse_status
+                FROM task_run_raw_outputs WHERE task_run_id=$run";
+            verify.Parameters.AddWithValue("$run", runId);
+            using var reader = verify.ExecuteReader();
+            if (!reader.Read() || reader.GetString(0) != manifest.RelativePath || reader.GetString(1) != manifest.Command ||
+                reader.GetInt64(2) != manifest.ByteCount || reader.GetString(3) != manifest.OutputSha256 ||
+                reader.GetString(4) != manifest.SegmentSha256 || reader.GetString(5) != manifest.ParsedJson ||
+                reader.GetInt64(6) != manifest.CapturedMs || reader.GetString(7) != manifest.CaptureStatus ||
+                reader.GetString(8) != manifest.ParseStatus)
             throw new InvalidOperationException("H3C Raw output did not match the task run, command or sealed segment manifest.");
+        }
+        using (var update = db.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = @"UPDATE task_runs SET state=$state,ended_ms=$now,failure_reason=$failure
+                WHERE id=$run AND state='RUNNING'";
+            update.Parameters.AddWithValue("$state", terminalState);
+            update.Parameters.AddWithValue("$now", UtcNowMs());
+            update.Parameters.AddWithValue("$failure", (object?)failureReason ?? DBNull.Value);
+            update.Parameters.AddWithValue("$run", runId);
+            if (update.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("H3C task state did not accept the atomic terminal transition.");
+        }
+        transaction.Commit();
     }
 
-    public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes,
-        string sourceId = "syslog-local")
+    private static void AddManifestParameters(SqliteCommand command, string runId, H3cRawOutputManifest manifest,
+        string profileId, string host)
     {
-        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null, 0, 0, sourceId), "FINALIZED");
+        command.Parameters.AddWithValue("$command", manifest.Command);
+        command.Parameters.AddWithValue("$bytes", manifest.ByteCount);
+        command.Parameters.AddWithValue("$outputSha", manifest.OutputSha256);
+        command.Parameters.AddWithValue("$segmentSha", manifest.SegmentSha256);
+        command.Parameters.AddWithValue("$parsed", manifest.ParsedJson);
+        command.Parameters.AddWithValue("$captured", manifest.CapturedMs);
+        command.Parameters.AddWithValue("$capture", manifest.CaptureStatus);
+        command.Parameters.AddWithValue("$parse", manifest.ParseStatus);
+        command.Parameters.AddWithValue("$path", manifest.RelativePath);
+        command.Parameters.AddWithValue("$run", runId);
+        command.Parameters.AddWithValue("$profile", profileId);
+        command.Parameters.AddWithValue("$host", host);
+    }
+
+    private static bool IsSha256(string value) => value.Length == 64 && value.All(Uri.IsHexDigit);
+
+    public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes,
+        string sourceId = "syslog-local", string? taskRunId = null)
+    {
+        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null, 0, 0, sourceId,
+            TaskRunId: taskRunId), "FINALIZED");
     }
 
     public void MarkUnavailable(Exception exception)
@@ -775,8 +937,8 @@ internal sealed class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
-                o.relative_path,o.sha256,o.byte_count,o.parsed_json
+            command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
+                o.relative_path,o.sha256,o.byte_count,o.parsed_json,o.capture_status,o.parse_status
             FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id
             ORDER BY COALESCE(t.queued_ms,t.started_ms) DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
@@ -792,7 +954,9 @@ internal sealed class Catalog(RuntimeSettings settings)
                 reader.IsDBNull(10) ? null : reader.GetString(10),
                 reader.IsDBNull(11) ? null : reader.GetString(11),
                 reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                reader.IsDBNull(13) ? null : reader.GetString(13)));
+                reader.IsDBNull(13) ? null : reader.GetString(13),
+                reader.IsDBNull(14) ? null : reader.GetString(14),
+                reader.IsDBNull(15) ? null : reader.GetString(15)));
         }
         return result;
     }
@@ -938,9 +1102,9 @@ internal sealed class Catalog(RuntimeSettings settings)
             WHERE state='FINALIZED' ORDER BY COALESCE(last_full_audit_ms,0),relative_path LIMIT 1";
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
-        var row = new IndexedSegment(reader.GetString(0), "FINALIZED",
+        var row = new IndexedSegment(reader.GetString(0), "syslog-local", "FINALIZED",
             reader.IsDBNull(1) ? null : reader.GetInt64(1), reader.GetInt64(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3), null, null, null);
+            reader.IsDBNull(3) ? null : reader.GetString(3), null, null, null, null, false);
         reader.Close();
         try
         {
@@ -1014,18 +1178,18 @@ internal sealed class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT relative_path,state,record_count,byte_count,sha256,checkpoint_size,checkpoint_write_ticks,last_full_audit_ms FROM raw_segments";
+        command.CommandText = "SELECT relative_path,source_id,state,record_count,byte_count,sha256,checkpoint_size,checkpoint_write_ticks,last_full_audit_ms,task_run_id,EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.relative_path=raw_segments.relative_path) FROM raw_segments";
         using var reader = command.ExecuteReader();
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var result = new Dictionary<string, IndexedSegment>(pathComparer);
         while (reader.Read())
         {
             var relative = reader.GetString(0).Replace('\\', '/');
-            result[relative] = new(relative, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetInt64(5),
-                reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                reader.IsDBNull(7) ? null : reader.GetInt64(7));
+            result[relative] = new(relative, reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3), reader.GetInt64(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                reader.IsDBNull(7) ? null : reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9), reader.GetInt32(10) != 0);
         }
         return result;
     }
@@ -1078,14 +1242,15 @@ internal sealed class Catalog(RuntimeSettings settings)
         using var command = db.CreateCommand();
         command.CommandText = @"INSERT INTO raw_segments
             (id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,sealed_ms,
-             checkpoint_size,checkpoint_write_ticks,last_verified_ms)
-            VALUES($id,$source,$path,$state,$first,$last,$count,$bytes,$sha,$now,$size,$ticks,$now)
+             checkpoint_size,checkpoint_write_ticks,last_verified_ms,task_run_id)
+            VALUES($id,$source,$path,$state,$first,$last,$count,$bytes,$sha,$now,$size,$ticks,$now,$run)
             ON CONFLICT(relative_path) DO UPDATE SET
               state=excluded.state, first_received_ms=excluded.first_received_ms,
               last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
               byte_count=excluded.byte_count, sha256=excluded.sha256,
               checkpoint_size=excluded.checkpoint_size,checkpoint_write_ticks=excluded.checkpoint_write_ticks,
               last_verified_ms=excluded.last_verified_ms,
+              task_run_id=COALESCE(raw_segments.task_run_id,excluded.task_run_id),
               sealed_ms=COALESCE(raw_segments.sealed_ms,excluded.sealed_ms)
             WHERE raw_segments.source_id=excluded.source_id";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
@@ -1100,6 +1265,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$now", UtcNowMs());
         command.Parameters.AddWithValue("$size", checkpointSize);
         command.Parameters.AddWithValue("$ticks", checkpointTicks);
+        command.Parameters.AddWithValue("$run", (object?)info.TaskRunId ?? DBNull.Value);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidDataException("Raw segment source identity changed for an indexed path; preserving the file for investigation.");
     }
@@ -1198,6 +1364,8 @@ internal sealed class Catalog(RuntimeSettings settings)
         long validBytes = 0, recordCount = 0, first = long.MaxValue, last = 0, consumed = 0;
         string? segmentSourceId = null;
         string? segmentDeviceHost = null;
+        string? segmentTaskRunId = null;
+        string segmentCaptureStatus = "COMPLETE";
         bool corrupt = false;
         using var line = new MemoryStream();
         var buffer = new byte[65536];
@@ -1217,15 +1385,19 @@ internal sealed class Catalog(RuntimeSettings settings)
                     line.Position = 0;
                     if (lineBytes.Length > 0 && lineBytes[^1] == (byte)'\r')
                         Array.Resize(ref lineBytes, lineBytes.Length - 1);
-                    if (!TryReadRecord(lineBytes, out var timestamp, out var recordSourceId, out var recordDeviceHost) ||
+                    if (!TryReadRecord(lineBytes, out var timestamp, out var recordSourceId, out var recordDeviceHost,
+                            out var recordTaskRunId, out var recordCaptureStatus) ||
                         (segmentSourceId is not null && !string.Equals(segmentSourceId, recordSourceId, StringComparison.Ordinal)) ||
-                        (segmentDeviceHost is not null && !string.Equals(segmentDeviceHost, recordDeviceHost, StringComparison.OrdinalIgnoreCase)))
+                        (segmentDeviceHost is not null && !string.Equals(segmentDeviceHost, recordDeviceHost, StringComparison.OrdinalIgnoreCase)) ||
+                        (segmentTaskRunId is not null && !string.Equals(segmentTaskRunId, recordTaskRunId, StringComparison.Ordinal)))
                     {
                         corrupt = true;
                         goto Finished;
                     }
                     segmentSourceId ??= recordSourceId;
                     segmentDeviceHost ??= recordDeviceHost;
+                    segmentTaskRunId ??= recordTaskRunId;
+                    segmentCaptureStatus = recordCaptureStatus;
                     validBytes = consumed;
                     recordCount++;
                     first = Math.Min(first, timestamp);
@@ -1259,7 +1431,8 @@ internal sealed class Catalog(RuntimeSettings settings)
         var hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         var sourceId = segmentSourceId ?? ResolveEmptyRawSource(path);
         return new(recordCount, recordCount == 0 ? 0 : first, last, byteCount, hash, corrupt,
-            Math.Max(0, originalLength - byteCount), evidencePath, originalLength, byteCount, sourceId, segmentDeviceHost);
+            Math.Max(0, originalLength - byteCount), evidencePath, originalLength, byteCount, sourceId,
+            segmentDeviceHost, segmentTaskRunId, segmentCaptureStatus);
     }
 
     private string PreserveTailEvidence(string sourcePath, FileStream source, long offset, long originalLength)
@@ -1395,11 +1568,14 @@ internal sealed class Catalog(RuntimeSettings settings)
         }
     }
 
-    private static bool TryReadRecord(byte[] line, out long timestamp, out string sourceId, out string? deviceHost)
+    private static bool TryReadRecord(byte[] line, out long timestamp, out string sourceId, out string? deviceHost,
+        out string? taskRunId, out string captureStatus)
     {
         timestamp = 0;
         sourceId = string.Empty;
         deviceHost = null;
+        taskRunId = null;
+        captureStatus = "COMPLETE";
         try
         {
             using var document = JsonDocument.Parse(line);
@@ -1425,8 +1601,14 @@ internal sealed class Catalog(RuntimeSettings settings)
                     !root.TryGetProperty("output_sha256", out var outputHash) || outputHash.ValueKind != JsonValueKind.String ||
                     !root.TryGetProperty("output_utf8_base64", out var output) || output.ValueKind != JsonValueKind.String)
                     return false;
+                if (root.TryGetProperty("capture_status", out var capture))
+                {
+                    if (capture.ValueKind != JsonValueKind.String || capture.GetString() is not ("COMPLETE" or "PARTIAL")) return false;
+                    captureStatus = capture.GetString()!;
+                }
                 sourceId = source.GetString() ?? string.Empty;
                 deviceHost = host.GetString();
+                taskRunId = run.GetString();
                 var profileId = profile.GetString()!;
                 if (!string.Equals(sourceId, "h3c-" + profileId, StringComparison.Ordinal) ||
                     !string.Equals(profileId, profileId.ToLowerInvariant(), StringComparison.Ordinal)) return false;
@@ -1435,8 +1617,9 @@ internal sealed class Catalog(RuntimeSettings settings)
                 var expectedHash = outputHash.GetString() ?? string.Empty;
                 if (expectedHash.Length != 64 || expectedHash.Any(c => !Uri.IsHexDigit(c))) return false;
                 var actualHash = SHA256.HashData(outputBytes);
-                return CryptographicOperations.FixedTimeEquals(actualHash,
-                    Convert.FromHexString(expectedHash));
+                if (!CryptographicOperations.FixedTimeEquals(actualHash, Convert.FromHexString(expectedHash))) return false;
+                _ = new System.Text.UTF8Encoding(false, true).GetString(outputBytes);
+                return true;
             }
 
             if (!root.TryGetProperty("received_ms", out var received) || !received.TryGetInt64(out timestamp) || timestamp <= 0 ||
@@ -1450,7 +1633,7 @@ internal sealed class Catalog(RuntimeSettings settings)
             sourceId = "syslog-local";
             return true;
         }
-        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException or DecoderFallbackException)
         {
             return false;
         }
@@ -1460,6 +1643,7 @@ internal sealed class Catalog(RuntimeSettings settings)
 
     private static RawRecoverySummary EmptyRecovery() => new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Array.Empty<RecoveryIssue>());
 
-    private sealed record IndexedSegment(string RelativePath, string State, long? RecordCount, long ByteCount,
-        string? Sha256, long? CheckpointSize, long? CheckpointWriteTicks, long? LastFullAuditMs);
+    private sealed record IndexedSegment(string RelativePath, string SourceId, string State, long? RecordCount,
+        long ByteCount, string? Sha256, long? CheckpointSize, long? CheckpointWriteTicks, long? LastFullAuditMs,
+        string? TaskRunId, bool HasTaskOutputManifest);
 }

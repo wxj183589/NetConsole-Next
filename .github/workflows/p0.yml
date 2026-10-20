@@ -15,6 +15,11 @@ jobs:
       - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
       - run: dotnet run --project src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release -- --help
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check --requirement tests/requirements-ssh-protocol.txt
+      - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
       - run: python3 tests/smoke.py
       - run: python3 tests/g1_recovery.py
       - run: python3 tests/udp_trace_benchmark_tests.py
@@ -31,6 +36,11 @@ jobs:
       - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
       - run: dotnet run --project src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release -- --help
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check --requirement tests/requirements-ssh-protocol.txt
+      - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
       - name: Publish, install, and exercise Windows Service through SCM
         shell: pwsh
         run: ./tests/windows_service_lifecycle.ps1

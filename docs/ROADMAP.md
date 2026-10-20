@@ -19,16 +19,23 @@
 
 ## G2 可靠设备采集（基础组件进行中）
 
-- 当前独立开发分支已加入 H3C Comware SSH 初始只读适配器：默认关闭、SHA-256 Host Key pin、现代算法 allowlist、最多两条固定命令、256 KiB 输出边界、任务持久化、Raw 回显和 SQLite 结果指针；模拟会话与合成 Comware golden fixtures 有自动测试。当前分支 Windows/Linux CI 和 PR 尚待完成。
-- 凭据 provider 当前只通过环境变量引用读取，不保存密码；这属于启动原型，Windows Credential Manager/DPAPI 或其他受控 Secret Store、轮换和现场部署策略仍未实现。
-- H3C stdout 的 SSH.NET 解码/编码路径、分页行为、平台命令和算法需在脱敏的目标 Comware 设备上实测；当前未连接设备，标记 `PENDING_REAL_ENVIRONMENT`。输出触发分页或超过 256 KiB 会使任务失败，避免把截断结果报告为成功。
+- G2.1 在 PR #10 的 SSH 只读适配器上增加 SSH.NET stdout/stderr 并行有界读取，修复非 seekable `PipeStream` 导致的输出限制失效；超限保留受限前缀并标为 `PARTIAL`，取消、超时、disconnect 与解析状态分开记录。Exec Channel 仍为当前实现，未在缺少目标设备证据时切换到交互 Shell。
+- SQLite schema v5 将 Raw 段与 Task Run 关联，并在单个事务内写结果清单和任务终态。Raw 已封段但进程退出时，启动恢复校验内容并幂等重建清单；任务维持 `INTERRUPTED`，不会被恢复成成功。
+- Windows 凭据采用 DPAPI `LocalMachine` 加密文件，Local Manager 提供 set/update/revoke；数据根 ACL 仅授予 SYSTEM、Administrators 和服务虚拟账户。Linux/Kylin 使用显式不可用 provider，环境变量 provider 仅在 Development 且显式开启时生效。
+- 本机所有 `/api/system/*` 管理端点需要 bearer token、loopback 来源和固定 Host 检查。token 可由 Local Manager 查看或旋转；没有 token、文件不可读或来源/Host 不符合时拒绝请求。远程管理认证/CSRF/角色模型尚未实现。
+- 已加入 host-key 变化/缺失、认证失败、连接取消/超时、设备断连、输出边界、分页提示、未知格式、事务回滚与恢复幂等测试。另用 Paramiko 本机 SSH server 与 SSH.NET 实际 wire 通道覆盖 host-key、认证、Exec、静默握手取消、连接重置和双并发会话，并以 fake transport 覆盖清理边界。模拟不等于 Comware 固件互操作；未连接真实设备，标记 `PENDING_REAL_ENVIRONMENT`。
+- G2.1 Linux Release 构建、C# 测试与 Syslog smoke/recovery 本地通过。Windows CI 需验证新增 DPAPI、安装 ACL 和 Local Manager token rotate。PR #10 保持未合并依赖，G2.1 使用独立分支与 PR。
+- H3C stdout 是 **SSH.NET 解码后的 UTF-8 命令输出**，不是 SSH 线路字节。Raw capture、`PARSED / EMPTY / UNRECOGNIZED / PARTIAL` 解析状态与任务终态是三个不同事实。最大输出 256 KiB；命令分页时失败，不自动降低 SSH 算法要求。
 - 正式现场 SSH/SNMP 采集、Syslog 多来源和 MR 实时采集仍须通过 G1 数据安全门禁、凭据管理评审和目标设备验证。
 - 持久调度仍为本机有界队列；没有分布式调度、自动重试、远程控制或业务任务 Web 页面。
+- Linux 合成设备并发 2/4/8/16 配合 128 个低速 Syslog 报文，4 档均观测到 128 收到、入队及 Raw 持久化、0 应用丢弃；结果是功能/资源样本，不是 SSH 设备吞吐或工业主机性能门禁。详见 [性能基线](PERFORMANCE_BASELINE.md)。
 - 在 2核4GB 与 4核8GB 目标主机执行 72 小时和 7 天测试，记录 CPU、工作集、IO、丢包量和数据缺口。
-- Windows 10/11、8/8.1、Server 2012/R2 单独建立兼容矩阵；当前 G2 分支未运行 Windows CI 前，不把其 SSH.NET 编译结果标记 `VERIFIED`；非 Win10 系统不能以构建成功代替验收。
+- Windows 10/11、8/8.1、Server 2012/R2 单独建立兼容矩阵；只有运行本轮 Windows CI 后才更新对应的 `CI_VERIFIED`，旧系统必须在目标机验证。
 
-### G1 尚未关闭的验收项
-- **待真实环境：**Windows 10/11 Service 安装/权限/升级，H3C SSH/Host Key/认证/Comware CLI，低配置工业主机 72 小时/7 天负载、物理磁盘耗尽/断电。Windows Server 2012/R2 当前已无 ESU；Windows 8/8.1 没有受支持的现代 .NET 10 路径。Server 2025 CI 与 Linux 故障注入不替代目标机验证。
+### G1/G2 尚未关闭的验收项
+- **待真实环境：**Windows 10/11 Service 安装/权限/升级；获现场授权的 H3C SSH Host Key、认证、Exec Channel、分页、版本、接口输出和算法互操作；低配置工业主机 72 小时/7 天负载、物理磁盘耗尽/断电。Server 2025 CI 与 Linux 故障注入不替代目标机验证。
+- **协议边界：**没有隔离 Comware 设备时，SSH 认证/host-key/exec/reset 由可注入 transport 模拟覆盖；SSH.NET 的真实握手和 CLI 模式属于 `PENDING_REAL_ENVIRONMENT`。
+- .NET 10 不支持 Windows 8/8.1 目标。SSH.NET 包含较旧目标框架资产不等于整个 ASP.NET Core/Service 可在旧 Windows 运行；旧系统需单独评估独立兼容宿主，不得降级当前密码学要求。
 
 ## P2-P5
 - P2：按成熟开源模式重新设计工具集和可选 HTTP/FTP/TFTP/WebDAV/SFTP Server。
