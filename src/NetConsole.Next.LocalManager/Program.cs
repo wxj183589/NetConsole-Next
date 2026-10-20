@@ -266,6 +266,7 @@ static string ResolveManagedRoot(string? requestedRoot)
 
 static string ReadSecret()
 {
+    if (Console.IsInputRedirected) return Console.In.ReadLine() ?? string.Empty;
     var value = new StringBuilder();
     while (true)
     {
