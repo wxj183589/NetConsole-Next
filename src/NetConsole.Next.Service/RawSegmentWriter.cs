@@ -65,7 +65,7 @@ internal sealed class RawSegmentWriter
         Directory.CreateDirectory(folder);
         var name = now.ToString("HHmmssfff") + "-" + Guid.NewGuid().ToString("N");
         _openPath = Path.Combine(folder, name + ".open");
-        _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson");
+        _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson").Replace('\\', '/');
         _stream = streamFactory is null
             ? new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)
             : streamFactory(_openPath);

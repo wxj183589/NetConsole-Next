@@ -368,8 +368,9 @@ internal sealed class Catalog(RuntimeSettings settings)
         foreach (var path in finalizedFiles)
         {
             scanned++;
-            var relative = RelativeRawPath(path);
-            var wasIndexed = indexed.TryGetValue(relative, out var row);
+            var scannedRelative = RelativeRawPath(path);
+            var wasIndexed = indexed.TryGetValue(scannedRelative, out var row);
+            var relative = wasIndexed ? row!.RelativePath : scannedRelative;
             try
             {
                 if (ContainsReparsePoint(path))
@@ -461,10 +462,22 @@ internal sealed class Catalog(RuntimeSettings settings)
                 candidates.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
         }
 
-        var ambiguousRuns = candidates.GroupBy(candidate => candidate.RunId, StringComparer.Ordinal)
-            .Where(group => group.Count() > 1).ToArray();
-        if (ambiguousRuns.Length > 0)
-            throw new InvalidDataException($"H3C Raw result recovery found multiple verified segments for {ambiguousRuns.Length} task run(s); no result manifests were changed.");
+        var distinctCandidates = new List<(string RunId, string RelativePath, string SegmentSha)>();
+        foreach (var runGroup in candidates.GroupBy(candidate => candidate.RunId, StringComparer.Ordinal))
+        {
+            var pathGroups = runGroup.GroupBy(candidate => RawPathComparisonKey(candidate.RelativePath), StringComparer.Ordinal).ToArray();
+            if (pathGroups.Length > 1)
+                throw new InvalidDataException("H3C Raw result recovery found multiple segments for one task run; no result manifests were changed.");
+
+            var aliases = pathGroups[0].ToArray();
+            if (aliases.Select(candidate => candidate.SegmentSha).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+                throw new InvalidDataException("H3C Raw path aliases have conflicting catalog checksums; no result manifests were changed.");
+
+            var selected = aliases.FirstOrDefault(candidate => TryResolveRawPath(candidate.RelativePath, out var path) &&
+                File.Exists(path) && !ContainsReparsePoint(path));
+            distinctCandidates.Add(selected == default ? aliases[0] : selected);
+        }
+        candidates = distinctCandidates;
 
         var verified = new List<(string RunId, string RelativePath, string SegmentSha, string Command,
             string ProfileId, string DeviceHost, string SourceId, int OutputBytes, string OutputSha,
@@ -1034,7 +1047,9 @@ internal sealed class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT state,COUNT(*) FROM raw_segments GROUP BY state";
+        command.CommandText = OperatingSystem.IsWindows()
+            ? "SELECT state,COUNT(DISTINCT replace(relative_path,char(92),'/')) FROM raw_segments GROUP BY state"
+            : "SELECT state,COUNT(DISTINCT relative_path) FROM raw_segments GROUP BY state";
         using var reader = command.ExecuteReader();
         int finalized = 0, incomplete = 0, missing = 0;
         while (reader.Read())
@@ -1253,14 +1268,21 @@ internal sealed class Catalog(RuntimeSettings settings)
         var result = new Dictionary<string, IndexedSegment>(pathComparer);
         while (reader.Read())
         {
-            var relative = reader.GetString(0).Replace('\\', '/');
-            result[relative] = new(relative, reader.GetString(1), reader.GetString(2),
+            var storedRelative = reader.GetString(0);
+            var comparisonKey = RawPathComparisonKey(storedRelative);
+            result[comparisonKey] = new(storedRelative, reader.GetString(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetInt64(3), reader.GetInt64(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
                 reader.IsDBNull(7) ? null : reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetInt64(8),
                 reader.IsDBNull(9) ? null : reader.GetString(9), reader.GetInt32(10) != 0);
         }
         return result;
+    }
+
+    private static string RawPathComparisonKey(string relativePath)
+    {
+        var normalized = OperatingSystem.IsWindows() ? relativePath.Replace('\\', '/') : relativePath;
+        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
     }
 
     private bool TryResolveRawPath(string relative, out string path)

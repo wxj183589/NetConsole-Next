@@ -128,6 +128,7 @@ internal static class SchedulerTests
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
         await PersistsH3cTaskOutputAsVerifiedRaw();
+        await ReconcilesLegacyWindowsRawPathAliases();
         await RejectsAmbiguousH3cRecoveryAtomically();
         VerifiesExistingV1CatalogUpgradeReadsEachRawOnce();
         VerifiesIncrementalRecoverySkipsLargeTrustedHistory();
@@ -584,7 +585,7 @@ internal static class SchedulerTests
             recovered.Initialize();
             var first = recovered.RecoverRawSegments();
             Assert(first.FailedFiles == 1 && first.Issues.Any(issue => issue.Category == "H3C_RESULT_RECONCILIATION" &&
-                   issue.Detail.Contains("multiple verified segments", StringComparison.Ordinal)),
+                   issue.Detail.Contains("multiple segments for one task run", StringComparison.Ordinal)),
                 $"ambiguous Raw evidence must be visible and block result reconstruction: {first}");
             Assert(Directory.EnumerateFiles(Path.Combine(root, "raw"), "*.ndjson", SearchOption.AllDirectories).Count() == 2,
                 "ambiguous recovery must retain both valid Raw files");
@@ -608,6 +609,77 @@ internal static class SchedulerTests
                 Assert(Convert.ToInt32(command.ExecuteScalar()) == 0,
                     "repeated ambiguous recovery must remain idempotent without producing a partial result");
             }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task ReconcilesLegacyWindowsRawPathAliases()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-h3c-path-alias-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var settings = TestSettings(root);
+        try
+        {
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            catalog.ProbeRawWritable();
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.30", 22, "readonly", "LAB_SWITCH_C",
+                fingerprint, true, 0, 0));
+            catalog.CreateTaskDefinition("h3c-path-alias", "H3C_SSH_READONLY", profileId,
+                H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(10));
+            var runId = catalog.CreateTaskRun("h3c-path-alias");
+            catalog.TransitionTaskRun(runId, "CONNECTING");
+            catalog.TransitionTaskRun(runId, "RUNNING");
+            const string output = "Synthetic Comware response for legacy Windows path test";
+            var definition = catalog.GetTaskDefinition("h3c-path-alias")!;
+            var manifest = await new H3cTaskRawResultSink(catalog).PersistAsync(runId, definition, output, "COMPLETE");
+            var physicalRaw = Path.Combine(root, manifest.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Assert(File.Exists(physicalRaw), "test setup must create one sealed H3C Raw file");
+
+            var legacyPath = manifest.RelativePath.Replace('/', '\\');
+            using (var db = OpenCatalog(root))
+            using (var alias = db.CreateCommand())
+            {
+                alias.CommandText = @"UPDATE raw_segments SET relative_path=$legacy WHERE relative_path=$current;
+                    INSERT INTO raw_segments(id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,
+                        byte_count,sha256,sealed_ms,checkpoint_size,checkpoint_write_ticks,last_verified_ms,task_run_id)
+                    SELECT $id,source_id,$current,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,
+                        sealed_ms,checkpoint_size,checkpoint_write_ticks,last_verified_ms,task_run_id
+                    FROM raw_segments WHERE relative_path=$legacy";
+                alias.Parameters.AddWithValue("$legacy", legacyPath);
+                alias.Parameters.AddWithValue("$current", manifest.RelativePath);
+                alias.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+                alias.ExecuteNonQuery();
+            }
+
+            var recovered = new Catalog(settings);
+            recovered.Initialize();
+            var first = recovered.RecoverRawSegments();
+            Assert(first.FailedFiles == 0 && first.IndexedOrphanFiles == 0 && File.Exists(physicalRaw),
+                $"legacy separator aliases for one Raw file must reconcile without re-indexing or deleting Raw: {first}");
+            Assert(recovered.GetRawCounts().Finalized == 1,
+                "Windows Raw health counts must treat slash aliases as one physical segment");
+            using (var db = OpenCatalog(root))
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = @"SELECT
+                    (SELECT COUNT(*) FROM raw_segments WHERE task_run_id=$run),
+                    (SELECT COUNT(*) FROM task_run_raw_outputs WHERE task_run_id=$run)";
+                command.Parameters.AddWithValue("$run", runId);
+                using var reader = command.ExecuteReader();
+                Assert(reader.Read() && reader.GetInt32(0) == 2 && reader.GetInt32(1) == 1,
+                    "legacy path aliases may remain as metadata evidence but recovery must not add another Raw row or duplicate the result");
+            }
+            var second = recovered.RecoverRawSegments();
+            Assert(second.FailedFiles == 0 && File.Exists(physicalRaw),
+                $"repeated startup must remain idempotent for legacy separator aliases: {second}");
         }
         finally
         {
