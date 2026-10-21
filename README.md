@@ -15,11 +15,11 @@
 
 当前实现包括：SQLite Schema v1、数据目录安全标识、本机 loopback 健康 API、可选 UDP Syslog、有界接收队列、Raw NDJSON 二进制保真、受控结束时封段与 SQLite 索引。G1 基础增加了启动时 Raw/SQLite 对账、遗留 `.open` 恢复、有效 NDJSON 前缀校验与损坏尾部截断、未索引段补登、缺失文件标记、任务运行记录、跨进程单实例锁，以及进程资源和采集状态快照。
 
-设备采集框架提供有界调度队列、最大并发限制、持久 Task Definition/Run、超时、取消和失败记录。当前 G2 开发分支加入 H3C Comware SSH 初始只读组件，仅允许 `display version` 和 `display interface brief`，使用 SHA-256 Host Key pin、算法 allowlist、模拟回显与脱敏 golden tests；真实设备尚未连接，不能视为现场验收通过。SSH 功能默认关闭，需显式设置 `NETCONSOLE_NEXT_H3C_ENABLED=1`；密码只通过 credential reference 从进程环境读取，不写入 SQLite，但受控 Secret Store 尚未完成。
+设备采集框架提供有界调度队列、最大并发限制、持久 Task Definition/Run、超时、取消和失败记录。G2.1 加固 H3C Comware SSH 只读组件，仅允许 `display version` 和 `display interface brief`，使用 SHA-256 Host Key pin、算法 allowlist、受限输出读取、Paramiko 本机 SSH wire 模拟及脱敏 golden tests；未连接真实设备。SSH 功能默认关闭，需显式设置 `NETCONSOLE_NEXT_H3C_ENABLED=1`。Windows 正式凭据通过 Local Manager 写入 DPAPI `LocalMachine` 加密 vault，数据库只存引用；Linux/Kylin 没有 DPAPI provider。环境变量凭据仅在显式 Development 模式并设置 `NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS=1` 时启用。
 
-Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，服务仅获得发布目录读取/执行权限和隔离数据根修改权限，并配置 SCM 自动恢复；Local Manager 提供 `status`、`start`、`stop`、`restart`、`open-web`、`open-data`、`open-raw`、`open-logs` 和 `open-published`。Windows Server 2025 CI 已实际验证 Service EXE 发布安装、ProgramData ACL、SCM 启停/重启/异常恢复和卸载保留数据。Windows 10/11、旧 Windows 和低配置工业机仍待实机验证。
+Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，数据根 ACL 仅授予 SYSTEM、Administrators 与服务身份；Local Manager 提供 Service 控制、目录打开、`api-token`、`rotate-api-token`、`credential set` 与 `credential revoke`。`/api/system/*` 管理端点要求本机 bearer token、loopback 来源和匹配 Host；健康端点只读且不要求 token。Windows Server 2025 CI 已验证 Service EXE 与 SCM 生命周期（PR #10）；G2.1 的新 ACL、DPAPI 和令牌轮换工作流等待本轮 Windows CI。Windows 10/11、旧 Windows 和低配置工业机仍待实机验证。
 
-**未实现或待验收：**Web 登录认证与业务界面、SNMP、Syslog 多来源、MR 采集、文件服务、受控 Secret Store、真实 H3C 设备回归和长周期运行。不能宣称真实现场的数据完整性、UDP 零丢包或工业机性能达标。
+**未实现或待验收：**Web 业务界面、SNMP、Syslog 多来源、MR 采集、文件服务、真实 H3C 设备/Comware Exec 兼容、设备并发性能和长周期运行。DPAPI 是本机 Windows vault，不是远程凭据服务。不能宣称真实现场的数据完整性、UDP 零丢包或工业机性能达标。
 
 ### .NET 10 原型本地运行
 
@@ -82,6 +82,8 @@ dotnet run --project src/NetConsole.Next.LocalManager -- open-logs
 ~~~
 
 健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。
+
+本机管理 API 首次初始化时生成高熵 token，保存在隔离数据根的 `local-api-token` 文件。Linux 权限为 `0600`；Windows 从 ProgramData 受限 ACL 继承。通过 Local Manager `api-token` 查看，`rotate-api-token` 立即使旧 token 失效。远程 Web 管理尚未实现；将来需增加用户认证、明确角色授权、来源验证、CSRF 防护和审计。
 
 参见 [ADR](docs/ADR-0001.md)、[路线与门禁](docs/ROADMAP.md)。
 

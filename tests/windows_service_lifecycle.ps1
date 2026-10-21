@@ -52,6 +52,7 @@ try {
     $aclText = (& icacls.exe $dataRoot 2>&1 | Out-String)
     if ($aclText -notmatch [regex]::Escape($serviceAccount)) { throw "ProgramData ACL does not include the virtual service account: $aclText" }
     if ($aclText -notmatch "\(M\)") { throw "ProgramData ACL does not grant Modify access: $aclText" }
+    if ($aclText -match "BUILTIN\\Users") { throw "ProgramData data root is readable or writable by ordinary local users: $aclText" }
 
     Invoke-Manager "status"
     Invoke-Manager "start"
@@ -61,6 +62,64 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $dataRoot ".netconsole-next-root"))) {
         throw "Service account could not initialize the ProgramData root marker."
+    }
+    $tokenPath = Join-Path $dataRoot "local-api-token"
+    if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) { throw "Service did not create its local API token." }
+    $tokenAcl = Get-Acl -LiteralPath $tokenPath
+    $serviceRule = $tokenAcl.Access | Where-Object { $_.IdentityReference.Value -eq $serviceAccount }
+    if (-not $serviceRule) { throw "Local API token ACL does not include the service identity." }
+    $usersSid = [Security.Principal.SecurityIdentifier]::new("S-1-5-32-545")
+    if ($tokenAcl.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $usersSid.Value -and $_.AccessControlType -eq "Allow" }) {
+        throw "Local API token ACL grants ordinary local users access."
+    }
+
+    $storedToken = Get-Content -LiteralPath $tokenPath -Raw
+    $managerToken = (& $managerExe api-token).Trim()
+    Assert-ExitCode "Local Manager api-token"
+    if ($managerToken -ne $storedToken.Trim()) { throw "Local Manager did not return the stored API token." }
+    $authorizedHeaders = @{ Authorization = "Bearer $managerToken" }
+    Invoke-RestMethod -Uri "http://127.0.0.1:18771/api/system/tasks" -Headers $authorizedHeaders -TimeoutSec 3 | Out-Null
+    $newToken = (& $managerExe rotate-api-token).Trim()
+    Assert-ExitCode "Local Manager rotate-api-token"
+    if (-not $newToken -or $newToken -eq $managerToken) { throw "Local Manager did not rotate the API bearer token." }
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:18771/api/system/tasks" -Headers $authorizedHeaders -TimeoutSec 3 | Out-Null
+        throw "Rotated API token continued to authorize the previous bearer."
+    }
+    catch {
+        if ([int]$_.Exception.Response.StatusCode -ne 401) { throw }
+    }
+    Invoke-RestMethod -Uri "http://127.0.0.1:18771/api/system/tasks" `
+        -Headers @{ Authorization = "Bearer $newToken" } -TimeoutSec 3 | Out-Null
+
+    $credentialInput = Join-Path $env:RUNNER_TEMP "netconsole-next-ci-secret-input.txt"
+    $syntheticCredential = "ci-only-synthetic-not-a-device-secret"
+    try {
+        [IO.File]::WriteAllText($credentialInput, "$syntheticCredential`n", [Text.UTF8Encoding]::new($false))
+        $credentialSet = Start-Process -FilePath $managerExe -ArgumentList @("credential", "set", "CI_TEST_ONLY", $dataRoot) `
+            -RedirectStandardInput $credentialInput -NoNewWindow -Wait -PassThru
+        if ($credentialSet.ExitCode -ne 0) { throw "Local Manager could not store a synthetic DPAPI credential." }
+        $credentialVault = Join-Path $dataRoot "credentials\h3c-credentials.v1.json"
+        if (-not (Test-Path -LiteralPath $credentialVault -PathType Leaf)) { throw "DPAPI credential vault file was not created." }
+        $vaultText = Get-Content -LiteralPath $credentialVault -Raw
+        if ($vaultText.Contains($syntheticCredential)) { throw "DPAPI credential vault contains plaintext test input." }
+        $vaultAcl = Get-Acl -LiteralPath $credentialVault
+        if (-not ($vaultAcl.Access | Where-Object { $_.IdentityReference.Value -eq $serviceAccount })) {
+            throw "DPAPI credential vault ACL does not include the service identity."
+        }
+        if ($vaultAcl.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $usersSid.Value -and $_.AccessControlType -eq "Allow" }) {
+            throw "DPAPI credential vault ACL grants ordinary local users access."
+        }
+
+        [IO.File]::WriteAllText($credentialInput, "updated-ci-only-synthetic-secret`n", [Text.UTF8Encoding]::new($false))
+        $credentialUpdate = Start-Process -FilePath $managerExe -ArgumentList @("credential", "set", "CI_TEST_ONLY", $dataRoot) `
+            -RedirectStandardInput $credentialInput -NoNewWindow -Wait -PassThru
+        if ($credentialUpdate.ExitCode -ne 0) { throw "Local Manager could not update the synthetic DPAPI credential." }
+        & $managerExe credential revoke CI_TEST_ONLY $dataRoot
+        Assert-ExitCode "Local Manager credential revoke"
+    }
+    finally {
+        Remove-Item -LiteralPath $credentialInput -Force -ErrorAction SilentlyContinue
     }
 
     Invoke-Manager "stop"
@@ -100,7 +159,7 @@ try {
         throw "Uninstall removed or modified the ProgramData data marker."
     }
     $installed = $false
-    Write-Output "PASS: Windows publish/install, virtual account, ProgramData ACL, Local Manager start/stop/restart, SCM crash recovery, and data retention after uninstall."
+    Write-Output "PASS: Windows publish/install, restricted ProgramData and DPAPI vault ACLs, Local Manager credential update/revoke and API token rotation, SCM lifecycle/crash recovery, and data retention after uninstall."
 }
 finally {
     if ($installed) {

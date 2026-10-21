@@ -29,6 +29,7 @@ internal sealed class RawSegmentWriter
     private readonly string _relativePath;
     private readonly string _sourceId;
     private readonly Stream _stream;
+    private string? _taskRunId;
     private readonly MemoryStream _stagedBytes = new(256 * 1024);
     private readonly ArrayBufferWriter<byte> _jsonBytes = new(4096);
     private long _first = long.MaxValue;
@@ -64,7 +65,7 @@ internal sealed class RawSegmentWriter
         Directory.CreateDirectory(folder);
         var name = now.ToString("HHmmssfff") + "-" + Guid.NewGuid().ToString("N");
         _openPath = Path.Combine(folder, name + ".open");
-        _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson");
+        _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson").Replace('\\', '/');
         _stream = streamFactory is null
             ? new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)
             : streamFactory(_openPath);
@@ -97,15 +98,17 @@ internal sealed class RawSegmentWriter
     }
 
     public byte[] AppendH3cCommand(string profileId, string taskRunId, string host, string command,
-        string output, long capturedMs)
+        string output, long capturedMs, string captureStatus)
     {
         if (_sourceId != "h3c-" + profileId || !Guid.TryParseExact(profileId, "N", out _) ||
             !Guid.TryParseExact(taskRunId, "N", out _))
             throw new ArgumentException("H3C profile/task identity does not match the Raw source.");
         if (!H3cCommandPolicy.IsAllowed(command)) throw new ArgumentException("H3C command is not allowlisted.", nameof(command));
+        if (captureStatus is not ("COMPLETE" or "PARTIAL")) throw new ArgumentException("H3C capture status is invalid.", nameof(captureStatus));
         if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl))
             throw new ArgumentException("H3C host is invalid.", nameof(host));
         if (_sealed || _records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
+        _taskRunId = taskRunId;
         var outputBytes = Encoding.UTF8.GetBytes(output);
         if (outputBytes.Length > H3cRawOutput.MaximumBytes)
             throw new InvalidDataException($"H3C output exceeds the {H3cRawOutput.MaximumBytes}-byte storage limit.");
@@ -122,6 +125,7 @@ internal sealed class RawSegmentWriter
             json.WriteString("task_run_id", taskRunId);
             json.WriteString("device_host", host);
             json.WriteString("command", command);
+            json.WriteString("capture_status", captureStatus);
             json.WriteNumber("output_byte_count", outputBytes.Length);
             json.WriteString("output_sha256", outputShaHex);
             json.WriteBase64String("output_utf8_base64", outputBytes);
@@ -181,7 +185,8 @@ internal sealed class RawSegmentWriter
         // If the DB write fails, the final file is deliberately preserved for reconciliation.
         var catalogStarted = Stopwatch.GetTimestamp();
         _catalog.RegisterFinalizedSegment(_relativePath, _records,
-            _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length, _sourceId);
+            _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length,
+            _sourceId, _taskRunId);
         LastCatalogWriteDurationMs = Stopwatch.GetElapsedTime(catalogStarted).TotalMilliseconds;
         LastSealDurationMs = Stopwatch.GetElapsedTime(sealStarted).TotalMilliseconds;
         _sealed = true;

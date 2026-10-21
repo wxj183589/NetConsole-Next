@@ -1,6 +1,6 @@
 # Performance baseline
 
-Status: reproducible Linux container measurements are available for the G1.5 Syslog path. They describe this cloud runner, not an industrial Mini host or production deployment. A larger PPS parameter is not evidence of achieved throughput: all tables below report the sender's measured rate. The G2 H3C work has only synthetic correctness tests; no SSH/device throughput, CPU, memory or session-lifetime measurement is available.
+Status: reproducible Linux container measurements are available for the G1.5 Syslog path and a G2.1 synthetic-device/Syslog concurrency check. They describe this cloud runner, not an industrial Mini host or production deployment. A larger PPS parameter is not evidence of achieved throughput: tables report measured send rates. G2.1 concurrency is simulated; no SSH/device throughput, algorithm negotiation, real session lifetime, or target-device resource measurement is available.
 
 ## Environment and accounting
 
@@ -68,6 +68,23 @@ With 1,000 pre-indexed, trusted historical 11,016-byte Raw files (11,016,000 B),
 Command: `python3 tests/perf_baseline.py --packets 100000 --payload-bytes 512 --rate 5000 --queue-burst 0 --history-files 1000 --sqlite-writes 500 --output docs/perf-results/g2-h3c-raw-writer-regression.json`. This is one current-branch regression sample after Raw Writer generalization; it is not a statistically sufficient before/after claim and it does not measure SSH/device collection.
 
 The paced sender completed 100,000 local `sendto` calls in 20.000 s. The Service received, admitted and flushed all 100,000 with zero application drops. The requested 4 MiB receive buffer reported 8 MiB effective; the host-global `RcvbufErrors` counter did not increase in the test interval. Queue high-water was 275 packets / 140,800 payload bytes. Process CPU was 25.95% host-normalized / 38.93% of the two-core quota; working set was 113,979,392 B, 21 threads and 231 file descriptors. The data root grew 77,813,033 B during the Syslog load. Raw sync latency was p50/p95/p99 0.0861/0.3984/0.7898 ms (max 1.9238); segment seal p50/p95 7.1079/22.2286 ms; SQLite registration p50/p95 1.2838/5.3368 ms. A separate 500-commit SQLite FULL-sync probe measured p50/p95/p99 0.0088/0.0148/0.1039 ms (max 0.3604). At startup, 1,019 indexed files were scanned/trusted-skipped, 0 content bytes read or hashed, Catalog recovery took 32 ms and full restart wall time was 562 ms. Physical IOPS were unavailable. The exact environment and full counters are in the linked JSON result.
+
+### G2.1 simulated device concurrency + Syslog
+
+The deterministic C# integration harness ran 2, 4, 8 and 16 concurrent fake device sessions while a loopback Syslog worker received 128 paced 128-byte datagrams in each scenario. The synthetic command completes after a 25 ms delay; this does not include DNS, TCP, SSH key exchange, authentication or Comware execution. Linux runner: Debian 13, kernel `6.18.55`, .NET `10.0.402`, 2.0-CPU cgroup quota. Exact machine-readable output: [g2-1-linux-regression.json](perf-results/g2-1-linux-regression.json), source commit `99d5d836f3f89a6131888e226ffff02ea4624117`.
+
+| Simulated concurrency cap | Peak sessions | Device runs / success | UDP received / admitted / Raw persisted | App drops | Process CPU time | Working set | Threads | Device p50/p95 | Data root growth |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 2 | 4 / 4 | 128 / 128 / 128 | 0 | 210.2 ms | 109,367,296 B | 16 | 27 / 29 ms | 181,567 B |
+| 4 | 4 | 8 / 8 | 128 / 128 / 128 | 0 | 414.0 ms | 112,730,112 B | 17 | 28 / 28 ms | 181,567 B |
+| 8 | 8 | 16 / 16 | 128 / 128 / 128 | 0 | 467.2 ms | 118,542,336 B | 17 | 27 / 29 ms | 181,567 B |
+| 16 | 16 | 32 / 32 | 128 / 128 / 128 | 0 | 450.0 ms | 127,512,576 B | 17 | 26 / 36 ms | 181,567 B |
+
+All four test cases observed every paced Syslog datagram at the application, enqueued it and sealed it to Raw, with zero application queue drops. Queue packet high-water was 1–2. The numbers are brief functional/resource samples from a shared runner; variation in CPU time is not monotonic and should not be treated as a scaling curve. No real SSH was attempted in this particular concurrency workload; production scheduler remains capped at two active device tasks. File descriptors and IOPS were not sampled in these four C# cases. A separate two-session SSH.NET wire test used Paramiko and is correctness evidence only. A combined case ran 40 fake tasks plus 500 paced Syslog datagrams: 40/40 tasks and 500/500 packets were persisted with no drops; CPU 673.6 ms, RSS 132,321,280 B, 17 threads, queue high-water 2, Raw flush p50/p95/p99 0.0599/0.1138/0.4867 ms, test data root 288,711 B. File handles and IOPS were unavailable for the C# harness.
+
+### G2.1 standalone Linux Syslog/storage regression sample
+
+Command: `tests/perf_baseline.py --packets 10000 --payload-bytes 256 --rate 5000 --queue-burst 0 --history-files 100 --sqlite-writes 100 --idle-seconds 1`. The sender completed 10,000 local send calls in 2.000 s; the Service received, admitted and flushed all 10,000 with zero application drops. Socket receive buffer requested/effective sizes were 4/8 MiB; queue high-water was 72 packets / 18,432 payload bytes. Host-global UDP `InErrors`/`RcvbufErrors` did not change during the send window (the host-global cumulative baseline was 490,304 and is not a per-socket counter). Process CPU was 33.01% host-normalized / 49.52% of the 2-core quota; working set 66,875,392 B, 16 threads and 233 file descriptors. Raw sync p50/p95/p99 was 0.0769/0.3393/1.2768 ms; one segment seal took 12.53 ms; SQLite registration took 4.03 ms. A separate 100-commit SQLite `synchronous=FULL` probe measured p50/p95/p99 0.0064/0.0096/0.0495 ms. The 100-file trusted history case read/hashed 0 file-content bytes; Catalog recovery was 10 ms and measured restart wall time was 484 ms. The temporary data root ended at 6,237,338 B; it included 100 seeded 11,016-byte historical fixture files, so this figure is not just current traffic growth. Physical IOPS and in-container physical byte deltas were unavailable. Full output is in [g2-1-linux-regression.json](perf-results/g2-1-linux-regression.json).
 
 ## Durability and limits
 

@@ -10,6 +10,7 @@ internal sealed class RuntimeSettings
     public required IPAddress SyslogBind { get; init; }
     public required int SyslogReceiveBufferBytes { get; init; }
     public bool H3cEnabled { get; init; }
+    public bool H3cDevelopmentEnvironmentCredentialsEnabled { get; init; }
 
     public static RuntimeSettings FromEnvironment()
     {
@@ -36,7 +37,8 @@ internal sealed class RuntimeSettings
             SyslogPort = ParsePort("NETCONSOLE_NEXT_SYSLOG_PORT", 0, true),
             SyslogBind = bind,
             SyslogReceiveBufferBytes = receiveBuffer,
-            H3cEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_ENABLED") == "1"
+            H3cEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_ENABLED") == "1",
+            H3cDevelopmentEnvironmentCredentialsEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS") == "1"
         };
     }
 

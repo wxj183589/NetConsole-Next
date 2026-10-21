@@ -36,8 +36,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "sc.exe sidtype failed with exit code $LASTEXITCODE." }
     & icacls.exe $serviceDirectory /grant ($serviceAccount + ":(OI)(CI)RX") | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not grant the service account read/execute access to the publish directory." }
-    & icacls.exe $dataRoot /grant ($serviceAccount + ":(OI)(CI)M") | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Could not grant the service account modify access to the isolated data root." }
+    & icacls.exe $dataRoot /inheritance:r /grant:r `
+        "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" ($serviceAccount + ":(OI)(CI)M") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not secure the isolated data root for the service account and administrators." }
 
     & sc.exe description $serviceName "NetConsole Next local collection core" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe description failed with exit code $LASTEXITCODE." }
@@ -54,6 +55,6 @@ catch {
 }
 
 Write-Output "Installed $serviceName as $serviceAccount with automatic start and restart recovery."
-Write-Output "The service can read the publish directory and modify only its isolated data root: $dataRoot"
+Write-Output "The service can read the publish directory and modify only its isolated data root; access is restricted to SYSTEM, administrators, and the service identity: $dataRoot"
 Write-Output "The data root is retained when the service is uninstalled. The service refuses a nonempty unmarked data root."
 Write-Output "Use the Local Manager 'start' command after reviewing the service and firewall settings."

@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Hosting;
 using NetConsole.Next.Service;
+using NetConsole.Next.Credentials;
+using System.Security.Cryptography;
+using System.Text;
 
 using var singleInstance = SingleInstanceGuard.Acquire();
 var settings = RuntimeSettings.FromEnvironment();
@@ -10,7 +13,12 @@ builder.WebHost.UseUrls($"http://127.0.0.1:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
-builder.Services.AddSingleton<IH3cCredentialProvider, EnvironmentH3cCredentialProvider>();
+IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
+    ? new EnvironmentH3cCredentialProvider(enabled: true)
+    : OperatingSystem.IsWindows()
+        ? new WindowsDpapiH3cCredentialProvider(settings.DataRoot)
+        : new UnavailableH3cCredentialProvider();
+builder.Services.AddSingleton<IH3cCredentialProvider>(credentialProvider);
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -35,6 +43,56 @@ builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    if (!(context.Request.Path.Value?.StartsWith("/api/system", StringComparison.OrdinalIgnoreCase) ?? false))
+    {
+        await next();
+        return;
+    }
+
+    var remote = context.Connection.RemoteIpAddress;
+    var requestHost = context.Request.Host;
+    var validHost = (string.Equals(requestHost.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(requestHost.Host, "localhost", StringComparison.OrdinalIgnoreCase)) &&
+                    requestHost.Port == settings.WebPort;
+    if (remote is null || !System.Net.IPAddress.IsLoopback(remote) || !validHost)
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+
+    if (string.Equals(context.Request.Path.Value, "/api/system/health", StringComparison.OrdinalIgnoreCase))
+    {
+        await next();
+        return;
+    }
+
+    string expectedToken;
+    try { expectedToken = LocalApiTokenStore.ReadExisting(settings.DataRoot); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        return;
+    }
+    var values = context.Request.Headers["Authorization"];
+    if (values.Count != 1 || !values[0]!.StartsWith("Bearer ", StringComparison.Ordinal))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers["WWW-Authenticate"] = "Bearer";
+        return;
+    }
+    var presented = values[0]![7..];
+    var expectedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
+    var presentedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
+    if (!CryptographicOperations.FixedTimeEquals(expectedDigest, presentedDigest))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers["WWW-Authenticate"] = "Bearer";
+        return;
+    }
+    await next();
+});
 var catalog = app.Services.GetRequiredService<Catalog>();
 var runtimeStatus = app.Services.GetRequiredService<RuntimeStatus>();
 RollingFileLoggerProvider? fileLoggerProvider = null;
@@ -99,6 +157,7 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         h3cCollectionEnabled = runtime.H3cEnabled,
         collectionState = status.CollectionState,
         collectionError = status.CollectionError,
+        h3cMetrics = H3cCollectionMetrics.Snapshot(),
         udpReceived = ingress.Received,
         udpAccepted = ingress.Accepted,
         udpDropped = ingress.Dropped,
@@ -190,7 +249,7 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
     {
         try
         {
-            rawCatalog.QuarantineIntegrityAudit(auditId, request.Actor, request.Detail);
+            rawCatalog.QuarantineIntegrityAudit(auditId, "local-api-token", request.Detail);
             var unresolved = rawCatalog.GetUnresolvedIntegrityIssueCount();
             status.ReassessIntegrityIssues(unresolved);
             return Results.Ok(new { auditId, disposition = "QUARANTINED", unresolvedIntegrityIssues = unresolved,
@@ -203,7 +262,7 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
 
 app.Run();
 
-internal sealed record RawIssueQuarantineRequest(string Actor, string Detail);
+internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,

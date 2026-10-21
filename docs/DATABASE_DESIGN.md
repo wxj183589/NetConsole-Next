@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v4 is implemented with additive idempotent upgrades from v1-v3. Linux Release build, repeated migration, SQLite integrity, Raw reconciliation, issue-disposition and synthetic H3C task-output tests passed locally. G2 Linux and Windows Server 2025 CI (including SCM lifecycle) passed in run `39297383055`. Target OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v5 is implemented with additive idempotent upgrades from v1-v4. Linux and Windows Server 2025 Release builds/tests, repeated migration, SQLite integrity, Raw reconciliation, atomic task/result rollback and synthetic H3C output recovery passed; current G2.1 Windows CI run `39638777555` also passed the Windows legacy Raw path alias regression and DPAPI/service checks. Target Windows OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -8,10 +8,12 @@ Status: schema v4 is implemented with additive idempotent upgrades from v1-v3. L
 <data-root>/
 ├── .netconsole-next-root
 ├── .raw-recovery-in-progress # present during reconciliation; removed after a noncritical pass completes
+├── local-api-token            # random bearer token; Unix mode 0600, Windows inherits restricted data-root ACL
 ├── catalog.db                 # SQLite authority for sources, Raw manifest and task runs
 ├── catalog.db-wal / -shm      # SQLite-managed WAL files while open
 ├── raw/syslog/YYYY/MM/DD/     # Raw NDJSON segments (.open while writing, .ndjson after seal)
 ├── raw/h3c/<profile-id>/YYYY/MM/DD/ # one sealed command response per H3C task run
+├── credentials/h3c-credentials.v1.json # Windows DPAPI LocalMachine ciphertext keyed by reference
 ├── logs/                      # rolling service diagnostics (5 MiB segments, 14-file cap)
 ├── published/ inbox/ archive/ backup/ # prepared isolated directories; optional services are not implemented
 └── recovery-evidence/         # verified corrupt-tail bytes and JSON metadata
@@ -21,7 +23,7 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 
 ## Schema versions
 
-`schema_versions` currently records v1 through v4. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state and adds v4 H3C identity/result tables in idempotent transactions. Reopening an already upgraded database is tested.
+`schema_versions` currently records v1 through v5. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state, adds v4 H3C identity/result tables, and applies v5 Raw/task recovery fields and status validation in idempotent transactions. Reopening an already upgraded database is tested.
 
 ### Schema v1 base
 
@@ -53,16 +55,28 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 
 | Table | Purpose |
 | --- | --- |
-| `h3c_device_profiles` | H3C host/port/username, enabled state, a credential **reference**, and normalized SHA-256 SSH host-key pin. Passwords are not stored. Connection identity is immutable for a profile ID; host, credential-reference or host-key changes require a new ID. The current environment-variable provider is a bootstrap mechanism, not a managed credential vault. |
-| `task_run_raw_outputs` | One command/output manifest per H3C task run, referencing the sealed Raw segment and storing command, stdout byte count/SHA-256, segment SHA-256, parsed JSON and capture time. A task only transitions to `SUCCEEDED` after Raw has been flushed/sealed, the segment registered, and this output row inserted. |
+| `h3c_device_profiles` | H3C host/port/username, enabled state, a credential **reference**, and normalized SHA-256 SSH host-key pin. Passwords are not stored. Connection identity is immutable for a profile ID; host, credential-reference or host-key changes require a new ID. Windows uses the LocalMachine DPAPI vault; Linux/Kylin has no production provider. The environment-variable provider is available only in explicit Development mode. |
+| `task_run_raw_outputs` | One command/output manifest per H3C task run, referencing the sealed Raw segment and storing command, decoded output byte count/SHA-256, segment SHA-256, parsed JSON, capture time, `capture_status` (`COMPLETE/PARTIAL`) and `parse_status` (`PARSED/EMPTY/UNRECOGNIZED/PARTIAL/UNCLASSIFIED`). |
+
+### Schema v5 additions
+
+| Table / columns | Purpose |
+| --- | --- |
+| `raw_segments.task_run_id` | Links a single-record H3C Raw segment to its persisted Task Run so recovery can rebuild a missing result manifest after a process crash. The index is partial and only covers non-null task IDs. |
+| `task_run_raw_outputs.capture_status`, `parse_status` | Separates output completeness from parser recognition. SQLite triggers restrict both values to their defined states. |
+| Atomic completion transaction | `CompleteTaskRunWithRawOutput` inserts/validates the result manifest and transitions the run terminal state in the same SQLite transaction. An injected terminal update failure rolls back the manifest insert. Startup recovery may restore the manifest from verified Raw but leaves task state `INTERRUPTED`; it never changes a crashed task to success. |
 
 Initialization enables WAL once and verifies the resulting mode. Each later SQLite connection sets `synchronous=FULL`, foreign keys, and a 5-second busy timeout without reissuing the journal-mode pragma, avoiding needless mode checks during concurrent writes. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
 
 ## Raw write and recovery
 
-Syslog payload bytes are Base64 encoded in newline-terminated JSON records. H3C command stdout (strict UTF-8 bytes decoded/re-encoded by SSH.NET) is Base64 encoded in a typed NDJSON record with source/profile/run IDs, exact allowlisted command, host, output length and output SHA-256. This preserves the SSH library's decoded command stdout, not SSH wire packets. H3C records are capped at 256 KiB decoded output and one record per segment. Recovery parses both known record types and verifies embedded H3C output hashes and source/profile folder identity; unknown record types are not accepted. It hashes the valid prefix when a file needs full inspection. Before truncating the first malformed or partial tail, it writes the exact tail bytes into `recovery-evidence/*.tail.bin`, flushes and hashes them, then writes metadata with source-relative path, byte offset, length, and SHA-256. If evidence cannot be written and verified, the original Raw file stays unchanged. Re-running recovery uses a deterministic evidence identity and does not create duplicate catalog rows.
+Syslog payload bytes are Base64 encoded in newline-terminated JSON records. H3C command output is the **SSH.NET-decoded UTF-8 output**, not SSH wire bytes. It is Base64 encoded in a typed NDJSON record with source/profile/run IDs, exact allowlisted command, host, output length/hash and `capture_status`. Combined stdout/stderr is drained concurrently and limited to 256 KiB; only decoded stdout is written to Raw, never stderr or diagnostic logs. Output limit, paging response, nonzero command result or a disconnect after output retains the available stdout prefix as `PARTIAL`. H3C records are one command per segment. Recovery verifies embedded output hashes, status, task-run ID, segment hash and source/profile folder. If a Raw-sealed Task Run has no result row, it reconstructs the result row idempotently while retaining the existing task terminal/interrupted status. Before truncating a malformed or partial tail, recovery writes and verifies the exact tail bytes in `recovery-evidence/`; failed evidence writes leave source bytes unchanged.
+
+The local API bearer token is intentionally outside SQLite and lives in `local-api-token`. Windows H3C secrets are also outside SQLite: only DPAPI ciphertext is persisted in `credentials/h3c-credentials.v1.json`, keyed by reference; the service identity relies on the restricted inherited ProgramData ACL. Linux/Kylin has no DPAPI implementation. Explicit Development environment credentials are not a production provider.
 
 Every startup enumerates `.open` and `.ndjson` paths to discover unindexed files and compare indexed state. A `FINALIZED` row is trusted for startup only when the expected SHA exists and file size plus last-write UTC ticks equal its post-verification checkpoint. In that case startup performs filesystem metadata checks but reads zero file contents and writes no catalog row. v1 rows have no checkpoint, so the first v2 startup fully validates them. A size/time change, `INCOMPLETE`/`MISSING` state, `.open`, orphan, or path error forces full inspection; a checksum mismatch is appended to `raw_integrity_audits` and the Raw file remains on disk marked `INCOMPLETE`.
+
+New Raw catalog paths use forward slashes on every OS. During recovery, Windows compares slash and backslash spellings as the same physical path but retains the existing SQLite primary-key string when updating a legacy row; this prevents a second catalog row for the same file. Legacy slash aliases are treated as one logical segment only when their physical file and checksum agree. Distinct Raw files for a single H3C task remain an explicit recovery error, and Raw files are retained.
 
 The service writes `.raw-recovery-in-progress` with write-through before reconciliation. A process killed during recovery leaves the marker; the next startup replays the scan and reports `RECOVERY_INTERRUPTED`. On successful noncritical completion it clears the marker. A critical SQLite/raw-root error leaves it for another attempt. Persisted `INCOMPLETE`/`MISSING` segments and task runs changed to `INTERRUPTED` also keep the health state degraded on later starts. A low-priority audit begins after ten minutes, then fully inspects at most one finalized segment per minute, including a segment whose same-size rewrite preserved its last-write timestamp.
 

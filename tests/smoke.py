@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 
 def unused_port(socktype):
@@ -48,6 +49,45 @@ def main():
             else:
                 raise AssertionError("Health endpoint never became ready.")
             assert health["syslogEnabled"] is True
+            tasks_url = f"http://127.0.0.1:{web_port}/api/system/tasks"
+            try:
+                urllib.request.urlopen(tasks_url, timeout=2)
+                raise AssertionError("management GET must require local bearer authorization")
+            except urllib.error.HTTPError as error:
+                assert error.code == 401, error.code
+            profile_post = urllib.request.Request(
+                f"http://127.0.0.1:{web_port}/api/system/h3c/profiles",
+                data=b'{"id":"00000000000000000000000000000001"}',
+                headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                urllib.request.urlopen(profile_post, timeout=2)
+                raise AssertionError("unauthorized profile creation must be rejected before route execution")
+            except urllib.error.HTTPError as error:
+                assert error.code == 401, error.code
+            token = (root / "local-api-token").read_text().strip()
+            authorized = urllib.request.Request(tasks_url, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(authorized, timeout=2) as response:
+                assert response.status == 200
+            spoofed_host = urllib.request.Request(url, headers={"Host": f"attacker.invalid:{web_port}"})
+            try:
+                urllib.request.urlopen(spoofed_host, timeout=2)
+                raise AssertionError("loopback API must reject an unexpected Host header")
+            except urllib.error.HTTPError as error:
+                assert error.code == 403, error.code
+            quarantine_url = f"http://127.0.0.1:{web_port}/api/system/raw-integrity-audits/missing/quarantine"
+            quarantine = urllib.request.Request(quarantine_url, data=b'{"actor":"spoofed","detail":"test"}',
+                                               headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                urllib.request.urlopen(quarantine, timeout=2)
+                raise AssertionError("unauthorized management POST must be rejected")
+            except urllib.error.HTTPError as error:
+                assert error.code == 401, error.code
+            quarantine.add_header("Authorization", f"Bearer {token}")
+            try:
+                urllib.request.urlopen(quarantine, timeout=2)
+                raise AssertionError("authorized quarantine for a missing audit should return 404")
+            except urllib.error.HTTPError as error:
+                assert error.code == 404, error.code
             raw_payload = b"<134>Oct 19 19:00:00 MR-CT P0\\x00\\xff\\r\\n"
             # Use actual NUL, 0xff and CRLF to prove we preserve binary datagrams.
             raw_payload = raw_payload.replace(b"\\x00", b"\x00").replace(b"\\xff", b"\xff").replace(b"\\r\\n", b"\r\n")

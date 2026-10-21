@@ -82,6 +82,8 @@ internal sealed record H3cInterfaceBriefResult(
     bool Recognized,
     string? Notice);
 
+internal sealed record H3cParseResult(string Status, string Json);
+
 internal static partial class H3cComwareParser
 {
     [GeneratedRegex(@"H3C Comware Software,\s*Version\s+([^,\s]+)(?:,\s*Release\s+([^\r\n]+))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -90,9 +92,15 @@ internal static partial class H3cComwareParser
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9/._:-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex InterfaceNamePattern();
 
+    [GeneratedRegex(@"(?im)^\s*-{2,}\s*more\b.*$|^\s*press\s+any\s+key\b.*$|^\s*\[?more\]?\s*$", RegexOptions.CultureInvariant)]
+    private static partial Regex PaginationPattern();
+
+    [GeneratedRegex(@"\x1b\[[0-?]*[ -/]*[@-~]", RegexOptions.CultureInvariant)]
+    private static partial Regex AnsiControlPattern();
+
     public static H3cVersionInfo ParseVersion(string output)
     {
-        var match = VersionPattern().Match(output ?? string.Empty);
+        var match = VersionPattern().Match(NormalizeTerminalText(output));
         return match.Success
             ? new("H3C Comware", match.Groups[1].Value, match.Groups[2].Success ? match.Groups[2].Value.Trim() : null, true)
             : new("unknown", string.Empty, null, false);
@@ -102,7 +110,7 @@ internal static partial class H3cComwareParser
     {
         var interfaces = new List<H3cInterfaceStatus>();
         var section = BriefSection.None;
-        foreach (var rawLine in (output ?? string.Empty).Split('\n'))
+        foreach (var rawLine in NormalizeTerminalText(output).Split('\n'))
         {
             var line = rawLine.Trim().TrimEnd('\r');
             if (line.Length == 0) continue;
@@ -143,11 +151,46 @@ internal static partial class H3cComwareParser
 
     public static string ToParsedJson(string command, string output)
     {
+        return Parse(command, output).Json;
+    }
+
+    public static H3cParseResult Parse(string command, string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return new("EMPTY", "{}");
         if (command == H3cCommandPolicy.DisplayVersion)
-            return System.Text.Json.JsonSerializer.Serialize(ParseVersion(output));
+        {
+            var result = ParseVersion(output);
+            return new(result.Recognized ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
         if (command == H3cCommandPolicy.DisplayInterfaceBrief)
-            return System.Text.Json.JsonSerializer.Serialize(ParseInterfaceBrief(output));
+        {
+            var result = ParseInterfaceBrief(output);
+            return new(result.Recognized ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
+    }
+
+    public static bool ContainsPaginationPrompt(string output)
+    {
+        return PaginationPattern().IsMatch(NormalizeTerminalText(output));
+    }
+
+    private static string NormalizeTerminalText(string? output)
+    {
+        var ansiStripped = AnsiControlPattern().Replace(output ?? string.Empty, string.Empty);
+        var builder = new System.Text.StringBuilder(ansiStripped.Length);
+        foreach (var character in ansiStripped)
+        {
+            if (character == '\b')
+            {
+                if (builder.Length > 0) builder.Length--;
+            }
+            else if (character != '\0' && character != '\x1b') builder.Append(character);
+        }
+        return builder.ToString();
     }
 
     private static string? At(string[] parts, int index) =>

@@ -1,7 +1,10 @@
+using System.Buffers;
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Renci.SshNet;
 using Renci.SshNet.Common;
+using NetConsole.Next.Credentials;
 
 namespace NetConsole.Next.Service;
 
@@ -16,16 +19,61 @@ internal sealed class H3cCredentialUnavailableException() : InvalidOperationExce
 internal sealed class H3cHostKeyMismatchException() : InvalidOperationException(
     "SSH host key did not match the configured SHA256 pin.") { }
 
+internal sealed class H3cHostKeyMissingException() : InvalidOperationException(
+    "SSH connection completed without a verifiable host key.") { }
+
 internal sealed class H3cAuthenticationFailedException() : InvalidOperationException(
     "SSH authentication failed for the configured H3C profile.") { }
 
-// Bootstrap provider only: values are read at use time and never persisted, returned, or logged.
+internal sealed class H3cConnectionTimeoutException() : TimeoutException(
+    "H3C SSH connection timed out.") { }
+
+internal sealed class H3cUnsupportedAlgorithmException() : InvalidOperationException(
+    "The SSH peer has no algorithm in the configured security allowlist.") { }
+
+internal sealed class H3cOutputLimitException() : Exception(
+    "H3C command output exceeded the configured combined output/error limit.") { }
+
+internal sealed class H3cInvalidEncodingException() : Exception(
+    "H3C command output is not valid UTF-8.") { }
+
+internal sealed class H3cCommandRejectedException() : Exception(
+    "H3C read-only command failed or returned an SSH error stream.") { }
+
+internal sealed class H3cPaginationDetectedException() : Exception(
+    "H3C response contains a paging prompt and is incomplete.") { }
+
+internal sealed class H3cPartialOutputException(
+    string output, string failureCode, bool isCancellation) : IOException(failureCode)
+{
+    public string Output { get; } = output;
+    public string FailureCode { get; } = failureCode;
+    public bool IsCancellation { get; } = isCancellation;
+}
+
+// The bootstrap provider is only selected for an explicit Development configuration.
 internal sealed class EnvironmentH3cCredentialProvider : IH3cCredentialProvider
 {
+    private readonly bool _enabled;
+
+    public EnvironmentH3cCredentialProvider(bool enabled) => _enabled = enabled;
+
     public string? GetPassword(string reference) =>
-        H3cCredentialReference.IsValid(reference)
+        _enabled && H3cCredentialReference.IsValid(reference)
             ? Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_CREDENTIAL_" + reference)
             : null;
+}
+
+internal sealed class WindowsDpapiH3cCredentialProvider(string dataRoot) : IH3cCredentialProvider
+{
+    public string? GetPassword(string reference) => OperatingSystem.IsWindows()
+        ? WindowsDpapiCredentialVault.Get(dataRoot, reference)
+        : null;
+}
+
+internal sealed class UnavailableH3cCredentialProvider : IH3cCredentialProvider
+{
+    public string? GetPassword(string reference) => null;
 }
 
 internal static class H3cSshAlgorithmPolicy
@@ -63,7 +111,7 @@ internal static class H3cSshAlgorithmPolicy
         KeepOnly(info.HostKeyAlgorithms.Keys, name => info.HostKeyAlgorithms.Remove(name), HostKeys);
         if (info.KeyExchangeAlgorithms.Count == 0 || info.Encryptions.Count == 0 ||
             info.HmacAlgorithms.Count == 0 || info.HostKeyAlgorithms.Count == 0)
-            throw new NotSupportedException("SSH.NET did not expose any algorithm from the configured H3C allowlist.");
+            throw new H3cUnsupportedAlgorithmException();
     }
 
     private static void KeepOnly(IEnumerable<string> names, Action<string> remove, HashSet<string> allowed)
@@ -72,30 +120,37 @@ internal static class H3cSshAlgorithmPolicy
     }
 }
 
-internal sealed class H3cSshDeviceSessionFactory(Catalog catalog, IH3cCredentialProvider credentials) : IDeviceSessionFactory
+internal interface IH3cSshTransportFactory
 {
-    public IDeviceSession Create(string target)
-    {
-        var profile = catalog.GetH3cDeviceProfile(target)
-            ?? throw new KeyNotFoundException("H3C device profile was not found.");
-        if (!profile.Enabled) throw new InvalidOperationException("H3C device profile is disabled.");
-        return new H3cSshDeviceSession(profile, credentials);
-    }
+    IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password);
 }
 
-internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3cCredentialProvider credentials) : IDeviceSession
+internal interface IH3cSshTransport : IDisposable
 {
-    private SshClient? _client;
-    private bool _hostKeyAccepted;
+    bool IsConnected { get; }
+    Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken);
+    Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
+    void Abort();
+}
+
+internal sealed record H3cCapturedOutput(string Text, long StderrByteCount);
+
+internal sealed class SshNetH3cSshTransportFactory : IH3cSshTransportFactory
+{
+    public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) =>
+        new SshNetH3cSshTransport(profile, password);
+}
+
+internal sealed class SshNetH3cSshTransport : IH3cSshTransport
+{
+    private readonly SshClient _client;
     private bool _hostKeySeen;
+    private bool _hostKeyAccepted;
+    private bool _disposed;
+    private long _hostKeyAcceptedTimestamp;
 
-    public async Task ConnectAsync(CancellationToken cancellationToken)
+    public SshNetH3cSshTransport(H3cDeviceProfileSnapshot profile, string password)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var password = credentials.GetPassword(profile.CredentialReference);
-        if (string.IsNullOrEmpty(password))
-            throw new H3cCredentialUnavailableException();
-
         var info = new Renci.SshNet.ConnectionInfo(profile.Host, profile.Port, profile.Username,
             new PasswordAuthenticationMethod(profile.Username, password))
         {
@@ -104,34 +159,56 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
         };
         H3cSshAlgorithmPolicy.Apply(info);
         _client = new SshClient(info);
+    }
+
+    public bool IsConnected => !_disposed && _client.IsConnected;
+
+    public async Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(verifyHostKey);
+        var started = Stopwatch.GetTimestamp();
         _client.HostKeyReceived += (_, args) =>
         {
             _hostKeySeen = true;
-            _hostKeyAccepted = H3cHostKeyFingerprint.Matches(profile.HostKeySha256, args.FingerPrintSHA256);
+            _hostKeyAccepted = verifyHostKey(args.FingerPrintSHA256);
             args.CanTrust = _hostKeyAccepted;
+            if (_hostKeyAccepted) Interlocked.Exchange(ref _hostKeyAcceptedTimestamp, Stopwatch.GetTimestamp());
         };
         try
         {
             await _client.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            if (!_hostKeySeen) throw new H3cHostKeyMissingException();
             if (!_hostKeyAccepted) throw new H3cHostKeyMismatchException();
         }
         catch (SshAuthenticationException)
         {
-            _client.Dispose();
-            _client = null;
+            Abort();
             throw new H3cAuthenticationFailedException();
+        }
+        catch (SshOperationTimeoutException)
+        {
+            Abort();
+            throw new H3cConnectionTimeoutException();
         }
         catch (Exception) when (_hostKeySeen && !_hostKeyAccepted)
         {
-            _client.Dispose();
-            _client = null;
+            Abort();
             throw new H3cHostKeyMismatchException();
         }
         catch
         {
-            _client.Dispose();
-            _client = null;
+            Abort();
             throw;
+        }
+        finally
+        {
+            var ended = Stopwatch.GetTimestamp();
+            var authenticationStarted = Interlocked.Read(ref _hostKeyAcceptedTimestamp);
+            var connectionEnded = authenticationStarted > 0 ? authenticationStarted : ended;
+            H3cCollectionMetrics.RecordConnectAuthentication(Stopwatch.GetElapsedTime(started, ended));
+            H3cCollectionMetrics.RecordConnectionSetup(Stopwatch.GetElapsedTime(started, connectionEnded));
+            if (authenticationStarted > 0)
+                H3cCollectionMetrics.RecordAuthentication(Stopwatch.GetElapsedTime(authenticationStarted, ended));
         }
     }
 
@@ -139,64 +216,254 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
     {
         if (!H3cCommandPolicy.IsAllowed(command))
             throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
-        var client = _client;
-        if (client is null || !client.IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
-        cancellationToken.ThrowIfCancellationRequested();
-        using var sshCommand = client.CreateCommand(command);
+        if (!IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
+
+        using var sshCommand = _client.CreateCommand(command);
         // The persisted scheduler imposes the stricter per-run deadline (maximum ten minutes).
         sshCommand.CommandTimeout = TimeSpan.FromMinutes(11);
-        using var commandCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var execution = sshCommand.ExecuteAsync(commandCancellation.Token);
-        var outputLimitExceeded = false;
-        while (!execution.IsCompleted)
+        var execution = sshCommand.ExecuteAsync(cancellationToken);
+        H3cCapturedOutput captured;
+        try
         {
-            if (StreamLengthExceedsLimit(sshCommand.OutputStream) ||
-                StreamLengthExceedsLimit(sshCommand.ExtendedOutputStream))
-            {
-                outputLimitExceeded = true;
-                commandCancellation.Cancel();
-                try { client.Disconnect(); }
-                catch (Exception) { }
-                break;
-            }
-            await Task.WhenAny(execution, Task.Delay(10, cancellationToken)).ConfigureAwait(false);
+            captured = await H3cCommandOutputCollector.CollectAsync(
+                sshCommand.OutputStream, sshCommand.ExtendedOutputStream, execution,
+                H3cRawOutput.MaximumBytes, Abort, cancellationToken).ConfigureAwait(false);
         }
-        outputLimitExceeded |= StreamLengthExceedsLimit(sshCommand.OutputStream) ||
-                               StreamLengthExceedsLimit(sshCommand.ExtendedOutputStream);
-        try { await execution.ConfigureAwait(false); }
-        catch when (outputLimitExceeded) { }
-        if (outputLimitExceeded)
-            throw new InvalidDataException($"H3C response exceeded the {H3cRawOutput.MaximumBytes}-byte output or error stream limit.");
-        if (sshCommand.ExitStatus is not null and not 0)
-            throw new InvalidDataException($"H3C read-only command returned exit status {sshCommand.ExitStatus}.");
-        var output = sshCommand.Result;
-        if (output.Contains("---- More ----", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Press any key", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("H3C response was paginated; no partial result was accepted.");
-        if (Encoding.UTF8.GetByteCount(output) > H3cRawOutput.MaximumBytes)
-            throw new InvalidDataException($"H3C response exceeds the {H3cRawOutput.MaximumBytes}-byte result limit.");
+        catch (H3cOutputLimitException)
+        {
+            throw;
+        }
+        catch (H3cPartialOutputException)
+        {
+            throw;
+        }
+
+        var output = captured.Text;
+        if (captured.StderrByteCount > 0)
+        {
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_STDERR_PARTIAL", false);
+            throw new H3cCommandRejectedException();
+        }
+        if (sshCommand.ExitStatus is not null and not 0 || sshCommand.ExitSignal is not null)
+        {
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_COMMAND_EXIT_FAILED_PARTIAL", false);
+            throw new H3cCommandRejectedException();
+        }
+        if (H3cComwareParser.ContainsPaginationPrompt(output))
+            throw new H3cPartialOutputException(output, "H3C_PAGINATION_PARTIAL", false);
         return output;
     }
 
-    private static bool StreamLengthExceedsLimit(Stream stream)
+    public void Abort()
     {
-        try { return stream.CanSeek && stream.Length > H3cRawOutput.MaximumBytes; }
-        catch (NotSupportedException) { return false; }
+        if (_disposed) return;
+        _disposed = true;
+        _client.Dispose();
+    }
+
+    public void Dispose() => Abort();
+}
+
+internal static class H3cCommandOutputCollector
+{
+    public static async Task<H3cCapturedOutput> CollectAsync(Stream stdout, Stream stderr, Task execution,
+        int maximumCombinedBytes, Action abortTransport, CancellationToken cancellationToken = default)
+    {
+        if (maximumCombinedBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumCombinedBytes));
+        cancellationToken.ThrowIfCancellationRequested();
+        long totalBytes = 0;
+        long stderrBytes = 0;
+        using var captured = new MemoryStream(Math.Min(maximumCombinedBytes, 4096));
+        var exceeded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var drainFailed = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var abortRequested = 0;
+        void AbortOnce()
+        {
+            if (Interlocked.Exchange(ref abortRequested, 1) != 0) return;
+            try { abortTransport(); }
+            catch (Exception) { }
+        }
+        _ = exceeded.Task.ContinueWith(_ => AbortOnce(), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        using var cancellationRegistration = cancellationToken.Register(() =>
+        {
+            cancelled.TrySetResult();
+            AbortOnce();
+        });
+
+        async Task DrainAsync(Stream source, bool capture)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(8192);
+            try
+            {
+                while (true)
+                {
+                    var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length)).ConfigureAwait(false);
+                    if (read == 0) return;
+                    if (!capture) Interlocked.Add(ref stderrBytes, read);
+                    var before = Interlocked.Add(ref totalBytes, read) - read;
+                    var remaining = Math.Max(0, maximumCombinedBytes - before);
+                    var accepted = (int)Math.Min(read, remaining);
+                    if (capture && accepted > 0) captured.Write(buffer, 0, accepted);
+                    if (before + read > maximumCombinedBytes) exceeded.TrySetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                drainFailed.TrySetResult(ex);
+                throw;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+            }
+        }
+
+        var stdoutDrain = DrainAsync(stdout, capture: true);
+        var stderrDrain = DrainAsync(stderr, capture: false);
+        var drains = Task.WhenAll(stdoutDrain, stderrDrain);
+        Exception? executionError = null;
+        var winner = await Task.WhenAny(execution, exceeded.Task, drainFailed.Task, cancelled.Task).ConfigureAwait(false);
+        var wasOverLimit = winner == exceeded.Task;
+        var wasCancelled = winner == cancelled.Task;
+        if (wasOverLimit || winner == drainFailed.Task || wasCancelled)
+            AbortOnce();
+
+        try { await execution.ConfigureAwait(false); }
+        catch (Exception ex) { executionError = ex; }
+        try { await drains.ConfigureAwait(false); }
+        catch (Exception ex) { executionError ??= ex; }
+        wasOverLimit |= exceeded.Task.IsCompleted;
+        wasCancelled |= cancelled.Task.IsCompleted || cancellationToken.IsCancellationRequested;
+        if (wasOverLimit) AbortOnce();
+
+        string output;
+        var allowIncompleteTail = wasOverLimit || wasCancelled || winner == drainFailed.Task || executionError is not null;
+        try
+        {
+            output = DecodeUtf8Prefix(captured.GetBuffer(), checked((int)captured.Length), allowIncompleteTail);
+        }
+        catch (DecoderFallbackException) { throw new H3cInvalidEncodingException(); }
+
+        if (wasOverLimit)
+        {
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_OUTPUT_LIMIT_PARTIAL", false);
+            throw new H3cOutputLimitException();
+        }
+        if (wasCancelled)
+        {
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_CANCELLED_PARTIAL", true);
+            throw new OperationCanceledException(cancellationToken);
+        }
+        if (winner == drainFailed.Task)
+        {
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_STREAM_READ_FAILED_PARTIAL", false);
+            throw new IOException("H3C SSH output stream could not be read.");
+        }
+        if (executionError is not null)
+        {
+            if (executionError is OperationCanceledException)
+            {
+                if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_CANCELLED_PARTIAL", true);
+                throw executionError;
+            }
+            if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_DISCONNECTED_PARTIAL", false);
+            throw executionError;
+        }
+        return new(output, Interlocked.Read(ref stderrBytes));
+    }
+
+    private static string DecodeUtf8Prefix(byte[] bytes, int length, bool allowIncompleteTail)
+    {
+        var encoding = new UTF8Encoding(false, true);
+        if (!allowIncompleteTail) return encoding.GetString(bytes, 0, length);
+        var decoder = encoding.GetDecoder();
+        var chars = new char[encoding.GetMaxCharCount(length)];
+        var charCount = decoder.GetChars(bytes, 0, length, chars, 0, flush: false);
+        return new string(chars, 0, charCount);
+    }
+}
+
+internal sealed class H3cSshDeviceSessionFactory(Catalog catalog, IH3cCredentialProvider credentials,
+    IH3cSshTransportFactory? transportFactory = null) : IDeviceSessionFactory
+{
+    private readonly IH3cSshTransportFactory _transportFactory = transportFactory ?? new SshNetH3cSshTransportFactory();
+
+    public IDeviceSession Create(string target)
+    {
+        var profile = catalog.GetH3cDeviceProfile(target)
+            ?? throw new KeyNotFoundException("H3C device profile was not found.");
+        if (!profile.Enabled) throw new InvalidOperationException("H3C device profile is disabled.");
+        return new H3cSshDeviceSession(profile, credentials, _transportFactory);
+    }
+}
+
+internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3cCredentialProvider credentials,
+    IH3cSshTransportFactory transportFactory) : IDeviceSession
+{
+    private IH3cSshTransport? _transport;
+    private bool _sessionCounted;
+
+    public async Task ConnectAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var password = credentials.GetPassword(profile.CredentialReference);
+        if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
+        _transport = transportFactory.Create(profile, password);
+        await _transport.ConnectAsync(fingerprint => H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint),
+            cancellationToken).ConfigureAwait(false);
+        _sessionCounted = true;
+        H3cCollectionMetrics.SessionOpened();
+    }
+
+    public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+    {
+        if (!H3cCommandPolicy.IsAllowed(command))
+            throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+        var transport = _transport;
+        if (transport is null || !transport.IsConnected)
+            throw new InvalidOperationException("H3C SSH session is not connected.");
+        cancellationToken.ThrowIfCancellationRequested();
+        var started = Stopwatch.GetTimestamp();
+        try { return await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false); }
+        finally { H3cCollectionMetrics.RecordCommand(Stopwatch.GetElapsedTime(started)); }
     }
 
     public ValueTask DisposeAsync()
     {
-        _client?.Dispose();
-        _client = null;
+        try { _transport?.Dispose(); }
+        finally
+        {
+            _transport = null;
+            if (_sessionCounted)
+            {
+                _sessionCounted = false;
+                H3cCollectionMetrics.SessionClosed();
+            }
+        }
         return ValueTask.CompletedTask;
     }
 }
 
+internal sealed record H3cRawOutputManifest(string RelativePath, string Command, long ByteCount,
+    string OutputSha256, string SegmentSha256, string CaptureStatus, string ParseStatus,
+    string ParsedJson, long CapturedMs);
+
+internal interface ITaskResultSink
+{
+    Task<H3cRawOutputManifest> PersistAsync(string runId, TaskDefinitionSnapshot definition,
+        string output, string captureStatus);
+}
+
 internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? storageFailure = null) : ITaskResultSink
 {
-    public async Task PersistAsync(string runId, TaskDefinitionSnapshot definition, string output)
+    public async Task<H3cRawOutputManifest> PersistAsync(string runId, TaskDefinitionSnapshot definition,
+        string output, string captureStatus)
     {
-        if (definition.TaskType != "H3C_SSH_READONLY") return;
+        if (definition.TaskType != "H3C_SSH_READONLY")
+            throw new InvalidOperationException("Only H3C output can be written through the H3C Raw sink.");
+        if (captureStatus is not ("COMPLETE" or "PARTIAL")) throw new ArgumentException("Capture status is invalid.", nameof(captureStatus));
         var profile = catalog.GetH3cDeviceProfile(definition.Target)
             ?? throw new InvalidOperationException("H3C result references a missing device profile.");
         var capturedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -208,12 +475,16 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
         try
         {
             var outputSha = writer.AppendH3cCommand(profile.Id, runId, profile.Host,
-                definition.Command, output, capturedMs);
+                definition.Command, output, capturedMs, captureStatus);
             await writer.FlushAsync().ConfigureAwait(false);
             await writer.SealAsync().ConfigureAwait(false);
-            var parsed = H3cComwareParser.ToParsedJson(definition.Command, output);
-            catalog.RegisterTaskRunRawOutput(runId, writer.RelativePath, definition.Command, outputByteCount,
-                Convert.ToHexString(outputSha).ToLowerInvariant(), writer.Sha256!, capturedMs, parsed);
+            H3cCollectionMetrics.RecordRawCommit(writer.LastSyncDurationMs, writer.LastSealDurationMs);
+            var parse = captureStatus == "PARTIAL"
+                ? new H3cParseResult("PARTIAL", "{}")
+                : H3cComwareParser.Parse(definition.Command, output);
+            return new H3cRawOutputManifest(writer.RelativePath, definition.Command, outputByteCount,
+                Convert.ToHexString(outputSha).ToLowerInvariant(), writer.Sha256!, captureStatus,
+                parse.Status, parse.Json, capturedMs);
         }
         catch (Exception ex)
         {

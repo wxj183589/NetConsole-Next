@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Channels;
+using System.Data.Common;
 
 namespace NetConsole.Next.Service;
 
@@ -27,11 +29,6 @@ internal interface IDeviceSession : IAsyncDisposable
 {
     Task ConnectAsync(CancellationToken cancellationToken);
     Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
-}
-
-internal interface ITaskResultSink
-{
-    Task PersistAsync(string runId, TaskDefinitionSnapshot definition, string output);
 }
 
 // Shared bounded execution core for future SSH/SNMP collectors. It never runs a shell command itself.
@@ -154,7 +151,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             if (_disposed || !_items.TryGetValue(id, out var item)) return false;
             lock (item.Gate)
             {
-                if (IsTerminal(item.Snapshot.State)) return false;
+                if (IsTerminal(item.Snapshot.State) || item.CommitStarted) return false;
                 item.CancelRequested = true;
                 if (item.Snapshot.State == "QUEUED")
                 {
@@ -179,16 +176,18 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
 
         foreach (var item in items)
         {
+            bool cancel;
             lock (item.Gate)
             {
-                item.CancelRequested = true;
+                cancel = !item.CommitStarted;
+                if (cancel) item.CancelRequested = true;
                 if (item.Snapshot.State == "QUEUED")
                 {
                     item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
                     PersistState(item, "CANCELLED", null);
                 }
             }
-            item.Cancellation.Cancel();
+            if (cancel) item.Cancellation.Cancel();
         }
         _queue.Writer.TryComplete();
         while (_queue.Reader.TryRead(out _)) Interlocked.Decrement(ref _queued);
@@ -251,6 +250,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         string terminalState;
         string? result = null;
         string? error = null;
+        var captureStatus = "COMPLETE";
+        var resultPersistedAtomically = false;
         using var timeout = new CancellationTokenSource(item.Request.Timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, item.Cancellation.Token, timeout.Token);
 
@@ -262,19 +263,41 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             result = await session.ExecuteAsync(item.Request.Command, linked.Token);
             terminalState = "SUCCEEDED";
         }
+        catch (H3cPartialOutputException ex)
+        {
+            H3cCollectionMetrics.RecordFailure(ex);
+            result = ex.Output;
+            captureStatus = "PARTIAL";
+            terminalState = ex.IsCancellation ? timeout.IsCancellationRequested ? "TIMED_OUT" : "CANCELLED" : "FAILED";
+            error = ex.FailureCode;
+        }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested || item.Cancellation.IsCancellationRequested)
         {
+            H3cCollectionMetrics.RecordFailure(new OperationCanceledException());
             terminalState = "CANCELLED";
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
+            H3cCollectionMetrics.RecordFailure(new TimeoutException());
             terminalState = "TIMED_OUT";
             error = "Collection request exceeded its timeout.";
+        }
+        catch (TimeoutException ex)
+        {
+            if (item.Definition?.TaskType == "H3C_SSH_READONLY") H3cCollectionMetrics.RecordFailure(ex);
+            terminalState = "TIMED_OUT";
+            error = ex.GetType().Name;
         }
         catch (Exception ex)
         {
             terminalState = "FAILED";
             error = ex.GetType().Name;
+            if (item.Definition?.TaskType == "H3C_SSH_READONLY") H3cCollectionMetrics.RecordFailure(ex);
+            if (ex is DbException or IOException or UnauthorizedAccessException)
+            {
+                try { _persistenceFailure?.Invoke(ex); }
+                catch { }
+            }
         }
 
         if (session is not null)
@@ -284,25 +307,62 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 terminalState = "FAILED";
                 error = error is null ? $"SessionDispose:{ex.GetType().Name}" : $"{error}; SessionDispose:{ex.GetType().Name}";
+                if (item.Definition?.TaskType == "H3C_SSH_READONLY") H3cCollectionMetrics.RecordFailure(ex);
             }
         }
 
-        if (terminalState == "SUCCEEDED" && item.Definition?.TaskType == "H3C_SSH_READONLY")
+        if (result is not null && item.Definition?.TaskType == "H3C_SSH_READONLY")
         {
             try
             {
                 if (_resultSink is null)
                     throw new InvalidOperationException("H3C task cannot complete without a durable Raw result sink.");
-                await _resultSink.PersistAsync(item.Snapshot.Id, item.Definition, result ?? string.Empty);
+                BeginRawCommit(item, timeout, ref terminalState, ref error);
+                var manifest = await _resultSink.PersistAsync(item.Snapshot.Id, item.Definition, result, captureStatus);
+                var sqliteStarted = Stopwatch.GetTimestamp();
+                _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifest, terminalState, error);
+                H3cCollectionMetrics.RecordSqliteCommit(Stopwatch.GetElapsedTime(sqliteStarted));
+                resultPersistedAtomically = true;
             }
             catch (Exception ex)
             {
                 terminalState = "FAILED";
                 error = $"ResultPersistence:{ex.GetType().Name}";
+                H3cCollectionMetrics.RecordFailure(ex);
+                if (ex is DbException or IOException or UnauthorizedAccessException)
+                {
+                    try { _persistenceFailure?.Invoke(ex); }
+                    catch { }
+                }
             }
         }
 
-        SetTerminal(item, terminalState, result, error, timeout.IsCancellationRequested);
+        SetTerminal(item, terminalState, result, error,
+            timeoutRequested: !item.CommitStarted && timeout.IsCancellationRequested,
+            stateAlreadyPersisted: resultPersistedAtomically);
+    }
+
+    private void BeginRawCommit(WorkItem item, CancellationTokenSource timeout,
+        ref string terminalState, ref string? error)
+    {
+        lock (item.Gate)
+        {
+            if (item.CancelRequested || _shutdown.IsCancellationRequested)
+            {
+                terminalState = "CANCELLED";
+                error = "Cancelled after command capture; output is being durably recorded.";
+            }
+            else if (timeout.IsCancellationRequested && terminalState == "SUCCEEDED")
+            {
+                terminalState = "TIMED_OUT";
+                error = "Collection request exceeded its timeout before Raw commit.";
+            }
+            item.CommitStarted = true;
+        }
+        // The command deadline covers connection and command execution. Once the
+        // captured response enters the durable commit phase, finish or report a
+        // storage failure instead of abandoning a partially written Raw result.
+        timeout.CancelAfter(Timeout.InfiniteTimeSpan);
     }
 
     private void SetState(WorkItem item, string state)
@@ -314,11 +374,14 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         if (item.Persisted && state == "RUNNING") PersistState(item, state, null);
     }
 
-    private void SetTerminal(WorkItem item, string state, string? result, string? error, bool timeoutRequested)
+    private void SetTerminal(WorkItem item, string state, string? result, string? error,
+        bool timeoutRequested, bool stateAlreadyPersisted = false)
     {
+        if (item.Definition?.TaskType == "H3C_SSH_READONLY")
+            H3cCollectionMetrics.RecordTask(TimeSpan.FromMilliseconds(Math.Max(0, UtcNowMs() - item.Snapshot.SubmittedMs)));
         lock (item.Gate)
         {
-            if (item.CancelRequested || _shutdown.IsCancellationRequested)
+            if (!item.CommitStarted && (item.CancelRequested || _shutdown.IsCancellationRequested))
             {
                 state = "CANCELLED";
                 result = null;
@@ -332,7 +395,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             }
             item.Snapshot = item.Snapshot with { State = state, Result = result, Error = error, EndedMs = UtcNowMs() };
         }
-        if (item.Persisted) PersistState(item, state, error);
+        if (item.Persisted && !stateAlreadyPersisted) PersistState(item, state, error);
         lock (_gate) PruneCompletedHistory();
     }
 
@@ -387,6 +450,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         public TaskDefinitionSnapshot? Definition { get; } = definition;
         public bool Persisted { get; } = persisted;
         public bool CancelRequested { get; set; }
+        public bool CommitStarted { get; set; }
         public DeviceCollectionSnapshot Snapshot { get; set; } = new(id, request.Target, request.Command, "QUEUED", null, null, submittedMs, null, null);
     }
 }
