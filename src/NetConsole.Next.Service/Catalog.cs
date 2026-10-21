@@ -545,7 +545,9 @@ internal sealed class Catalog(RuntimeSettings settings)
             CASE WHEN r.record_count=1 THEN 1 ELSE 0 END,
             CASE WHEN r.task_run_id=$run THEN 1 ELSE 0 END,
             CASE WHEN r.sha256=$segmentSha THEN 1 ELSE 0 END,
-            CASE WHEN r.byte_count=$segmentBytes THEN 1 ELSE 0 END
+            CASE WHEN r.byte_count=$segmentBytes THEN 1 ELSE 0 END,
+            CASE WHEN NOT EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.task_run_id=$run) THEN 1 ELSE 0 END,
+            CASE WHEN NOT EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.relative_path=$path) THEN 1 ELSE 0 END
             FROM task_runs t
             LEFT JOIN task_definitions d ON d.id=t.definition_id
             LEFT JOIN h3c_device_profiles p ON p.source_id=t.source_id
@@ -561,7 +563,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$run", runId);
         var names = new[] { "task_type", "definition_type", "definition_command", "definition_target",
             "profile_id", "profile_host", "task_source", "raw_source", "raw_state", "raw_record_count",
-            "raw_task_run", "raw_checksum", "raw_length" };
+            "raw_task_run", "raw_checksum", "raw_length", "run_manifest_slot", "raw_path_slot" };
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return names;
         return names.Where((_, index) => reader.GetInt64(index) != 1).ToArray();
