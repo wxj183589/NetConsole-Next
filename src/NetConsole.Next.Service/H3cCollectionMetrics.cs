@@ -5,7 +5,8 @@ using System.Diagnostics;
 namespace NetConsole.Next.Service;
 
 internal sealed record H3cCollectionMetricsSnapshot(int ActiveSshSessions,
-    long ConnectAuthenticationCount, double ConnectAuthenticationTotalMs,
+    long ConnectionSetupCount, double ConnectionSetupTotalMs,
+    long AuthenticationCount, double AuthenticationTotalMs,
     long CommandCount, double CommandTotalMs,
     long RawCommitCount, double RawFlushSyncTotalMs, double RawSealTotalMs,
     long SqliteCommitCount, double SqliteCommitTotalMs,
@@ -16,7 +17,8 @@ internal static class H3cCollectionMetrics
 {
     private static readonly ConcurrentDictionary<string, long> Failures = new(StringComparer.Ordinal);
     private static int _activeSessions;
-    private static long _connectCount, _connectTicks;
+    private static long _connectionSetupCount, _connectionSetupTicks;
+    private static long _authenticationCount, _authenticationTicks;
     private static long _commandCount, _commandTicks;
     private static long _rawCommitCount, _rawFlushMicroseconds, _rawSealMicroseconds;
     private static long _sqliteCount, _sqliteTicks;
@@ -24,10 +26,15 @@ internal static class H3cCollectionMetrics
 
     public static void SessionOpened() => Interlocked.Increment(ref _activeSessions);
     public static void SessionClosed() => Interlocked.Decrement(ref _activeSessions);
-    public static void RecordConnectAuthentication(TimeSpan elapsed)
+    public static void RecordConnectionSetup(TimeSpan elapsed)
     {
-        Interlocked.Increment(ref _connectCount);
-        Interlocked.Add(ref _connectTicks, elapsed.Ticks);
+        Interlocked.Increment(ref _connectionSetupCount);
+        Interlocked.Add(ref _connectionSetupTicks, elapsed.Ticks);
+    }
+    public static void RecordAuthentication(TimeSpan elapsed)
+    {
+        Interlocked.Increment(ref _authenticationCount);
+        Interlocked.Add(ref _authenticationTicks, elapsed.Ticks);
     }
     public static void RecordCommand(TimeSpan elapsed)
     {
@@ -53,7 +60,8 @@ internal static class H3cCollectionMetrics
     public static void RecordFailure(Exception exception) => Failures.AddOrUpdate(Classify(exception), 1, (_, count) => count + 1);
 
     public static H3cCollectionMetricsSnapshot Snapshot() => new(
-        Volatile.Read(ref _activeSessions), Interlocked.Read(ref _connectCount), Milliseconds(Interlocked.Read(ref _connectTicks)),
+        Volatile.Read(ref _activeSessions), Interlocked.Read(ref _connectionSetupCount), Milliseconds(Interlocked.Read(ref _connectionSetupTicks)),
+        Interlocked.Read(ref _authenticationCount), Milliseconds(Interlocked.Read(ref _authenticationTicks)),
         Interlocked.Read(ref _commandCount), Milliseconds(Interlocked.Read(ref _commandTicks)),
         Interlocked.Read(ref _rawCommitCount), Interlocked.Read(ref _rawFlushMicroseconds) / 1000d,
         Interlocked.Read(ref _rawSealMicroseconds) / 1000d,

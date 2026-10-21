@@ -35,6 +35,10 @@ internal static class SchedulerTests
                     await session.ConnectAsync(CancellationToken.None);
                     var output = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None);
                     Assert(output == "H3C Comware synthetic response\n", "SSH.NET Exec Channel should return the simulated Comware response intact");
+                    var connectedMetrics = H3cCollectionMetrics.Snapshot();
+                    Assert(connectedMetrics.ConnectionSetupCount > 0 && connectedMetrics.AuthenticationCount > 0 &&
+                           connectedMetrics.ConnectionSetupTotalMs > 0 && connectedMetrics.AuthenticationTotalMs > 0,
+                        "SSH protocol telemetry should report connection/key-exchange and post-pin authentication time separately");
                     Console.WriteLine("PASS: SSH.NET wire authentication, pinned host key and Exec Channel output");
                     break;
                 case "host-key":

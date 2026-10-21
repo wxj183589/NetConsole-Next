@@ -147,6 +147,7 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     private bool _hostKeySeen;
     private bool _hostKeyAccepted;
     private bool _disposed;
+    private long _hostKeyAcceptedTimestamp;
 
     public SshNetH3cSshTransport(H3cDeviceProfileSnapshot profile, string password)
     {
@@ -165,11 +166,13 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     public async Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(verifyHostKey);
+        var started = Stopwatch.GetTimestamp();
         _client.HostKeyReceived += (_, args) =>
         {
             _hostKeySeen = true;
             _hostKeyAccepted = verifyHostKey(args.FingerPrintSHA256);
             args.CanTrust = _hostKeyAccepted;
+            if (_hostKeyAccepted) Interlocked.Exchange(ref _hostKeyAcceptedTimestamp, Stopwatch.GetTimestamp());
         };
         try
         {
@@ -196,6 +199,15 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         {
             Abort();
             throw;
+        }
+        finally
+        {
+            var ended = Stopwatch.GetTimestamp();
+            var authenticationStarted = Interlocked.Read(ref _hostKeyAcceptedTimestamp);
+            var connectionEnded = authenticationStarted > 0 ? authenticationStarted : ended;
+            H3cCollectionMetrics.RecordConnectionSetup(Stopwatch.GetElapsedTime(started, connectionEnded));
+            if (authenticationStarted > 0)
+                H3cCollectionMetrics.RecordAuthentication(Stopwatch.GetElapsedTime(authenticationStarted, ended));
         }
     }
 
@@ -394,19 +406,14 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
-        var started = Stopwatch.GetTimestamp();
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var password = credentials.GetPassword(profile.CredentialReference);
-            if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
-            _transport = transportFactory.Create(profile, password);
-            await _transport.ConnectAsync(fingerprint => H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint),
-                cancellationToken).ConfigureAwait(false);
-            _sessionCounted = true;
-            H3cCollectionMetrics.SessionOpened();
-        }
-        finally { H3cCollectionMetrics.RecordConnectAuthentication(Stopwatch.GetElapsedTime(started)); }
+        cancellationToken.ThrowIfCancellationRequested();
+        var password = credentials.GetPassword(profile.CredentialReference);
+        if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
+        _transport = transportFactory.Create(profile, password);
+        await _transport.ConnectAsync(fingerprint => H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint),
+            cancellationToken).ConfigureAwait(false);
+        _sessionCounted = true;
+        H3cCollectionMetrics.SessionOpened();
     }
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)

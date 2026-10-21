@@ -516,8 +516,10 @@ internal sealed class Catalog(RuntimeSettings settings)
             insert.Parameters.AddWithValue("$segmentBytes", bytes.Length);
             if (insert.ExecuteNonQuery() != 1)
             {
+                var duplicateCandidateCount = candidates.Count(item => item.RunId == candidate.RunId);
                 var mismatches = ExplainH3cManifestLinkMismatch(db, transaction, candidate.RunId, candidate.RelativePath,
                     commandText, profileId, deviceHost ?? string.Empty, sourceId, segmentSha, bytes.Length);
+                if (duplicateCandidateCount > 1) mismatches = mismatches.Append("duplicate_raw_candidates").ToArray();
                 throw new InvalidDataException("H3C Raw result did not match its persisted task definition and source" +
                     (mismatches.Count == 0 ? "." : $" (mismatch: {string.Join(",", mismatches)})."));
             }
