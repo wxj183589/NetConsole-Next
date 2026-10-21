@@ -5,6 +5,7 @@ using System.Diagnostics;
 namespace NetConsole.Next.Service;
 
 internal sealed record H3cCollectionMetricsSnapshot(int ActiveSshSessions,
+    long ConnectAuthenticationCount, double ConnectAuthenticationTotalMs,
     long ConnectionSetupCount, double ConnectionSetupTotalMs,
     long AuthenticationCount, double AuthenticationTotalMs,
     long CommandCount, double CommandTotalMs,
@@ -17,6 +18,7 @@ internal static class H3cCollectionMetrics
 {
     private static readonly ConcurrentDictionary<string, long> Failures = new(StringComparer.Ordinal);
     private static int _activeSessions;
+    private static long _connectAuthenticationCount, _connectAuthenticationTicks;
     private static long _connectionSetupCount, _connectionSetupTicks;
     private static long _authenticationCount, _authenticationTicks;
     private static long _commandCount, _commandTicks;
@@ -26,6 +28,11 @@ internal static class H3cCollectionMetrics
 
     public static void SessionOpened() => Interlocked.Increment(ref _activeSessions);
     public static void SessionClosed() => Interlocked.Decrement(ref _activeSessions);
+    public static void RecordConnectAuthentication(TimeSpan elapsed)
+    {
+        Interlocked.Increment(ref _connectAuthenticationCount);
+        Interlocked.Add(ref _connectAuthenticationTicks, elapsed.Ticks);
+    }
     public static void RecordConnectionSetup(TimeSpan elapsed)
     {
         Interlocked.Increment(ref _connectionSetupCount);
@@ -60,7 +67,8 @@ internal static class H3cCollectionMetrics
     public static void RecordFailure(Exception exception) => Failures.AddOrUpdate(Classify(exception), 1, (_, count) => count + 1);
 
     public static H3cCollectionMetricsSnapshot Snapshot() => new(
-        Volatile.Read(ref _activeSessions), Interlocked.Read(ref _connectionSetupCount), Milliseconds(Interlocked.Read(ref _connectionSetupTicks)),
+        Volatile.Read(ref _activeSessions), Interlocked.Read(ref _connectAuthenticationCount), Milliseconds(Interlocked.Read(ref _connectAuthenticationTicks)),
+        Interlocked.Read(ref _connectionSetupCount), Milliseconds(Interlocked.Read(ref _connectionSetupTicks)),
         Interlocked.Read(ref _authenticationCount), Milliseconds(Interlocked.Read(ref _authenticationTicks)),
         Interlocked.Read(ref _commandCount), Milliseconds(Interlocked.Read(ref _commandTicks)),
         Interlocked.Read(ref _rawCommitCount), Interlocked.Read(ref _rawFlushMicroseconds) / 1000d,

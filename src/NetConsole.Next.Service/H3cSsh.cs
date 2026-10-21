@@ -205,6 +205,7 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
             var ended = Stopwatch.GetTimestamp();
             var authenticationStarted = Interlocked.Read(ref _hostKeyAcceptedTimestamp);
             var connectionEnded = authenticationStarted > 0 ? authenticationStarted : ended;
+            H3cCollectionMetrics.RecordConnectAuthentication(Stopwatch.GetElapsedTime(started, ended));
             H3cCollectionMetrics.RecordConnectionSetup(Stopwatch.GetElapsedTime(started, connectionEnded));
             if (authenticationStarted > 0)
                 H3cCollectionMetrics.RecordAuthentication(Stopwatch.GetElapsedTime(authenticationStarted, ended));

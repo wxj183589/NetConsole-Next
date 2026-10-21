@@ -448,8 +448,8 @@ internal sealed class Catalog(RuntimeSettings settings)
     private void RecoverH3cOutputManifests()
     {
         var candidates = new List<(string RunId, string RelativePath, string SegmentSha)>();
-        using (var db = Open())
-        using (var command = db.CreateCommand())
+        using (var queryDb = Open())
+        using (var command = queryDb.CreateCommand())
         {
             command.CommandText = @"SELECT r.task_run_id,r.relative_path,r.sha256
                 FROM raw_segments r JOIN task_runs t ON t.id=r.task_run_id
@@ -461,6 +461,14 @@ internal sealed class Catalog(RuntimeSettings settings)
                 candidates.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
         }
 
+        var ambiguousRuns = candidates.GroupBy(candidate => candidate.RunId, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1).ToArray();
+        if (ambiguousRuns.Length > 0)
+            throw new InvalidDataException($"H3C Raw result recovery found multiple verified segments for {ambiguousRuns.Length} task run(s); no result manifests were changed.");
+
+        var verified = new List<(string RunId, string RelativePath, string SegmentSha, string Command,
+            string ProfileId, string DeviceHost, string SourceId, int OutputBytes, string OutputSha,
+            string ParseJson, long CapturedMs, string CaptureStatus, string ParseStatus, int SegmentBytes)>();
         foreach (var candidate in candidates)
         {
             if (!TryResolveRawPath(candidate.RelativePath, out var path) || !File.Exists(path) || ContainsReparsePoint(path))
@@ -485,8 +493,18 @@ internal sealed class Catalog(RuntimeSettings settings)
                 ? new H3cParseResult("PARTIAL", "{}")
                 : H3cComwareParser.Parse(commandText, output);
             var parsedAt = record.GetProperty("captured_ms").GetInt64();
-            using var db = Open();
-            using var transaction = db.BeginTransaction();
+            verified.Add((candidate.RunId, candidate.RelativePath, segmentSha, commandText, profileId,
+                deviceHost ?? string.Empty, sourceId, outputBytes.Length,
+                record.GetProperty("output_sha256").GetString()!, parse.Json, parsedAt,
+                captureStatus, parse.Status, bytes.Length));
+        }
+
+        if (verified.Count == 0) return;
+
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        foreach (var candidate in verified)
+        {
             using var insert = db.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = @"INSERT OR IGNORE INTO task_run_raw_outputs
@@ -500,31 +518,30 @@ internal sealed class Catalog(RuntimeSettings settings)
                   AND p.host=$host AND t.source_id=$source AND r.source_id=t.source_id
                   AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
                   AND r.task_run_id=$run AND r.sha256=$segmentSha AND r.byte_count=$segmentBytes";
-            insert.Parameters.AddWithValue("$command", commandText);
-            insert.Parameters.AddWithValue("$bytes", outputBytes.Length);
-            insert.Parameters.AddWithValue("$outputSha", record.GetProperty("output_sha256").GetString()!);
-            insert.Parameters.AddWithValue("$segmentSha", segmentSha);
-            insert.Parameters.AddWithValue("$parsed", parse.Json);
-            insert.Parameters.AddWithValue("$captured", parsedAt);
-            insert.Parameters.AddWithValue("$capture", captureStatus);
-            insert.Parameters.AddWithValue("$parse", parse.Status);
+            insert.Parameters.AddWithValue("$command", candidate.Command);
+            insert.Parameters.AddWithValue("$bytes", candidate.OutputBytes);
+            insert.Parameters.AddWithValue("$outputSha", candidate.OutputSha);
+            insert.Parameters.AddWithValue("$segmentSha", candidate.SegmentSha);
+            insert.Parameters.AddWithValue("$parsed", candidate.ParseJson);
+            insert.Parameters.AddWithValue("$captured", candidate.CapturedMs);
+            insert.Parameters.AddWithValue("$capture", candidate.CaptureStatus);
+            insert.Parameters.AddWithValue("$parse", candidate.ParseStatus);
             insert.Parameters.AddWithValue("$path", candidate.RelativePath);
             insert.Parameters.AddWithValue("$run", candidate.RunId);
-            insert.Parameters.AddWithValue("$profile", profileId);
-            insert.Parameters.AddWithValue("$host", deviceHost ?? string.Empty);
-            insert.Parameters.AddWithValue("$source", sourceId);
-            insert.Parameters.AddWithValue("$segmentBytes", bytes.Length);
+            insert.Parameters.AddWithValue("$profile", candidate.ProfileId);
+            insert.Parameters.AddWithValue("$host", candidate.DeviceHost);
+            insert.Parameters.AddWithValue("$source", candidate.SourceId);
+            insert.Parameters.AddWithValue("$segmentBytes", candidate.SegmentBytes);
             if (insert.ExecuteNonQuery() != 1)
             {
-                var duplicateCandidateCount = candidates.Count(item => item.RunId == candidate.RunId);
                 var mismatches = ExplainH3cManifestLinkMismatch(db, transaction, candidate.RunId, candidate.RelativePath,
-                    commandText, profileId, deviceHost ?? string.Empty, sourceId, segmentSha, bytes.Length);
-                if (duplicateCandidateCount > 1) mismatches = mismatches.Append("duplicate_raw_candidates").ToArray();
+                    candidate.Command, candidate.ProfileId, candidate.DeviceHost, candidate.SourceId,
+                    candidate.SegmentSha, candidate.SegmentBytes);
                 throw new InvalidDataException("H3C Raw result did not match its persisted task definition and source" +
                     (mismatches.Count == 0 ? "." : $" (mismatch: {string.Join(",", mismatches)})."));
             }
-            transaction.Commit();
         }
+        transaction.Commit();
     }
 
     private static IReadOnlyList<string> ExplainH3cManifestLinkMismatch(SqliteConnection db,

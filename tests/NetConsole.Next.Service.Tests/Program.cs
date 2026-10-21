@@ -36,9 +36,10 @@ internal static class SchedulerTests
                     var output = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None);
                     Assert(output == "H3C Comware synthetic response\n", "SSH.NET Exec Channel should return the simulated Comware response intact");
                     var connectedMetrics = H3cCollectionMetrics.Snapshot();
-                    Assert(connectedMetrics.ConnectionSetupCount > 0 && connectedMetrics.AuthenticationCount > 0 &&
+                    Assert(connectedMetrics.ConnectAuthenticationCount > 0 && connectedMetrics.ConnectAuthenticationTotalMs > 0 &&
+                           connectedMetrics.ConnectionSetupCount > 0 && connectedMetrics.AuthenticationCount > 0 &&
                            connectedMetrics.ConnectionSetupTotalMs > 0 && connectedMetrics.AuthenticationTotalMs > 0,
-                        "SSH protocol telemetry should report connection/key-exchange and post-pin authentication time separately");
+                        "SSH protocol telemetry should retain combined connect/auth timing and report connection/key-exchange and post-pin authentication time separately");
                     Console.WriteLine("PASS: SSH.NET wire authentication, pinned host key and Exec Channel output");
                     break;
                 case "host-key":
@@ -127,6 +128,7 @@ internal static class SchedulerTests
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
         await PersistsH3cTaskOutputAsVerifiedRaw();
+        await RejectsAmbiguousH3cRecoveryAtomically();
         VerifiesExistingV1CatalogUpgradeReadsEachRawOnce();
         VerifiesIncrementalRecoverySkipsLargeTrustedHistory();
         VerifiesMaintenanceFailureCanResolveAfterVerifiedRetry();
@@ -479,6 +481,7 @@ internal static class SchedulerTests
                 drop.ExecuteNonQuery();
             }
             var openRunId = catalog.CreateTaskRun("h3c-version");
+            Assert(interruptedId != openRunId, "separate crash and open-segment cases must use different persisted task run ids");
             catalog.TransitionTaskRun(openRunId, "CONNECTING");
             catalog.TransitionTaskRun(openRunId, "RUNNING");
             var openWriter = new RawSegmentWriterFactory().CreateH3c(catalog, profileId);
@@ -492,7 +495,7 @@ internal static class SchedulerTests
             Assert(recovery.FailedFiles == 0 && recovery.TrustedFilesSkipped == 4 && recovery.RecoveredOpenFiles == 1,
                 $"verified indexed H3C output and crash recovery should reconcile idempotently: {recovery}; " +
                 string.Join(" | ", recovery.Issues.Select(issue =>
-                    $"{issue.Category}:{issue.RelativePath}:{issue.Detail}")));
+                    $"{issue.Category}:{issue.RelativePath}:{issue.Detail}")) + "; " + DescribeH3cRawEvidence(root));
             var afterRecovery = recovered.RecentTaskRuns().Single(x => x.Id == persisted.Id);
             Assert(afterRecovery.State == "SUCCEEDED" && afterRecovery.RawOutputPath == persisted.RawOutputPath &&
                    afterRecovery.CaptureStatus == "COMPLETE" && afterRecovery.ParseStatus == "PARSED",
@@ -546,6 +549,102 @@ internal static class SchedulerTests
         command.CommandText = "SELECT sha256 FROM raw_segments WHERE relative_path=$path AND state='FINALIZED'";
         command.Parameters.AddWithValue("$path", relativePath);
         return Convert.ToString(command.ExecuteScalar()) ?? throw new InvalidOperationException("H3C Raw segment was not finalized in SQLite.");
+    }
+
+    private static async Task RejectsAmbiguousH3cRecoveryAtomically()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-h3c-ambiguous-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var settings = TestSettings(root);
+        try
+        {
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            catalog.ProbeRawWritable();
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.20", 22, "readonly", "LAB_SWITCH_B",
+                fingerprint, true, 0, 0));
+            catalog.CreateTaskDefinition("h3c-ambiguous", "H3C_SSH_READONLY", profileId,
+                H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(10));
+            var runId = catalog.CreateTaskRun("h3c-ambiguous");
+            catalog.TransitionTaskRun(runId, "CONNECTING");
+            catalog.TransitionTaskRun(runId, "RUNNING");
+            const string output = "Synthetic Comware response for ambiguity recovery test";
+            var definition = catalog.GetTaskDefinition("h3c-ambiguous")!;
+            _ = await new H3cTaskRawResultSink(catalog).PersistAsync(runId, definition, output, "COMPLETE");
+
+            var duplicate = new RawSegmentWriterFactory().CreateH3c(catalog, profileId);
+            duplicate.AppendH3cCommand(profileId, runId, "192.0.2.20", H3cCommandPolicy.DisplayVersion,
+                output, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE");
+            await duplicate.FlushAsync();
+            await duplicate.SealAsync();
+
+            var recovered = new Catalog(settings);
+            recovered.Initialize();
+            var first = recovered.RecoverRawSegments();
+            Assert(first.FailedFiles == 1 && first.Issues.Any(issue => issue.Category == "H3C_RESULT_RECONCILIATION" &&
+                   issue.Detail.Contains("multiple verified segments", StringComparison.Ordinal)),
+                $"ambiguous Raw evidence must be visible and block result reconstruction: {first}");
+            Assert(Directory.EnumerateFiles(Path.Combine(root, "raw"), "*.ndjson", SearchOption.AllDirectories).Count() == 2,
+                "ambiguous recovery must retain both valid Raw files");
+            using (var db = OpenCatalog(root))
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = "SELECT COUNT(*) FROM task_run_raw_outputs WHERE task_run_id=$run";
+                command.Parameters.AddWithValue("$run", runId);
+                Assert(Convert.ToInt32(command.ExecuteScalar()) == 0,
+                    "ambiguous recovery must not partially insert a task result manifest");
+            }
+
+            var second = recovered.RecoverRawSegments();
+            Assert(second.FailedFiles == 1 && Directory.EnumerateFiles(Path.Combine(root, "raw"), "*.ndjson", SearchOption.AllDirectories).Count() == 2,
+                $"repeated ambiguous recovery must remain visible and retain evidence: {second}");
+            using (var db = OpenCatalog(root))
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = "SELECT COUNT(*) FROM task_run_raw_outputs WHERE task_run_id=$run";
+                command.Parameters.AddWithValue("$run", runId);
+                Assert(Convert.ToInt32(command.ExecuteScalar()) == 0,
+                    "repeated ambiguous recovery must remain idempotent without producing a partial result");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string DescribeH3cRawEvidence(string root)
+    {
+        var onDisk = new List<string>();
+        foreach (var path in Directory.EnumerateFiles(Path.Combine(root, "raw"), "*", SearchOption.AllDirectories)
+                     .Where(path => Path.GetExtension(path) is ".open" or ".ndjson"))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                var end = bytes.Length > 0 && bytes[^1] == (byte)'\n' ? bytes.Length - 1 : bytes.Length;
+                using var document = System.Text.Json.JsonDocument.Parse(bytes.AsMemory(0, end));
+                var record = document.RootElement;
+                if (record.TryGetProperty("record_type", out var type) && type.GetString() == "h3c_command")
+                    onDisk.Add($"{record.GetProperty("task_run_id").GetString()}={Path.GetRelativePath(root, path).Replace('\\', '/')}");
+            }
+            catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException)
+            {
+                onDisk.Add($"unreadable:{Path.GetRelativePath(root, path).Replace('\\', '/')}");
+            }
+        }
+
+        var indexed = new List<string>();
+        using (var db = OpenCatalog(root))
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = "SELECT task_run_id,relative_path FROM raw_segments WHERE source_id LIKE 'h3c-%' AND task_run_id IS NOT NULL ORDER BY task_run_id,relative_path";
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) indexed.Add($"{reader.GetString(0)}={reader.GetString(1)}");
+        }
+        return $"disk=[{string.Join(",", onDisk)}]; catalog=[{string.Join(",", indexed)}]";
     }
 
     private static async Task VerifiesH3cTransportLifecycle(H3cDeviceProfileSnapshot profile, string fingerprint)
