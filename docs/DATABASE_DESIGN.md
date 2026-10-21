@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v5 is implemented with additive idempotent upgrades from v1-v4. Linux Release build, repeated migration, SQLite integrity, Raw reconciliation, atomic task/result rollback and synthetic H3C output recovery tests passed locally. Current G2.1 Windows CI is pending; PR #10 Server 2025 CI is historical baseline, not evidence for the v5/DPAPI changes. Target OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v5 is implemented with additive idempotent upgrades from v1-v4. Linux and Windows Server 2025 Release builds/tests, repeated migration, SQLite integrity, Raw reconciliation, atomic task/result rollback and synthetic H3C output recovery passed; current G2.1 Windows CI run `39638777555` also passed the Windows legacy Raw path alias regression and DPAPI/service checks. Target Windows OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -75,6 +75,8 @@ Syslog payload bytes are Base64 encoded in newline-terminated JSON records. H3C 
 The local API bearer token is intentionally outside SQLite and lives in `local-api-token`. Windows H3C secrets are also outside SQLite: only DPAPI ciphertext is persisted in `credentials/h3c-credentials.v1.json`, keyed by reference; the service identity relies on the restricted inherited ProgramData ACL. Linux/Kylin has no DPAPI implementation. Explicit Development environment credentials are not a production provider.
 
 Every startup enumerates `.open` and `.ndjson` paths to discover unindexed files and compare indexed state. A `FINALIZED` row is trusted for startup only when the expected SHA exists and file size plus last-write UTC ticks equal its post-verification checkpoint. In that case startup performs filesystem metadata checks but reads zero file contents and writes no catalog row. v1 rows have no checkpoint, so the first v2 startup fully validates them. A size/time change, `INCOMPLETE`/`MISSING` state, `.open`, orphan, or path error forces full inspection; a checksum mismatch is appended to `raw_integrity_audits` and the Raw file remains on disk marked `INCOMPLETE`.
+
+New Raw catalog paths use forward slashes on every OS. During recovery, Windows compares slash and backslash spellings as the same physical path but retains the existing SQLite primary-key string when updating a legacy row; this prevents a second catalog row for the same file. Legacy slash aliases are treated as one logical segment only when their physical file and checksum agree. Distinct Raw files for a single H3C task remain an explicit recovery error, and Raw files are retained.
 
 The service writes `.raw-recovery-in-progress` with write-through before reconciliation. A process killed during recovery leaves the marker; the next startup replays the scan and reports `RECOVERY_INTERRUPTED`. On successful noncritical completion it clears the marker. A critical SQLite/raw-root error leaves it for another attempt. Persisted `INCOMPLETE`/`MISSING` segments and task runs changed to `INTERRUPTED` also keep the health state degraded on later starts. A low-priority audit begins after ten minutes, then fully inspects at most one finalized segment per minute, including a segment whose same-size rewrite preserved its last-write timestamp.
 

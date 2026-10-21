@@ -24,13 +24,13 @@
 - Windows 凭据采用 DPAPI `LocalMachine` 加密文件，Local Manager 提供 set/update/revoke；数据根 ACL 仅授予 SYSTEM、Administrators 和服务虚拟账户。Linux/Kylin 使用显式不可用 provider，环境变量 provider 仅在 Development 且显式开启时生效。
 - 本机所有 `/api/system/*` 管理端点需要 bearer token、loopback 来源和固定 Host 检查。token 可由 Local Manager 查看或旋转；没有 token、文件不可读或来源/Host 不符合时拒绝请求。远程管理认证/CSRF/角色模型尚未实现。
 - 已加入 host-key 变化/缺失、认证失败、连接取消/超时、设备断连、输出边界、分页提示、未知格式、事务回滚与恢复幂等测试。另用 Paramiko 本机 SSH server 与 SSH.NET 实际 wire 通道覆盖 host-key、认证、Exec、静默握手取消、连接重置和双并发会话，并以 fake transport 覆盖清理边界。模拟不等于 Comware 固件互操作；未连接真实设备，标记 `PENDING_REAL_ENVIRONMENT`。
-- G2.1 Linux Release 构建、C# 测试与 Syslog smoke/recovery 本地通过。Windows CI 需验证新增 DPAPI、安装 ACL 和 Local Manager token rotate。PR #10 保持未合并依赖，G2.1 使用独立分支与 PR。
+- G2.1 Linux 与 Windows Server 2025 Release 构建、C# 测试、Paramiko/SSH.NET wire 模拟及 Windows SCM/DPAPI/ACL 工作流通过（PR #11 head `426a42c2fd8b3f91576444ec2bd9325052b7bdb5`，Actions run `39638777555`）。Windows CI 曾发现旧 Raw 路径反斜杠与恢复正斜杠产生重复 Catalog 行；现已修复为写入规范化路径、恢复时按 Windows 物理路径识别并保留现有 DB 路径键，并加入 Windows 回归测试。PR #10 仍是未合并依赖，PR #11 保持独立且未合并。
 - H3C stdout 是 **SSH.NET 解码后的 UTF-8 命令输出**，不是 SSH 线路字节。Raw capture、`PARSED / EMPTY / UNRECOGNIZED / PARTIAL` 解析状态与任务终态是三个不同事实。最大输出 256 KiB；命令分页时失败，不自动降低 SSH 算法要求。
 - 正式现场 SSH/SNMP 采集、Syslog 多来源和 MR 实时采集仍须通过 G1 数据安全门禁、凭据管理评审和目标设备验证。
 - 持久调度仍为本机有界队列；没有分布式调度、自动重试、远程控制或业务任务 Web 页面。
 - Linux 合成设备并发 2/4/8/16 配合 128 个低速 Syslog 报文，4 档均观测到 128 收到、入队及 Raw 持久化、0 应用丢弃；结果是功能/资源样本，不是 SSH 设备吞吐或工业主机性能门禁。详见 [性能基线](PERFORMANCE_BASELINE.md)。
 - 在 2核4GB 与 4核8GB 目标主机执行 72 小时和 7 天测试，记录 CPU、工作集、IO、丢包量和数据缺口。
-- Windows 10/11、8/8.1、Server 2012/R2 单独建立兼容矩阵；只有运行本轮 Windows CI 后才更新对应的 `CI_VERIFIED`，旧系统必须在目标机验证。
+- Windows Server 2025 GitHub runner 的当前分支 CI 已验证；Windows 10/11、8/8.1、Server 2012/R2 与低配置设备仍按 [兼容矩阵](COMPATIBILITY_MATRIX.md) 标记为待目标环境验证，不能从 Server 2025 CI 推导其兼容性。
 
 ### G1/G2 尚未关闭的验收项
 - **待真实环境：**Windows 10/11 Service 安装/权限/升级；获现场授权的 H3C SSH Host Key、认证、Exec Channel、分页、版本、接口输出和算法互操作；低配置工业主机 72 小时/7 天负载、物理磁盘耗尽/断电。Server 2025 CI 与 Linux 故障注入不替代目标机验证。
