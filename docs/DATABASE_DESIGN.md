@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v5 is implemented with additive idempotent upgrades from v1-v4. Linux and Windows Server 2025 Release builds/tests, repeated migration, SQLite integrity, Raw reconciliation, atomic task/result rollback and synthetic H3C output recovery passed; current G2.1 Windows CI run `39638777555` also passed the Windows legacy Raw path alias regression and DPAPI/service checks. Target Windows OS and live-device compatibility remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v6 adds additive terminal session and event indexes on top of schema v5. Detailed terminal bytes remain in independent append-only recordings; the service is not a terminal UI. Physical COM, real devices, GUI and target Windows acceptance remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -65,6 +65,15 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 | `raw_segments.task_run_id` | Links a single-record H3C Raw segment to its persisted Task Run so recovery can rebuild a missing result manifest after a process crash. The index is partial and only covers non-null task IDs. |
 | `task_run_raw_outputs.capture_status`, `parse_status` | Separates output completeness from parser recognition. SQLite triggers restrict both values to their defined states. |
 | Atomic completion transaction | `CompleteTaskRunWithRawOutput` inserts/validates the result manifest and transitions the run terminal state in the same SQLite transaction. An injected terminal update failure rolls back the manifest insert. Startup recovery may restore the manifest from verified Raw but leaves task state `INTERRUPTED`; it never changes a crashed task to success. |
+
+### Schema v6 additions
+
+| Table | Purpose |
+| --- | --- |
+| `terminal_sessions` | Session identity, registered target snapshot, protocol, restricted mode, state, connection result, negotiated SSH algorithm, Host Key event, and recording integrity summary. |
+| `terminal_events` | Append-only UTC event index for connection, command policy, output, backpressure, disconnect and storage outcomes. Detailed terminal bytes are not stored in SQLite. |
+
+Terminal recordings are JSONL files under `terminal-recordings/`, with one timestamped base64 input/output record per line and a SHA-256 over the exact bytes written. The first implementation enforces a 64 MiB per-session recording bound and a 256-item output queue. An incomplete recording remains marked incomplete when storage fails or the transport ends before a clean close.
 
 Initialization enables WAL once and verifies the resulting mode. Each later SQLite connection sets `synchronous=FULL`, foreign keys, and a 5-second busy timeout without reissuing the journal-mode pragma, avoiding needless mode checks during concurrent writes. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
 

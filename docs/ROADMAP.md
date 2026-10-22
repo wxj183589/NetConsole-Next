@@ -19,6 +19,12 @@
 
 ## G2 可靠设备采集（基础组件进行中）
 
+### G2.3 内置终端第一垂直切片
+
+- 已在 G2.1 基线上加入可选 Terminal Session Manager：SSH.NET ShellStream、Telnet IAC/login、Windows COM 适配、服务器端 `RESTRICTED_READONLY` 输入策略、一次性 WebSocket ticket、有限输出队列和独立 JSONL 录制。
+- Schema v6 保存会话元数据与 UTC 事件索引；录制文件保存带时间戳的输入/输出字节与 SHA-256。任意设备地址、未登记目标、原始字节输入和通用本机 Shell 均不开放。
+- 当前切片不包含 xterm.js 设备管理 UI、会话检索/回放导出和物理串口验收；这些属于后续 PR B/C。SSH.NET 当前公开 API 只提供初始 PTY 尺寸，窗口变化请求仍需依赖后续库能力或受控适配；当前保留 gateway resize 契约但不宣称已完成远端 resize。
+
 - G2.1 在 PR #10 的 SSH 只读适配器上增加 SSH.NET stdout/stderr 并行有界读取，修复非 seekable `PipeStream` 导致的输出限制失效；超限保留受限前缀并标为 `PARTIAL`，取消、超时、disconnect 与解析状态分开记录。Exec Channel 仍为当前实现，未在缺少目标设备证据时切换到交互 Shell。
 - SQLite schema v5 将 Raw 段与 Task Run 关联，并在单个事务内写结果清单和任务终态。Raw 已封段但进程退出时，启动恢复校验内容并幂等重建清单；任务维持 `INTERRUPTED`，不会被恢复成成功。
 - Windows 凭据采用 DPAPI `LocalMachine` 加密文件，Local Manager 提供 set/update/revoke；数据根 ACL 仅授予 SYSTEM、Administrators 和服务虚拟账户。Linux/Kylin 使用显式不可用 provider，环境变量 provider 仅在 Development 且显式开启时生效。

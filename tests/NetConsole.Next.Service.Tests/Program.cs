@@ -1,4 +1,5 @@
 using NetConsole.Next.Service;
+using NetConsole.Next.Service.Tests;
 using Microsoft.Extensions.Logging;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
@@ -144,6 +145,7 @@ internal static class SchedulerTests
         await VerifiesCaptureDiskFullRetainsPartialRawAndFaults();
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesRollingLogSizeAndRetention();
+        await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
     }

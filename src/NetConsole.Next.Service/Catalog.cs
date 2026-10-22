@@ -45,7 +45,7 @@ internal sealed record RawSegmentInspection(long RecordCount, long FirstReceived
     string? TaskRunId = null, string CaptureStatus = "COMPLETE");
 internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
 
-internal sealed class Catalog(RuntimeSettings settings)
+internal sealed partial class Catalog(RuntimeSettings settings)
 {
     private const int MaximumLineBytes = 512 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
@@ -107,6 +107,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         ApplyV3Migration(db);
         ApplyV4Migration(db);
         ApplyV5Migration(db);
+        ApplyV6Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -211,6 +212,19 @@ internal sealed class Catalog(RuntimeSettings settings)
         AddColumnIfMissing(db, transaction, "task_run_raw_outputs", "parse_status", "TEXT NOT NULL DEFAULT 'UNCLASSIFIED'");
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v5.sql")
             ?? throw new InvalidOperationException("Embedded schema_v5.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV6Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v6.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v6.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

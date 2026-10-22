@@ -3,6 +3,9 @@ using NetConsole.Next.Service;
 using NetConsole.Next.Credentials;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net.WebSockets;
+using System.Text.Json;
+using System.IO.Ports;
 
 using var singleInstance = SingleInstanceGuard.Acquire();
 var settings = RuntimeSettings.FromEnvironment();
@@ -19,6 +22,8 @@ IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() 
         ? new WindowsDpapiH3cCredentialProvider(settings.DataRoot)
         : new UnavailableH3cCredentialProvider();
 builder.Services.AddSingleton<IH3cCredentialProvider>(credentialProvider);
+builder.Services.AddSingleton<TerminalSessionManager>();
+builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -43,6 +48,7 @@ builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
 
 var app = builder.Build();
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 app.Use(async (context, next) =>
 {
     if (!(context.Request.Path.Value?.StartsWith("/api/system", StringComparison.OrdinalIgnoreCase) ?? false))
@@ -63,6 +69,14 @@ app.Use(async (context, next) =>
     }
 
     if (string.Equals(context.Request.Path.Value, "/api/system/health", StringComparison.OrdinalIgnoreCase))
+    {
+        await next();
+        return;
+    }
+
+    var websocketStream = context.WebSockets.IsWebSocketRequest &&
+        context.Request.Path.Value?.EndsWith("/stream", StringComparison.OrdinalIgnoreCase) == true;
+    if (websocketStream)
     {
         await next();
         return;
@@ -95,6 +109,11 @@ app.Use(async (context, next) =>
 });
 var catalog = app.Services.GetRequiredService<Catalog>();
 var runtimeStatus = app.Services.GetRequiredService<RuntimeStatus>();
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    try { app.Services.GetRequiredService<TerminalSessionManager>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+    catch { }
+});
 RollingFileLoggerProvider? fileLoggerProvider = null;
 try
 {
@@ -190,6 +209,73 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
     });
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+if (settings.TerminalEnabled)
+{
+    app.MapGet("/api/system/terminal/serial-ports", () =>
+        Results.Ok(SerialPort.GetPortNames().OrderBy(name => name, StringComparer.OrdinalIgnoreCase)));
+    app.MapGet("/api/system/terminal/sessions", (string? targetId, TerminalSessionManager manager) =>
+        Results.Ok(manager.Recent(targetId)));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
+    {
+        var session = rawCatalog.GetTerminalSession(sessionId);
+        return session is null ? Results.NotFound() : Results.Ok(session);
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.TerminalEvents(sessionId)));
+    app.MapPost("/api/system/terminal/sessions", (TerminalSessionRequest request, TerminalSessionManager manager) =>
+    {
+        try
+        {
+            var sessionId = manager.Create(request);
+            return Results.Created($"/api/system/terminal/sessions/{sessionId}",
+                new { sessionId, state = "CONNECTING", mode = "RESTRICTED_READONLY" });
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/ticket", (string sessionId,
+        TerminalSessionManager manager, TerminalTicketStore tickets) =>
+    {
+        if (manager.Get(sessionId) is null) return Results.NotFound();
+        return Results.Ok(tickets.Issue(sessionId));
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
+        string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
+    {
+        var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}" };
+        var origin = context.Request.Headers.Origin.ToString();
+        if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+        var ticket = context.Request.Query["ticket"].ToString();
+        if (string.IsNullOrWhiteSpace(ticket) || !tickets.TryConsume(ticket, sessionId))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+        var session = manager.Get(sessionId);
+        if (session is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        var send = SendTerminalOutputAsync(socket, session, cancellation.Token);
+        var receive = ReceiveTerminalInputAsync(socket, session, cancellation.Token);
+        await Task.WhenAny(send, receive).ConfigureAwait(false);
+        cancellation.Cancel();
+        try { await Task.WhenAll(send, receive).ConfigureAwait(false); } catch { }
+        if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+        {
+            try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None); } catch { }
+        }
+    });
+}
 if (settings.H3cEnabled)
 {
     app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentH3cDeviceProfiles()));
@@ -261,6 +347,60 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
     });
 
 app.Run();
+
+static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+{
+    var status = JsonSerializer.SerializeToUtf8Bytes(new { type = "status", session = session.Snapshot });
+    await socket.SendAsync(status, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
+    await foreach (var output in session.Output.ReadAllAsync(cancellationToken))
+        await socket.SendAsync(output, WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
+}
+
+static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+{
+    var buffer = new byte[64 * 1024];
+    while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
+    {
+        var result = await socket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
+        if (result.MessageType == WebSocketMessageType.Close) return;
+        if (result.MessageType != WebSocketMessageType.Text || !result.EndOfMessage || result.Count > buffer.Length)
+        {
+            await socket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "structured text messages only", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(buffer.AsSpan(0, result.Count));
+            var root = document.RootElement;
+            var type = root.GetProperty("type").GetString();
+            switch (type)
+            {
+                case "input":
+                    await session.SendCommandAsync(root.GetProperty("text").GetString(), cancellationToken).ConfigureAwait(false);
+                    break;
+                case "control":
+                    await session.SendControlAsync(root.GetProperty("signal").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
+                    break;
+                case "resize":
+                    await session.ResizeAsync(root.GetProperty("columns").GetInt32(), root.GetProperty("rows").GetInt32(), cancellationToken).ConfigureAwait(false);
+                    break;
+                case "ping":
+                    break;
+                default:
+                    throw new InvalidOperationException("Unsupported terminal message type.");
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            try
+            {
+                var error = JsonSerializer.SerializeToUtf8Bytes(new { type = "error", error = ex.Message });
+                await socket.SendAsync(error, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
+            }
+            catch { return; }
+        }
+    }
+}
 
 internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
