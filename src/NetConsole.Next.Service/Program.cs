@@ -370,13 +370,13 @@ static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRun
         }
         try
         {
-            using var document = JsonDocument.Parse(buffer.AsSpan(0, result.Count));
+            using var document = JsonDocument.Parse(buffer.AsMemory(0, result.Count));
             var root = document.RootElement;
             var type = root.GetProperty("type").GetString();
             switch (type)
             {
                 case "input":
-                    await session.SendCommandAsync(root.GetProperty("text").GetString(), cancellationToken).ConfigureAwait(false);
+                    await session.SendCommandAsync(root.GetProperty("text").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
                     break;
                 case "control":
                     await session.SendControlAsync(root.GetProperty("signal").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
