@@ -77,7 +77,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         }
         _ = LocalApiTokenStore.GetOrCreate(settings.DataRoot);
 
-        foreach (var directoryName in new[] { "raw", "published", "inbox", "archive", "backup" })
+        foreach (var directoryName in new[] { "raw", "published", "inbox", "archive", "backup", "terminal-recordings" })
         {
             var directory = Path.Combine(settings.DataRoot, directoryName);
             Directory.CreateDirectory(directory);
@@ -108,6 +108,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV4Migration(db);
         ApplyV5Migration(db);
         ApplyV6Migration(db);
+        ApplyV7Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -125,6 +126,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             WHERE state IN ('QUEUED','CONNECTING','RUNNING')";
         interrupted.Parameters.AddWithValue("$now", UtcNowMs());
         InterruptedTaskRuns = interrupted.ExecuteNonQuery();
+        RecoverTerminalSessions(db);
         Available = true;
         StorageFailure = null;
     }
@@ -231,6 +233,191 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.CommandText = reader.ReadToEnd();
         command.ExecuteNonQuery();
         transaction.Commit();
+    }
+
+    private static void ApplyV7Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "operator_identity",
+            "TEXT NOT NULL DEFAULT 'UNATTRIBUTED'");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "site_name", "TEXT");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "command_count", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "output_bytes", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "recording_status",
+            "TEXT NOT NULL DEFAULT 'INCOMPLETE'");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "recording_verified_ms", "INTEGER");
+        AddColumnIfMissing(db, transaction, "terminal_sessions", "recording_integrity_detail", "TEXT");
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v7.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v7.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        using var status = db.CreateCommand();
+        status.Transaction = transaction;
+        status.CommandText = "UPDATE terminal_sessions SET recording_status='COMPLETE' WHERE recording_complete=1 AND recording_status='INCOMPLETE'";
+        status.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private void RecoverTerminalSessions(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        var now = UtcNowMs();
+        using var update = db.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = @"UPDATE terminal_sessions SET state='DISCONNECTED', ended_ms=COALESCE(ended_ms,$now),
+            last_activity_ms=$now, disconnect_reason=COALESCE(disconnect_reason,'SERVICE_STOP'),
+            recording_complete=0, recording_status='INTERRUPTED',
+            recording_integrity_detail=COALESCE(recording_integrity_detail,'Service stopped before terminal session completion.')
+            WHERE state IN ('CONNECTING','CONNECTED')";
+        update.Parameters.AddWithValue("$now", now);
+        var changed = update.ExecuteNonQuery();
+
+        var interruptedSessions = new List<TerminalSessionSnapshot>();
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = TerminalSessionSelect + " WHERE recording_status='INTERRUPTED'";
+            using var reader = query.ExecuteReader();
+            while (reader.Read()) interruptedSessions.Add(ReadTerminalSession(reader));
+        }
+        foreach (var session in interruptedSessions)
+            RecoverTerminalRecordingSegments(db, transaction, session);
+
+        if (changed > 0)
+        {
+            using var events = db.CreateCommand();
+            events.Transaction = transaction;
+            events.CommandText = @"INSERT INTO terminal_events(session_id,at_ms,event_type,detail_json)
+                SELECT id,$now,'DISCONNECTED', '{""reason"":""SERVICE_STOP"",""recovered"":true}'
+                FROM terminal_sessions WHERE recording_status='INTERRUPTED'
+                  AND NOT EXISTS (SELECT 1 FROM terminal_events e WHERE e.session_id=terminal_sessions.id
+                    AND e.event_type='DISCONNECTED' AND e.detail_json LIKE '%""recovered"":true%')";
+            events.Parameters.AddWithValue("$now", now);
+            events.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    private void RecoverTerminalRecordingSegments(SqliteConnection db, SqliteTransaction transaction,
+        TerminalSessionSnapshot session)
+    {
+        if (string.IsNullOrWhiteSpace(session.Id) ||
+            session.Id.Any(ch => !(char.IsLetterOrDigit(ch) || ch is '-' or '_')))
+            throw new InvalidDataException($"Terminal session id is not safe for recording recovery: {session.Id}");
+        var sessionDirectory = Path.Combine(settings.DataRoot, "terminal-recordings", session.Id);
+        if (!Directory.Exists(sessionDirectory)) return;
+        EnsureTerminalPathNotReparse(sessionDirectory);
+
+        var artifacts = Directory.EnumerateFiles(sessionDirectory, "segment-*", SearchOption.TopDirectoryOnly)
+            .Where(path => Path.GetFileName(path).EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(path).EndsWith(".jsonl.open", StringComparison.OrdinalIgnoreCase))
+            .Select(path =>
+            {
+                EnsureTerminalPathNotReparse(path);
+                var fileName = Path.GetFileName(path);
+                var open = fileName.EndsWith(".open", StringComparison.OrdinalIgnoreCase);
+                var stem = open ? fileName[..^".jsonl.open".Length] : fileName[..^".jsonl".Length];
+                if (!stem.StartsWith("segment-", StringComparison.Ordinal) ||
+                    !int.TryParse(stem["segment-".Length..], out var number) || number < 1)
+                    throw new InvalidDataException($"Terminal recording segment name is invalid: {fileName}");
+                return (Path: path, Number: number, Open: open);
+            })
+            .OrderBy(item => item.Number)
+            .ToArray();
+        if (artifacts.Length == 0) return;
+        if (artifacts.GroupBy(item => item.Number).Any(group => group.Count() != 1))
+            throw new InvalidDataException($"Terminal recording session {session.Id} contains duplicate segment numbers.");
+
+        using var overall = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        long totalBytes = 0;
+        var recovered = new List<(string RelativePath, string FullPath, TerminalRecordingSegmentSnapshot Segment)>();
+        foreach (var artifact in artifacts)
+        {
+            var relativePath = Path.GetRelativePath(settings.DataRoot, artifact.Path).Replace('\\', '/');
+            var fallbackTime = session.EndedMs ?? session.LastActivityMs;
+            var segment = new TerminalRecordingSegmentSnapshot(session.Id, artifact.Number, relativePath,
+                session.StartedMs, fallbackTime, 0, 0, null, artifact.Open ? "INCOMPLETE" : "COMPLETE");
+            TerminalRecordingFileInspection inspection;
+            var state = segment.State;
+            try
+            {
+                inspection = TerminalRecordingReader.Inspect(settings.DataRoot, session, segment);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or
+                System.Text.Json.JsonException or FormatException)
+            {
+                var fingerprint = TerminalRecordingReader.Fingerprint(artifact.Path);
+                inspection = new(0, session.StartedMs, fallbackTime, fingerprint.Bytes, fingerprint.Sha256);
+                state = "CORRUPTED";
+            }
+            var started = inspection.RecordCount > 0 ? inspection.StartedMs : session.StartedMs;
+            var ended = inspection.RecordCount > 0 ? inspection.EndedMs : fallbackTime;
+            var recoveredSegment = segment with
+            {
+                StartedMs = started,
+                EndedMs = ended,
+                Bytes = inspection.Bytes,
+                RecordCount = inspection.RecordCount,
+                Sha256 = inspection.Sha256,
+                State = state
+            };
+            using var insert = db.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO terminal_recording_segments
+                (session_id,segment_number,relative_path,started_ms,ended_ms,byte_count,record_count,sha256,state)
+                VALUES($session,$number,$path,$started,$ended,$bytes,$records,$sha,$state)
+                ON CONFLICT(session_id,segment_number) DO UPDATE SET
+                    relative_path=excluded.relative_path,started_ms=excluded.started_ms,ended_ms=excluded.ended_ms,
+                    byte_count=excluded.byte_count,record_count=excluded.record_count,sha256=excluded.sha256,state=excluded.state";
+            insert.Parameters.AddWithValue("$session", recoveredSegment.SessionId);
+            insert.Parameters.AddWithValue("$number", recoveredSegment.Number);
+            insert.Parameters.AddWithValue("$path", recoveredSegment.RelativePath);
+            insert.Parameters.AddWithValue("$started", recoveredSegment.StartedMs);
+            insert.Parameters.AddWithValue("$ended", recoveredSegment.EndedMs);
+            insert.Parameters.AddWithValue("$bytes", recoveredSegment.Bytes);
+            insert.Parameters.AddWithValue("$records", recoveredSegment.RecordCount);
+            insert.Parameters.AddWithValue("$sha", recoveredSegment.Sha256);
+            insert.Parameters.AddWithValue("$state", recoveredSegment.State);
+            insert.ExecuteNonQuery();
+
+            AppendFileToHash(overall, artifact.Path);
+            totalBytes += inspection.Bytes;
+            recovered.Add((relativePath, artifact.Path, recoveredSegment));
+        }
+
+        var recordingPath = session.RecordingRelativePath ?? recovered[0].RelativePath;
+        using var update = db.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = @"UPDATE terminal_sessions SET recording_relative_path=$path,
+            recording_bytes=$bytes,recording_sha256=$sha,recording_complete=0,recording_status='INTERRUPTED',
+            recording_integrity_detail=$detail WHERE id=$id";
+        update.Parameters.AddWithValue("$path", recordingPath);
+        update.Parameters.AddWithValue("$bytes", totalBytes);
+        update.Parameters.AddWithValue("$sha", Convert.ToHexString(overall.GetHashAndReset()).ToLowerInvariant());
+        update.Parameters.AddWithValue("$detail", $"Recovered {recovered.Count} recording segment(s) after service interruption; the session remains incomplete.");
+        update.Parameters.AddWithValue("$id", session.Id);
+        update.ExecuteNonQuery();
+    }
+
+    private static void AppendFileToHash(System.Security.Cryptography.IncrementalHash hash, string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+            64 * 1024, FileOptions.SequentialScan);
+        var buffer = new byte[64 * 1024];
+        int count;
+        while ((count = stream.Read(buffer, 0, buffer.Length)) > 0)
+            hash.AppendData(buffer, 0, count);
+    }
+
+    private static void EnsureTerminalPathNotReparse(string path)
+    {
+        if ((Directory.Exists(path) || File.Exists(path)) &&
+            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Terminal recording path cannot be a reparse point.");
     }
 
     private static void AddColumnIfMissing(SqliteConnection db, SqliteTransaction transaction,

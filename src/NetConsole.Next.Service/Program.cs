@@ -24,6 +24,8 @@ IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() 
 builder.Services.AddSingleton<IH3cCredentialProvider>(credentialProvider);
 builder.Services.AddSingleton<TerminalSessionManager>();
 builder.Services.AddSingleton<TerminalTicketStore>();
+builder.Services.AddSingleton<TerminalRecordingService>();
+builder.Services.AddSingleton<TerminalExportService>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -229,15 +231,69 @@ if (settings.TerminalEnabled)
         if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
         return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
     });
-    app.MapGet("/api/system/terminal/sessions", (string? targetId, TerminalSessionManager manager) =>
-        Results.Ok(manager.Recent(targetId)));
+    app.MapGet("/api/system/terminal/sessions", (HttpRequest request, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query))));
     app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
     {
         var session = rawCatalog.GetTerminalSession(sessionId);
         return session is null ? Results.NotFound() : Results.Ok(session);
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.TerminalEvents(sessionId)));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
+        Results.Ok(rawCatalog.TerminalEvents(sessionId, Math.Clamp(limit ?? 500, 1, 5000))));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.TerminalRecordingSegments(sessionId)));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/integrity", (string sessionId,
+        TerminalRecordingService recordings) =>
+    {
+        try { return Results.Ok(recordings.Verify(sessionId)); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/recording/verify", (string sessionId,
+        TerminalRecordingService recordings) =>
+    {
+        try { return Results.Ok(recordings.Verify(sessionId)); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.TerminalExports(sessionId)));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/export", async (HttpContext context, string sessionId,
+        string? format, Catalog rawCatalog, TerminalRecordingService recordings, TerminalExportService exports) =>
+    {
+        var session = rawCatalog.GetTerminalSession(sessionId);
+        if (session is null) return Results.NotFound();
+        try
+        {
+            var integrity = recordings.Verify(sessionId);
+            await exports.WriteAsync(context.Response, session, format ?? "TXT", integrity, context.RequestAborted);
+            return Results.Empty;
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/replay", (string sessionId,
+        long? offset, int? limit, long? fromMs, long? toMs, TerminalRecordingService recordings) =>
+    {
+        try
+        {
+            var safeOffset = Math.Max(0, offset ?? 0);
+            var safeLimit = Math.Clamp(limit ?? 500, 1, 2000);
+            var page = recordings.ReadReplay(sessionId, safeOffset, safeLimit, fromMs, toMs);
+            return Results.Ok(new
+            {
+                page.SessionId, page.Offset, page.Limit, page.HasMore,
+                entries = page.Entries.Select(entry => new
+                {
+                    entry.Position, entry.SegmentNumber, entry.AtMs, entry.Direction,
+                    dataB64 = Convert.ToBase64String(entry.Data)
+                })
+            });
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
+        catch (FileNotFoundException) { return Results.NotFound(); }
+    });
     app.MapPost("/api/system/terminal/sessions", (TerminalSessionRequest request, TerminalSessionManager manager) =>
     {
         try

@@ -9,13 +9,13 @@ NetConsole.Next.Service
   ├─ Windows Service host adapter / generic host lifecycle
   ├─ loopback health endpoint and bearer-protected local management API
   ├─ UDP Syslog receiver → packet/byte-bounded channel → batched Raw NDJSON segment writer
-  ├─ SQLite v5 catalog, incremental startup reconciliation, integrity audit and explicit issue disposition
+  ├─ SQLite v7 catalog, incremental startup reconciliation, integrity audit and explicit issue disposition
   ├─ process, queue, collection and disk-free monitoring
   ├─ bounded, count-retained local rolling logs
   └─ bounded persisted scheduler with simulated sessions and opt-in H3C SSH read-only collection
   ├─ optional Terminal Session Manager with SSH ShellStream, Telnet IAC and local serial transports
   ├─ loopback WebSocket gateway with one-time terminal tickets and bounded output buffering
-  └─ bounded JSONL terminal recordings plus SQLite session/event metadata
+  └─ bounded segmented JSONL terminal recordings plus SQLite session/event/history metadata
 
 NetConsole.Next.LocalManager
   └─ local CLI for service control, protected API token rotation and Windows DPAPI credential maintenance
@@ -27,6 +27,8 @@ NetConsole.Next.Credentials
 The Service has no UI dependency. The Web endpoint binds to `127.0.0.1`; every `/api/system/*` route requires a bearer token except read-only health, and all require a loopback remote address plus `127.0.0.1:<port>` or `localhost:<port>` Host. The data root contains the token; Linux token mode is `0600`, Windows inherits an ACL restricted to SYSTEM, Administrators and the service SID. The Local Manager can display/rotate the token. No CORS policy is enabled. Remote Web authentication, CSRF, user roles and audit identity are not implemented. UDP remote binding requires explicit opt-in. The Local Manager is a local process and does not own the Service lifetime.
 
 Terminal endpoints are opt-in (`NETCONSOLE_NEXT_TERMINAL_ENABLED=1`). Session creation accepts only a registered H3C profile for SSH/Telnet or a currently enumerated local COM port for Serial. The first mode is server-enforced `RESTRICTED_READONLY`; raw WebSocket bytes and arbitrary host/port targets are not accepted. A short-lived one-time ticket is issued through the bearer-protected local API and consumed exactly once by the WebSocket stream.
+
+Terminal history is separate from live transport sessions. History queries are paged and filter by registered target, protocol, time, state, integrity and recorded command keyword. Replay reads the controlled recording root through bounded pages and never creates a transport or ticket. Export is loopback/Bearer protected, streams TXT/JSONL/escaped HTML/manifest data, and records an audit row with verification status. Until a real authenticated operator model exists, history and export identity is `UNATTRIBUTED`.
 
 ## Storage boundary
 

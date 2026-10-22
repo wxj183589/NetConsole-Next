@@ -38,3 +38,14 @@ Development branch `feat/g2-1-h3c-ssh-hardening`, based on the open PR #10 head 
 | Live device, target Windows, low-spec industrial host, 72-hour/7-day run | Not run; no target environment authorized/available | `PENDING_REAL_ENVIRONMENT` | H3C protocol interoperability and firmware algorithms, OS compatibility, physical disk-full/power-loss behavior and industrial performance |
 
 Kernel host counters are not socket scoped. A host counter delta equal to the send/application gap under an otherwise isolated local test is supporting evidence, not a per-socket kernel trace. Burst records retain every expected/missing sequence and application-drop count in the JSON result.
+
+## G2.3 PR C session history evidence
+
+The following evidence was produced on Windows x64 with .NET SDK 10.0.402, Node 24.18.0, the locked web dependencies in `web/package-lock.json`, and isolated temporary data roots. Neither `D:\NetConsoleData` nor `D:\NetConsoleData-dev` was read or written.
+
+| Evidence | Command | Result | Boundary |
+| --- | --- | --- | --- |
+| Service and Local Manager Release builds | `dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release`; `dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release` | Passed with 0 warnings and 0 errors. | Does not establish Windows SCM or real-device acceptance for PR C. |
+| v7 storage, segmented recording, recovery and exports | `dotnet run --project tests/NetConsole.Next.Service.Tests -c Release --no-restore` | Passed existing Service suite plus v7 migration metadata, ordered multi-segment recording, bounded replay paging, SHA-256 tamper detection, traversal rejection, HTML escaping, export audit, v6 single-file replay, interrupted-session recovery and idempotence. | Simulated/isolated data only; power loss and physical disk exhaustion remain pending. |
+| Offline Web UI bundle and contract | `npm run build` in `web`; `python tests/terminal_ui_contract.py` | Passed; xterm.js/addons are bundled locally and publishable wwwroot assets contain no CDN dependency. | Does not establish cross-machine browser installation policy. |
+| Real browser PR B + PR C E2E | `python tests/terminal_e2e.py` | Passed Playwright Chromium flows for registered SSH/Telnet, simulated COM, ticket/auth rejection, readonly input, split/search/theme, history detail, UTC/Asia-Shanghai timeline, read-only replay controls and JSONL download. | Protocol simulators; physical COM, real devices and GUI manual acceptance remain pending. |

@@ -24,7 +24,16 @@
       <div id="service-state" class="muted">尚未连接服务</div>
       <div id="device-list" class="device-list"></div>
       <div class="panel-title sessions-title"><span>会话历史</span><button id="refresh-sessions">刷新</button></div>
+      <div class="history-filters">
+        <select id="history-device" aria-label="设备"><option value="">全部设备</option></select>
+        <select id="history-protocol" aria-label="协议"><option value="">全部协议</option><option>SSH</option><option>TELNET</option><option>SERIAL</option></select>
+        <select id="history-integrity-filter" aria-label="录制完整性"><option value="">全部完整性</option><option>COMPLETE</option><option>INCOMPLETE</option><option>INTERRUPTED</option><option>MISSING</option><option>CORRUPTED</option></select>
+        <input id="history-from" type="datetime-local" aria-label="开始时间" title="开始时间">
+        <input id="history-to" type="datetime-local" aria-label="结束时间" title="结束时间">
+        <input id="history-keyword" placeholder="会话或命令关键词" aria-label="历史关键词">
+      </div>
       <div id="session-list" class="session-list"></div>
+      <div class="history-pagination"><button id="history-prev" title="上一页">上一页</button><span id="history-page">第 1 页</span><button id="history-next" title="下一页">下一页</button></div>
     </aside>
     <section class="workspace panel">
       <div class="tabs" id="tabs"><span class="empty-tabs">暂无终端会话</span></div>
@@ -42,6 +51,21 @@
       <label>波特率 <input id="baud" type="number" value="9600" min="300" max="921600"></label>
       <div class="dialog-actions"><button value="cancel">取消</button><button id="serial-open" value="default">打开</button></div>
     </form>
+  </dialog>
+  <dialog id="history-dialog">
+    <div class="history-detail">
+      <div class="panel-title"><strong id="history-title">终端会话</strong><button id="history-close">关闭</button></div>
+      <div id="history-summary" class="history-summary"></div>
+      <div class="history-toolbar">
+        <label>时区 <select id="history-timezone"><option value="Asia/Shanghai">Asia/Shanghai</option><option value="UTC">UTC</option><option value="local">本机时区</option></select></label>
+        <button id="history-verify">重新校验</button><button data-export="TXT">TXT</button><button data-export="JSONL">JSONL</button><button data-export="HTML">HTML</button><button data-export="MANIFEST">清单</button>
+      </div>
+      <div id="history-integrity" class="integrity"></div>
+      <div class="history-columns">
+        <div><h4>时间轴</h4><div id="history-events" class="history-events"></div></div>
+        <div class="replay-panel"><div class="replay-toolbar"><button id="replay-restart">重新开始</button><button id="replay-play">播放</button><label>速度 <select id="replay-speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></label><input id="replay-progress" type="range" min="0" max="0" value="0"><input id="replay-search" placeholder="搜索回显"></div><div id="replay-terminal" class="replay-terminal"></div></div>
+      </div>
+    </div>
   </dialog>
   <script src="/terminal.bundle.js"></script>
 </body>

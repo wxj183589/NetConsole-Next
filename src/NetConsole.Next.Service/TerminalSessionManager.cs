@@ -178,6 +178,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
             _catalog.UpdateTerminalState(Snapshot.Id, "CONNECTED", "CONNECTED", negotiatedAlgorithm: _transport.NegotiatedAlgorithm);
             _catalog.RecordTerminalEvent(Snapshot.Id, new("CONNECTED", new { protocol = _transport.Protocol }));
+            _catalog.RecordTerminalEvent(Snapshot.Id, new("AUTHENTICATED", new { protocol = _transport.Protocol }));
             Snapshot = Snapshot with { State = "CONNECTED", ConnectionResult = "CONNECTED", NegotiatedAlgorithm = _transport.NegotiatedAlgorithm };
             await ReadLoopAsync().ConfigureAwait(false);
         }

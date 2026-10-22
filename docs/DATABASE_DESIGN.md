@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v6 adds additive terminal session and event indexes on top of schema v5. Detailed terminal bytes remain in independent append-only recordings; the service now serves the first G2.3 Web terminal slice. Physical COM, real devices, GUI and target Windows acceptance remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v7 adds terminal recording metadata, ordered bounded segments and export audit rows on top of schema v6. Detailed terminal bytes remain in independent append-only recordings; v6 single-file recordings remain readable. Physical COM, real devices, GUI and target Windows acceptance remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 
@@ -23,7 +23,7 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 
 ## Schema versions
 
-`schema_versions` currently records v1 through v6. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state, adds v4 H3C identity/result tables, applies v5 Raw/task recovery fields and status validation, and applies v6 terminal session/event tables in idempotent transactions. Reopening an already upgraded database is tested.
+`schema_versions` currently records v1 through v7. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state, adds v4 H3C identity/result tables, applies v5 Raw/task recovery fields and status validation, applies v6 terminal session/event tables, and applies v7 terminal recording segments/export audit metadata in idempotent transactions. Reopening an already upgraded database is tested.
 
 ### Schema v1 base
 
@@ -74,6 +74,17 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 | `terminal_events` | Append-only UTC event index for connection, command policy, output, backpressure, disconnect and storage outcomes. Detailed terminal bytes are not stored in SQLite. |
 
 Terminal recordings are JSONL files under `terminal-recordings/`, with one timestamped base64 input/output record per line and a SHA-256 over the exact bytes written. The first implementation enforces a 64 MiB per-session recording bound and a 256-item output queue. An incomplete recording remains marked incomplete when storage fails or the transport ends before a clean close.
+
+### Schema v7 additions
+
+| Table / columns | Purpose |
+| --- | --- |
+| `terminal_sessions.operator_identity`, `site_name`, `command_count`, `output_bytes` | Preserve `UNATTRIBUTED` until a real operator identity exists and support history filters/summary fields. |
+| `terminal_sessions.recording_status`, `recording_verified_ms`, `recording_integrity_detail` | Distinguish `COMPLETE`, `INCOMPLETE`, `INTERRUPTED`, `MISSING` and `CORRUPTED` based on verification rather than file existence alone. |
+| `terminal_recording_segments` | Ordered relative paths, UTC millisecond ranges, byte/record counts, SHA-256 and segment state. v6 single-file rows are read through a compatibility path. |
+| `terminal_exports` | Append-only export audit metadata including format, integrity status, operator identity, result and byte count. |
+
+New terminal recordings roll at 8 MiB and retain a 64 MiB session bound. A writer seals `.open` files before recording a segment as complete; an interrupted final segment remains evidence and is never upgraded silently. Startup marks active sessions as interrupted idempotently. All recording paths are resolved below `terminal-recordings/` and reparse-point traversal is rejected.
 
 Initialization enables WAL once and verifies the resulting mode. Each later SQLite connection sets `synchronous=FULL`, foreign keys, and a 5-second busy timeout without reissuing the journal-mode pragma, avoiding needless mode checks during concurrent writes. A write-lock test confirms busy errors return instead of hanging. Startup runs `quick_check(1)` and `foreign_key_check` before enabling collection. Catalog unavailable or critical recovery state prevents new collection. Writes are short-lived and segment registration happens only after the file is sealed.
 

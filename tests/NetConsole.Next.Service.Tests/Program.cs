@@ -866,7 +866,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 6, "v6 migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 7, "v7 terminal history migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
