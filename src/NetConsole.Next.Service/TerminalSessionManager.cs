@@ -60,6 +60,9 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
         {
             if (string.IsNullOrWhiteSpace(request.SerialPort))
                 throw new ArgumentException("A serial port is required.", nameof(request));
+            if (request.SerialPort.StartsWith("SIMULATED-", StringComparison.OrdinalIgnoreCase) &&
+                !_settings.TerminalDevelopmentSimulationEnabled)
+                throw new InvalidOperationException("Simulated serial ports are available only in explicit Development test mode.");
             serial = new TerminalSerialConfiguration(request.SerialPort.Trim(), request.BaudRate, request.DataBits,
                 request.StopBits, request.Parity, request.Handshake, request.DtrEnable, request.RtsEnable);
             serialPort = serial.PortName;
@@ -236,7 +239,10 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
 
     private async Task<ITerminalTransport> CreateTransportAsync()
     {
-        if (_serial is not null) return new SerialTerminalTransport(_serial);
+        if (_serial is not null)
+            return _serial.PortName.StartsWith("SIMULATED-", StringComparison.OrdinalIgnoreCase)
+                ? new SimulatedSerialTerminalTransport(_serial.PortName)
+                : new SerialTerminalTransport(_serial);
         var profile = _profile ?? throw new InvalidOperationException("Terminal device profile is missing.");
         var password = _credentials.GetPassword(profile.CredentialReference);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();

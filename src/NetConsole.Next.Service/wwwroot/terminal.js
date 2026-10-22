@@ -1,3 +1,7 @@
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+
 (() => {
   "use strict";
   const state = { token: sessionStorage.getItem("netconsole-token") || "", devices: [], sessions: [], tabs: new Map(), active: null, split: false, dark: true };
@@ -28,10 +32,9 @@
     if (!state.sessions.length) list.innerHTML = '<div class="muted">暂无已保存会话</div>';
   }
   function createTerminal(tab) {
-    if (!window.Terminal) { notice("xterm.js 未加载，请检查本机网络或部署静态依赖。", true); return null; }
     const terminal = new Terminal({ convertEol:true, cursorBlink:true, scrollback:5000, fontSize:Number($("font-size").value), theme: state.dark ? { background:"#05080b" } : { background:"#fff", foreground:"#18212b" } });
-    if (window.FitAddon) { tab.fit = new FitAddon.FitAddon(); terminal.loadAddon(tab.fit); }
-    if (window.SearchAddon) { tab.search = new SearchAddon.SearchAddon(); terminal.loadAddon(tab.search); }
+    tab.fit = new FitAddon(); terminal.loadAddon(tab.fit);
+    tab.search = new SearchAddon(); terminal.loadAddon(tab.search);
     terminal.onData(data => editInput(tab, data)); terminal.onResize(size => sendMessage(tab, { type:"resize", columns:size.cols, rows:size.rows }));
     return terminal;
   }
@@ -45,7 +48,7 @@
     tab.inputBuffer += data; tab.terminal.write(data);
   }
   async function createTab(device, protocol, serial = null) {
-    const id = `tab-${crypto.randomUUID()}`; const tab = { id, label: serial ? serial : `${device.host} ${protocol}`, targetId: device.id, protocol, terminal:null, socket:null, connected:false, serial };
+    const id = `tab-${crypto.randomUUID()}`; const tab = { id, label: serial?.serialPort ?? `${device.host} ${protocol}`, targetId: device.id, protocol, terminal:null, socket:null, connected:false, inputBuffer:"", serial };
     tab.terminal = createTerminal(tab); if (!tab.terminal) return; state.tabs.set(id, tab); state.active = id;
     const pane = document.createElement("div"); pane.className = "terminal-pane"; pane.dataset.pane = id; $("terminals").append(pane); tab.terminal.open(pane); tab.terminal.writeln(`\x1b[90mConnecting ${tab.label} (RESTRICTED_READONLY)...\x1b[0m`);
     renderTabs(); renderPanes();

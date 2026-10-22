@@ -4,7 +4,9 @@ obj/
 .idea/
 .vscode/
 .local-data/
+.local-publish-terminal/
 data/
+web/node_modules/
 *.db
 *.db-shm
 *.db-wal

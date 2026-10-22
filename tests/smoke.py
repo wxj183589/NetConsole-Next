@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Isolated Linux P0 smoke: localhost health, UDP exact bytes, Raw file and SQLite catalog."""
 import base64
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -32,9 +33,10 @@ def main():
         env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root),
                    NETCONSOLE_NEXT_WEB_PORT=str(web_port),
                    NETCONSOLE_NEXT_SYSLOG_PORT=str(udp_port))
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True)
+                                   text=True, creationflags=creationflags)
         try:
             url = f"http://127.0.0.1:{web_port}/api/system/health"
             for _ in range(120):
@@ -102,7 +104,10 @@ def main():
             else:
                 raise AssertionError("P0 Raw did not flush.")
             assert health["udpDropped"] == 0, health
-            service.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                service.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                service.send_signal(signal.SIGINT)
             service.wait(timeout=20)
             assert service.returncode == 0, service.returncode
             raw_files = list((root / "raw").rglob("*.ndjson"))
@@ -110,7 +115,7 @@ def main():
             records = [json.loads(line) for line in raw_files[0].read_text().splitlines()]
             assert len(records) == 1, records
             assert base64.b64decode(records[0]["payload_base64"]) == raw_payload
-            with sqlite3.connect(root / "catalog.db") as db:
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
                 rows = db.execute("SELECT relative_path,record_count,byte_count,state FROM raw_segments").fetchall()
             assert len(rows) == 1, rows
             rel, count, size, state = rows[0]

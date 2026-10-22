@@ -1,6 +1,7 @@
 using System.IO.Ports;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 using Renci.SshNet;
 
 namespace NetConsole.Next.Service;
@@ -275,6 +276,56 @@ internal sealed class SerialTerminalTransport(TerminalSerialConfiguration config
             ReadTimeout = 1000,
             WriteTimeout = 1000
         };
+    }
+}
+
+// Development-only transport used by the browser E2E harness. It is never
+// enumerated or accepted unless RuntimeSettings explicitly enables simulation.
+internal sealed class SimulatedSerialTerminalTransport(string portName) : ITerminalTransport
+{
+    private readonly Channel<byte[]> _output = Channel.CreateBounded<byte[]>(16);
+    private byte[]? _pending;
+    private int _pendingOffset;
+
+    public string Protocol => "SERIAL";
+    public string? NegotiatedAlgorithm => "SERIAL-SIMULATED";
+
+    public async Task ConnectAsync(CancellationToken cancellationToken)
+    {
+        await _output.Writer.WriteAsync(Encoding.UTF8.GetBytes($"{portName} simulated console ready\r\n> "), cancellationToken);
+    }
+
+    public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        if (_pending is null || _pendingOffset >= _pending.Length)
+        {
+            _pending = await _output.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            _pendingOffset = 0;
+        }
+        var count = Math.Min(buffer.Length, _pending.Length - _pendingOffset);
+        _pending.AsMemory(_pendingOffset, count).CopyTo(buffer);
+        _pendingOffset += count;
+        return count;
+    }
+
+    public async Task SendCommandAsync(string command, CancellationToken cancellationToken)
+    {
+        await _output.Writer.WriteAsync(Encoding.UTF8.GetBytes($"{command}\r\nsimulated:{command}\r\n> "), cancellationToken);
+    }
+
+    public async Task SendControlAsync(string control, CancellationToken cancellationToken)
+    {
+        if (control != "CTRL_C") throw new InvalidOperationException("Only CTRL_C is available in RESTRICTED_READONLY mode.");
+        await _output.Writer.WriteAsync(Encoding.UTF8.GetBytes("^C\r\n> "), cancellationToken);
+    }
+
+    public Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public ValueTask DisposeAsync()
+    {
+        _output.Writer.TryComplete();
+        return ValueTask.CompletedTask;
     }
 }
 

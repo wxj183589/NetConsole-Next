@@ -7,6 +7,8 @@ INDEX = ROOT / "src" / "NetConsole.Next.Service" / "wwwroot" / "index.html"
 SCRIPT = ROOT / "src" / "NetConsole.Next.Service" / "wwwroot" / "terminal.js"
 PROJECT = ROOT / "src" / "NetConsole.Next.Service" / "NetConsole.Next.Service.csproj"
 PROGRAM = ROOT / "src" / "NetConsole.Next.Service" / "Program.cs"
+WEB_PACKAGE = ROOT / "web" / "package.json"
+WEB_LOCK = ROOT / "web" / "package-lock.json"
 
 
 def test_web_terminal_assets_are_published():
@@ -15,7 +17,15 @@ def test_web_terminal_assets_are_published():
     assert "wwwroot\\**\\*" in project
     assert "CopyToPublishDirectory=\"PreserveNewest\"" in project
     html = INDEX.read_text(encoding="utf-8")
-    assert "xterm@5.3.0" in html
+    assert "xterm.css" in html and "terminal.bundle.js" in html
+    assert "cdn.jsdelivr.net" not in html
+    package = WEB_PACKAGE.read_text(encoding="utf-8")
+    assert '"@xterm/xterm": "5.5.0"' in package
+    assert '"@xterm/addon-fit": "0.10.0"' in package
+    assert '"@xterm/addon-search": "0.15.0"' in package
+    assert WEB_LOCK.is_file()
+    assert (ROOT / "src" / "NetConsole.Next.Service" / "wwwroot" / "terminal.bundle.js").is_file()
+    assert (ROOT / "src" / "NetConsole.Next.Service" / "wwwroot" / "xterm.css").is_file()
     assert 'id="device-list"' in html and 'id="terminals"' in html
 
 
@@ -26,7 +36,9 @@ def test_web_terminal_uses_authorized_session_flow():
     assert "/api/system/terminal/sessions" in script
     assert "/ticket" in script and "/stream?ticket=" in script
     assert 'mode:"RESTRICTED_READONLY"' in script
-    assert "new Terminal" in script
+    assert 'from "@xterm/xterm"' in script
+    assert 'from "@xterm/addon-fit"' in script
+    assert 'from "@xterm/addon-search"' in script
     assert "new TerminalDeviceView" in program
     assert "UseStaticFiles" in program
 

@@ -151,7 +151,6 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or I
 }
 
 var processStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-app.MapGet("/", () => Results.Text("NetConsole Next Core service"));
 app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress, Catalog rawCatalog,
     RuntimeStatus status, RuntimeResources resources, FileLogDiagnostics logDiagnostics) =>
 {
@@ -224,8 +223,12 @@ if (settings.TerminalEnabled)
         });
         return Results.Ok(devices);
     });
-    app.MapGet("/api/system/terminal/serial-ports", () =>
-        Results.Ok(SerialPort.GetPortNames().OrderBy(name => name, StringComparer.OrdinalIgnoreCase)));
+    app.MapGet("/api/system/terminal/serial-ports", (RuntimeSettings runtime) =>
+    {
+        var ports = SerialPort.GetPortNames().AsEnumerable();
+        if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
+        return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+    });
     app.MapGet("/api/system/terminal/sessions", (string? targetId, TerminalSessionManager manager) =>
         Results.Ok(manager.Recent(targetId)));
     app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
