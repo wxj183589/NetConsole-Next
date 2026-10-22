@@ -159,8 +159,12 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken) =>
-        Task.CompletedTask;
+    public async Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken)
+    {
+        var stream = _stream ?? throw new InvalidOperationException("Telnet terminal is not connected.");
+        await stream.WriteAsync(_negotiator.Resize(columns, rows), cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -283,14 +287,25 @@ internal sealed class TelnetNegotiator
     private const byte Dont = 254;
     private const byte Sb = 250;
     private const byte Se = 240;
+    private const byte Echo = 1;
+    private const byte SuppressGoAhead = 3;
+    private const byte TerminalType = 24;
+    private const byte Naws = 31;
+    private const byte Is = 0;
+    private const byte Send = 1;
     private readonly List<byte> _payload = new();
     private readonly List<byte> _replies = new();
+    private readonly List<byte> _subnegotiation = new();
     private bool _inIac;
     private bool _inSubnegotiation;
     private bool _afterSubnegotiationIac;
     private byte _command;
 
-    public static byte[] InitialNegotiation => new byte[] { Iac, Will, 1, Iac, Will, 3, Iac, Do, 24, Iac, Do, 31 };
+    public static byte[] InitialNegotiation => new byte[]
+    {
+        Iac, Do, Echo, Iac, Do, SuppressGoAhead,
+        Iac, Will, TerminalType, Iac, Will, Naws
+    };
     public ReadOnlyMemory<byte> Replies => _replies.ToArray();
 
     public byte[] Process(ReadOnlySpan<byte> bytes)
@@ -308,24 +323,28 @@ internal sealed class TelnetNegotiator
             if (_afterSubnegotiationIac)
             {
                 _afterSubnegotiationIac = false;
-                if (value == Se) _inSubnegotiation = false;
+                if (value == Se)
+                {
+                    _inSubnegotiation = false;
+                    HandleSubnegotiation();
+                }
+                else if (value == Iac) _subnegotiation.Add(value);
                 return;
             }
             if (value == Iac) _afterSubnegotiationIac = true;
+            else _subnegotiation.Add(value);
             return;
         }
         if (_inIac)
         {
             _inIac = false;
             if (value == Iac) { _payload.Add(value); return; }
-            if (value == Sb) { _inSubnegotiation = true; return; }
+            if (value == Sb) { _inSubnegotiation = true; _subnegotiation.Clear(); return; }
             if (value is Will or Wont or Do or Dont) { _command = value; _inIac = true; return; }
-            if (_command is Will or Wont)
-            {
-                if (_command == Will && value is 1 or 3 or 24 or 31) Reply(Dont, value);
-                else Reply(Dont, value);
-            }
-            else if (_command is Do or Dont) Reply(_command == Do ? Wont : Dont, value);
+            if (_command == Will) Reply(value is Echo or SuppressGoAhead ? Do : Dont, value);
+            else if (_command == Wont) Reply(Dont, value);
+            else if (_command == Do) Reply(value is TerminalType or Naws or SuppressGoAhead ? Will : Wont, value);
+            else if (_command == Dont) Reply(Wont, value);
             _command = 0;
             return;
         }
@@ -334,4 +353,22 @@ internal sealed class TelnetNegotiator
     }
 
     private void Reply(byte command, byte option) { _replies.Add(Iac); _replies.Add(command); _replies.Add(option); }
+
+    public byte[] Resize(int columns, int rows)
+    {
+        columns = Math.Clamp(columns, 1, 500);
+        rows = Math.Clamp(rows, 1, 300);
+        return new byte[] { Iac, Sb, Naws, (byte)(columns >> 8), (byte)columns,
+            (byte)(rows >> 8), (byte)rows, Iac, Se };
+    }
+
+    private void HandleSubnegotiation()
+    {
+        if (_subnegotiation.Count >= 2 && _subnegotiation[0] == TerminalType && _subnegotiation[1] == Send)
+        {
+            _replies.AddRange(new byte[] { Iac, Sb, TerminalType, Is });
+            _replies.AddRange(Encoding.ASCII.GetBytes("VT100"));
+            _replies.AddRange(new byte[] { Iac, Se });
+        }
+    }
 }
