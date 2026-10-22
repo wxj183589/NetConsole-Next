@@ -23,7 +23,7 @@ The Windows default root is `%ProgramData%/NetConsoleNext/data`; elsewhere it mu
 
 ## Schema versions
 
-`schema_versions` currently records v1 through v5. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state, adds v4 H3C identity/result tables, and applies v5 Raw/task recovery fields and status validation in idempotent transactions. Reopening an already upgraded database is tested.
+`schema_versions` currently records v1 through v6. Startup applies the original v1 seed idempotently, adds v2 checkpoints/audits/tasks, creates v3 disposition state, adds v4 H3C identity/result tables, applies v5 Raw/task recovery fields and status validation, and applies v6 terminal session/event tables in idempotent transactions. Reopening an already upgraded database is tested.
 
 ### Schema v1 base
 
