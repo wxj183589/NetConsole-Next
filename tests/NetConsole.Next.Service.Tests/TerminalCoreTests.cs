@@ -28,9 +28,9 @@ internal static class TerminalCoreTests
     private static void VerifiesTelnetNegotiation()
     {
         var negotiator = new TelnetNegotiator();
-        var payload = negotiator.Process(new byte[] { 255, 251, 1, (byte)'R', 255, 253, 24, (byte)'E' });
+        var payload = negotiator.Process(new byte[] { 255, 251, 1, (byte)'R', 255, 253, 42, (byte)'E' });
         Assert(Encoding.ASCII.GetString(payload) == "RE", "Telnet IAC bytes must not leak into terminal output");
-        Assert(negotiator.Replies.Span.SequenceEqual(new byte[] { 255, 253, 1, 255, 252, 24 }),
+        Assert(negotiator.Replies.Span.SequenceEqual(new byte[] { 255, 253, 1, 255, 252, 42 }),
             "Telnet negotiation must accept echo and refuse unsupported terminal options deterministically");
     }
 
