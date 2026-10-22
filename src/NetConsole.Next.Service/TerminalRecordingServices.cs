@@ -124,12 +124,24 @@ internal sealed class TerminalRecordingService
     {
         var session = _catalog.GetTerminalSession(sessionId)
             ?? throw new KeyNotFoundException("Terminal session was not found.");
+        offset = Math.Max(0, offset);
+        limit = Math.Clamp(limit, 1, 2000);
         var segments = _catalog.TerminalRecordingSegments(sessionId);
-        var entries = TerminalRecordingReader.ReadEntries(_settings.DataRoot, session, segments)
-            .Where(item => (!fromMs.HasValue || item.AtMs >= fromMs.Value) && (!toMs.HasValue || item.AtMs <= toMs.Value))
-            .Skip(checked((int)Math.Min(offset, int.MaxValue))).Take(limit + 1).ToList();
-        var hasMore = entries.Count > limit;
-        if (hasMore) entries.RemoveAt(entries.Count - 1);
+        IReadOnlyList<TerminalRecordingEntry> entries;
+        bool hasMore;
+        if (fromMs is null && toMs is null)
+        {
+            (entries, hasMore) = TerminalRecordingReader.ReadPage(_settings.DataRoot, session, segments, offset, limit);
+        }
+        else
+        {
+            var filtered = TerminalRecordingReader.ReadEntries(_settings.DataRoot, session, segments)
+                .Where(item => (!fromMs.HasValue || item.AtMs >= fromMs.Value) && (!toMs.HasValue || item.AtMs <= toMs.Value))
+                .Skip(checked((int)Math.Min(offset, int.MaxValue))).Take(limit + 1).ToList();
+            hasMore = filtered.Count > limit;
+            if (hasMore) filtered.RemoveAt(limit);
+            entries = filtered;
+        }
         return new(sessionId, offset, limit, hasMore, entries);
     }
 }

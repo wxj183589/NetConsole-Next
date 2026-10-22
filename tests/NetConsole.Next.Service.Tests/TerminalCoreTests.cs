@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service.Tests;
 
@@ -14,6 +15,8 @@ internal static class TerminalCoreTests
         VerifiesOneTimeTicket();
         await VerifiesSessionSchemaAndRecordingAsync();
         await VerifiesSegmentedRecordingIntegrityAndRecoveryAsync();
+        await VerifiesRecordingPublicationSafetyAsync();
+        await VerifiesRecordingCatalogBusyAndDiskFaultsAsync();
         await VerifiesLegacyV6SingleFileReadAsync();
     }
 
@@ -132,6 +135,11 @@ internal static class TerminalCoreTests
             var page = recordingService.ReadReplay(session.Id, 0, 60);
             Assert(page.Entries.Count == 60 && page.HasMore && page.Entries[0].SegmentNumber == 1 && page.Entries.Any(item => item.SegmentNumber > 1),
                 "replay should page across the ordered segments without loading the entire recording");
+            var segmentCursorOffset = resultSegments[0].RecordCount + 1;
+            var cursorPage = recordingService.ReadReplay(session.Id, segmentCursorOffset, 3);
+            Assert(cursorPage.Entries.Count > 0 && cursorPage.Entries[0].Position == segmentCursorOffset &&
+                   cursorPage.Entries[0].SegmentNumber >= 2,
+                "replay pagination should use persisted segment record counts as a forward cursor");
             try { TerminalRecordingReader.ResolvePath(root, "terminal-recordings/../catalog.db"); throw new InvalidOperationException("path traversal was accepted"); }
             catch (InvalidDataException) { }
 
@@ -141,6 +149,9 @@ internal static class TerminalCoreTests
             var corrupted = recordingService.Verify(session.Id);
             Assert(corrupted.Status == "CORRUPTED" && corrupted.Segments.Any(item => item.State == "CORRUPTED"),
                 "tampered segment must remain visible as corrupted evidence");
+            var corruptedSession = catalog.GetTerminalSession(session.Id);
+            Assert(corruptedSession?.RecordingStatus == "CORRUPTED" && !corruptedSession.RecordingComplete,
+                "a failed integrity check must never leave the historical session marked COMPLETE");
 
             var openSessionId = "interrupted-open-session";
             var openWriter = new TerminalRecordingWriter(root, openSessionId);
@@ -178,6 +189,197 @@ internal static class TerminalCoreTests
                 "repeating startup recovery must not duplicate recovered recording segments");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static async Task VerifiesRecordingPublicationSafetyAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-terminal-publication-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var collisionWriter = new TerminalRecordingWriter(root, "collision-session");
+            await collisionWriter.AppendAsync(1700000000000, "output", Encoding.UTF8.GetBytes("original\n"), CancellationToken.None);
+            var collisionDirectory = Path.Combine(root, "terminal-recordings", "collision-session");
+            var collisionPath = Path.Combine(collisionDirectory, "segment-000001.jsonl");
+            await File.WriteAllTextAsync(collisionPath, "existing-evidence\n", Encoding.UTF8);
+            try
+            {
+                await collisionWriter.CompleteAsync(CancellationToken.None);
+                throw new InvalidOperationException("a same-name segment collision should fail closed");
+            }
+            catch (IOException) { }
+            Assert(await File.ReadAllTextAsync(collisionPath, Encoding.UTF8) == "existing-evidence\n",
+                "sealing must not delete or overwrite an existing segment target");
+            Assert(File.Exists(Path.Combine(collisionDirectory, "segment-000001.jsonl.open")),
+                "the open segment must remain as collision evidence");
+            File.Delete(collisionPath);
+            var collisionResult = await collisionWriter.CompleteAsync(CancellationToken.None);
+            Assert(collisionResult.Complete && File.Exists(collisionPath),
+                "after the collision is resolved, completion must be retryable");
+            await collisionWriter.DisposeAsync();
+
+            var indexFailure = true;
+            var indexFaults = new TerminalRecordingFaults
+            {
+                BeforeIndexPublish = _ =>
+                {
+                    if (indexFailure)
+                    {
+                        indexFailure = false;
+                        throw new IOException("injected index publication interruption");
+                    }
+                }
+            };
+            var retryWriter = new TerminalRecordingWriter(root, "index-retry-session", indexFaults);
+            await retryWriter.AppendAsync(1700000000001, "output", Encoding.UTF8.GetBytes("retry\n"), CancellationToken.None);
+            try
+            {
+                await retryWriter.CompleteAsync(CancellationToken.None);
+                throw new InvalidOperationException("the injected index publication failure should be observable");
+            }
+            catch (IOException) { }
+            var retryDirectory = Path.Combine(root, "terminal-recordings", "index-retry-session");
+            Assert(!File.Exists(Path.Combine(retryDirectory, "index.json")) &&
+                   File.Exists(Path.Combine(retryDirectory, "segment-000001.jsonl")) &&
+                   !Directory.EnumerateFiles(retryDirectory, "*.open").Any(),
+                "an index failure must retain sealed segments without publishing a partial index");
+            var retryResult = await retryWriter.CompleteAsync(CancellationToken.None);
+            Assert(retryResult.Complete && File.Exists(Path.Combine(retryDirectory, "index.json")),
+                "CompleteAsync must retry index publication without duplicating segments");
+            var repeatResult = await retryWriter.CompleteAsync(CancellationToken.None);
+            Assert(repeatResult.Sha256 == retryResult.Sha256 &&
+                   !Directory.EnumerateFiles(retryDirectory, "index.json.previous-*").Any(),
+                "repeating a successful completion must be idempotent");
+            await retryWriter.DisposeAsync();
+
+            var oldIndexWriter = new TerminalRecordingWriter(root, "old-index-session");
+            await oldIndexWriter.AppendAsync(1700000000002, "output", Encoding.UTF8.GetBytes("new\n"), CancellationToken.None);
+            var oldIndexDirectory = Path.Combine(root, "terminal-recordings", "old-index-session");
+            var indexPath = Path.Combine(oldIndexDirectory, "index.json");
+            await File.WriteAllTextAsync(indexPath, "old-index-evidence\n", Encoding.UTF8);
+            var oldIndexResult = await oldIndexWriter.CompleteAsync(CancellationToken.None);
+            var backups = Directory.EnumerateFiles(oldIndexDirectory, "index.json.previous-*").ToArray();
+            Assert(oldIndexResult.Complete && backups.Length == 1 &&
+                   await File.ReadAllTextAsync(backups[0], Encoding.UTF8) == "old-index-evidence\n",
+                "atomic index replacement must retain the previous index as evidence");
+            await oldIndexWriter.DisposeAsync();
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static async Task VerifiesRecordingCatalogBusyAndDiskFaultsAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-terminal-faults-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var writer = new TerminalRecordingWriter(root, "busy-session");
+            var session = new TerminalSessionSnapshot("busy-session", "device-1", "device-1", "SSH",
+                "RESTRICTED_READONLY", "127.0.0.1", 22, null, null, "CLOSED", now, now, now,
+                "CONNECTED", "USER_REQUEST", null, null, writer.RelativePath, 0, null, false);
+            catalog.CreateTerminalSession(session);
+            await writer.AppendAsync(now, "output", Encoding.UTF8.GetBytes("busy\n"), CancellationToken.None);
+            var result = await writer.CompleteAsync(CancellationToken.None);
+            using var lockConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(root, "catalog.db"), Pooling = false
+            }.ToString());
+            lockConnection.Open();
+            using var lockTransaction = lockConnection.BeginTransaction();
+            using (var lockCommand = lockConnection.CreateCommand())
+            {
+                lockCommand.Transaction = lockTransaction;
+                lockCommand.CommandText = "UPDATE terminal_sessions SET last_activity_ms=last_activity_ms WHERE id='busy-session'";
+                lockCommand.ExecuteNonQuery();
+            }
+            try
+            {
+                catalog.CompleteTerminalRecording(session.Id, result);
+                throw new InvalidOperationException("SQLite busy should be observable during terminal recording commit");
+            }
+            catch (SqliteException ex)
+            {
+                Assert(ex.SqliteErrorCode == 5 || ex.SqliteExtendedErrorCode == 5,
+                    $"expected SQLITE_BUSY, got {ex.SqliteErrorCode}/{ex.SqliteExtendedErrorCode}");
+            }
+            var segmentPath = Path.Combine(root, result.Segments![0].RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Assert(File.Exists(segmentPath), "SQLite busy must not remove an already published recording segment");
+            lockTransaction.Rollback();
+            catalog.CompleteTerminalRecording(session.Id, result);
+            Assert(catalog.GetTerminalSession(session.Id)?.RecordingComplete == true,
+                "terminal recording metadata must be retryable after SQLite busy is released");
+            await writer.DisposeAsync();
+
+            var diskFaults = new TerminalRecordingFaults
+            {
+                CreateStream = path => new FailAfterBytesStream(new FileStream(path, FileMode.CreateNew, FileAccess.Write,
+                    FileShare.Read, 4096, FileOptions.WriteThrough), 1)
+            };
+            var diskWriter = new TerminalRecordingWriter(root, "disk-fault-session", diskFaults);
+            try
+            {
+                await diskWriter.AppendAsync(now + 1, "output", Encoding.UTF8.GetBytes(new string('x', 2048)), CancellationToken.None);
+                throw new InvalidOperationException("the injected recording disk fault should be observable");
+            }
+            catch (IOException) { }
+            var partial = await diskWriter.CompleteAsync(CancellationToken.None);
+            var diskDirectory = Path.Combine(root, "terminal-recordings", "disk-fault-session");
+            Assert(!partial.Complete && File.Exists(Path.Combine(diskDirectory, "segment-000001.jsonl")) &&
+                   File.Exists(Path.Combine(diskDirectory, "index.json")),
+                "a recording write interruption must preserve partial evidence and publish an INCOMPLETE index");
+            await diskWriter.DisposeAsync();
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private sealed class FailAfterBytesStream(Stream inner, long byteLimit) : Stream
+    {
+        private long _written;
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var remaining = byteLimit - _written;
+            if (buffer.Length > remaining)
+            {
+                if (remaining > 0)
+                {
+                    inner.Write(buffer[..(int)remaining].Span);
+                    _written += remaining;
+                }
+                throw new IOException("No space left on device (deterministic terminal test injection).");
+            }
+            _written += buffer.Length;
+            return inner.WriteAsync(buffer, cancellationToken);
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            GC.SuppressFinalize(this);
+        }
     }
 
     private static async Task VerifiesLegacyV6SingleFileReadAsync()

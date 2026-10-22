@@ -4,6 +4,16 @@ using System.Text.Json;
 
 namespace NetConsole.Next.Service;
 
+// Test-only fault seams. Production callers leave this null; the callbacks let
+// the service tests reproduce publication interruption without locking or
+// mutating an unrelated data root.
+internal sealed class TerminalRecordingFaults
+{
+    public Func<string, Stream>? CreateStream { get; init; }
+    public Action<string, string>? BeforeSegmentPublish { get; init; }
+    public Action<string>? BeforeIndexPublish { get; init; }
+}
+
 internal sealed class TerminalRecordingWriter : IAsyncDisposable
 {
     private const long MaximumSessionBytes = 64L * 1024 * 1024;
@@ -11,10 +21,11 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
     private readonly string _sessionId;
     private readonly string _recordingDirectory;
     private readonly string _relativeIndexPath;
+    private readonly TerminalRecordingFaults? _faults;
     private readonly IncrementalHash _overallHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly List<TerminalRecordingSegmentResult> _segments = [];
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private FileStream? _stream;
+    private Stream? _stream;
     private IncrementalHash? _segmentHash;
     private string? _openPath;
     private string? _segmentRelativePath;
@@ -27,10 +38,11 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
     private long _outputBytes;
     private int _segmentNumber;
     private int _failed;
-    private int _completed;
+    private int _completionRequested;
+    private bool _completionCanBeComplete;
     private TerminalRecordingResult? _result;
 
-    public TerminalRecordingWriter(string dataRoot, string sessionId)
+    public TerminalRecordingWriter(string dataRoot, string sessionId, TerminalRecordingFaults? faults = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || sessionId.Any(ch => !(char.IsLetterOrDigit(ch) || ch is '-' or '_')))
             throw new ArgumentException("The terminal session id is not a safe file name.", nameof(sessionId));
@@ -41,6 +53,7 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
         if (!Directory.Exists(recordingsRoot)) Directory.CreateDirectory(recordingsRoot);
         EnsureNotReparse(recordingsRoot);
         _sessionId = sessionId;
+        _faults = faults;
         _recordingDirectory = Path.Combine(recordingsRoot, sessionId);
         Directory.CreateDirectory(_recordingDirectory);
         EnsureNotReparse(_recordingDirectory);
@@ -66,6 +79,8 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
         try
         {
             if (Volatile.Read(ref _failed) != 0) return;
+            if (Volatile.Read(ref _completionRequested) != 0)
+                throw new InvalidOperationException("The terminal recording has already started completion.");
             if (_bytes + line.Length > MaximumSessionBytes)
             {
                 Volatile.Write(ref _failed, 1);
@@ -96,10 +111,18 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_result is not null) return _result;
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return _result ?? BuildResult();
-            if (_stream is not null)
-                await SealCurrentAsync(Volatile.Read(ref _failed) == 0, cancellationToken).ConfigureAwait(false);
+            if (Interlocked.Exchange(ref _completionRequested, 1) == 0)
+                _completionCanBeComplete = Volatile.Read(ref _failed) == 0;
+            if (_result is not null)
+            {
+                // The recording is already sealed.  An index publication failure must
+                // remain retryable on the same writer and must not be mistaken for a
+                // successful completion merely because the payload is durable.
+                await WriteIndexAsync(_result, cancellationToken).ConfigureAwait(false);
+                return _result;
+            }
+            if (_stream is not null || (_openPath is not null && File.Exists(_openPath)))
+                await SealCurrentAsync(_completionCanBeComplete && Volatile.Read(ref _failed) == 0, cancellationToken).ConfigureAwait(false);
             _result = BuildResult();
             await WriteIndexAsync(_result, cancellationToken).ConfigureAwait(false);
             return _result;
@@ -142,8 +165,8 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
         var name = $"segment-{_segmentNumber:000000}.jsonl";
         _segmentRelativePath = $"terminal-recordings/{_sessionId}/{name}";
         _openPath = Path.Combine(_recordingDirectory, name + ".open");
-        _stream = new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
-            64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
+        _stream = _faults?.CreateStream?.Invoke(_openPath) ?? new FileStream(_openPath, FileMode.CreateNew,
+            FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
         _segmentHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         _segmentStartedMs = 0;
         _segmentEndedMs = 0;
@@ -153,32 +176,70 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
 
     private async ValueTask SealCurrentAsync(bool complete, CancellationToken cancellationToken)
     {
-        if (_stream is null || _openPath is null || _segmentRelativePath is null || _segmentHash is null) return;
+        if (_openPath is null || _segmentRelativePath is null || _segmentHash is null) return;
         var stream = _stream;
         var openPath = _openPath;
+        var finalPath = openPath[..^".open".Length];
+        var streamClosed = stream is null;
         try
         {
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            stream.Flush(flushToDisk: true);
-            await stream.DisposeAsync().ConfigureAwait(false);
-            _stream = null;
-            var finalPath = openPath[..^".open".Length];
-            if (File.Exists(finalPath)) File.Delete(finalPath);
-            File.Move(openPath, finalPath);
-            _segments.Add(new TerminalRecordingSegmentResult(_segmentNumber, _segmentRelativePath,
-                _segmentStartedMs == 0 ? _segmentEndedMs : _segmentStartedMs, _segmentEndedMs,
-                _segmentBytes, _segmentRecords,
-                Convert.ToHexString(_segmentHash.GetHashAndReset()).ToLowerInvariant(), complete));
+            if (stream is not null)
+            {
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                if (stream is FileStream fileStream) fileStream.Flush(flushToDisk: true);
+                await stream.DisposeAsync().ConfigureAwait(false);
+                _stream = null;
+                streamClosed = true;
+            }
+            else if (!File.Exists(openPath) && !File.Exists(finalPath))
+            {
+                throw new FileNotFoundException("Terminal recording segment disappeared before publication.", openPath);
+            }
+
+            _faults?.BeforeSegmentPublish?.Invoke(openPath, finalPath);
+            if (File.Exists(openPath))
+            {
+                // Never replace an existing segment.  A same-name collision is
+                // retained as evidence and must be resolved by an operator or a
+                // recovery policy, not silently deleted by the recorder.
+                if (File.Exists(finalPath))
+                    throw new IOException($"Terminal recording segment target already exists: {finalPath}");
+                File.Move(openPath, finalPath);
+            }
+            else if (!File.Exists(finalPath))
+            {
+                throw new FileNotFoundException("Terminal recording segment disappeared before publication.", openPath);
+            }
+
+            if (!_segments.Any(item => item.Number == _segmentNumber &&
+                    string.Equals(item.RelativePath, _segmentRelativePath, StringComparison.Ordinal)))
+            {
+                _segments.Add(new TerminalRecordingSegmentResult(_segmentNumber, _segmentRelativePath,
+                    _segmentStartedMs == 0 ? _segmentEndedMs : _segmentStartedMs, _segmentEndedMs,
+                    _segmentBytes, _segmentRecords,
+                    Convert.ToHexString(_segmentHash.GetHashAndReset()).ToLowerInvariant(), complete));
+            }
             _segmentHash.Dispose();
             _segmentHash = null;
             if (!complete) Volatile.Write(ref _failed, 1);
-            if (Volatile.Read(ref _completed) == 0) OpenNextSegment();
+            if (Volatile.Read(ref _completionRequested) == 0) OpenNextSegment();
+            else
+            {
+                _openPath = null;
+                _segmentRelativePath = null;
+            }
         }
         catch
         {
-            Volatile.Write(ref _failed, 1);
-            try { await stream.DisposeAsync().ConfigureAwait(false); } catch { }
-            _stream = null;
+            if (!streamClosed) Volatile.Write(ref _failed, 1);
+            // Keep a still-open stream available for a retry when flushing failed.
+            // Once the stream was successfully closed, the .open file remains on
+            // disk and the next CompleteAsync call can publish it without loss.
+            if (stream is not null && ReferenceEquals(_stream, stream))
+            {
+                try { await stream.DisposeAsync().ConfigureAwait(false); } catch { }
+                _stream = null;
+            }
             throw;
         }
     }
@@ -188,7 +249,7 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
         if (_result is not null) return _result;
         var complete = Volatile.Read(ref _failed) == 0;
         var hash = Convert.ToHexString(_overallHash.GetHashAndReset()).ToLowerInvariant();
-        return new(_relativeIndexPath, _bytes, hash, complete, _segments.ToArray(), _inputCount, _outputBytes);
+        return _result = new(_relativeIndexPath, _bytes, hash, complete, _segments.ToArray(), _inputCount, _outputBytes);
     }
 
     private async ValueTask WriteIndexAsync(TerminalRecordingResult result, CancellationToken cancellationToken)
@@ -203,11 +264,58 @@ internal sealed class TerminalRecordingWriter : IAsyncDisposable
             complete = result.Complete,
             segments = result.Segments
         });
-        await using var stream = new FileStream(indexPath, FileMode.Create, FileAccess.Write, FileShare.Read,
-            16 * 1024, FileOptions.WriteThrough | FileOptions.Asynchronous);
-        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-        stream.Flush(flushToDisk: true);
+        var temporaryPath = indexPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            if (File.Exists(indexPath))
+            {
+                try
+                {
+                    var existing = await File.ReadAllBytesAsync(indexPath, cancellationToken).ConfigureAwait(false);
+                    if (existing.AsSpan().SequenceEqual(payload)) return;
+                }
+                catch (IOException)
+                {
+                    // Fall through to the atomic replacement path.  A transient
+                    // read failure must not make a durable index unrecoverable.
+                }
+            }
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                16 * 1024, FileOptions.WriteThrough | FileOptions.Asynchronous))
+            {
+                await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            _faults?.BeforeIndexPublish?.Invoke(indexPath);
+            PublishIndexAtomically(temporaryPath, indexPath);
+        }
+        finally
+        {
+            // A failed publication leaves the previous index and all segment files
+            // untouched.  Only the private, incomplete temporary index is eligible
+            // for cleanup.
+            if (File.Exists(temporaryPath))
+            {
+                try { File.Delete(temporaryPath); } catch { }
+            }
+        }
+    }
+
+    private static void PublishIndexAtomically(string temporaryPath, string indexPath)
+    {
+        if (!File.Exists(indexPath))
+        {
+            File.Move(temporaryPath, indexPath);
+            return;
+        }
+
+        // Preserve every previous index as evidence.  File.Replace publishes the
+        // complete flushed temporary file atomically on supported local filesystems.
+        var backupPath = indexPath + ".previous-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "-" +
+            Guid.NewGuid().ToString("N");
+        File.Replace(temporaryPath, indexPath, backupPath, ignoreMetadataErrors: true);
     }
 
     private static void EnsureNotReparse(string path)
@@ -249,6 +357,55 @@ internal static class RestrictedReadonlyInputPolicy
 }
 internal static class TerminalRecordingReader
 {
+    public static (IReadOnlyList<TerminalRecordingEntry> Entries, bool HasMore) ReadPage(
+        string dataRoot, TerminalSessionSnapshot session, IReadOnlyList<TerminalRecordingSegmentSnapshot> segments,
+        long offset, int limit)
+    {
+        if (segments.Count == 0)
+        {
+            var legacy = ReadEntries(dataRoot, session, segments).Skip(checked((int)Math.Min(offset, int.MaxValue)))
+                .Take(limit + 1).ToList();
+            return TrimPage(legacy, limit);
+        }
+
+        var ordered = segments.OrderBy(item => item.Number).ToArray();
+        var remaining = offset;
+        var skipped = 0L;
+        var firstSegment = 0;
+        while (firstSegment < ordered.Length)
+        {
+            var recordCount = Math.Max(0, ordered[firstSegment].RecordCount);
+            if (remaining < recordCount) break;
+            remaining -= recordCount;
+            skipped += recordCount;
+            firstSegment++;
+        }
+
+        if (firstSegment == ordered.Length) return (Array.Empty<TerminalRecordingEntry>(), false);
+
+        var page = new List<TerminalRecordingEntry>(Math.Min(limit + 1, 2048));
+        var position = skipped;
+        for (var index = firstSegment; index < ordered.Length; index++)
+        {
+            foreach (var entry in ReadEntries(dataRoot, session, [ordered[index]]))
+            {
+                var globalPosition = position++;
+                if (globalPosition < offset) continue;
+                page.Add(entry with { Position = globalPosition });
+                if (page.Count > limit) return TrimPage(page, limit);
+            }
+        }
+        return TrimPage(page, limit);
+    }
+
+    private static (IReadOnlyList<TerminalRecordingEntry> Entries, bool HasMore) TrimPage(
+        List<TerminalRecordingEntry> entries, int limit)
+    {
+        var hasMore = entries.Count > limit;
+        if (hasMore) entries.RemoveAt(limit);
+        return (entries, hasMore);
+    }
+
     public static IEnumerable<TerminalRecordingEntry> ReadEntries(string dataRoot,
         TerminalSessionSnapshot session, IReadOnlyList<TerminalRecordingSegmentSnapshot> segments)
     {
