@@ -213,9 +213,10 @@ def main():
             edge_path = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
             if edge_path.is_file(): browser_path = str(edge_path)
         if browser_path: browser_env["NETCONSOLE_E2E_BROWSER"] = browser_path
-        result = subprocess.run(["node", str(repo / "tests" / "terminal_browser_e2e.mjs")], cwd=repo, env=browser_env, text=True, capture_output=True, timeout=90)
-        sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
-        if result.returncode: raise RuntimeError(f"browser E2E exited with {result.returncode}")
+        for browser_test in ("terminal_browser_e2e.mjs", "terminal_history_browser_e2e.mjs"):
+            result = subprocess.run(["node", str(repo / "tests" / browser_test)], cwd=repo, env=browser_env, text=True, capture_output=True, timeout=90)
+            sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
+            if result.returncode: raise RuntimeError(f"browser E2E {browser_test} exited with {result.returncode}")
     finally:
         if SIMULATOR_EVENTS:
             print("simulator events:", "; ".join(SIMULATOR_EVENTS), file=sys.stderr)
