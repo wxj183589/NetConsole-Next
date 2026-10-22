@@ -80,14 +80,20 @@ internal static class RestrictedReadonlyInputPolicy
 {
     public static bool TryNormalize(string? input, out string command, out string reason)
     {
-        command = input?.Trim() ?? string.Empty;
+        var raw = input ?? string.Empty;
+        command = raw.Trim();
         reason = string.Empty;
+        if (raw.Any(char.IsControl))
+        {
+            reason = "Control characters are not allowed.";
+            return false;
+        }
         if (command.Length == 0 || command.Length > 256)
         {
             reason = "Command must contain 1-256 characters.";
             return false;
         }
-        if (command.Any(char.IsControl) || command.Contains(';') || command.Contains('|') ||
+        if (command.Contains(';') || command.Contains('|') ||
             command.Contains('&') || command.Contains('`') || command.Contains('$') ||
             command.Contains('>') || command.Contains('<') || command.Contains('\\'))
         {
