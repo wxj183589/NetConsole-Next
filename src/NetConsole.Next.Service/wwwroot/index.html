@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>NetConsole Next Terminal</title>
+  <link rel="stylesheet" href="/terminal.css">
+  <link rel="stylesheet" href="/xterm.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>NetConsole Next</strong><span class="subtitle">受控终端</span></div>
+    <div class="toolbar">
+      <input id="token" type="password" autocomplete="off" placeholder="本机 API Token">
+      <button id="connect-token">连接服务</button>
+      <button id="theme">浅色主题</button>
+      <label>字号 <input id="font-size" type="number" min="10" max="28" value="14"></label>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="devices panel">
+      <div class="panel-title"><span>登记设备</span><button id="refresh-devices" title="刷新设备">刷新</button></div>
+      <div id="service-state" class="muted">尚未连接服务</div>
+      <div id="device-list" class="device-list"></div>
+      <div class="panel-title sessions-title"><span>会话历史</span><button id="refresh-sessions">刷新</button></div>
+      <div id="session-list" class="session-list"></div>
+    </aside>
+    <section class="workspace panel">
+      <div class="tabs" id="tabs"><span class="empty-tabs">暂无终端会话</span></div>
+      <div class="terminal-actions">
+        <button id="split">分屏</button><button id="reconnect">重连</button><button id="disconnect">断开</button>
+        <input id="search" placeholder="搜索当前终端" aria-label="搜索当前终端">
+      </div>
+      <div id="terminals" class="terminals"><div class="welcome">从左侧登记设备打开 SSH 或 Telnet 终端。当前会话固定为 RESTRICTED_READONLY。</div></div>
+      <div id="notice" class="notice" role="status"></div>
+    </section>
+  </main>
+  <dialog id="serial-dialog">
+    <form method="dialog" id="serial-form"><h3>打开本地 COM Console</h3>
+      <label>端口 <select id="serial-port"></select></label>
+      <label>波特率 <input id="baud" type="number" value="9600" min="300" max="921600"></label>
+      <div class="dialog-actions"><button value="cancel">取消</button><button id="serial-open" value="default">打开</button></div>
+    </form>
+  </dialog>
+  <script src="/terminal.bundle.js"></script>
+</body>
+</html>

@@ -11,6 +11,7 @@ internal sealed class RuntimeSettings
     public required int SyslogReceiveBufferBytes { get; init; }
     public bool H3cEnabled { get; init; }
     public bool TerminalEnabled { get; init; }
+    public bool TerminalDevelopmentSimulationEnabled { get; init; }
     public bool H3cDevelopmentEnvironmentCredentialsEnabled { get; init; }
 
     public static RuntimeSettings FromEnvironment()
@@ -40,6 +41,8 @@ internal sealed class RuntimeSettings
             SyslogReceiveBufferBytes = receiveBuffer,
             H3cEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_ENABLED") == "1",
             TerminalEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_ENABLED") == "1",
+            TerminalDevelopmentSimulationEnabled = IsDevelopmentEnvironment() &&
+                Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_DEV_SIMULATION") == "1",
             H3cDevelopmentEnvironmentCredentialsEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS") == "1"
         };
     }
@@ -52,6 +55,10 @@ internal sealed class RuntimeSettings
             throw new InvalidOperationException(key + " is invalid.");
         return p;
     }
+
+    private static bool IsDevelopmentEnvironment() =>
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase);
 
     private static int ParsePositiveInt(string key, int fallback, int maximum)
     {

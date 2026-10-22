@@ -48,6 +48,8 @@ builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
 
 var app = builder.Build();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 app.Use(async (context, next) =>
 {
@@ -149,7 +151,6 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or I
 }
 
 var processStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-app.MapGet("/", () => Results.Text("NetConsole Next Core service"));
 app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress, Catalog rawCatalog,
     RuntimeStatus status, RuntimeResources resources, FileLogDiagnostics logDiagnostics) =>
 {
@@ -211,8 +212,23 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
 if (settings.TerminalEnabled)
 {
-    app.MapGet("/api/system/terminal/serial-ports", () =>
-        Results.Ok(SerialPort.GetPortNames().OrderBy(name => name, StringComparer.OrdinalIgnoreCase)));
+    app.MapGet("/api/system/terminal/devices", (Catalog rawCatalog, TerminalSessionManager manager) =>
+    {
+        var sessions = manager.Recent();
+        var devices = rawCatalog.RecentH3cDeviceProfiles(100).Select(profile =>
+        {
+            var latest = sessions.FirstOrDefault(session => session.TargetId == profile.Id);
+            return new TerminalDeviceView(profile.Id, profile.Host, profile.Port, profile.Username, profile.Enabled,
+                new[] { "SSH", "TELNET" }, latest?.State, latest?.StartedMs, latest?.DisconnectReason);
+        });
+        return Results.Ok(devices);
+    });
+    app.MapGet("/api/system/terminal/serial-ports", (RuntimeSettings runtime) =>
+    {
+        var ports = SerialPort.GetPortNames().AsEnumerable();
+        if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
+        return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+    });
     app.MapGet("/api/system/terminal/sessions", (string? targetId, TerminalSessionManager manager) =>
         Results.Ok(manager.Recent(targetId)));
     app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
@@ -240,6 +256,12 @@ if (settings.TerminalEnabled)
     {
         if (manager.Get(sessionId) is null) return Results.NotFound();
         return Results.Ok(tickets.Issue(sessionId));
+    });
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/close", async (string sessionId,
+        TerminalSessionManager manager) =>
+    {
+        if (!await manager.CloseAsync(sessionId)) return Results.NotFound();
+        return Results.Ok(new { sessionId, state = "CLOSED" });
     });
     app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
         string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
@@ -407,3 +429,6 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string CredentialReference, string HostKeySha256, bool Enabled = true);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
+internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
+    IReadOnlyList<string> SupportedProtocols, string? LastSessionState, long? LastSessionStartedMs,
+    string? LastDisconnectReason);
