@@ -1,4 +1,5 @@
 using NetConsole.Next.Service;
+using NetConsole.Next.Service.Tests;
 using Microsoft.Extensions.Logging;
 using Microsoft.Data.Sqlite;
 using System.Diagnostics;
@@ -144,6 +145,7 @@ internal static class SchedulerTests
         await VerifiesCaptureDiskFullRetainsPartialRawAndFaults();
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesRollingLogSizeAndRetention();
+        await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
     }
@@ -864,7 +866,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 5, "v5 migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 6, "v6 migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
