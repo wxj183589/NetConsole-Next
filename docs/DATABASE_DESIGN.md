@@ -1,6 +1,6 @@
 # Database and Raw layout
 
-Status: schema v6 adds additive terminal session and event indexes on top of schema v5. Detailed terminal bytes remain in independent append-only recordings; the service is not a terminal UI. Physical COM, real devices, GUI and target Windows acceptance remain pending. Backup/restore remains `NOT_STARTED`.
+Status: schema v6 adds additive terminal session and event indexes on top of schema v5. Detailed terminal bytes remain in independent append-only recordings; the service now serves the first G2.3 Web terminal slice. Physical COM, real devices, GUI and target Windows acceptance remain pending. Backup/restore remains `NOT_STARTED`.
 
 ## Current isolated data root
 

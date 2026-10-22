@@ -22,6 +22,7 @@ jobs:
       - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
       - run: python3 tests/smoke.py
       - run: python3 tests/g1_recovery.py
+      - run: python tests/terminal_ui_contract.py
       - run: python3 tests/udp_trace_benchmark_tests.py
       - run: python3 tests/perf_baseline.py --packets 10000 --queue-burst 0 --history-files 100 --sqlite-writes 100 --idle-seconds 1 --rate 5000
       - run: python3 tests/udp_trace_benchmark.py --pps 500 --payload-bytes 128 --duration-seconds 1 --require-lossless --output /tmp/netconsole-next-ci-udp-trace.json
@@ -41,6 +42,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --disable-pip-version-check --requirement tests/requirements-ssh-protocol.txt
       - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
+      - run: python tests/terminal_ui_contract.py
       - name: Publish, install, and exercise Windows Service through SCM
         shell: pwsh
         run: ./tests/windows_service_lifecycle.ps1

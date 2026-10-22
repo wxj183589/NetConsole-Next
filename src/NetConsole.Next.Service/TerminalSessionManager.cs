@@ -25,6 +25,13 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
     public TerminalSessionRuntime? Get(string sessionId) =>
         _sessions.TryGetValue(sessionId, out var session) ? session : null;
 
+    public async Task<bool> CloseAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var session)) return false;
+        await session.CloseForUserAsync().ConfigureAwait(false);
+        return true;
+    }
+
     public string Create(TerminalSessionRequest request)
     {
         if (request.Mode != "RESTRICTED_READONLY")
@@ -270,6 +277,8 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         _output.Writer.TryComplete();
         _owner.Remove(Snapshot.Id);
     }
+
+    internal Task CloseForUserAsync() => CloseAsync("USER_REQUEST", "CLOSED");
 
     public async ValueTask DisposeAsync()
     {

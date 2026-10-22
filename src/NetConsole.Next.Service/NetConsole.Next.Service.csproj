@@ -17,5 +17,6 @@
     <EmbeddedResource Include="../../storage/schema_v4.sql" LogicalName="schema_v4.sql" />
     <EmbeddedResource Include="../../storage/schema_v5.sql" LogicalName="schema_v5.sql" />
     <EmbeddedResource Include="../../storage/schema_v6.sql" LogicalName="schema_v6.sql" />
+    <Content Update="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
