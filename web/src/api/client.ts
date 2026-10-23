@@ -82,6 +82,10 @@ export function setCsrfToken(token: string): void {
   csrfToken = token
 }
 
+export function clearCsrfToken(): void {
+  csrfToken = ''
+}
+
 async function request<T>(path: string, init: RequestInit = {}, allowErrorBody = false): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
@@ -116,7 +120,10 @@ export async function login(username: string, password: string): Promise<{ user:
 }
 
 export function getCurrentUser(): Promise<WebUser> { return request('/api/auth/me') }
-export function logout(): Promise<void> { return request('/api/auth/logout', { method: 'POST' }) }
+export async function logout(): Promise<void> {
+  try { await request('/api/auth/logout', { method: 'POST' }) }
+  finally { clearCsrfToken() }
+}
 export function changePassword(payload: { currentPassword?: string; newPassword: string; username?: string }): Promise<void> {
   return request('/api/auth/password', { method: 'POST', body: JSON.stringify(payload) })
 }

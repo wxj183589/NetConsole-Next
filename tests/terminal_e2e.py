@@ -24,6 +24,16 @@ SIMULATOR_ERRORS = []
 SIMULATOR_EVENTS = []
 
 
+def safe_text(value):
+    return value if isinstance(value, str) else ""
+
+
+def process_tail(process, limit=4000):
+    if not process.stdout:
+        return ""
+    return safe_text(process.stdout.read())[-limit:]
+
+
 def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -193,11 +203,13 @@ def main():
     for thread in threads: thread.start()
     web_port = free_port()
     env = os.environ.copy(); env.update({"NETCONSOLE_NEXT_DATA_ROOT": str(root), "NETCONSOLE_NEXT_WEB_PORT": str(web_port), "NETCONSOLE_NEXT_SYSLOG_PORT": "0", "NETCONSOLE_NEXT_H3C_ENABLED": "1", "NETCONSOLE_NEXT_TERMINAL_ENABLED": "1", "NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS": "1", "NETCONSOLE_NEXT_TERMINAL_DEV_SIMULATION": "1", "ASPNETCORE_ENVIRONMENT": "Development", "NETCONSOLE_NEXT_CREDENTIAL_E2E_SECRET": PASSWORD})
-    service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     try:
         health = f"http://127.0.0.1:{web_port}/api/system/health"
         for _ in range(150):
-            if service.poll() is not None: raise RuntimeError("service exited before health")
+            if service.poll() is not None:
+                raise RuntimeError(f"service exited before health (exit code {service.returncode}):\n{process_tail(service)}")
             try:
                 with urllib.request.urlopen(health, timeout=1): break
             except Exception: time.sleep(0.1)
@@ -216,9 +228,12 @@ def main():
         # Web PR-1 replaces the old root terminal page with the single Vue entry.
         # The test retains the same simulator coverage and adds Cookie-auth validation.
         for browser_test in ("web_terminal_browser_e2e.mjs",):
-            result = subprocess.run(["node", str(repo / "tests" / browser_test)], cwd=repo, env=browser_env, text=True, capture_output=True, timeout=90)
-            sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
-            if result.returncode: raise RuntimeError(f"browser E2E {browser_test} exited with {result.returncode}")
+            result = subprocess.run(["node", str(repo / "tests" / browser_test)], cwd=repo, env=browser_env,
+                                    text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=90)
+            if safe_text(result.stdout): sys.stdout.write(result.stdout)
+            if safe_text(result.stderr): sys.stderr.write(result.stderr)
+            if result.returncode:
+                raise RuntimeError(f"browser E2E {browser_test} exited with {result.returncode}")
     finally:
         if SIMULATOR_EVENTS:
             print("simulator events:", "; ".join(SIMULATOR_EVENTS), file=sys.stderr)
@@ -229,7 +244,9 @@ def main():
             service.terminate()
             try: service.wait(timeout=15)
             except subprocess.TimeoutExpired: service.kill(); service.wait(timeout=10)
-        if service.stdout and service.returncode: sys.stderr.write(service.stdout.read()[-4000:])
+        if service.returncode:
+            output = process_tail(service)
+            if output: sys.stderr.write(output)
         shutil.rmtree(root, ignore_errors=True)
 
 

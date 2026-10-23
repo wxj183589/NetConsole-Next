@@ -14,6 +14,8 @@ internal sealed class WebAuthStore
     private const int SessionHours = 12;
     private readonly RuntimeSettings _settings;
     private readonly ConcurrentDictionary<string, LoginWindow> _loginWindows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, object> _csrfLocks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _csrfTokens = new(StringComparer.Ordinal);
 
     public WebAuthStore(RuntimeSettings settings) => _settings = settings;
 
@@ -61,10 +63,44 @@ internal sealed class WebAuthStore
         if (string.IsNullOrWhiteSpace(csrfToken)) return false;
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT csrf_hash FROM web_sessions WHERE token_hash=$token AND revoked_ms IS NULL";
+        command.CommandText = "SELECT csrf_hash FROM web_sessions WHERE token_hash=$token AND revoked_ms IS NULL AND expires_ms>$now";
         command.Parameters.AddWithValue("$token", HashToken(sessionToken));
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var stored = command.ExecuteScalar() as byte[];
         return stored is not null && CryptographicOperations.FixedTimeEquals(stored, HashToken(csrfToken));
+    }
+
+    public string? GetOrCreateCsrf(string? sessionToken, string? presentedToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionToken)) return null;
+        var sessionKey = Convert.ToHexString(HashToken(sessionToken));
+        var gate = _csrfLocks.GetOrAdd(sessionKey, static _ => new object());
+        lock (gate)
+        {
+            if (ValidateSession(sessionToken) is null)
+            {
+                _csrfTokens.TryRemove(sessionKey, out _);
+                return null;
+            }
+            if (_csrfTokens.TryGetValue(sessionKey, out var cachedToken) && ValidateCsrf(sessionToken, cachedToken))
+                return cachedToken;
+            if (!string.IsNullOrWhiteSpace(presentedToken) && ValidateCsrf(sessionToken, presentedToken))
+            {
+                _csrfTokens[sessionKey] = presentedToken;
+                return presentedToken;
+            }
+
+            var next = RandomToken();
+            using var db = Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "UPDATE web_sessions SET csrf_hash=$csrf WHERE token_hash=$token AND revoked_ms IS NULL AND expires_ms>$now";
+            command.Parameters.AddWithValue("$csrf", HashToken(next));
+            command.Parameters.AddWithValue("$token", HashToken(sessionToken));
+            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            if (command.ExecuteNonQuery() != 1) return null;
+            _csrfTokens[sessionKey] = next;
+            return next;
+        }
     }
 
     public WebLoginResult? TryLogin(string username, string password, string? remoteIp, out bool rateLimited)
@@ -103,6 +139,7 @@ internal sealed class WebAuthStore
             command.Parameters.AddWithValue("$now", now); command.Parameters.AddWithValue("$expires", now + TimeSpan.FromHours(SessionHours).TotalMilliseconds);
             command.Parameters.AddWithValue("$ip", (object?)remoteIp ?? DBNull.Value); command.ExecuteNonQuery();
         }
+        _csrfTokens[Convert.ToHexString(HashToken(sessionToken))] = csrfToken;
         return new WebLoginResult(identity with { SessionId = sessionId }, sessionToken, csrfToken);
     }
 
@@ -112,6 +149,7 @@ internal sealed class WebAuthStore
         using var db = Open(); using var command = db.CreateCommand();
         command.CommandText = "UPDATE web_sessions SET revoked_ms=$now WHERE token_hash=$token AND revoked_ms IS NULL";
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); command.Parameters.AddWithValue("$token", HashToken(token)); command.ExecuteNonQuery();
+        _csrfTokens.TryRemove(Convert.ToHexString(HashToken(token)), out _);
     }
 
     public bool ChangePassword(WebUserIdentity actor, string username, string? currentPassword, string newPassword)

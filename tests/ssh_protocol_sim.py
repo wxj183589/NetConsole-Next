@@ -130,6 +130,8 @@ def run_case(dll, mode):
             ["dotnet", str(dll), "--ssh-wire", mode, str(port), client_pin],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=12,
             env=environment,
             check=False,
@@ -143,10 +145,10 @@ def run_case(dll, mode):
     if server_error and mode not in ("host-key", "auth"):
         raise RuntimeError(f"{mode} simulated SSH server failed ({server_error[0]})")
     if result.returncode != 0:
-        sys.stderr.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        if result.stdout: sys.stderr.write(result.stdout)
+        if result.stderr: sys.stderr.write(result.stderr)
         raise RuntimeError(f"{mode} SSH.NET wire test failed with exit code {result.returncode}")
-    sys.stdout.write(result.stdout)
+    if result.stdout: sys.stdout.write(result.stdout)
 
 
 def main():

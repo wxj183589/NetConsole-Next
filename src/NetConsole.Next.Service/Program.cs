@@ -186,9 +186,8 @@ app.MapGet("/api/auth/me", (HttpContext context, WebAuthStore auth) =>
 app.MapGet("/api/auth/csrf", (HttpContext context, WebAuthStore auth) =>
 {
     var sessionToken = context.Request.Cookies[WebCookieNames.Session];
-    var identity = auth.ValidateSession(sessionToken);
-    if (identity is null) return Results.Unauthorized();
-    var csrf = RandomWebToken();
+    var csrf = auth.GetOrCreateCsrf(sessionToken, context.Request.Cookies[WebCookieNames.Csrf]);
+    if (csrf is null) return Results.Unauthorized();
     context.Response.Cookies.Append(WebCookieNames.Csrf, csrf, WebCookieOptions(httpOnly: false));
     return Results.Ok(new { csrfToken = csrf });
 });
@@ -549,8 +548,6 @@ static CookieOptions WebCookieOptions(bool httpOnly) => new()
     Path = "/",
     MaxAge = TimeSpan.FromHours(12),
 };
-
-static string RandomWebToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
 static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
 {

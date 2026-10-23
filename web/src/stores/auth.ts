@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { ApiRequestError, getCsrf, getCurrentUser, login, logout, type WebUser } from '../api/client'
+import { ApiRequestError, clearCsrfToken, getCsrf, getCurrentUser, login, logout, type WebUser } from '../api/client'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<WebUser | null>(null)
@@ -18,6 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch (error) {
       if (!(error instanceof ApiRequestError) || error.status !== 401) console.warn('auth bootstrap failed', error)
       user.value = null
+      clearCsrfToken()
     } finally { ready.value = true }
   }
 
