@@ -110,6 +110,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV6Migration(db);
         ApplyV7Migration(db);
         ApplyV8Migration(db);
+        ApplyV9Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -289,6 +290,20 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                 NULLIF(host_key_sha256,'') FROM h3c_device_profiles
             WHERE NOT EXISTS(SELECT 1 FROM ssh_host_keys k WHERE k.device_id=h3c_device_profiles.id)";
         seed.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV9Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v9.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v9.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        WebAuthStore.SeedDefaults(db, transaction);
         transaction.Commit();
     }
 

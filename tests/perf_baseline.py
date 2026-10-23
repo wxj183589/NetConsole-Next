@@ -45,7 +45,7 @@ def start_service(dll, root):
     env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root),
                NETCONSOLE_NEXT_WEB_PORT=str(web_port), NETCONSOLE_NEXT_SYSLOG_PORT=str(udp_port))
     proc = subprocess.Popen(["dotnet", str(dll)], env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True)
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     return proc, f"http://127.0.0.1:{web_port}", udp_port
 
 

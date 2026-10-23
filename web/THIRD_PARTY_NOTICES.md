@@ -1,5 +1,15 @@
 # Third-party notices
 
+The Web PR-1 UI uses the following packages. Versions are locked in `package-lock.json`.
+
+- Vue 3, Vue Router, Pinia, Vite, Vitest and Vue Test Utils: MIT.
+- Element Plus and `@element-plus/icons-vue`: MIT.
+- ECharts: Apache-2.0.
+- `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-search`: MIT.
+- Playwright and esbuild: Apache-2.0 / MIT components as distributed by their packages.
+
+Art Design Pro was inspected as a visual reference only. No Art Design Pro source, route, store, or asset is included in this repository. Old NetConsole source was inspected as a functional reference only and is not bundled into the Next Web build.
+
 The offline terminal bundle includes these npm packages, all pinned in
 `package-lock.json`:
 

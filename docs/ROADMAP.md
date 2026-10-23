@@ -28,7 +28,7 @@
 - G2.1 在 PR #10 的 SSH 只读适配器上增加 SSH.NET stdout/stderr 并行有界读取，修复非 seekable `PipeStream` 导致的输出限制失效；超限保留受限前缀并标为 `PARTIAL`，取消、超时、disconnect 与解析状态分开记录。Exec Channel 仍为当前实现，未在缺少目标设备证据时切换到交互 Shell。
 - SQLite schema v5 将 Raw 段与 Task Run 关联，并在单个事务内写结果清单和任务终态。Raw 已封段但进程退出时，启动恢复校验内容并幂等重建清单；任务维持 `INTERRUPTED`，不会被恢复成成功。
 - Windows 凭据采用 DPAPI `LocalMachine` 加密文件，Local Manager 提供 set/update/revoke；数据根 ACL 仅授予 SYSTEM、Administrators 和服务虚拟账户。Linux/Kylin 使用显式不可用 provider，环境变量 provider 仅在 Development 且显式开启时生效。
-- 本机所有 `/api/system/*` 管理端点需要 bearer token、loopback 来源和固定 Host 检查。token 可由 Local Manager 查看或旋转；没有 token、文件不可读或来源/Host 不符合时拒绝请求。远程管理认证/CSRF/角色模型尚未实现。
+- 本机所有 `/api/system/*` 管理端点保留 bearer token、来源和 Host 检查；Web PR-1 增加独立 Cookie 会话、PBKDF2 用户、角色检查、CSRF/Origin 校验和显式 LAN bind，同时保持 loopback 默认。详见 `WEB_AUTH_AND_LAN.md`。
 - 已加入 host-key 变化/缺失、认证失败、连接取消/超时、设备断连、输出边界、分页提示、未知格式、事务回滚与恢复幂等测试。另用 Paramiko 本机 SSH server 与 SSH.NET 实际 wire 通道覆盖 host-key、认证、Exec、静默握手取消、连接重置和双并发会话，并以 fake transport 覆盖清理边界。模拟不等于 Comware 固件互操作；未连接真实设备，标记 `PENDING_REAL_ENVIRONMENT`。
 - G2.1 Linux 与 Windows Server 2025 Release 构建、C# 测试、Paramiko/SSH.NET wire 模拟及 Windows SCM/DPAPI/ACL 工作流通过（PR #11 head `426a42c2fd8b3f91576444ec2bd9325052b7bdb5`，Actions run `39638777555`）。Windows CI 曾发现旧 Raw 路径反斜杠与恢复正斜杠产生重复 Catalog 行；现已修复为写入规范化路径、恢复时按 Windows 物理路径识别并保留现有 DB 路径键，并加入 Windows 回归测试。PR #10 仍是未合并依赖，PR #11 保持独立且未合并。
 - H3C stdout 是 **SSH.NET 解码后的 UTF-8 命令输出**，不是 SSH 线路字节。Raw capture、`PARSED / EMPTY / UNRECOGNIZED / PARTIAL` 解析状态与任务终态是三个不同事实。最大输出 256 KiB；命令分页时失败，不自动降低 SSH 算法要求。

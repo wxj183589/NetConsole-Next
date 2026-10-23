@@ -36,7 +36,7 @@ def main():
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True, creationflags=creationflags)
+                                   text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
         try:
             url = f"http://127.0.0.1:{web_port}/api/system/health"
             for _ in range(120):
