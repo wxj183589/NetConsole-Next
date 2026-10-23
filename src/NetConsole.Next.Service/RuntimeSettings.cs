@@ -6,6 +6,8 @@ internal sealed class RuntimeSettings
 {
     public required string DataRoot { get; init; }
     public required int WebPort { get; init; }
+    public string WebBindAddress { get; init; } = "127.0.0.1";
+    public bool WebLanEnabled { get; init; }
     public required int SyslogPort { get; init; }
     public required IPAddress SyslogBind { get; init; }
     public required int SyslogReceiveBufferBytes { get; init; }
@@ -36,6 +38,9 @@ internal sealed class RuntimeSettings
         {
             DataRoot = full,
             WebPort = ParsePort("NETCONSOLE_NEXT_WEB_PORT", 18771, false),
+            WebBindAddress = ParseWebBindAddress(),
+            WebLanEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_BIND") is "0.0.0.0" or "::" ||
+                Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_LAN") == "1",
             SyslogPort = ParsePort("NETCONSOLE_NEXT_SYSLOG_PORT", 0, true),
             SyslogBind = bind,
             SyslogReceiveBufferBytes = receiveBuffer,
@@ -59,6 +64,15 @@ internal sealed class RuntimeSettings
     private static bool IsDevelopmentEnvironment() =>
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase);
+
+    private static string ParseWebBindAddress()
+    {
+        var value = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_BIND");
+        if (string.IsNullOrWhiteSpace(value)) return "127.0.0.1";
+        if (value is not ("127.0.0.1" or "localhost" or "0.0.0.0" or "::"))
+            throw new InvalidOperationException("NETCONSOLE_NEXT_WEB_BIND must be 127.0.0.1, 0.0.0.0 or ::.");
+        return value == "localhost" ? "127.0.0.1" : value;
+    }
 
     private static int ParsePositiveInt(string key, int fallback, int maximum)
     {

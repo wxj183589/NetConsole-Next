@@ -213,7 +213,9 @@ def main():
             edge_path = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
             if edge_path.is_file(): browser_path = str(edge_path)
         if browser_path: browser_env["NETCONSOLE_E2E_BROWSER"] = browser_path
-        for browser_test in ("terminal_browser_e2e.mjs", "terminal_history_browser_e2e.mjs"):
+        # Web PR-1 replaces the old root terminal page with the single Vue entry.
+        # The test retains the same simulator coverage and adds Cookie-auth validation.
+        for browser_test in ("web_terminal_browser_e2e.mjs",):
             result = subprocess.run(["node", str(repo / "tests" / browser_test)], cwd=repo, env=browser_env, text=True, capture_output=True, timeout=90)
             sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
             if result.returncode: raise RuntimeError(f"browser E2E {browser_test} exited with {result.returncode}")
