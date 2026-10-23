@@ -36,8 +36,11 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
     {
         if (request.Mode != "RESTRICTED_READONLY")
             throw new ArgumentException("Only RESTRICTED_READONLY terminal sessions are enabled.", nameof(request));
-        if (!TerminalProtocolNames.TryParse(request.Protocol, out var protocol))
-            throw new ArgumentException("Protocol must be SSH, TELNET or SERIAL.", nameof(request));
+        var requestedProtocol = request.Protocol?.Trim().ToUpperInvariant();
+        var autoProtocol = string.Equals(requestedProtocol, "AUTO", StringComparison.Ordinal);
+        TerminalProtocol protocol = TerminalProtocol.Ssh;
+        if (!autoProtocol && !TerminalProtocolNames.TryParse(requestedProtocol ?? string.Empty, out protocol))
+            throw new ArgumentException("Protocol must be AUTO, SSH, TELNET or SERIAL.", nameof(request));
         if (_sessions.Count >= MaximumSessions)
             throw new InvalidOperationException("The terminal session limit has been reached.");
 
@@ -47,6 +50,19 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
         string? host = null;
         int? port = null;
         string? serialPort = null;
+        if (autoProtocol && !string.IsNullOrWhiteSpace(request.SerialPort))
+            throw new ArgumentException("AUTO protocol selection is available only for registered network devices.", nameof(request));
+        if (autoProtocol && protocol == TerminalProtocol.Ssh)
+        {
+            if (profile is null && string.IsNullOrWhiteSpace(request.SerialPort))
+            {
+                profile = _catalog.GetH3cDeviceProfile(request.TargetId)
+                    ?? throw new KeyNotFoundException("The target is not an authorized registered device.");
+                if (!profile.Enabled) throw new InvalidOperationException("The registered device is disabled.");
+            }
+            if (profile is not null)
+                protocol = profile.TerminalProtocol == "TELNET" ? TerminalProtocol.Telnet : TerminalProtocol.Ssh;
+        }
         if (protocol is TerminalProtocol.Ssh or TerminalProtocol.Telnet)
         {
             profile = _catalog.GetH3cDeviceProfile(request.TargetId)
@@ -79,7 +95,7 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
         {
             _catalog.CreateTerminalSession(snapshot);
             var runtime = new TerminalSessionRuntime(this, _catalog, _credentials, _settings.DataRoot,
-                snapshot, profile, serial, recording);
+                snapshot, profile, serial, recording, autoProtocol);
             if (!_sessions.TryAdd(id, runtime)) throw new InvalidOperationException("Terminal session id collision.");
             runtime.Start();
             return id;
@@ -109,6 +125,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
     private readonly H3cDeviceProfileSnapshot? _profile;
     private readonly TerminalSerialConfiguration? _serial;
     private readonly TerminalRecordingWriter _recording;
+    private readonly bool _allowProtocolFallback;
     private readonly Channel<byte[]> _output = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(256)
     {
         FullMode = BoundedChannelFullMode.Wait,
@@ -126,7 +143,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
 
     internal TerminalSessionRuntime(TerminalSessionManager owner, Catalog catalog, IH3cCredentialProvider credentials,
         string dataRoot, TerminalSessionSnapshot snapshot, H3cDeviceProfileSnapshot? profile,
-        TerminalSerialConfiguration? serial, TerminalRecordingWriter recording)
+        TerminalSerialConfiguration? serial, TerminalRecordingWriter recording, bool allowProtocolFallback = false)
     {
         _owner = owner;
         _catalog = catalog;
@@ -136,6 +153,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         _profile = profile;
         _serial = serial;
         _recording = recording;
+        _allowProtocolFallback = allowProtocolFallback;
     }
 
     public void Start()
@@ -175,10 +193,29 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         try
         {
             _transport = await CreateTransportAsync().ConfigureAwait(false);
-            await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
-            _catalog.UpdateTerminalState(Snapshot.Id, "CONNECTED", "CONNECTED", negotiatedAlgorithm: _transport.NegotiatedAlgorithm);
+            try
+            {
+                await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
+            }
+            catch (H3cProtocolNegotiationException) when (_allowProtocolFallback &&
+                _profile?.TerminalProtocol == "AUTO" && _profile.AllowTelnetFallback && Snapshot.Protocol == "SSH")
+            {
+                await _transport.DisposeAsync().ConfigureAwait(false);
+                _transport = new TelnetTerminalTransport(_profile, _credentials.GetPassword(_profile.CredentialReference) ?? string.Empty);
+                await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
+                _catalog.UpdateTerminalProtocol(Snapshot.Id, _transport.Protocol);
+                Snapshot = Snapshot with { Protocol = _transport.Protocol };
+            }
+            _catalog.UpdateTerminalState(Snapshot.Id, "CONNECTED", "CONNECTED",
+                negotiatedAlgorithm: _transport.NegotiatedAlgorithm, hostKeyEvent: _transport.HostKeyEvent);
             _catalog.RecordTerminalEvent(Snapshot.Id, new("CONNECTED", new { protocol = _transport.Protocol }));
             _catalog.RecordTerminalEvent(Snapshot.Id, new("AUTHENTICATED", new { protocol = _transport.Protocol }));
+            if (_transport.HostKeyEvent is "FIRST_TRUST" or "AUTO_UPDATE")
+                _catalog.RecordTerminalEvent(Snapshot.Id, new("HOST_KEY_CHANGED", new
+                {
+                    decision = _transport.HostKeyEvent,
+                    warning = "Automatic host-key acceptance is not independent device identity verification."
+                }));
             Snapshot = Snapshot with { State = "CONNECTED", ConnectionResult = "CONNECTED", NegotiatedAlgorithm = _transport.NegotiatedAlgorithm };
             await ReadLoopAsync().ConfigureAwait(false);
         }
@@ -191,7 +228,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             var reason = ex switch
             {
                 H3cHostKeyMismatchException => "HOST_KEY_MISMATCH",
-                H3cUnsupportedAlgorithmException => "UNSUPPORTED_ALGORITHM",
+                H3cUnsupportedAlgorithmException or H3cProtocolNegotiationException => "UNSUPPORTED_ALGORITHM",
                 H3cAuthenticationFailedException => "AUTHENTICATION_FAILED",
                 H3cCredentialUnavailableException => "CREDENTIAL_UNAVAILABLE",
                 TimeoutException => "TIMEOUT",
@@ -249,7 +286,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         return Snapshot.Protocol switch
         {
-            "SSH" => new SshTerminalTransport(profile, password),
+                "SSH" => new SshTerminalTransport(profile, password, _catalog),
             "TELNET" => new TelnetTerminalTransport(profile, password),
             _ => throw new InvalidOperationException("Unsupported terminal protocol.")
         };

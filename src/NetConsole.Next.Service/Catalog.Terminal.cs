@@ -85,6 +85,18 @@ internal sealed partial class Catalog
         transaction.Commit();
     }
 
+    public void UpdateTerminalProtocol(string sessionId, string protocol)
+    {
+        if (protocol is not ("SSH" or "TELNET" or "SERIAL"))
+            throw new ArgumentException("Invalid terminal protocol.", nameof(protocol));
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE terminal_sessions SET protocol=$protocol WHERE id=$id";
+        command.Parameters.AddWithValue("$protocol", protocol);
+        command.Parameters.AddWithValue("$id", sessionId);
+        if (command.ExecuteNonQuery() == 0) throw new KeyNotFoundException("Terminal session was not found.");
+    }
+
     public void CompleteTerminalRecording(string sessionId, TerminalRecordingResult recording)
     {
         ArgumentNullException.ThrowIfNull(recording);

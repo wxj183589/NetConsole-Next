@@ -31,11 +31,14 @@ internal sealed class H3cConnectionTimeoutException() : TimeoutException(
 internal sealed class H3cUnsupportedAlgorithmException() : InvalidOperationException(
     "The SSH peer has no algorithm in the configured security allowlist.") { }
 
+internal sealed class H3cProtocolNegotiationException() : InvalidOperationException(
+    "The SSH peer could not negotiate a compatible protocol algorithm.") { }
+
 internal sealed class H3cOutputLimitException() : Exception(
     "H3C command output exceeded the configured combined output/error limit.") { }
 
 internal sealed class H3cInvalidEncodingException() : Exception(
-    "H3C command output is not valid UTF-8.") { }
+    "H3C command output is not valid for the configured terminal encoding.") { }
 
 internal sealed class H3cCommandRejectedException() : Exception(
     "H3C read-only command failed or returned an SSH error stream.") { }
@@ -103,12 +106,33 @@ internal static class H3cSshAlgorithmPolicy
         "rsa-sha2-256", "rsa-sha2-512"
     };
 
-    public static void Apply(Renci.SshNet.ConnectionInfo info)
+    private static readonly HashSet<string> LegacyKeyExchanges = new(StringComparer.Ordinal)
     {
-        KeepOnly(info.KeyExchangeAlgorithms.Keys, name => info.KeyExchangeAlgorithms.Remove(name), KeyExchanges);
-        KeepOnly(info.Encryptions.Keys, name => info.Encryptions.Remove(name), Encryptions);
-        KeepOnly(info.HmacAlgorithms.Keys, name => info.HmacAlgorithms.Remove(name), MacAlgorithms);
-        KeepOnly(info.HostKeyAlgorithms.Keys, name => info.HostKeyAlgorithms.Remove(name), HostKeys);
+        "diffie-hellman-group14-sha1", "diffie-hellman-group-exchange-sha1"
+    };
+    private static readonly HashSet<string> LegacyEncryptions = new(StringComparer.Ordinal)
+    {
+        "aes128-cbc", "aes192-cbc", "aes256-cbc"
+    };
+    private static readonly HashSet<string> LegacyMacAlgorithms = new(StringComparer.Ordinal)
+    {
+        "hmac-sha1", "hmac-sha1-96"
+    };
+    private static readonly HashSet<string> LegacyHostKeys = new(StringComparer.Ordinal)
+    {
+        "ssh-rsa"
+    };
+
+    public static void Apply(Renci.SshNet.ConnectionInfo info, bool allowLegacyAlgorithms = false)
+    {
+        KeepOnly(info.KeyExchangeAlgorithms.Keys, name => info.KeyExchangeAlgorithms.Remove(name),
+            allowLegacyAlgorithms ? KeyExchanges.Concat(LegacyKeyExchanges).ToHashSet(StringComparer.Ordinal) : KeyExchanges);
+        KeepOnly(info.Encryptions.Keys, name => info.Encryptions.Remove(name),
+            allowLegacyAlgorithms ? Encryptions.Concat(LegacyEncryptions).ToHashSet(StringComparer.Ordinal) : Encryptions);
+        KeepOnly(info.HmacAlgorithms.Keys, name => info.HmacAlgorithms.Remove(name),
+            allowLegacyAlgorithms ? MacAlgorithms.Concat(LegacyMacAlgorithms).ToHashSet(StringComparer.Ordinal) : MacAlgorithms);
+        KeepOnly(info.HostKeyAlgorithms.Keys, name => info.HostKeyAlgorithms.Remove(name),
+            allowLegacyAlgorithms ? HostKeys.Concat(LegacyHostKeys).ToHashSet(StringComparer.Ordinal) : HostKeys);
         if (info.KeyExchangeAlgorithms.Count == 0 || info.Encryptions.Count == 0 ||
             info.HmacAlgorithms.Count == 0 || info.HostKeyAlgorithms.Count == 0)
             throw new H3cUnsupportedAlgorithmException();
@@ -128,7 +152,7 @@ internal interface IH3cSshTransportFactory
 internal interface IH3cSshTransport : IDisposable
 {
     bool IsConnected { get; }
-    Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken);
+    Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken);
     Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
     void Abort();
 }
@@ -144,6 +168,7 @@ internal sealed class SshNetH3cSshTransportFactory : IH3cSshTransportFactory
 internal sealed class SshNetH3cSshTransport : IH3cSshTransport
 {
     private readonly SshClient _client;
+    private readonly string _terminalEncoding;
     private bool _hostKeySeen;
     private bool _hostKeyAccepted;
     private bool _disposed;
@@ -155,22 +180,23 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
             new PasswordAuthenticationMethod(profile.Username, password))
         {
             Timeout = TimeSpan.FromSeconds(10),
-            Encoding = new UTF8Encoding(false, true)
+            Encoding = TerminalTextEncoding.Resolve(profile.TerminalEncoding)
         };
-        H3cSshAlgorithmPolicy.Apply(info);
+        _terminalEncoding = profile.TerminalEncoding;
+        H3cSshAlgorithmPolicy.Apply(info, profile.AllowLegacyAlgorithms);
         _client = new SshClient(info);
     }
 
     public bool IsConnected => !_disposed && _client.IsConnected;
 
-    public async Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken)
+    public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(verifyHostKey);
         var started = Stopwatch.GetTimestamp();
         _client.HostKeyReceived += (_, args) =>
         {
             _hostKeySeen = true;
-            _hostKeyAccepted = verifyHostKey(args.FingerPrintSHA256);
+            _hostKeyAccepted = verifyHostKey(args.HostKeyName, args.FingerPrintSHA256);
             args.CanTrust = _hostKeyAccepted;
             if (_hostKeyAccepted) Interlocked.Exchange(ref _hostKeyAcceptedTimestamp, Stopwatch.GetTimestamp());
         };
@@ -189,6 +215,11 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         {
             Abort();
             throw new H3cConnectionTimeoutException();
+        }
+        catch (SshConnectionException ex) when (IsAlgorithmNegotiationFailure(ex.Message))
+        {
+            Abort();
+            throw new H3cProtocolNegotiationException();
         }
         catch (Exception) when (_hostKeySeen && !_hostKeyAccepted)
         {
@@ -227,7 +258,7 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         {
             captured = await H3cCommandOutputCollector.CollectAsync(
                 sshCommand.OutputStream, sshCommand.ExtendedOutputStream, execution,
-                H3cRawOutput.MaximumBytes, Abort, cancellationToken).ConfigureAwait(false);
+                H3cRawOutput.MaximumBytes, Abort, cancellationToken, _terminalEncoding).ConfigureAwait(false);
         }
         catch (H3cOutputLimitException)
         {
@@ -262,12 +293,23 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     }
 
     public void Dispose() => Abort();
+
+    private static bool IsAlgorithmNegotiationFailure(string? message)
+    {
+        var value = message ?? string.Empty;
+        return value.Contains("algorithm", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("key exchange", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("cipher", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("mac", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("no matching", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal static class H3cCommandOutputCollector
 {
     public static async Task<H3cCapturedOutput> CollectAsync(Stream stdout, Stream stderr, Task execution,
-        int maximumCombinedBytes, Action abortTransport, CancellationToken cancellationToken = default)
+        int maximumCombinedBytes, Action abortTransport, CancellationToken cancellationToken = default,
+        string terminalEncoding = "AUTO")
     {
         if (maximumCombinedBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumCombinedBytes));
         cancellationToken.ThrowIfCancellationRequested();
@@ -342,7 +384,8 @@ internal static class H3cCommandOutputCollector
         var allowIncompleteTail = wasOverLimit || wasCancelled || winner == drainFailed.Task || executionError is not null;
         try
         {
-            output = DecodeUtf8Prefix(captured.GetBuffer(), checked((int)captured.Length), allowIncompleteTail);
+            output = TerminalTextEncoding.DecodePrefix(captured.GetBuffer(), checked((int)captured.Length),
+                terminalEncoding, allowIncompleteTail);
         }
         catch (DecoderFallbackException) { throw new H3cInvalidEncodingException(); }
 
@@ -374,15 +417,6 @@ internal static class H3cCommandOutputCollector
         return new(output, Interlocked.Read(ref stderrBytes));
     }
 
-    private static string DecodeUtf8Prefix(byte[] bytes, int length, bool allowIncompleteTail)
-    {
-        var encoding = new UTF8Encoding(false, true);
-        if (!allowIncompleteTail) return encoding.GetString(bytes, 0, length);
-        var decoder = encoding.GetDecoder();
-        var chars = new char[encoding.GetMaxCharCount(length)];
-        var charCount = decoder.GetChars(bytes, 0, length, chars, 0, flush: false);
-        return new string(chars, 0, charCount);
-    }
 }
 
 internal sealed class H3cSshDeviceSessionFactory(Catalog catalog, IH3cCredentialProvider credentials,
@@ -395,12 +429,12 @@ internal sealed class H3cSshDeviceSessionFactory(Catalog catalog, IH3cCredential
         var profile = catalog.GetH3cDeviceProfile(target)
             ?? throw new KeyNotFoundException("H3C device profile was not found.");
         if (!profile.Enabled) throw new InvalidOperationException("H3C device profile is disabled.");
-        return new H3cSshDeviceSession(profile, credentials, _transportFactory);
+        return new H3cSshDeviceSession(profile, credentials, _transportFactory, catalog);
     }
 }
 
 internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3cCredentialProvider credentials,
-    IH3cSshTransportFactory transportFactory) : IDeviceSession
+    IH3cSshTransportFactory transportFactory, Catalog? catalog = null) : IDeviceSession
 {
     private IH3cSshTransport? _transport;
     private bool _sessionCounted;
@@ -411,8 +445,28 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
         var password = credentials.GetPassword(profile.CredentialReference);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         _transport = transportFactory.Create(profile, password);
-        await _transport.ConnectAsync(fingerprint => H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint),
-            cancellationToken).ConfigureAwait(false);
+        string? hostKeyCorrelation = null;
+        try
+        {
+            await _transport.ConnectAsync((keyType, fingerprint) =>
+            {
+                if (catalog is null) return H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint);
+                var decision = catalog.CheckSshHostKey(profile, keyType, fingerprint);
+                hostKeyCorrelation = decision.CorrelationId;
+                return decision.Accepted;
+            }, cancellationToken).ConfigureAwait(false);
+            if (catalog is not null && hostKeyCorrelation is not null &&
+                !catalog.CommitSshHostKey(hostKeyCorrelation))
+                throw new H3cHostKeyMismatchException();
+        }
+        catch
+        {
+            if (catalog is not null && hostKeyCorrelation is not null)
+            {
+                try { catalog.FailSshHostKey(hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE"); } catch { }
+            }
+            throw;
+        }
         _sessionCounted = true;
         H3cCollectionMetrics.SessionOpened();
     }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
@@ -9,6 +10,123 @@ internal static class H3cCommandPolicy
     public const string DisplayInterfaceBrief = "display interface brief";
 
     public static bool IsAllowed(string command) => command is DisplayVersion or DisplayInterfaceBrief;
+}
+
+internal static class TerminalTextEncoding
+{
+    private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+    private static readonly Encoding Gb18030 = CreateGb18030();
+
+    public static bool IsSupported(string? value) => value?.Trim().ToUpperInvariant() is "AUTO" or "UTF-8" or "GB18030";
+
+    public static Encoding Resolve(string? value) => value?.Trim().ToUpperInvariant() switch
+    {
+        "GB18030" => Gb18030,
+        "UTF-8" => Utf8,
+        _ => Utf8
+    };
+
+    public static string Decode(ReadOnlySpan<byte> bytes, string? preference)
+    {
+        var normalized = preference?.Trim().ToUpperInvariant();
+        if (normalized == "GB18030") return Gb18030.GetString(bytes);
+        if (normalized == "UTF-8") return Utf8.GetString(bytes);
+        try { return Utf8.GetString(bytes); }
+        catch (DecoderFallbackException) { return Gb18030.GetString(bytes); }
+    }
+
+    public static string DecodePrefix(byte[] bytes, int length, string? preference, bool allowIncompleteTail)
+    {
+        if (length < 0 || length > bytes.Length) throw new ArgumentOutOfRangeException(nameof(length));
+        var normalized = preference?.Trim().ToUpperInvariant();
+        var encoding = normalized switch
+        {
+            "GB18030" => Gb18030,
+            "UTF-8" => Utf8,
+            _ => Utf8
+        };
+        try { return DecodeWith(encoding, bytes, length, allowIncompleteTail); }
+        catch (DecoderFallbackException) when (normalized is null or "" or "AUTO")
+        {
+            return DecodeWith(Gb18030, bytes, length, allowIncompleteTail);
+        }
+    }
+
+    private static string DecodeWith(Encoding encoding, byte[] bytes, int length, bool allowIncompleteTail)
+    {
+        if (!allowIncompleteTail) return encoding.GetString(bytes, 0, length);
+        var decoder = encoding.GetDecoder();
+        var chars = new char[encoding.GetMaxCharCount(length)];
+        var count = decoder.GetChars(bytes, 0, length, chars, 0, flush: false);
+        return new string(chars, 0, count);
+    }
+
+    private static Encoding CreateGb18030()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        return Encoding.GetEncoding(54936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+    }
+}
+
+internal sealed class TerminalTextDecoder
+{
+    private readonly string _preference;
+    private Encoding _encoding;
+    private Decoder _decoder;
+    private bool _autoUtf8;
+    private readonly List<byte> _autoPending = [];
+
+    public TerminalTextDecoder(string? preference)
+    {
+        _preference = preference?.Trim().ToUpperInvariant() ?? "AUTO";
+        _autoUtf8 = _preference is "AUTO" or "";
+        _encoding = _autoUtf8 ? TerminalTextEncoding.Resolve("UTF-8") : TerminalTextEncoding.Resolve(_preference);
+        _decoder = _encoding.GetDecoder();
+    }
+
+    public byte[] Decode(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length == 0) return [];
+        if (_autoUtf8)
+        {
+            _autoPending.AddRange(bytes.ToArray());
+            try
+            {
+                var complete = _encoding.GetString(_autoPending.ToArray());
+                _autoPending.Clear();
+                return Encoding.UTF8.GetBytes(complete);
+            }
+            catch (DecoderFallbackException)
+            {
+                var probe = _encoding.GetDecoder();
+                var chars = new char[_encoding.GetMaxCharCount(_autoPending.Count)];
+                try
+                {
+                    probe.Convert(_autoPending.ToArray(), 0, _autoPending.Count, chars, 0, chars.Length,
+                        flush: false, out _, out _, out _);
+                    return [];
+                }
+                catch (DecoderFallbackException)
+                {
+                    _autoUtf8 = false;
+                    _encoding = TerminalTextEncoding.Resolve("GB18030");
+                    _decoder = _encoding.GetDecoder();
+                    var fallback = DecodeWith(_encoding, _decoder, _autoPending.ToArray());
+                    _autoPending.Clear();
+                    return fallback;
+                }
+            }
+        }
+        try { return DecodeWith(_encoding, _decoder, bytes); }
+        catch (DecoderFallbackException) { throw; }
+    }
+
+    private static byte[] DecodeWith(Encoding encoding, Decoder decoder, ReadOnlySpan<byte> bytes)
+    {
+        var chars = new char[encoding.GetMaxCharCount(bytes.Length)];
+        var count = decoder.GetChars(bytes, chars, flush: false);
+        return Encoding.UTF8.GetBytes(chars, 0, count);
+    }
 }
 
 internal static class H3cHostKeyFingerprint
@@ -59,7 +177,12 @@ internal sealed record H3cDeviceProfileSnapshot(
     string HostKeySha256,
     bool Enabled,
     long CreatedMs,
-    long UpdatedMs)
+    long UpdatedMs,
+    string HostKeyUpdatePolicy = "STRICT",
+    bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO",
+    string TerminalProtocol = "AUTO",
+    bool AllowTelnetFallback = false)
 {
     public string SourceId => "h3c-" + Id;
 }

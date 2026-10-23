@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading.Channels;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 
 namespace NetConsole.Next.Service;
 
@@ -10,6 +11,7 @@ internal interface ITerminalTransport : IAsyncDisposable
 {
     string Protocol { get; }
     string? NegotiatedAlgorithm { get; }
+    string? HostKeyEvent { get; }
     Task ConnectAsync(CancellationToken cancellationToken);
     ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken);
     Task SendCommandAsync(string command, CancellationToken cancellationToken);
@@ -17,33 +19,110 @@ internal interface ITerminalTransport : IAsyncDisposable
     Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken);
 }
 
-internal sealed class SshTerminalTransport(H3cDeviceProfileSnapshot profile, string password) : ITerminalTransport
+internal sealed class SshTerminalTransport : ITerminalTransport
 {
-    private readonly SshClient _client = CreateClient(profile, password);
+    private readonly H3cDeviceProfileSnapshot _profile;
+    private readonly SshClient _client;
+    private readonly Catalog _catalog;
     private ShellStream? _shell;
     private bool _hostKeySeen;
     private bool _hostKeyAccepted;
+    private string? _hostKeyCorrelation;
+    private string? _hostKeyDecision;
+    private readonly byte[] _pending = new byte[64 * 1024];
+    private readonly TerminalTextDecoder _decoder;
+    private int _pendingOffset;
+    private int _pendingCount;
+
+    public SshTerminalTransport(H3cDeviceProfileSnapshot profile, string password, Catalog catalog)
+    {
+        _profile = profile;
+        _client = CreateClient(profile, password);
+        _catalog = catalog;
+        _decoder = new TerminalTextDecoder(profile.TerminalEncoding);
+    }
 
     public string Protocol => "SSH";
-    public string? NegotiatedAlgorithm => _client.ConnectionInfo.CurrentKeyExchangeAlgorithm;
+    public string? NegotiatedAlgorithm => string.Join("/", new[]
+    {
+        _client.ConnectionInfo.CurrentKeyExchangeAlgorithm,
+        _client.ConnectionInfo.CurrentHostKeyAlgorithm,
+        _client.ConnectionInfo.CurrentServerHmacAlgorithm
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+    public string? HostKeyEvent => _hostKeyDecision;
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         _client.HostKeyReceived += (_, args) =>
         {
             _hostKeySeen = true;
-            _hostKeyAccepted = H3cHostKeyFingerprint.Matches(profile.HostKeySha256, args.FingerPrintSHA256);
+            var check = _catalog.CheckSshHostKey(_profile, args.HostKeyName, args.FingerPrintSHA256);
+            _hostKeyAccepted = check.Accepted;
+            _hostKeyCorrelation = check.CorrelationId;
+            _hostKeyDecision = check.Decision;
             args.CanTrust = _hostKeyAccepted;
         };
-        await _client.ConnectAsync(cancellationToken).ConfigureAwait(false);
-        if (!_hostKeySeen || !_hostKeyAccepted) throw new H3cHostKeyMismatchException();
-        _shell = _client.CreateShellStream("vt100", 120, 40, 1200, 8000, 64 * 1024);
+        try
+        {
+            await _client.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            if (!_hostKeySeen || !_hostKeyAccepted) throw new H3cHostKeyMismatchException();
+            _shell = _client.CreateShellStream("vt100", 120, 40, 1200, 8000, 64 * 1024);
+            if (_hostKeyCorrelation is not null && !_catalog.CommitSshHostKey(_hostKeyCorrelation))
+                throw new H3cHostKeyMismatchException();
+        }
+        catch (SshAuthenticationException)
+        {
+            FailPendingHostKey();
+            throw new H3cAuthenticationFailedException();
+        }
+        catch (SshOperationTimeoutException)
+        {
+            FailPendingHostKey();
+            throw new H3cConnectionTimeoutException();
+        }
+        catch (SshConnectionException) when (_hostKeySeen && !_hostKeyAccepted)
+        {
+            // A rejected host key is an identity failure, never a reason to
+            // fall back to Telnet.
+            FailPendingHostKey();
+            throw new H3cHostKeyMismatchException();
+        }
+        catch (SshConnectionException ex) when (IsAlgorithmNegotiationFailure(ex.Message))
+        {
+            FailPendingHostKey();
+            throw new H3cProtocolNegotiationException();
+        }
+        catch
+        {
+            if (_hostKeyCorrelation is not null)
+            {
+                try { _catalog.FailSshHostKey(_hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE"); } catch { }
+            }
+            throw;
+        }
     }
 
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
+        if (_pendingCount > 0)
+        {
+            var copy = Math.Min(buffer.Length, _pendingCount);
+            _pending.AsMemory(_pendingOffset, copy).CopyTo(buffer);
+            _pendingOffset += copy;
+            _pendingCount -= copy;
+            return copy;
+        }
         var shell = _shell ?? throw new InvalidOperationException("SSH terminal is not connected.");
-        return await shell.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        var raw = new byte[Math.Min(buffer.Length, 64 * 1024)];
+        var read = await shell.ReadAsync(raw, cancellationToken).ConfigureAwait(false);
+        if (read == 0) return 0;
+        var normalized = _decoder.Decode(raw.AsSpan(0, read));
+        if (normalized.Length > _pending.Length)
+            throw new InvalidDataException("SSH decoded output exceeded the bounded buffer.");
+        normalized.CopyTo(_pending, 0);
+        _pendingOffset = 0;
+        _pendingCount = normalized.Length;
+        return await ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
     }
 
     public Task SendCommandAsync(string command, CancellationToken cancellationToken)
@@ -88,10 +167,26 @@ internal sealed class SshTerminalTransport(H3cDeviceProfileSnapshot profile, str
             new PasswordAuthenticationMethod(profile.Username, password))
         {
             Timeout = TimeSpan.FromSeconds(10),
-            Encoding = new UTF8Encoding(false, true)
+            Encoding = TerminalTextEncoding.Resolve(profile.TerminalEncoding)
         };
-        H3cSshAlgorithmPolicy.Apply(info);
+        H3cSshAlgorithmPolicy.Apply(info, profile.AllowLegacyAlgorithms);
         return new SshClient(info);
+    }
+
+    private void FailPendingHostKey()
+    {
+        if (_hostKeyCorrelation is null) return;
+        try { _catalog.FailSshHostKey(_hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE"); } catch { }
+    }
+
+    private static bool IsAlgorithmNegotiationFailure(string? message)
+    {
+        var value = message ?? string.Empty;
+        return value.Contains("algorithm", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("key exchange", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("cipher", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("mac", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("no matching", StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -99,6 +194,8 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
 {
     private readonly H3cDeviceProfileSnapshot _profile = profile;
     private readonly string _password = password;
+    private readonly Encoding _encoding = TerminalTextEncoding.Resolve(profile.TerminalEncoding);
+    private readonly TerminalTextDecoder _decoder = new(profile.TerminalEncoding);
     private TcpClient? _client;
     private NetworkStream? _stream;
     private readonly TelnetNegotiator _negotiator = new();
@@ -107,7 +204,8 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
     private int _pendingCount;
 
     public string Protocol => "TELNET";
-    public string? NegotiatedAlgorithm => "TELNET-IAC";
+    public string? NegotiatedAlgorithm => "TELNET-IAC/" + _profile.TerminalEncoding;
+    public string? HostKeyEvent => null;
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
@@ -139,16 +237,18 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         if (payload.Length == 0) return await ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-        payload.CopyTo(_pending, 0);
+        var normalized = _decoder.Decode(payload);
+        if (normalized.Length > _pending.Length) throw new InvalidDataException("Telnet decoded output exceeded the bounded buffer.");
+        normalized.CopyTo(_pending, 0);
         _pendingOffset = 0;
-        _pendingCount = payload.Length;
+        _pendingCount = normalized.Length;
         return await ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SendCommandAsync(string command, CancellationToken cancellationToken)
     {
         var stream = _stream ?? throw new InvalidOperationException("Telnet terminal is not connected.");
-        await stream.WriteAsync(Encoding.UTF8.GetBytes(command + "\r\n"), cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(_encoding.GetBytes(command + "\r\n"), cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -189,15 +289,17 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
             var payload = _negotiator.Process(buffer.AsSpan(0, read));
             if (_negotiator.Replies.Length > 0) await stream.WriteAsync(_negotiator.Replies, cancellationToken).ConfigureAwait(false);
             if (payload.Length == 0) continue;
-            var chunk = Encoding.UTF8.GetString(payload);
+            var normalized = _decoder.Decode(payload);
+            var chunk = Encoding.UTF8.GetString(normalized);
             text.Append(chunk);
             var lower = text.ToString().ToLowerInvariant();
-            if (lower.Contains("password"))
+            if (lower.Contains("password") || lower.Contains("密码") || lower.Contains("passcode"))
             {
                 await SendSecretAsync(_password, cancellationToken).ConfigureAwait(false);
                 text.Clear();
             }
-            else if (lower.Contains("login:") || lower.Contains("username:"))
+            else if (lower.Contains("login:") || lower.Contains("username:") || lower.Contains("用户名") ||
+                     lower.Contains("用户:") || lower.Contains("账号"))
             {
                 await SendSecretAsync(_profile.Username, cancellationToken).ConfigureAwait(false);
                 text.Clear();
@@ -205,9 +307,11 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
             else if (lower.EndsWith("> ", StringComparison.Ordinal) || lower.EndsWith("# ", StringComparison.Ordinal) ||
                      lower.EndsWith(">", StringComparison.Ordinal) || lower.EndsWith("#", StringComparison.Ordinal))
             {
+                if (normalized.Length > _pending.Length)
+                    throw new InvalidDataException("Telnet login output exceeded the bounded buffer.");
                 _pendingOffset = 0;
-                _pendingCount = payload.Length;
-                payload.CopyTo(_pending, 0);
+                _pendingCount = normalized.Length;
+                normalized.CopyTo(_pending, 0);
                 return;
             }
             if (text.Length > 8192) text.Remove(0, text.Length - 4096);
@@ -218,7 +322,7 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
     private async Task SendSecretAsync(string value, CancellationToken cancellationToken)
     {
         var stream = _stream!;
-        await stream.WriteAsync(Encoding.UTF8.GetBytes(value + "\r\n"), cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(_encoding.GetBytes(value + "\r\n"), cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 }
@@ -228,6 +332,7 @@ internal sealed class SerialTerminalTransport(TerminalSerialConfiguration config
     private readonly SerialPort _port = CreatePort(configuration);
     public string Protocol => "SERIAL";
     public string? NegotiatedAlgorithm => "SERIAL";
+    public string? HostKeyEvent => null;
 
     public Task ConnectAsync(CancellationToken cancellationToken)
     {
@@ -289,6 +394,7 @@ internal sealed class SimulatedSerialTerminalTransport(string portName) : ITermi
 
     public string Protocol => "SERIAL";
     public string? NegotiatedAlgorithm => "SERIAL-SIMULATED";
+    public string? HostKeyEvent => null;
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {

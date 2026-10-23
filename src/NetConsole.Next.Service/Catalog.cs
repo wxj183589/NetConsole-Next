@@ -109,6 +109,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV5Migration(db);
         ApplyV6Migration(db);
         ApplyV7Migration(db);
+        ApplyV8Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -258,6 +259,36 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         status.Transaction = transaction;
         status.CommandText = "UPDATE terminal_sessions SET recording_status='COMPLETE' WHERE recording_complete=1 AND recording_status='INCOMPLETE'";
         status.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV8Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "host_key_update_policy",
+            "TEXT NOT NULL DEFAULT 'STRICT'");
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "allow_legacy_algorithms",
+            "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "terminal_encoding",
+            "TEXT NOT NULL DEFAULT 'AUTO'");
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "terminal_protocol",
+            "TEXT NOT NULL DEFAULT 'AUTO'");
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "allow_telnet_fallback",
+            "INTEGER NOT NULL DEFAULT 0");
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v8.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v8.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        using var seed = db.CreateCommand();
+        seed.Transaction = transaction;
+        seed.CommandText = @"INSERT INTO ssh_host_keys(device_id,host,port,update_policy,current_key_type,current_sha256)
+            SELECT id,host,port,host_key_update_policy,CASE WHEN host_key_sha256<>'' THEN 'UNKNOWN' END,
+                NULLIF(host_key_sha256,'') FROM h3c_device_profiles
+            WHERE NOT EXISTS(SELECT 1 FROM ssh_host_keys k WHERE k.device_id=h3c_device_profiles.id)";
+        seed.ExecuteNonQuery();
         transaction.Commit();
     }
 
@@ -871,7 +902,16 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             throw new ArgumentException("H3C username contains unsupported characters.", nameof(profile));
         if (!H3cCredentialReference.IsValid(profile.CredentialReference))
             throw new ArgumentException("Credential reference must match [A-Z][A-Z0-9_]{0,63}.", nameof(profile));
-        var fingerprint = H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
+        var fingerprint = string.IsNullOrWhiteSpace(profile.HostKeySha256) ? string.Empty :
+            H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
+        if (profile.HostKeyUpdatePolicy is not ("AUTO_UPDATE" or "STRICT"))
+            throw new ArgumentException("Host key update policy must be AUTO_UPDATE or STRICT.", nameof(profile));
+        if (!TerminalTextEncoding.IsSupported(profile.TerminalEncoding))
+            throw new ArgumentException("Terminal encoding must be AUTO, UTF-8 or GB18030.", nameof(profile));
+        if (profile.TerminalProtocol is not ("AUTO" or "SSH" or "TELNET"))
+            throw new ArgumentException("Terminal protocol must be AUTO, SSH or TELNET.", nameof(profile));
+        if (fingerprint.Length == 0 && profile.HostKeyUpdatePolicy != "AUTO_UPDATE")
+            throw new ArgumentException("A STRICT H3C profile requires an initial SHA256 host-key fingerprint.", nameof(profile));
         var sourceId = "h3c-" + profile.Id;
         var now = UtcNowMs();
         using var db = Open();
@@ -885,7 +925,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             using var reader = existing.ExecuteReader();
             if (reader.Read() && (reader.GetString(0) != profile.Host || reader.GetInt32(1) != profile.Port ||
                 reader.GetString(2) != profile.Username || reader.GetString(3) != profile.CredentialReference ||
-                reader.GetString(4) != fingerprint))
+                (!string.IsNullOrEmpty(fingerprint) && (reader.IsDBNull(4) || reader.GetString(4) != fingerprint))))
                 throw new InvalidOperationException("H3C connection identity is immutable; create a new profile id for host, credential-reference or host-key changes.");
         }
         using (var source = db.CreateCommand())
@@ -903,11 +943,15 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         {
             insert.Transaction = transaction;
             insert.CommandText = @"INSERT INTO h3c_device_profiles
-                (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms)
-                VALUES($id,$source,$host,$port,$username,$credential,$fingerprint,$enabled,$created,$updated)
+                (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback)
+                VALUES($id,$source,$host,$port,$username,$credential,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$protocol,$telnetFallback)
                 ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,host=excluded.host,port=excluded.port,
                     username=excluded.username,credential_reference=excluded.credential_reference,
-                    host_key_sha256=excluded.host_key_sha256,enabled=excluded.enabled,updated_ms=excluded.updated_ms";
+                    host_key_sha256=CASE WHEN excluded.host_key_sha256='' THEN h3c_device_profiles.host_key_sha256 ELSE excluded.host_key_sha256 END,
+                    enabled=excluded.enabled,updated_ms=excluded.updated_ms,
+                    host_key_update_policy=excluded.host_key_update_policy,allow_legacy_algorithms=excluded.allow_legacy_algorithms,
+                    terminal_encoding=excluded.terminal_encoding,terminal_protocol=excluded.terminal_protocol,
+                    allow_telnet_fallback=excluded.allow_telnet_fallback";
             insert.Parameters.AddWithValue("$id", profile.Id);
             insert.Parameters.AddWithValue("$source", sourceId);
             insert.Parameters.AddWithValue("$host", profile.Host);
@@ -918,7 +962,28 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
             insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
             insert.Parameters.AddWithValue("$updated", now);
+            insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
+            insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0);
+            insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding);
+            insert.Parameters.AddWithValue("$protocol", profile.TerminalProtocol);
+            insert.Parameters.AddWithValue("$telnetFallback", profile.AllowTelnetFallback ? 1 : 0);
             insert.ExecuteNonQuery();
+        }
+        using (var binding = db.CreateCommand())
+        {
+            binding.Transaction = transaction;
+            binding.CommandText = @"INSERT INTO ssh_host_keys(device_id,host,port,update_policy,current_key_type,current_sha256)
+                VALUES($device,$host,$port,$policy,CASE WHEN $fingerprint='' THEN NULL ELSE 'UNKNOWN' END,NULLIF($fingerprint,''))
+                ON CONFLICT(device_id) DO UPDATE SET host=excluded.host,port=excluded.port,
+                    update_policy=excluded.update_policy,
+                    current_sha256=CASE WHEN ssh_host_keys.current_sha256 IS NULL THEN excluded.current_sha256 ELSE ssh_host_keys.current_sha256 END,
+                    current_key_type=CASE WHEN ssh_host_keys.current_sha256 IS NULL THEN excluded.current_key_type ELSE ssh_host_keys.current_key_type END";
+            binding.Parameters.AddWithValue("$device", profile.Id);
+            binding.Parameters.AddWithValue("$host", profile.Host);
+            binding.Parameters.AddWithValue("$port", profile.Port);
+            binding.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
+            binding.Parameters.AddWithValue("$fingerprint", fingerprint);
+            binding.ExecuteNonQuery();
         }
         transaction.Commit();
     }
@@ -927,13 +992,15 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms
+        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
+            host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
             FROM h3c_device_profiles WHERE id=$id";
         command.Parameters.AddWithValue("$id", id);
         using var reader = command.ExecuteReader();
         return reader.Read()
             ? new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
-                reader.GetString(4), reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8))
+                reader.GetString(4), reader.IsDBNull(5) ? string.Empty : reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8),
+                reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0)
             : null;
     }
 
@@ -941,15 +1008,50 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms
+        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
+            host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
             FROM h3c_device_profiles ORDER BY updated_ms DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
         using var reader = command.ExecuteReader();
         var profiles = new List<H3cDeviceProfileSnapshot>();
         while (reader.Read())
             profiles.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
-                reader.GetString(4), reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8)));
+                reader.GetString(4), reader.IsDBNull(5) ? string.Empty : reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8),
+                reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0));
         return profiles;
+    }
+
+    public void SetH3cCompatibility(string id, string hostKeyUpdatePolicy, bool allowLegacyAlgorithms,
+        string terminalEncoding = "AUTO", string terminalProtocol = "AUTO", bool allowTelnetFallback = false)
+    {
+        if (hostKeyUpdatePolicy is not ("AUTO_UPDATE" or "STRICT"))
+            throw new ArgumentException("Host key update policy must be AUTO_UPDATE or STRICT.", nameof(hostKeyUpdatePolicy));
+        if (!TerminalTextEncoding.IsSupported(terminalEncoding))
+            throw new ArgumentException("Terminal encoding must be AUTO, UTF-8 or GB18030.", nameof(terminalEncoding));
+        if (terminalProtocol is not ("AUTO" or "SSH" or "TELNET"))
+            throw new ArgumentException("Terminal protocol must be AUTO, SSH or TELNET.", nameof(terminalProtocol));
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using var update = db.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = @"UPDATE h3c_device_profiles
+            SET host_key_update_policy=$policy,allow_legacy_algorithms=$legacy,terminal_encoding=$encoding,
+                terminal_protocol=$protocol,allow_telnet_fallback=$telnetFallback,updated_ms=$now WHERE id=$id";
+        update.Parameters.AddWithValue("$policy", hostKeyUpdatePolicy);
+        update.Parameters.AddWithValue("$legacy", allowLegacyAlgorithms ? 1 : 0);
+        update.Parameters.AddWithValue("$encoding", terminalEncoding);
+        update.Parameters.AddWithValue("$protocol", terminalProtocol);
+        update.Parameters.AddWithValue("$telnetFallback", allowTelnetFallback ? 1 : 0);
+        update.Parameters.AddWithValue("$now", UtcNowMs());
+        update.Parameters.AddWithValue("$id", id);
+        if (update.ExecuteNonQuery() == 0) throw new KeyNotFoundException("H3C device profile was not found.");
+        using var binding = db.CreateCommand();
+        binding.Transaction = transaction;
+        binding.CommandText = "UPDATE ssh_host_keys SET update_policy=$policy WHERE device_id=$id";
+        binding.Parameters.AddWithValue("$policy", hostKeyUpdatePolicy);
+        binding.Parameters.AddWithValue("$id", id);
+        binding.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public void CreateTaskDefinition(string id, string taskType, string target, string command,

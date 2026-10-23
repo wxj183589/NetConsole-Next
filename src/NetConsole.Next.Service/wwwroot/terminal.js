@@ -27,8 +27,17 @@ import { SearchAddon } from "@xterm/addon-search";
     for (const device of state.devices) {
       const item = document.createElement("div"); item.className = `device${device.enabled ? "" : " disabled"}`;
       item.innerHTML = `<strong>${safeText(device.id)}</strong><small>${safeText(device.host)}:${device.port} · ${safeText(device.username)}</small><small>${device.enabled ? "已授权" : "已禁用"}${device.lastSessionState ? ` · 最近 ${safeText(device.lastSessionState)}` : ""}</small>`;
+      const compatibility = document.createElement("div"); compatibility.className = "device-compatibility";
+      compatibility.innerHTML = `<label>协议 <select class="terminal-protocol"><option>AUTO</option><option>SSH</option><option>TELNET</option></select></label><label>指纹 <select class="host-key-policy"><option>AUTO_UPDATE</option><option>STRICT</option></select></label><label>编码 <select class="terminal-encoding"><option>AUTO</option><option>UTF-8</option><option>GB18030</option></select></label><label><input class="legacy-algorithms" type="checkbox"> 兼容旧算法</label><label><input class="telnet-fallback" type="checkbox"> SSH 算法失败时允许 Telnet</label>`;
+      compatibility.querySelector(".terminal-protocol").value = device.terminalProtocol || "AUTO";
+      compatibility.querySelector(".host-key-policy").value = device.hostKeyUpdatePolicy || "STRICT";
+      compatibility.querySelector(".terminal-encoding").value = device.terminalEncoding || "AUTO";
+      compatibility.querySelector(".legacy-algorithms").checked = Boolean(device.allowLegacyAlgorithms);
+      compatibility.querySelector(".telnet-fallback").checked = Boolean(device.allowTelnetFallback);
+      const saveCompatibility = async () => { try { await api(`/api/system/h3c/profiles/${encodeURIComponent(device.id)}/compatibility`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ hostKeyUpdatePolicy:compatibility.querySelector(".host-key-policy").value, allowLegacyAlgorithms:compatibility.querySelector(".legacy-algorithms").checked, terminalEncoding:compatibility.querySelector(".terminal-encoding").value, terminalProtocol:compatibility.querySelector(".terminal-protocol").value, allowTelnetFallback:compatibility.querySelector(".telnet-fallback").checked }) }); notice(`${device.host} 兼容策略已保存`); } catch (error) { notice(error.message, true); } };
+      compatibility.querySelectorAll("select,input").forEach(control => control.onchange = saveCompatibility); item.append(compatibility);
       const actions = document.createElement("div"); actions.className = "device-actions";
-      for (const protocol of ["SSH", "TELNET"]) { const button = document.createElement("button"); button.textContent = protocol; button.disabled = !device.enabled; button.onclick = () => createTab(device, protocol); actions.append(button); }
+      for (const protocol of (device.supportedProtocols || ["SSH", "TELNET"])) { const button = document.createElement("button"); button.textContent = protocol; button.disabled = !device.enabled; button.onclick = () => createTab(device, protocol); actions.append(button); }
       item.append(actions); list.append(item);
     }
     const serial = document.createElement("button"); serial.textContent = "打开本地 COM Console"; serial.style.width = "100%"; serial.style.marginTop = "8px"; serial.onclick = openSerialDialog; list.append(serial);
