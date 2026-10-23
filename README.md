@@ -43,10 +43,11 @@ dotnet run --project src/NetConsole.Next.Service
 
 ~~~sh
 dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
 python3 tests/smoke.py
 ~~~
 
-Linux smoke 检查健康端点、UDP 原始字节、Raw 封段和 SQLite catalog；Windows 当前只有 CI 编译检查。原始 `.open` 文件在异常退出时保留，但自动恢复和 catalog 对账属于后续 G1，**尚未通过验收**。
+Linux smoke 检查健康端点、UDP 原始字节、4MiB Raw 分段和 SQLite catalog；C# harness 覆盖正常封段、catalog 登记失败后的重试、重复 Seal、内容校验和 Worker-style finally 关闭；Windows CI 执行 Service 编译和同一 harness。跨进程掉电后的自动恢复和 catalog 对账仍属于后续 G1，**尚未通过验收**。
 
 参见 [ADR](docs/ADR-0001.md)、[路线与门禁](docs/ROADMAP.md)。
 

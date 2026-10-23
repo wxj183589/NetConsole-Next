@@ -33,7 +33,9 @@ def main():
                    NETCONSOLE_NEXT_SYSLOG_PORT=str(udp_port))
         service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True)
+                                   text=True,
+                                   creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                                                  if os.name == "nt" else 0))
         try:
             url = f"http://127.0.0.1:{web_port}/api/system/health"
             for _ in range(120):
@@ -51,33 +53,47 @@ def main():
             raw_payload = b"<134>Oct 19 19:00:00 MR-CT P0\\x00\\xff\\r\\n"
             # Use actual NUL, 0xff and CRLF to prove we preserve binary datagrams.
             raw_payload = raw_payload.replace(b"\\x00", b"\x00").replace(b"\\xff", b"\xff").replace(b"\\r\\n", b"\r\n")
+            bulk_payload = bytes(index % 256 for index in range(60000))
+            payloads = [raw_payload] + [bulk_payload] * 60
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.sendto(raw_payload, ("127.0.0.1", udp_port))
+                for payload in payloads:
+                    sock.sendto(payload, ("127.0.0.1", udp_port))
+                    time.sleep(0.02)
             for _ in range(120):
                 with urllib.request.urlopen(url, timeout=1) as response:
                     health = json.load(response)
-                if health["rawFlushedRecords"] >= 1:
+                if health["rawFlushedRecords"] >= len(payloads):
                     break
                 time.sleep(.1)
             else:
                 raise AssertionError("P0 Raw did not flush.")
             assert health["udpDropped"] == 0, health
-            service.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                service.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                service.send_signal(signal.SIGINT)
             service.wait(timeout=20)
             assert service.returncode == 0, service.returncode
-            raw_files = list((root / "raw").rglob("*.ndjson"))
-            assert len(raw_files) == 1, raw_files
-            records = [json.loads(line) for line in raw_files[0].read_text().splitlines()]
-            assert len(records) == 1, records
-            assert base64.b64decode(records[0]["payload_base64"]) == raw_payload
+            raw_files = sorted((root / "raw").rglob("*.ndjson"))
+            assert len(raw_files) >= 2, raw_files
+            records = [json.loads(line) for raw_file in raw_files for line in raw_file.read_text().splitlines()]
+            assert len(records) == len(payloads), len(records)
+            decoded = [base64.b64decode(record["payload_base64"]) for record in records]
+            assert decoded[0] == raw_payload
+            assert decoded[1:] == [bulk_payload] * 60
             with sqlite3.connect(root / "catalog.db") as db:
                 rows = db.execute("SELECT relative_path,record_count,byte_count,state FROM raw_segments").fetchall()
-            assert len(rows) == 1, rows
-            rel, count, size, state = rows[0]
-            assert state == "FINALIZED" and count == 1
-            assert (root / rel).resolve() == raw_files[0].resolve()
-            assert size == raw_files[0].stat().st_size
-            print("PASS: health, UDP binary fidelity, durable Raw seal, SQLite catalog")
+            db.close()
+            assert len(rows) == len(raw_files), rows
+            assert len({row[0] for row in rows}) == len(rows), rows
+            assert sum(row[1] for row in rows) == len(payloads)
+            for rel, count, size, state in rows:
+                target = (root / rel).resolve()
+                assert state == "FINALIZED" and count > 0
+                assert target.is_file() and target in {path.resolve() for path in raw_files}
+                assert size == target.stat().st_size
+            assert not list((root / "raw").rglob("*.open"))
+            print("PASS: health, UDP binary fidelity, 4MiB rolling, durable Raw seal, SQLite catalog")
         finally:
             if service.poll() is None:
                 service.kill()

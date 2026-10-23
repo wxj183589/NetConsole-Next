@@ -12,6 +12,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+      - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
       - run: python3 tests/smoke.py
   windows:
     runs-on: windows-latest
@@ -21,3 +22,4 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+      - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release

@@ -47,13 +47,41 @@ internal sealed class Catalog(RuntimeSettings settings)
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
     {
         using var db = Open();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable, deferred: false);
+        var path = relative.Replace('\\', '/');
+
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = @"SELECT source_id,state,first_received_ms,last_received_ms,
+                record_count,byte_count,sha256
+                FROM raw_segments WHERE relative_path=$path";
+            existing.Parameters.AddWithValue("$path", path);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                var same = reader.GetString(0) == "syslog-local"
+                    && reader.GetString(1) == "FINALIZED"
+                    && reader.GetInt64(2) == first
+                    && reader.GetInt64(3) == last
+                    && reader.GetInt64(4) == count
+                    && reader.GetInt64(5) == bytes
+                    && reader.GetString(6) == sha;
+                if (!same)
+                    throw new InvalidOperationException($"Raw segment catalog metadata conflicts for '{path}'.");
+                transaction.Commit();
+                return;
+            }
+        }
+
         using var command = db.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = @"INSERT INTO raw_segments
             (id,source_id,relative_path,state,first_received_ms,last_received_ms,
              record_count,byte_count,sha256,sealed_ms)
             VALUES ($id,'syslog-local',$path,'FINALIZED',$first,$last,$count,$bytes,$sha,$now)";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
-        command.Parameters.AddWithValue("$path", relative.Replace('\\', '/'));
+        command.Parameters.AddWithValue("$path", path);
         command.Parameters.AddWithValue("$first", first);
         command.Parameters.AddWithValue("$last", last);
         command.Parameters.AddWithValue("$count", count);
@@ -61,6 +89,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$sha", sha);
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     // Includes live .open files; pending crash recovery needs a future G1 scanner.

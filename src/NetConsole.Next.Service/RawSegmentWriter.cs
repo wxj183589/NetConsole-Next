@@ -9,26 +9,37 @@ internal sealed record SyslogPacket(long ReceivedMs, string SenderIp, int Sender
 // Append-only P0 raw writer. Roll at 4MiB, seal before indexing; retain files on catalog errors.
 internal sealed class RawSegmentWriter
 {
-    private readonly Catalog _catalog;
+    private readonly Action<string, long, long, long, string, long> _register;
     private readonly string _openPath;
+    private readonly string _publishedPath;
     private readonly string _relativePath;
     private readonly FileStream _stream;
     private readonly StreamWriter _writer;
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
-    private bool _sealed;
+    private long? _publishedBytes;
+    private string? _checksum;
+    private bool _writerClosed;
+    private bool _filePublished;
+    private bool _catalogRegistered;
 
     public long Bytes => _bytes;
 
     public RawSegmentWriter(Catalog catalog)
+        : this(catalog.RawRoot, catalog.RegisterFinalizedSegment)
     {
-        _catalog = catalog;
+    }
+
+    internal RawSegmentWriter(string rawRoot, Action<string, long, long, long, string, long> register)
+    {
+        _register = register;
         var now = DateTimeOffset.UtcNow;
         var folderRelative = Path.Combine("syslog", now.ToString("yyyy"), now.ToString("MM"), now.ToString("dd"));
-        var folder = Path.Combine(catalog.RawRoot, folderRelative);
+        var folder = Path.Combine(rawRoot, folderRelative);
         Directory.CreateDirectory(folder);
         var name = now.ToString("HHmmssfff") + "-" + Guid.NewGuid().ToString("N");
         _openPath = Path.Combine(folder, name + ".open");
+        _publishedPath = Path.Combine(folder, name + ".ndjson");
         _relativePath = Path.Combine("raw", folderRelative, name + ".ndjson");
         _stream = new FileStream(_openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous);
         _writer = new StreamWriter(_stream, new UTF8Encoding(false), 32768);
@@ -36,7 +47,8 @@ internal sealed class RawSegmentWriter
 
     public async Task AppendAsync(SyslogPacket packet)
     {
-        if (_sealed) throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
+        if (_writerClosed || _filePublished)
+            throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
         var line = JsonSerializer.Serialize(new
         {
             received_ms = packet.ReceivedMs,
@@ -53,25 +65,37 @@ internal sealed class RawSegmentWriter
 
     public async Task FlushAsync()
     {
+        if (_writerClosed) return;
         await _writer.FlushAsync();
         _stream.Flush(flushToDisk: true);
     }
 
     public async Task SealAsync()
     {
-        if (_sealed) return;
-        await FlushAsync();
-        await _writer.DisposeAsync();
-        string checksum;
-        using (var sha = SHA256.Create())
-        using (var input = File.OpenRead(_openPath))
-            checksum = Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
-        var published = _openPath[..^".open".Length] + ".ndjson";
-        File.Move(_openPath, published);
-        // If the DB write fails, the final file is deliberately preserved.
-        // G1 must reconcile sealed/unindexed and abandoned .open files on startup.
-        _catalog.RegisterFinalizedSegment(_relativePath, _records,
-            _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length);
-        _sealed = true;
+        if (_catalogRegistered) return;
+
+        if (!_filePublished)
+        {
+            await FlushAsync();
+            if (!_writerClosed)
+            {
+                await _writer.DisposeAsync();
+                _writerClosed = true;
+            }
+
+            using (var sha = SHA256.Create())
+            using (var input = File.OpenRead(_openPath))
+                _checksum ??= Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
+
+            File.Move(_openPath, _publishedPath);
+            // Publishing is separate from catalog registration. A later SealAsync
+            // must never return to the old .open path after this move succeeds.
+            _filePublished = true;
+        }
+
+        _publishedBytes ??= new FileInfo(_publishedPath).Length;
+        _register(_relativePath, _records,
+            _first == long.MaxValue ? 0 : _first, _last, _checksum!, _publishedBytes.Value);
+        _catalogRegistered = true;
     }
 }
