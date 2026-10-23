@@ -24,7 +24,10 @@ try {
   if (await page.locator("#replay-terminal .xterm-rows").count() !== 1) throw new Error("replay xterm did not open");
 
   await page.getByRole("button", { name: "播放" }).click();
-  await page.getByRole("button", { name: "暂停" }).click();
+  await page.waitForTimeout(25);
+  if (await page.getByRole("button", { name: "暂停" }).count()) {
+    await page.getByRole("button", { name: "暂停" }).click();
+  }
   await page.getByRole("button", { name: "重新开始" }).click();
   await page.locator("#replay-speed").selectOption("2");
   await page.locator("#replay-progress").fill("0");

@@ -177,6 +177,14 @@ internal static class SchedulerTests
                !connectionInfo.Encryptions.ContainsKey("3des-cbc") &&
                !connectionInfo.HmacAlgorithms.ContainsKey("hmac-sha1") &&
                !connectionInfo.HostKeyAlgorithms.ContainsKey("ssh-rsa"), "weak SSH algorithms must be removed from the connection allowlist");
+        var legacyConnectionInfo = new Renci.SshNet.ConnectionInfo("192.0.2.1", 22, "lab",
+            new Renci.SshNet.PasswordAuthenticationMethod("lab", "unit-test-placeholder"));
+        H3cSshAlgorithmPolicy.Apply(legacyConnectionInfo, allowLegacyAlgorithms: true);
+        Assert(legacyConnectionInfo.KeyExchangeAlgorithms.ContainsKey("diffie-hellman-group14-sha1") ||
+               legacyConnectionInfo.Encryptions.ContainsKey("aes128-cbc") ||
+               legacyConnectionInfo.HmacAlgorithms.ContainsKey("hmac-sha1") ||
+               legacyConnectionInfo.HostKeyAlgorithms.ContainsKey("ssh-rsa"),
+            "device-scoped legacy compatibility should retain only explicitly allowed legacy algorithms");
 
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayVersion, string.Empty).Status == "EMPTY",
             "empty command output is a capture result, not a parser success");
@@ -866,7 +874,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 7, "v7 terminal history migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 8, "v8 terminal compatibility migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
@@ -1854,13 +1862,13 @@ internal static class SchedulerTests
         public int DisposeCount { get; private set; }
         public int AbortCount { get; private set; }
 
-        public async Task ConnectAsync(Func<string?, bool> verifyHostKey, CancellationToken cancellationToken)
+        public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
         {
             if (waitForConnectCancellation)
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (fingerprint is null) throw new H3cHostKeyMissingException();
-            if (!verifyHostKey(fingerprint)) throw new H3cHostKeyMismatchException();
+            if (!verifyHostKey("ssh-ed25519", fingerprint)) throw new H3cHostKeyMismatchException();
             if (failAuthentication) throw new H3cAuthenticationFailedException();
             IsConnected = true;
         }

@@ -17,6 +17,9 @@ internal static class TerminalCoreTests
         await VerifiesSegmentedRecordingIntegrityAndRecoveryAsync();
         await VerifiesRecordingPublicationSafetyAsync();
         await VerifiesRecordingCatalogBusyAndDiskFaultsAsync();
+        await VerifiesSshHostKeyLifecycleAsync();
+        VerifiesTerminalTextEncoding();
+        VerifiesStreamingTerminalTextDecoder();
         await VerifiesLegacyV6SingleFileReadAsync();
     }
 
@@ -338,6 +341,174 @@ internal static class TerminalCoreTests
             await diskWriter.DisposeAsync();
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static async Task VerifiesSshHostKeyLifecycleAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-terminal-host-key-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            var deviceId = Guid.NewGuid().ToString("N");
+            var first = Fingerprint(0x11);
+            var second = Fingerprint(0x22);
+            var third = Fingerprint(0x33);
+            var fourth = Fingerprint(0x44);
+            var fifth = Fingerprint(0x55);
+            catalog.CreateH3cDeviceProfile(new(deviceId, "192.0.2.10", 22, "reader", "TEST_CREDENTIAL", "",
+                true, 0, 0, "AUTO_UPDATE", false));
+            var profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            var firstDecision = catalog.CheckSshHostKey(profile, "ssh-ed25519", first);
+            Assert(firstDecision.Accepted && firstDecision.Decision == "FIRST_TRUST" && firstDecision.CorrelationId is not null,
+                "an authorized device without a saved key should enter first-trust pending state");
+            Assert(catalog.CommitSshHostKey(firstDecision.CorrelationId!), "first-trust key should become effective after connection success");
+            Assert(catalog.CommitSshHostKey(firstDecision.CorrelationId!), "committing the same first-trust result should be idempotent");
+            profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            Assert(profile.HostKeySha256 == H3cHostKeyFingerprint.Normalize(first), "first trusted fingerprint should be persisted on the profile");
+            var match = catalog.CheckSshHostKey(profile, "ssh-ed25519", first);
+            Assert(match.Accepted && match.Decision == "MATCH", "a later matching host key should connect directly");
+
+            var changed = catalog.CheckSshHostKey(profile, "ssh-ed25519", second);
+            Assert(changed.Accepted && changed.Decision == "AUTO_UPDATE" && changed.CorrelationId is not null,
+                "AUTO_UPDATE should accept a changed key only through a pending correlation");
+            Assert(catalog.CommitSshHostKey(changed.CorrelationId!), "AUTO_UPDATE key should become effective after connection success");
+            profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            Assert(profile.HostKeySha256 == H3cHostKeyFingerprint.Normalize(second), "AUTO_UPDATE should replace current key only after effective commit");
+            var history = catalog.SshHostKeyHistory(deviceId);
+            Assert(history.Any(x => x.State == "PENDING") && history.Any(x => x.State == "EFFECTIVE") && history.Count >= 4,
+                "host-key history should retain first trust, change pending and effective events");
+
+            catalog.SetH3cCompatibility(deviceId, "STRICT", false);
+            var strictChanged = catalog.CheckSshHostKey(profile, "ssh-ed25519", first);
+            Assert(!strictChanged.Accepted && strictChanged.Decision == "REJECTED" && strictChanged.Reason == "HOST_KEY_CHANGED_STRICT",
+                "STRICT should reject a changed host key and retain the current fingerprint");
+            Assert(catalog.GetH3cDeviceProfile(deviceId)!.HostKeySha256 == H3cHostKeyFingerprint.Normalize(second),
+                "STRICT rejection must not overwrite the current fingerprint");
+
+            catalog.SetH3cCompatibility(deviceId, "AUTO_UPDATE", false, "GB18030", "AUTO", true);
+            profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            Assert(profile.TerminalEncoding == "GB18030" && profile.TerminalProtocol == "AUTO" &&
+                   profile.AllowTelnetFallback,
+                "device compatibility settings should persist protocol, encoding and explicit Telnet fallback policy");
+            var execFactory = new TerminalCoreFakeH3cSshTransportFactory(first);
+            var execSession = new H3cSshDeviceSession(profile, new TerminalCoreFixedH3cCredentialProvider("synthetic"), execFactory, catalog);
+            await execSession.ConnectAsync(CancellationToken.None);
+            await execSession.DisposeAsync();
+            Assert(catalog.SshHostKeyHistory(deviceId).Any(x => x.State == "EFFECTIVE" && x.KeyType == "ssh-ed25519"),
+                "SSH Exec host-key verification should retain the concrete SSH key type");
+
+            var unauthorized = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "192.0.2.99", 22,
+                "reader", "TEST_CREDENTIAL", "", true, 0, 0, "AUTO_UPDATE", false);
+            var unauthorizedDecision = catalog.CheckSshHostKey(unauthorized, "ssh-ed25519", first);
+            Assert(!unauthorizedDecision.Accepted && unauthorizedDecision.Reason == "UNAUTHORIZED_DEVICE",
+                "unknown or unregistered devices must not enter automatic trust");
+
+            catalog.SetH3cCompatibility(deviceId, "AUTO_UPDATE", false);
+            profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            var concurrentChecks = await Task.WhenAll(
+                Task.Run(() => catalog.CheckSshHostKey(profile, "ssh-ed25519", third)),
+                Task.Run(() => catalog.CheckSshHostKey(profile, "ssh-ed25519", third)));
+            var concurrentA = concurrentChecks[0];
+            var concurrentB = concurrentChecks[1];
+            Assert(concurrentA.CorrelationId is not null && concurrentB.CorrelationId == concurrentA.CorrelationId,
+                "repeated concurrent observations of one pending key should share one correlation");
+            catalog.FailSshHostKey(concurrentA.CorrelationId!, "SIMULATED_CONNECTION_CANCELLED");
+            Assert(catalog.GetH3cDeviceProfile(deviceId)!.HostKeySha256 == H3cHostKeyFingerprint.Normalize(first),
+                "a cancelled or failed connection must retain the old current key");
+            Assert(catalog.SshHostKeyHistory(deviceId).Any(x => x.State == "FAILED"),
+                "failed host-key activation must remain visible in the audit history");
+
+            var competingChecks = await Task.WhenAll(
+                Task.Run(() => catalog.CheckSshHostKey(profile, "ssh-ed25519", fourth)),
+                Task.Run(() => catalog.CheckSshHostKey(profile, "ssh-ed25519", fifth)));
+            Assert(competingChecks.All(item => item.Accepted) &&
+                   competingChecks.Select(item => item.CorrelationId).Distinct().Count() == 2,
+                "concurrent observations of different keys should create independently auditable pending candidates");
+            Assert(catalog.CommitSshHostKey(competingChecks[0].CorrelationId!),
+                "the first concurrent candidate should become effective");
+            Assert(!catalog.CommitSshHostKey(competingChecks[1].CorrelationId!),
+                "a stale concurrent candidate must be rejected by revision protection");
+            Assert(catalog.SshHostKeyHistory(deviceId).Any(item => item.State == "FAILED" &&
+                       item.Reason == "CONCURRENT_HOST_KEY_UPDATE"),
+                "a stale concurrent candidate must remain visible as a failed audit event");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+
+        static string Fingerprint(byte seed) => Convert.ToBase64String(Enumerable.Range(0, 32)
+            .Select(index => (byte)(seed + index)).ToArray()).TrimEnd('=');
+    }
+
+    private static void VerifiesTerminalTextEncoding()
+    {
+        Assert(TerminalTextEncoding.IsSupported("AUTO") && TerminalTextEncoding.IsSupported("GB18030") &&
+               !TerminalTextEncoding.IsSupported("BIG5"), "terminal encoding policy should be bounded to supported modes");
+        var source = TerminalTextEncoding.Resolve("GB18030").GetBytes("用户名: 密码:");
+        Assert(TerminalTextEncoding.Decode(source, "GB18030") == "用户名: 密码:",
+            "explicit GB18030 Telnet prompts should decode without replacement characters");
+        Assert(TerminalTextEncoding.Decode(Encoding.UTF8.GetBytes("提示符> "), "AUTO") == "提示符> ",
+            "AUTO terminal encoding should preserve valid UTF-8 device prompts");
+    }
+
+    private static void VerifiesStreamingTerminalTextDecoder()
+    {
+        var utf8 = Encoding.UTF8.GetBytes("中文提示符> ");
+        var utf8Decoder = new TerminalTextDecoder("UTF-8");
+        var first = utf8Decoder.Decode(utf8.AsSpan(0, 2));
+        var second = utf8Decoder.Decode(utf8.AsSpan(2));
+        Assert(Encoding.UTF8.GetString(first) + Encoding.UTF8.GetString(second) == "中文提示符> ",
+            "UTF-8 terminal decoding must preserve characters split across transport reads");
+
+        var gb = TerminalTextEncoding.Resolve("GB18030").GetBytes("中文提示符> ");
+        var gbDecoder = new TerminalTextDecoder("GB18030");
+        var gbFirst = gbDecoder.Decode(gb.AsSpan(0, 1));
+        var gbSecond = gbDecoder.Decode(gb.AsSpan(1));
+        Assert(Encoding.UTF8.GetString(gbFirst) + Encoding.UTF8.GetString(gbSecond) == "中文提示符> ",
+            "GB18030 terminal decoding must preserve characters split across transport reads");
+    }
+
+    private sealed class TerminalCoreFixedH3cCredentialProvider(string? value) : IH3cCredentialProvider
+    {
+        public string? GetPassword(string reference) => value;
+    }
+
+    private sealed class TerminalCoreFakeH3cSshTransportFactory(string? fingerprint) : IH3cSshTransportFactory
+    {
+        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password)
+        {
+            Assert(password == "synthetic", "terminal host-key test should pass the resolved test credential");
+            return new TerminalCoreFakeH3cSshTransport(fingerprint);
+        }
+    }
+
+    private sealed class TerminalCoreFakeH3cSshTransport(string? fingerprint) : IH3cSshTransport
+    {
+        public bool IsConnected { get; private set; }
+
+        public Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (fingerprint is null) throw new H3cHostKeyMissingException();
+            if (!verifyHostKey("ssh-ed25519", fingerprint)) throw new H3cHostKeyMismatchException();
+            IsConnected = true;
+            return Task.CompletedTask;
+        }
+
+        public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsConnected) throw new IOException("terminal host-key test transport is disconnected");
+            return Task.FromResult("synthetic Comware output");
+        }
+
+        public void Abort() => IsConnected = false;
+        public void Dispose() => IsConnected = false;
     }
 
     private sealed class FailAfterBytesStream(Stream inner, long byteLimit) : Stream

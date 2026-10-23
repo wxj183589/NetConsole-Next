@@ -221,7 +221,9 @@ if (settings.TerminalEnabled)
         {
             var latest = sessions.FirstOrDefault(session => session.TargetId == profile.Id);
             return new TerminalDeviceView(profile.Id, profile.Host, profile.Port, profile.Username, profile.Enabled,
-                new[] { "SSH", "TELNET" }, latest?.State, latest?.StartedMs, latest?.DisconnectReason);
+                new[] { "AUTO", "SSH", "TELNET" }, profile.HostKeyUpdatePolicy, profile.AllowLegacyAlgorithms,
+                profile.TerminalEncoding, profile.TerminalProtocol, profile.AllowTelnetFallback,
+                latest?.State, latest?.StartedMs, latest?.DisconnectReason);
         });
         return Results.Ok(devices);
     });
@@ -362,7 +364,9 @@ if (settings.H3cEnabled)
         try
         {
             rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
-                request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0));
+                request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0,
+                request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms, request.TerminalEncoding,
+                request.TerminalProtocol, request.AllowTelnetFallback));
             return Results.Created($"/api/system/h3c/profiles/{request.Id}", rawCatalog.GetH3cDeviceProfile(request.Id));
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -372,6 +376,20 @@ if (settings.H3cEnabled)
             return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." });
         }
     });
+    app.MapPut("/api/system/h3c/profiles/{id}/compatibility", (string id, H3cCompatibilityRequest request,
+        Catalog rawCatalog) =>
+    {
+        try
+        {
+            rawCatalog.SetH3cCompatibility(id, request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms,
+                request.TerminalEncoding, request.TerminalProtocol, request.AllowTelnetFallback);
+            return Results.Ok(rawCatalog.GetH3cDeviceProfile(id));
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    });
+    app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (string id, Catalog rawCatalog, int? limit) =>
+        Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
     app.MapPost("/api/system/h3c/task-definitions", (H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
     {
         if (request.TimeoutMs is < 100 or > 600000)
@@ -482,9 +500,14 @@ static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRun
 
 internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
-    string CredentialReference, string HostKeySha256, bool Enabled = true);
+    string CredentialReference, string HostKeySha256, bool Enabled = true,
+    string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
+    string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
+internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
 internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
-    IReadOnlyList<string> SupportedProtocols, string? LastSessionState, long? LastSessionStartedMs,
-    string? LastDisconnectReason);
+    IReadOnlyList<string> SupportedProtocols, string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms,
+    string TerminalEncoding, string TerminalProtocol, bool AllowTelnetFallback,
+    string? LastSessionState, long? LastSessionStartedMs, string? LastDisconnectReason);
