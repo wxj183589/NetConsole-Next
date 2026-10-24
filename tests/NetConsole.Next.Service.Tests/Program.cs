@@ -92,6 +92,39 @@ static async Task CatalogFailureRetryAsync()
         Assert(Rows(root).Count == 1, "same catalog metadata must be idempotent");
         AssertThrows<InvalidOperationException>(() => catalog.RegisterFinalizedSegment(
             rows[0].RelativePath, rows[0].RecordCount + 1, 2000, 2000, rows[0].Sha256, rows[0].ByteCount));
+
+        const string rollbackPath = "raw/syslog/rollback-injection.ndjson";
+        using (var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(root, "catalog.db"),
+            Pooling = false
+        }.ToString()))
+        {
+            db.Open();
+            using var trigger = db.CreateCommand();
+            trigger.CommandText = "CREATE TRIGGER fail_raw_insert AFTER INSERT ON raw_segments BEGIN SELECT RAISE(ABORT, 'injected rollback'); END;";
+            trigger.ExecuteNonQuery();
+        }
+
+        AssertThrows<SqliteException>(() => catalog.RegisterFinalizedSegment(
+            rollbackPath, 1, 2100, 2100, rows[0].Sha256, rows[0].ByteCount));
+        Assert(!Rows(root).Any(row => row.RelativePath == rollbackPath),
+            "an aborted Catalog transaction must not leave a partial row");
+
+        using (var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(root, "catalog.db"),
+            Pooling = false
+        }.ToString()))
+        {
+            db.Open();
+            using var trigger = db.CreateCommand();
+            trigger.CommandText = "DROP TRIGGER fail_raw_insert";
+            trigger.ExecuteNonQuery();
+        }
+
+        catalog.RegisterFinalizedSegment(rollbackPath, 1, 2100, 2100, rows[0].Sha256, rows[0].ByteCount);
+        Assert(Rows(root).Count == 2, "a later Catalog retry must succeed after rollback");
     });
 }
 
