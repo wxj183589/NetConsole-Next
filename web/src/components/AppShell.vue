@@ -17,7 +17,7 @@ const nav = [
   { path: '/', label: '运行总览', icon: '◈' }, { path: '/devices', label: '设备管理', icon: '▦' },
   { path: '/terminal', label: '终端控制台', icon: '▣' }, { path: '/tasks', label: '任务中心', icon: '≡' },
   { path: '/wireless', label: '无线管理', icon: '⌁', disabled: true }, { path: '/rail', label: '轨道交通', icon: '▤', disabled: true },
-  { path: '/tools', label: '工具集', icon: '⌘', disabled: true }, { path: '/files', label: '文件管理', icon: '▱', disabled: true },
+  { path: '/tools', label: '工具集', icon: '⌘' }, { path: '/files', label: '文件管理', icon: '▱' },
   { path: '/settings', label: '系统设置', icon: '⚙' },
 ]
 const currentLabel = computed(() => String(route.meta.label || '运行总览'))

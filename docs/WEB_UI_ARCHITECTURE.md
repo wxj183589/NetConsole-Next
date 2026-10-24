@@ -1,6 +1,6 @@
 # NetConsole Next Web UI Architecture
 
-Status: `IMPLEMENTED` for Web PR-1 source; `CI_VERIFIED` is reported only for checks that ran in the current environment.
+Status: IMPLEMENTED for Web PR-1 and PR-2 source; CI_VERIFIED is reported only for checks that actually ran.
 
 ## Boundary and references
 
@@ -23,6 +23,8 @@ Browser (Vue 3 + TypeScript)
 NetConsole.Next.Service (.NET 10)
   ├─ existing Catalog / SQLite / Raw / scheduler / terminal core
   ├─ WebAuthStore: PBKDF2 users + independent Cookie sessions
+  ├─ HostToolRegistry + DesktopHelperIpc: SUPERADMIN-only host GUI boundary
+  ├─ FileManagerService + owner-bound background ZIP archive jobs
   └─ static files from wwwroot (no Node.js or CDN at runtime)
 ```
 
@@ -30,7 +32,7 @@ The browser uses `netconsole_session` (HttpOnly, SameSite=Lax) and a separate CS
 
 ## Navigation and state
 
-The primary routes are: overview, devices, terminal, tasks, wireless, rail, tools, files, and settings. Routes without a Next backend capability are visible but disabled and explicitly labeled `开发中`; they do not render fixture business records. Workspace tabs are independent and persisted in `sessionStorage`; route components are kept alive for the current browser tab.
+The primary routes are: overview, devices, terminal, tasks, wireless, rail, tools, files, and settings. PR-2 activates tools and files against real service APIs; wireless and rail remain explicitly disabled and do not render fixture business records. Workspace tabs are independent and persisted in sessionStorage; route components are kept alive for the current browser tab.
 
 ## Web PR-1 scope
 
@@ -44,5 +46,12 @@ The primary routes are: overview, devices, terminal, tasks, wireless, rail, tool
 - Vue xterm terminal for SSH/Telnet/COM, multiple tabs, split view, search, history, read-only replay and TXT/JSONL/HTML export;
 - deterministic unit tests and offline Vite output under Service `wwwroot`.
 
-`PENDING_REAL_ENVIRONMENT`: Windows Service installation, cross-computer LAN access, physical COM, real Comware device, screenshot evidence against a running .NET service, and production host acceptance.
+PENDING_REAL_ENVIRONMENT: Windows Service installation, cross-computer LAN access, physical COM, real Comware device, screenshot evidence against a running .NET service, and production host acceptance.
+
+## Web PR-2 boundary
+
+- /tools reads the Next host-tool registry. Only SUPERADMIN can configure a host executable or request a launch. ADMIN receives 403.
+- /files uses logical roots and server-side path resolution. It never receives the data-root absolute path.
+- Single-file download is streamed by the existing service; ZIP jobs are in-memory metadata plus a temp ZIP under the isolated data root and are bound to the creating user/session.
+- Password recovery is deliberately not a Web route. The elevated Local Manager command and the two tools/ wrappers update only the user hash, revoke that user’s sessions/CSRF tokens, and preserve catalog/raw/credentials.
 

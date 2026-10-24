@@ -28,6 +28,11 @@ builder.Services.AddSingleton<TerminalSessionManager>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
 builder.Services.AddSingleton<TerminalExportService>();
+builder.Services.AddSingleton<DesktopHelperIpc>();
+builder.Services.AddSingleton<HostToolRegistry>();
+builder.Services.AddSingleton<HostToolLaunchService>();
+builder.Services.AddSingleton<FileManagerService>();
+builder.Services.AddSingleton<FileArchiveService>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -50,6 +55,7 @@ builder.Services.AddHostedService<ServiceRunLifecycle>();
 builder.Services.AddHostedService<ProcessResourceMonitor>();
 builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FileArchiveService>());
 
 var app = builder.Build();
 app.UseDefaultFiles();
@@ -270,6 +276,75 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
     });
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
+app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
+{
+    if (!IsSuperAdmin(context)) return Results.Forbid();
+    try { return Results.Ok(registry.Configure(toolId, request.ExecutablePath, CurrentIdentity(context).Username)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/host-tools/{toolId}/launch", async (HttpContext context, string toolId, HostToolLaunchRequest request, HostToolLaunchService launcher) =>
+{
+    if (!IsSuperAdmin(context)) return Results.Forbid();
+    var result = await launcher.LaunchAsync(toolId, request.DeviceId, context.RequestAborted);
+    return Results.Ok(result);
+});
+app.MapPost("/api/system/host-tools/open-directory", async (HttpContext context, HostDirectoryRequest request, FileManagerService files, DesktopHelperIpc helper) =>
+{
+    if (!IsSuperAdmin(context)) return Results.Forbid();
+    try
+    {
+        var resolved = files.Resolve(request.RootId, request.RelativePath, true);
+        if (!resolved.IsDirectory) return Results.BadRequest(new { error = "A directory is required." });
+        var response = await helper.SendAsync(new { operation = "OPEN_DIRECTORY", rootId = request.RootId, relativePath = resolved.RelativePath, directoryPath = resolved.FullPath }, context.RequestAborted);
+        return Results.Ok(response);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/roots", (FileManagerService files) => Results.Ok(files.Roots()));
+app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService files) =>
+{
+    try
+    {
+        var result = files.List(request.Query["rootId"].ToString(), request.Query["path"].ToString(),
+            request.Query["search"].ToString(), request.Query["sort"].ToString(), request.Query["direction"].ToString(),
+            ParseQueryInt(request.Query["page"], 1), ParseQueryInt(request.Query["pageSize"], 100));
+        return Results.Ok(result);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerService files) =>
+{
+    try
+    {
+        var result = files.OpenDownload(request.Query["rootId"].ToString(), request.Query["path"].ToString());
+        return Results.File(result.Stream, result.ContentType, result.DownloadName, enableRangeProcessing: true);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
+{
+    try
+    {
+        var identity = CurrentIdentity(context);
+        var job = archives.Create(request, identity);
+        return Results.Accepted($"/api/system/files/archive-jobs/{job.Id}", job);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
+    archives.Get(id, CurrentIdentity(context)) is { } job ? Results.Ok(job) : Results.NotFound());
+app.MapPost("/api/system/files/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
+    archives.Cancel(id, CurrentIdentity(context)) ? Results.Ok(new { cancelled = true }) : Results.NotFound());
+app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
+{
+    var result = archives.OpenDownload(id, CurrentIdentity(context));
+    return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "application/zip", result.Value.Name, enableRangeProcessing: true);
+});
 if (settings.TerminalEnabled)
 {
     app.MapGet("/api/system/terminal/devices", (Catalog rawCatalog, TerminalSessionManager manager) =>
@@ -519,6 +594,11 @@ static bool IsAllowedWebHost(HostString host, RuntimeSettings settings)
         string.Equals(host.Host, "::1", StringComparison.OrdinalIgnoreCase)) return true;
     return settings.WebLanEnabled && !string.IsNullOrWhiteSpace(host.Host);
 }
+
+static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;
+static WebUserIdentity CurrentIdentity(HttpContext context) =>
+    context.Items[WebCookieNames.IdentityItem] as WebUserIdentity ?? throw new UnauthorizedAccessException("Web identity is missing.");
+static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
 
 static bool IsWriteRequest(string method) => method is "POST" or "PUT" or "PATCH" or "DELETE";
 

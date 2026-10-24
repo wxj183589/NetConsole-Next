@@ -111,6 +111,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV7Migration(db);
         ApplyV8Migration(db);
         ApplyV9Migration(db);
+        ApplyV10Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -304,6 +305,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.CommandText = reader.ReadToEnd();
         command.ExecuteNonQuery();
         WebAuthStore.SeedDefaults(db, transaction);
+        transaction.Commit();
+    }
+
+    private static void ApplyV10Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v10.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v10.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
         transaction.Commit();
     }
 

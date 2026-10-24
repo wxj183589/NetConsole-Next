@@ -44,6 +44,7 @@
 - .NET 10 不支持 Windows 8/8.1 目标。SSH.NET 包含较旧目标框架资产不等于整个 ASP.NET Core/Service 可在旧 Windows 运行；旧系统需单独评估独立兼容宿主，不得降级当前密码学要求。
 
 ## P2-P5
+- Web PR-2: host-tool registry/Desktop Helper boundary, logical-root file manager, owner-bound ZIP jobs and elevated Web password recovery are implemented in the PR-2 branch. Real Windows interactive GUI and LAN acceptance remain separate gates.
 - P2：按成熟开源模式重新设计工具集和可选 HTTP/FTP/TFTP/WebDAV/SFTP Server。
 - P3：实时轻量监测、RSSI/MESH 概览。
 - P4：离线 MR/MESH 深度分析。

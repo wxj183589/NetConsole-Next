@@ -15,6 +15,7 @@ No source from the existing NetConsole GPL-3.0 repository was copied in this pha
 | System.Security.Cryptography.ProtectedData | Windows DPAPI machine-scope H3C credential vault | 10.0.4 | MIT (NuGet license metadata); Windows-only provider, Linux returns unavailable |
 | Paramiko | Test-only synthetic SSH server for SSH.NET wire-level regression tests; not shipped or referenced by the Service | 5.1.0 | LGPL-2.1 (`LICENSE` in PyPI wheel); Python test-only dependency |
 | System.ServiceProcess.ServiceController | Local Manager SCM access | 10.0.0 in Local Manager; 10.0.4 transitively in Service | MIT (NuGet package license metadata) |
+| System.IO.Pipes.AccessControl | Windows Desktop Helper named-pipe ACLs | 10.0.0 | MIT (NuGet package license metadata); Windows host helper only |
 | System.Diagnostics.EventLog | ServiceController transitive dependency | 10.0.0 | MIT (NuGet package license metadata) |
 | .NET 10 shared/runtime components | Host runtime | 10.0 | Microsoft .NET runtime licensing and framework-dependent/self-contained package contents must be recorded with the release artifact |
 
