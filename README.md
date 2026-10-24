@@ -46,6 +46,7 @@ dotnet run --project src/NetConsole.Next.Service
 ~~~sh
 dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
 dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
+dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
 python3 tests/smoke.py
 python3 tests/g1_recovery.py
 ~~~
@@ -69,7 +70,7 @@ dotnet run --project src/NetConsole.Next.LocalManager -- start
 dotnet run --project src/NetConsole.Next.LocalManager -- open-data
 ~~~
 
-健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。
+健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。恢复中的文件转换先写入持久化恢复意图；即使在 `.open` 重命名后再次崩溃，下次启动仍按 `INCOMPLETE` 处理，不会提升为 `FINALIZED`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的完整 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。
 
 参见 [ADR](docs/ADR-0001.md)、[路线与门禁](docs/ROADMAP.md)。
 

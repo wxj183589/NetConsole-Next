@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS task_runs(
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_state ON task_runs(state,started_ms);
 CREATE INDEX IF NOT EXISTS idx_task_runs_source_time ON task_runs(source_id,started_ms);
+CREATE TABLE IF NOT EXISTS raw_recovery_intents(
+ source_relative_path TEXT PRIMARY KEY,
+ target_relative_path TEXT NOT NULL UNIQUE,
+ state TEXT NOT NULL CHECK(state='PENDING'),
+ first_received_ms INTEGER,
+ last_received_ms INTEGER,
+ record_count INTEGER NOT NULL,
+ byte_count INTEGER NOT NULL,
+ sha256 TEXT NOT NULL,
+ created_ms INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events(
  id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL,
  action TEXT NOT NULL, outcome TEXT NOT NULL,

@@ -28,6 +28,10 @@ internal sealed class Catalog(RuntimeSettings settings)
     public RawRecoverySummary RecoverySummary { get; private set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
     public string IntegrityStatus { get; private set; } = "unchecked";
 
+    // Test-only crash injection points. They are intentionally internal and remain null in production.
+    internal Action<string>? RecoveryBeforeRenameHook { get; set; }
+    internal Action<string>? RecoveryAfterRenameHook { get; set; }
+
     public void Initialize()
     {
         Directory.CreateDirectory(settings.DataRoot);
@@ -62,6 +66,21 @@ internal sealed class Catalog(RuntimeSettings settings)
         using var command = db.CreateCommand();
         command.CommandText = reader.ReadToEnd();
         command.ExecuteNonQuery();
+        using (var recoverySchema = db.CreateCommand())
+        {
+            recoverySchema.CommandText = @"CREATE TABLE IF NOT EXISTS raw_recovery_intents(
+                source_relative_path TEXT PRIMARY KEY,
+                target_relative_path TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL CHECK(state='PENDING'),
+                first_received_ms INTEGER,
+                last_received_ms INTEGER,
+                record_count INTEGER NOT NULL,
+                byte_count INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                created_ms INTEGER NOT NULL
+            )";
+            recoverySchema.ExecuteNonQuery();
+        }
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -97,6 +116,7 @@ internal sealed class Catalog(RuntimeSettings settings)
     public RawRecoverySummary RecoverRawSegments()
     {
         var indexed = ReadIndexedSegments();
+        var recoveryIntents = ReadRecoveryIntents();
         int missing = 0, recoveredOpen = 0, indexedOrphans = 0, repaired = 0, failed = 0, scanned = 0, evidenceFiles = 0;
         long discarded = 0, evidenceBytes = 0;
 
@@ -159,9 +179,14 @@ internal sealed class Catalog(RuntimeSettings settings)
                 var publishedPath = Path.ChangeExtension(originalPath, ".ndjson");
                 if (File.Exists(publishedPath))
                     publishedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + ".recovered-" + Guid.NewGuid().ToString("N") + ".ndjson");
+                var sourceRelative = RelativeRawPath(originalPath);
+                var recoveredRelative = RelativeRawPath(publishedPath);
+                PersistRecoveryIntent(sourceRelative, recoveredRelative, inspection);
+                RecoveryBeforeRenameHook?.Invoke(recoveredRelative);
                 File.Move(originalPath, publishedPath);
-                var relative = RelativeRawPath(publishedPath);
-                UpsertRecoveredSegment(relative, inspection, "INCOMPLETE");
+                RecoveryAfterRenameHook?.Invoke(recoveredRelative);
+                CompleteRecoveredSegment(recoveredRelative, inspection, sourceRelative);
+                recoveryIntents.Remove(recoveredRelative);
                 recoveredOpen++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
@@ -194,12 +219,18 @@ internal sealed class Catalog(RuntimeSettings settings)
                 }
 
                 var wasIndexed = indexed.TryGetValue(relative, out var row);
+                var hasPendingRecovery = recoveryIntents.TryGetValue(relative, out var pendingIntent);
                 var sameAsCatalog = wasIndexed && row!.State == "FINALIZED" &&
                     row.RecordCount == inspection.RecordCount && row.ByteCount == inspection.ByteCount &&
                     string.Equals(row.Sha256, inspection.Sha256, StringComparison.OrdinalIgnoreCase);
-                var state = sameAsCatalog && !inspection.CorruptTail ? "FINALIZED" :
-                    (!wasIndexed && !inspection.CorruptTail ? "FINALIZED" : "INCOMPLETE");
-                UpsertRecoveredSegment(relative, inspection, state);
+                var state = hasPendingRecovery ? "INCOMPLETE" :
+                    (sameAsCatalog && !inspection.CorruptTail ? "FINALIZED" :
+                    (!wasIndexed && !inspection.CorruptTail ? "FINALIZED" : "INCOMPLETE"));
+                if (hasPendingRecovery)
+                    CompleteRecoveredSegment(relative, inspection, pendingIntent!.SourceRelativePath);
+                else
+                    UpsertRecoveredSegment(relative, inspection, state);
+                recoveryIntents.Remove(relative);
                 if (!wasIndexed) indexedOrphans++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
@@ -229,7 +260,55 @@ internal sealed class Catalog(RuntimeSettings settings)
 
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes)
     {
-        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null), "FINALIZED");
+        if (count < 0 || bytes < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (sha.Length != 64 || !sha.All(Uri.IsHexDigit))
+            throw new ArgumentException("Raw segment checksum must be a SHA-256 hex string.", nameof(sha));
+
+        var path = relative.Replace('\\', '/');
+        using var db = Open();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable, deferred: false);
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = @"SELECT source_id,state,first_received_ms,last_received_ms,
+                record_count,byte_count,sha256
+                FROM raw_segments WHERE relative_path=$path";
+            existing.Parameters.AddWithValue("$path", path);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                var same = reader.GetString(0) == "syslog-local" &&
+                    reader.GetString(1) == "FINALIZED" &&
+                    ReadNullableInt64(reader, 2) == (count == 0 ? null : first) &&
+                    ReadNullableInt64(reader, 3) == (count == 0 ? null : last) &&
+                    reader.GetInt64(4) == count &&
+                    reader.GetInt64(5) == bytes &&
+                    string.Equals(reader.GetString(6), sha, StringComparison.OrdinalIgnoreCase);
+                if (!same)
+                    throw new InvalidOperationException($"Raw segment Catalog conflict for '{path}'; existing metadata was preserved.");
+                transaction.Commit();
+                return;
+            }
+        }
+
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO raw_segments
+                (id,source_id,relative_path,state,first_received_ms,last_received_ms,
+                 record_count,byte_count,sha256,sealed_ms)
+                VALUES($id,'syslog-local',$path,'FINALIZED',$first,$last,$count,$bytes,$sha,$now)";
+            insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+            insert.Parameters.AddWithValue("$path", path);
+            insert.Parameters.AddWithValue("$first", count == 0 ? DBNull.Value : first);
+            insert.Parameters.AddWithValue("$last", count == 0 ? DBNull.Value : last);
+            insert.Parameters.AddWithValue("$count", count);
+            insert.Parameters.AddWithValue("$bytes", bytes);
+            insert.Parameters.AddWithValue("$sha", sha.ToLowerInvariant());
+            insert.Parameters.AddWithValue("$now", UtcNowMs());
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public void EndTaskRun(string id, string state)
@@ -337,6 +416,94 @@ internal sealed class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$path", relative);
         command.ExecuteNonQuery();
     }
+
+    private Dictionary<string, RecoveryIntent> ReadRecoveryIntents()
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT source_relative_path,target_relative_path,state,
+            first_received_ms,last_received_ms,record_count,byte_count,sha256
+            FROM raw_recovery_intents WHERE state='PENDING'";
+        using var reader = command.ExecuteReader();
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var result = new Dictionary<string, RecoveryIntent>(comparer);
+        while (reader.Read())
+        {
+            var source = reader.GetString(0);
+            var target = reader.GetString(1);
+            result[target] = new(source, target,
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                reader.GetInt64(5), reader.GetInt64(6), reader.GetString(7));
+        }
+        return result;
+    }
+
+    private void PersistRecoveryIntent(string sourceRelative, string targetRelative, RawSegmentInspection inspection)
+    {
+        using var db = Open();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable, deferred: false);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"INSERT INTO raw_recovery_intents
+            (source_relative_path,target_relative_path,state,first_received_ms,last_received_ms,
+             record_count,byte_count,sha256,created_ms)
+            VALUES($source,$target,'PENDING',$first,$last,$count,$bytes,$sha,$now)
+            ON CONFLICT(source_relative_path) DO UPDATE SET
+              target_relative_path=excluded.target_relative_path,
+              state='PENDING', first_received_ms=excluded.first_received_ms,
+              last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
+              byte_count=excluded.byte_count, sha256=excluded.sha256, created_ms=excluded.created_ms";
+        command.Parameters.AddWithValue("$source", sourceRelative);
+        command.Parameters.AddWithValue("$target", targetRelative);
+        command.Parameters.AddWithValue("$first", inspection.RecordCount == 0 ? DBNull.Value : inspection.FirstReceivedMs);
+        command.Parameters.AddWithValue("$last", inspection.RecordCount == 0 ? DBNull.Value : inspection.LastReceivedMs);
+        command.Parameters.AddWithValue("$count", inspection.RecordCount);
+        command.Parameters.AddWithValue("$bytes", inspection.ByteCount);
+        command.Parameters.AddWithValue("$sha", inspection.Sha256);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private void CompleteRecoveredSegment(string relative, RawSegmentInspection info, string sourceRelative)
+    {
+        using var db = Open();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable, deferred: false);
+        using (var upsert = db.CreateCommand())
+        {
+            upsert.Transaction = transaction;
+            upsert.CommandText = @"INSERT INTO raw_segments
+                (id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,sealed_ms)
+                VALUES($id,'syslog-local',$path,'INCOMPLETE',$first,$last,$count,$bytes,$sha,$now)
+                ON CONFLICT(relative_path) DO UPDATE SET
+                  state='INCOMPLETE', first_received_ms=excluded.first_received_ms,
+                  last_received_ms=excluded.last_received_ms, record_count=excluded.record_count,
+                  byte_count=excluded.byte_count, sha256=excluded.sha256,
+                  sealed_ms=COALESCE(raw_segments.sealed_ms,excluded.sealed_ms)";
+            upsert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+            upsert.Parameters.AddWithValue("$path", relative);
+            upsert.Parameters.AddWithValue("$first", info.RecordCount == 0 ? DBNull.Value : info.FirstReceivedMs);
+            upsert.Parameters.AddWithValue("$last", info.RecordCount == 0 ? DBNull.Value : info.LastReceivedMs);
+            upsert.Parameters.AddWithValue("$count", info.RecordCount);
+            upsert.Parameters.AddWithValue("$bytes", info.ByteCount);
+            upsert.Parameters.AddWithValue("$sha", info.Sha256);
+            upsert.Parameters.AddWithValue("$now", UtcNowMs());
+            upsert.ExecuteNonQuery();
+        }
+        using (var clear = db.CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = "DELETE FROM raw_recovery_intents WHERE source_relative_path=$source OR target_relative_path=$target";
+            clear.Parameters.AddWithValue("$source", sourceRelative);
+            clear.Parameters.AddWithValue("$target", relative);
+            clear.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    private static long? ReadNullableInt64(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
 
     private void UpsertRecoveredSegment(string relative, RawSegmentInspection info, string state)
     {
@@ -585,4 +752,6 @@ internal sealed class Catalog(RuntimeSettings settings)
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private sealed record IndexedSegment(string RelativePath, string State, long? RecordCount, long ByteCount, string? Sha256);
+    private sealed record RecoveryIntent(string SourceRelativePath, string TargetRelativePath,
+        long? FirstReceivedMs, long? LastReceivedMs, long RecordCount, long ByteCount, string Sha256);
 }
