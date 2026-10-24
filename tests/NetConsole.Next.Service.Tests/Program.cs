@@ -49,6 +49,8 @@ static async Task NormalSealAsync()
             && Path.GetFullPath(Path.Combine(root, relative)) == Path.GetFullPath(files[0]),
             "catalog path should point at the published file");
         Assert(rows[0].Sha256 == Sha256(files[0]), "catalog checksum should match disk");
+        Assert(rows[0].ByteCount == new FileInfo(files[0]).Length,
+            "catalog byte_count must equal the published file length on the active newline convention");
         await AssertThrowsAsync<InvalidOperationException>(() => writer.AppendAsync(
             new SyslogPacket(1001, "127.0.0.1", 5514, new byte[] { 1 })));
     });

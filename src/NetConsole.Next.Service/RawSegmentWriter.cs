@@ -61,7 +61,7 @@ internal sealed class RawSegmentWriter
                 payload_base64 = Convert.ToBase64String(packet.Payload)
             });
             await _writer.WriteLineAsync(line);
-            _bytes += Encoding.UTF8.GetByteCount(line) + 1;
+            _bytes += Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(_writer.NewLine);
             _first = Math.Min(_first, packet.ReceivedMs);
             _last = Math.Max(_last, packet.ReceivedMs);
             _records++;
