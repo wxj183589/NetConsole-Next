@@ -30,7 +30,9 @@ class Client:
 
     def request(self, path, method="GET", payload=None, raw=False):
         body = None if payload is None else json.dumps(payload).encode()
-        headers = {"Content-Type": "application/json", "Origin": self.base} if body is not None else {}
+        headers = {"Origin": self.base}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         if method not in ("GET", "HEAD") and self.csrf:
             headers["X-NC-CSRF"] = self.csrf
         req = urllib.request.Request(self.base + path, data=body, method=method, headers=headers)
