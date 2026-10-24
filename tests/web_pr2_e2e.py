@@ -82,8 +82,10 @@ def main():
             assert status == 200 and data == "真实文件\n".encode()
             assert admin.request("/api/system/files/list?rootId=raw&path=" + urllib.parse.quote("../"))[0] == 400
             assert admin.request("/api/system/files/download?" + urllib.parse.urlencode({"rootId": "raw", "path": "catalog.db"}))[0] == 400
-            assert admin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})[0] == 403
-            assert superadmin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})[0] == 200
+            admin_tool_status = admin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
+            assert admin_tool_status[0] == 403, admin_tool_status
+            superadmin_tool_status = superadmin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
+            assert superadmin_tool_status[0] == 200, superadmin_tool_status
             assert superadmin.request("/api/system/host-tools/securecrt/launch", "POST", {"deviceId": "not-registered"})[1]["status"] == "INVALID_DEVICE"
             status, job = admin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["hello.txt", "nested"]}]})
             assert status == 202, (status, job)
