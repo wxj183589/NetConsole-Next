@@ -7,6 +7,6 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="System.IO.Pipes.AccessControl" Version="10.0.0" />
+    <PackageReference Include="System.IO.Pipes.AccessControl" Version="6.0.0-preview.5.21301.5" />
   </ItemGroup>
 </Project>
