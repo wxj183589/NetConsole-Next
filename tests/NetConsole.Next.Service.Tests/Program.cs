@@ -874,7 +874,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 9, "v9 Web authentication migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 10, "v10 Web password recovery migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
