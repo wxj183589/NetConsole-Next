@@ -127,6 +127,10 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
+        await VerifiesRawPublishFailureIsRetryable();
+        await VerifiesPreservedRawRejectsFurtherOperations();
+        await VerifiesConcurrentRawSealIsSerialized();
+        VerifiesCatalogRegistrationRejectsMetadataConflict();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
         await PersistsH3cTaskOutputAsVerifiedRaw();
         await ReconcilesLegacyWindowsRawPathAliases();
@@ -152,6 +156,123 @@ internal static class SchedulerTests
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
     }
+
+    private static async Task VerifiesRawPublishFailureIsRetryable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            await writer.AppendAsync(new SyslogPacket(7100, "127.0.0.1", 5514, new byte[] { 0, 0xff, 0x0d, 0x0a }));
+            using (var db = OpenCatalog(root))
+            using (var trigger = db.CreateCommand())
+            {
+                trigger.CommandText = "CREATE TRIGGER fail_raw_seal BEFORE INSERT ON raw_segments BEGIN SELECT RAISE(ABORT,'injected seal failure'); END";
+                trigger.ExecuteNonQuery();
+            }
+
+            AssertThrows<SqliteException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            var published = Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories);
+            Assert(published.Length == 1 && !Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Any(),
+                "a Catalog failure after publish must retain one final Raw file and no stale .open file");
+            var rawBeforeRetry = File.ReadAllBytes(published[0]);
+            using (var db = OpenCatalog(root))
+            using (var drop = db.CreateCommand())
+            {
+                drop.CommandText = "DROP TRIGGER fail_raw_seal";
+                drop.ExecuteNonQuery();
+            }
+            await writer.SealAsync();
+            await writer.SealAsync();
+            Assert(rawBeforeRetry.SequenceEqual(File.ReadAllBytes(published[0])),
+                "retry after Catalog failure must not rewrite published Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 1, "retry after Catalog failure must create one finalized Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesConcurrentRawSealIsSerialized()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-concurrent-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            for (var index = 0; index < 32; index++)
+                await writer.AppendAsync(new SyslogPacket(7200 + index, "127.0.0.1", 5514, new byte[index % 31 + 1]));
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => writer.SealAsync()));
+            Assert(Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories).Length == 1,
+                "concurrent SealAsync calls must publish exactly one Raw segment");
+            Assert(catalog.GetRawCounts().Finalized == 1, "concurrent SealAsync calls must create one Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesPreservedRawRejectsFurtherOperations()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-preserved-state-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriter(catalog, path => new FlushFailureStream(
+                new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)));
+            await writer.AppendAsync(new SyslogPacket(7250, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("preserve-state")));
+            AssertThrows<IOException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<IOException>(() => writer.PreserveOpenAsync().GetAwaiter().GetResult());
+
+            var openPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedBytes = File.ReadAllBytes(openPath);
+            Assert(preservedBytes.Length > 0, "a failed flush must retain bytes already written to the .open file");
+            AssertThrows<InvalidOperationException>(() => writer.AppendAsync(
+                new SyslogPacket(7251, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("must-reject")))
+                .GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedBytes.SequenceEqual(File.ReadAllBytes(openPath)),
+                "operations after PreserveOpenAsync must not change the retained Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 0,
+                "a preserved incomplete segment must not create a FINALIZED Catalog row");
+
+            var recovery = catalog.RecoverRawSegments();
+            Assert(recovery.RecoveredOpenFiles == 1 && recovery.FailedFiles == 0,
+                $"G1 recovery should reconcile the preserved .open file: {recovery}");
+            Assert(catalog.GetRawCounts().Incomplete == 1 && catalog.GetRawCounts().Finalized == 0,
+                "recovered preserved content must remain INCOMPLETE");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static void VerifiesCatalogRegistrationRejectsMetadataConflict()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-catalog-conflict-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            const string relative = "raw/syslog/catalog-conflict.ndjson";
+            var sha = new string('a', 64);
+            catalog.RegisterFinalizedSegment(relative, 1, 7300, 7300, sha, 42);
+            AssertThrows<InvalidOperationException>(() => catalog.RegisterFinalizedSegment(relative, 2, 7300, 7300, sha, 43));
+            using var db = OpenCatalog(root);
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT record_count,byte_count,sha256,state FROM raw_segments WHERE relative_path=$path";
+            command.Parameters.AddWithValue("$path", relative);
+            using var reader = command.ExecuteReader();
+            Assert(reader.Read() && reader.GetInt64(0) == 1 && reader.GetInt64(1) == 42 &&
+                   reader.GetString(2) == sha && reader.GetString(3) == "FINALIZED",
+                "a conflicting registration must preserve the original Catalog evidence");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
 
     private static void VerifiesArchiveResourceBoundariesAndAdmissionRollback()
     {
@@ -733,6 +854,15 @@ internal static class SchedulerTests
                 output, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE");
             await openWriter.FlushAsync();
             await openWriter.PreserveOpenAsync();
+            var preservedH3cPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedH3cBytes = File.ReadAllBytes(preservedH3cPath);
+            AssertThrows<InvalidOperationException>(() => openWriter.AppendH3cCommand(profileId, openRunId,
+                "192.0.2.10", H3cCommandPolicy.DisplayVersion, output,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE"));
+            AssertThrows<InvalidOperationException>(() => openWriter.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => openWriter.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedH3cBytes.SequenceEqual(File.ReadAllBytes(preservedH3cPath)),
+                "H3C Append/Flush/Seal after PreserveOpenAsync must not mutate the retained Raw output");
             var recovered = new Catalog(settings);
             recovered.Initialize();
             var recovery = recovered.RecoverRawSegments();
@@ -2183,6 +2313,36 @@ internal static class SchedulerTests
             await inner.WriteAsync(buffer, cancellationToken);
             _written += buffer.Length;
         }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            GC.SuppressFinalize(this);
+        }
+    }
+
+    private sealed class FlushFailureStream(Stream inner) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() => throw new IOException("deterministic flush failure");
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new IOException("deterministic flush failure"));
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(buffer, cancellationToken);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            inner.WriteAsync(buffer, offset, count, cancellationToken);
         protected override void Dispose(bool disposing)
         {
             if (disposing) inner.Dispose();

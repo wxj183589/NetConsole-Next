@@ -1325,9 +1325,69 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     public void RegisterFinalizedSegment(string relative, long count, long first, long last, string sha, long bytes,
         string sourceId = "syslog-local", string? taskRunId = null)
     {
-        UpsertRecoveredSegment(relative, new(count, first, last, bytes, sha, false, 0, null, 0, 0, sourceId,
-            TaskRunId: taskRunId), "FINALIZED");
+        if (count < 0 || bytes < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (!IsSha256(sha)) throw new ArgumentException("Raw segment checksum must be a SHA-256 hex string.", nameof(sha));
+        ValidateRawSourcePath(relative, sourceId);
+        var filePath = Path.Combine(settings.DataRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+        var file = new FileInfo(filePath);
+        var checkpointSize = file.Exists ? file.Length : bytes;
+        var checkpointTicks = file.Exists ? file.LastWriteTimeUtc.Ticks : 0;
+        var expectedFirst = count == 0 ? (long?)null : first;
+        var expectedLast = count == 0 ? (long?)null : last;
+
+        using var db = Open();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = @"SELECT source_id,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,task_run_id
+                FROM raw_segments WHERE relative_path=$path";
+            existing.Parameters.AddWithValue("$path", relative);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                var same = string.Equals(reader.GetString(0), sourceId, StringComparison.Ordinal) &&
+                    string.Equals(reader.GetString(1), "FINALIZED", StringComparison.Ordinal) &&
+                    ReadNullableInt64(reader, 2) == expectedFirst && ReadNullableInt64(reader, 3) == expectedLast &&
+                    reader.GetInt64(4) == count && reader.GetInt64(5) == bytes &&
+                    string.Equals(reader.GetString(6), sha, StringComparison.OrdinalIgnoreCase) &&
+                    ReadNullableString(reader, 7) == taskRunId;
+                if (!same)
+                    throw new InvalidOperationException($"Raw segment Catalog conflict for '{relative}'; existing metadata was preserved.");
+                transaction.Commit();
+                return;
+            }
+        }
+
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO raw_segments
+                (id,source_id,relative_path,state,first_received_ms,last_received_ms,record_count,byte_count,sha256,sealed_ms,
+                 checkpoint_size,checkpoint_write_ticks,last_verified_ms,task_run_id)
+                VALUES($id,$source,$path,'FINALIZED',$first,$last,$count,$bytes,$sha,$now,$size,$ticks,$now,$run)";
+            insert.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+            insert.Parameters.AddWithValue("$source", sourceId);
+            insert.Parameters.AddWithValue("$path", relative);
+            insert.Parameters.AddWithValue("$first", (object?)expectedFirst ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$last", (object?)expectedLast ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$count", count);
+            insert.Parameters.AddWithValue("$bytes", bytes);
+            insert.Parameters.AddWithValue("$sha", sha.ToLowerInvariant());
+            insert.Parameters.AddWithValue("$now", UtcNowMs());
+            insert.Parameters.AddWithValue("$size", checkpointSize);
+            insert.Parameters.AddWithValue("$ticks", checkpointTicks);
+            insert.Parameters.AddWithValue("$run", (object?)taskRunId ?? DBNull.Value);
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
+
+    private static long? ReadNullableInt64(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+
+    private static string? ReadNullableString(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
     public void MarkUnavailable(Exception exception)
     {
