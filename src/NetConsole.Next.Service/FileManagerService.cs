@@ -39,8 +39,8 @@ internal sealed class FileManagerService
             if (IsProtected(path, fileName) || IsReparse(path)) continue;
             if (query.Length > 0 && fileName.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
             var directory = Directory.Exists(path);
-            var info = directory ? new DirectoryInfo(path) : new FileInfo(path);
-            var size = directory ? 0 : ((FileInfo)info).Length;
+            FileSystemInfo info = directory ? new DirectoryInfo(path) : new FileInfo(path);
+            var size = info is FileInfo file ? file.Length : 0;
             entries.Add(new(fileName, relative, directory ? "DIRECTORY" : "FILE", size,
                 new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(), !directory, true));
         }
