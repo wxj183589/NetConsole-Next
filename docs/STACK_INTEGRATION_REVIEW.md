@@ -55,9 +55,6 @@ PR #2、#3、#4 当前不存在，未按编号推断。
 
 PR #5 已在独立 worktree 中以非改写 merge commit `323aca12ec72` 同步 PR #1，当前远程 PR #5 为 CLEAN；其 CI 已完成 Ubuntu/Windows PASS。PR #6–#18 的官方 head 尚未同步该新 PR5，因此不能由其“绿色 CI”推导出已包含 PR #1 修复。
 
-| 19 | `69bb7d6294e` | `#18@c3ec4ba6862d` | `c3ec4ba6862d` | 本地集成 | 包含 PR1/PR18 修复 | MERGEABLE/CI pending | [PR #19](https://github.com/wxj183589/NetConsole-Next/pull/19) |
-
-
 ## 2. PR #1 最终状态
 
 - PR：[#1](https://github.com/wxj183589/NetConsole-Next/pull/1)
