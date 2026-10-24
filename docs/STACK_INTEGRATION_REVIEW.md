@@ -2,7 +2,7 @@
 
 审计日期：2026-10-24（Asia/Shanghai）  
 仓库：`wxj183589/NetConsole-Next`  
-审计分支：`audit/p0-g1-stack-integration`，基于 PR #18 HEAD `69ed4495abc74feb54723c54addb708aecfbec52` 的临时 worktree。
+审计分支：`audit/p0-g1-stack-integration`，基于 PR #18 最新 HEAD `c3ec4ba6862de8e90630552e3e2410f509787f15` 的临时 worktree；PR #18 在审计期间持续更新，已逐次重新同步。
 
 本文件记录的是合并前审计和临时集成修复，不表示任何 PR 已合并。没有修改 `main`、正式 Raw 数据或旧 NetConsole 仓库。
 
@@ -36,7 +36,7 @@ PR #2、#3、#4 当前不存在，未按编号推断。
 | PR | 当前 head | GitHub base ref 当前 head | merge base | base...head | PR #1 修复提交是否在 head | GitHub mergeable | CI |
 |---:|---|---|---|---:|---|---|---|
 | 1 | `bc0392009249` | `main@9c544d2e4c40` | `9c544d2e4c40` | `0/19` | 是 | MERGEABLE | Ubuntu/Windows PASS |
-| 5 | `6a8906a235e9` | `#1@bc0392009249` | `0654f0de97de` | `4/3` | 否 | CONFLICTING | Ubuntu/Windows PASS |
+| 5 | `323aca12ec72` | `#1@bc0392009249` | `bc0392009249` | merge commit | 是（同步后） | MERGEABLE/CLEAN | Ubuntu/Windows PASS |
 | 6 | `3615325402bc` | `#5@6a8906a235e9` | `6a8906a235e9` | `0/4` | 否 | MERGEABLE | Ubuntu/Windows PASS |
 | 7 | `9c574ab50021` | `#6@3615325402bc` | `3615325402bc` | `0/2` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
 | 8 | `1dcbea1f4133` | `#7@9c574ab50021` | `9c574ab50021` | `0/4` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
@@ -49,9 +49,14 @@ PR #2、#3、#4 当前不存在，未按编号推断。
 | 15 | `439ee27ce90e` | `#14@bf311cee3298` | `bf311cee3298` | `0/1` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
 | 16 | `293abdf4fbbf` | `#15@439ee27ce90e` | `439ee27ce90e` | `0/1` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS；Codex review failed to complete |
 | 17 | `019e75479756` | `#16@293abdf4fbbf` | `293abdf4fbbf` | `0/3` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
-| 18 | `69ed4495abc7` | `#17@019e75479756` | `019e75479756` | `0/7` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
+| 18 | `c3ec4ba6862d` | `#17@019e75479756` | `019e75479756` | 更新中 | 否（相对 PR5 新 HEAD） | MERGEABLE/UNSTABLE | Ubuntu PASS；Windows 运行中后通过 |
 
-PR #5 的 GitHub PR 记录仍以旧 `0654f0de97de` 为合并基点；当前 base ref 已移动到 PR #1 HEAD，因此 GitHub 将 PR #5 标为冲突。PR #6–#18 是 PR #5 的后继提交图，不能由其“绿色 CI”推导出已包含 PR #1 的三项后追加修复。
+| 19 | `69bb7d6294e` | `#18@c3ec4ba6862d` | `c3ec4ba6862d` | 本地集成 | 包含 PR1/PR18 修复 | MERGEABLE/CI pending | [PR #19](https://github.com/wxj183589/NetConsole-Next/pull/19) |
+
+PR #5 已在独立 worktree 中以非改写 merge commit `323aca12ec72` 同步 PR #1，当前远程 PR #5 为 CLEAN；其 CI 已完成 Ubuntu/Windows PASS。PR #6–#18 的官方 head 尚未同步该新 PR5，因此不能由其“绿色 CI”推导出已包含 PR #1 修复。
+
+| 19 | `69bb7d6294e` | `#18@c3ec4ba6862d` | `c3ec4ba6862d` | 本地集成 | 包含 PR1/PR18 修复 | MERGEABLE/CI pending | [PR #19](https://github.com/wxj183589/NetConsole-Next/pull/19) |
+
 
 ## 2. PR #1 最终状态
 
@@ -67,12 +72,14 @@ PR #1 的原始评审线程和后续 `byte_count` 线程均已关闭；本审计
 
 ## 3. RawSegmentWriter 语义审计
 
-PR #18 当前实现已经使用 `MemoryStream`、`Utf8JsonWriter`、LF NDJSON、H3C Raw 和恢复计时，但仍有两项与 PR #1 同类的 P1：
+PR #18 最新 HEAD `c3ec4ba` 已包含 bounded archive queue、磁盘准入、取消清理、Windows auth/SQLite cleanup 和对应回归测试。PR #19 仍需同时审查 Raw 状态机和堆叠同步结果。
 
-1. `SealAsync` 在 `.open` 移动为 `.ndjson` 后才执行 Catalog 登记，`_sealed` 只在登记成功后设置。登记失败后再次 Seal 会再次读取不存在的 `.open`。
-2. Append、Flush、Seal、`AppendH3cCommand` 没有共同的操作门，多个 Seal 或 Append/Seal 并发时会竞争 `_stagedBytes`、Stream、文件移动和状态字段。
+PR #19 的 Raw 审计确认 PR #18 之前的 Raw 实现存在两项与 PR #1 同类的风险：
 
-临时集成修复保留了现代缓冲、H3C 输出和性能计时，并增加：
+1. `SealAsync` 在 `.open` 移动为 `.ndjson` 后才执行 Catalog 登记，登记失败后重复 Seal 可能再次访问不存在的 `.open`。
+2. Append、Flush、Seal、`AppendH3cCommand` 没有共同操作门，多个 Seal 或 Append/Seal 并发时可能竞争文件和状态。
+
+临时集成修复保留现代缓冲、H3C 输出和性能计时，并增加：
 
 - `_filePublished` / `_catalogRegistered` 两阶段状态；发布后重试只执行 Catalog 登记。
 - `SemaphoreSlim` 串行化 Syslog 和 H3C Raw 操作。
@@ -90,19 +97,23 @@ PR #18 的 `RegisterFinalizedSegment` 原先直接调用恢复用的 `UpsertReco
 
 这样没有机械覆盖恢复逻辑，也没有改变恢复对损坏尾部的证据保留策略。
 
-## 5. 合并模拟
+## 5. 阶段 A 与阶段 B 集成结果
 
-在独立 worktree 中执行：
+### 阶段 A：PR #19 Raw 状态机与最新 PR #18
 
-1. `main` 合入 PR #1：无冲突。
-2. 在该结果上继续模拟合入 PR #5：出现真实内容冲突，文件为：
-   - `.github/workflows/p0.yml`
-   - `README.md`
-   - `src/NetConsole.Next.Service/Catalog.cs`
-   - `src/NetConsole.Next.Service/RawSegmentWriter.cs`
-3. 未使用 `ours`/`theirs` 整体覆盖关键文件，随后中止模拟合并。
+- PR #19 原始 head：`f4cbd45d7cdba30962dd695b0b54c1b479ede04f`。
+- Raw P2 修复提交：`4e6eeff`；PR #18 bounded archive/disk 修复同步：`fc40031`；随后同步 PR #18 Web 回归 head `9473365`、`c3ec4ba`，当前 PR #19 head 为 `69bb7d6`。
+- `PreserveOpenAsync()` 关闭后，Append、H3C Append、Flush、Seal 均拒绝；Flush 失败会保留 `.open` 并显式传播异常。
+- 已验证 Catalog 登记失败后的仅 Catalog 重试、重复 Seal、并发 Seal、Preserve/Seal 竞争和 Raw 字节不变。
+- PR #19 与 PR #18 的每次同步均使用 `--no-commit --no-ff`；最新同步无未解决文件冲突，PR #18 bounded ZIP、磁盘准入、取消和清理测试均保留。
 
-冲突不仅是文本冲突：Raw Writer 的状态机和 Catalog 的登记/恢复职责也已发生语义分叉。不能直接按当前 PR 顺序批量合并。
+### 阶段 B：PR #5 与最新 PR #1
+
+- PR #5 原始 head：`6a8906a235e920078790b6ac4eeded02bcaf52d1`。
+- 实际冲突文件：`.github/workflows/p0.yml`、`README.md`、`Catalog.cs`、`RawSegmentWriter.cs`；均逐文件语义解决。
+- 新 head：`323aca12ec72c9c817e8ca019b49a270c37d638f`，为父分支 `6a8906a` 与 PR #1 `bc039200` 的非改写 merge commit。
+- G1 P1 修复：增加 `raw_recovery_intents` 持久化恢复意图；在 `.open` 重命名和尾部修复前记录意图；二次启动按 `INCOMPLETE` 处理；Catalog 登记与恢复 Upsert 分离。
+- PR #5 当前 GitHub 状态：MERGEABLE/CLEAN；Ubuntu、Windows 两组 CI 均 PASS；未自动合并、未 Resolve 原 P1 review thread。
 
 ## 6. 临时集成修复测试证据
 
@@ -136,7 +147,7 @@ PR #19 的首次 Actions run `40097847169` 在 Ubuntu 的 `tests/web_pr2_e2e.py`
 - PR #12：WebSocket 断开不释放会话；终端录制并发 Append；启动恢复和重复挂载问题。
 - PR #13：浏览器 reload 后终端会话无法恢复或关闭。
 - PR #17：LAN binding 未强制 TLS；仍有 Web auth/CSRF 相关评审。
-- PR #18：`FileArchiveService` 使用无界后台队列且缺少任务/用户配额，是当前明确的 ZIP 资源管理 P1。
+- PR #18：原 bounded queue 与磁盘准入 P1 已在最新 head 修复并完成 Codex 复审；ZIP64 超大文件、真实 Windows GUI/Explorer 和 LAN 实机验收仍未运行。
 
 这些评审没有与本次 Raw/Catalog 修复合并处理，不能宣称整条 Web 链已可合并。
 
@@ -154,70 +165,79 @@ Web 安装报告了 `glob` 旧版本弃用提示；本次未升级 Web 依赖。
 
 ## 9. 推荐合并策略和回退
 
-推荐方案 B/C：
-
-1. 先由维护者批准并合入 PR #1。
-2. 在 PR #1 最新 HEAD 上，以非改写历史的合并提交同步 PR #5；逐个解决 Raw/Catalog/CI 冲突并重新运行 P0/G1 回归。
-3. 只有 PR #5 的 P1 恢复问题关闭后，才继续按 #6 → #7 → #8 → #9 → #10 → #11 的顺序更新和验收。
-4. G2.3/ Web 链继续逐个更新，每个 PR 合并前必须检查上游 Raw/Catalog 语义和当前 PR 的未解决评审。
-5. PR #18 的 ZIP 队列 P1 必须独立修复和复审，不能用本次 Raw 修复抵消。
-
-回退策略：每一步保留原 PR 合并提交和 CI 运行链接；若出现 Raw 文件、Catalog 或恢复回归，回退最近一个堆叠合并提交，保留已发布 Raw 文件，不删除或重写数据目录。
+1. 先由维护者批准并合入 PR #1；本轮未执行合并。
+2. 审查 PR #5 的 `323aca12ec72`，重点确认双次崩溃恢复 P1 review thread；CI 已通过，复审未完成前不 Resolve。
+3. PR #5 获批准后，逐个刷新 PR #6→#18；官方后代当前均未包含 `323aca12ec72`，不能批量合并或推断自动继承修复。
+4. PR #19 作为 Raw 状态机与 PR #18 最新 Web/ZIP 代码的独立审计载体；合并前需先将 base 固定到最终 PR #18 head 并完成新一轮 review。
+5. 任一步出现 Raw 文件、Catalog 或恢复回归，回退最近的堆叠合并提交，保留 Raw 和恢复证据，不删除或重写数据目录。
 
 ## 10. 机器可读结论
 
 ```text
-TASK=NETCONSOLE_NEXT_P0_G1_G2_WEB_STACK_INTEGRATION_AUDIT
-
+TASK=NETCONSOLE_NEXT_PR19_RAW_STATE_P2_AND_PR5_INTEGRATION
 REPOSITORY=wxj183589/NetConsole-Next
 PR1_HEAD=bc03920092493e36611b634c6119d76203c13fb7
-PR1_CI=PASS (run 40094048782 Ubuntu/Windows)
-PR1_REVIEW=NO_MAJOR_ISSUES; unresolved threads=0
+PR1_STATUS=READY_FOR_MERGE_REVIEW
 PR1_MERGED=NO
 
-STACK_PR_COUNT=15 (PR 1,5-18)
-STACK_BRANCHES_AUDITED=1,5,6,7,8,9,10,11,12,13,14,15,16,17,18
-STACK_ANCESTRY_STATUS=PR5 starts at 0654f0d; PR6-18 descend from PR5; PR1 post-fixes are absent
-STACK_DIVERGENCE_FOUND=YES (PR5; current merge simulation conflicts)
+PR18_HEAD=c3ec4ba6862de8e90630552e3e2410f509787f15
+PR18_CI=Ubuntu PASS; Windows run after latest auth cleanup; review threads resolved
+PR18_REVIEW_STATUS=Codex review clean on bounded queue/disk admission; real ZIP64/Windows GUI/LAN pending
 
-P0_FIXES_PRESENT_IN_G1=NO (official PR5-9 heads)
-P0_FIXES_PRESENT_IN_G2=NO (official PR10-16 heads)
-P0_FIXES_PRESENT_IN_WEB_PR1=NO (official PR17 head)
-P0_FIXES_PRESENT_IN_WEB_PR2=NO (official PR18 head; local audit patch restores semantics)
+PR19_HEAD_BEFORE=f4cbd45d7cdba30962dd695b0b54c1b479ede04f
+PR19_HEAD_AFTER=69bb7d6294ee364e1146f94ec9b620d40fb8d88e
+PR19_P2_ROOT_CAUSE=Append/Flush/Seal accepted operations after PreserveOpenAsync closed the stream
+PR19_P2_FIX_SUMMARY=Explicit Raw state machine, serialized operation gate, preserved-open failure propagation, retry-only Catalog registration
+APPEND_AFTER_CLOSED_REJECTED=PASS
+H3C_APPEND_AFTER_CLOSED_REJECTED=PASS
+FLUSH_AFTER_CLOSED_REJECTED=PASS
+SEAL_AFTER_PRESERVE_REJECTED=PASS
+CATALOG_RETRY_AFTER_PUBLISH=PASS
+CONCURRENT_SEAL=PASS
+RAW_CONTENT_PRESERVED=PASS
+NO_FALSE_FINALIZED=PASS
+CATALOG_CONFLICT_REJECTED=PASS
+PR19_UPDATED_FROM_PR18=YES (latest observed c3ec4ba; no unresolved merge conflict)
+PR19_CONFLICTS_RESOLVED=YES
+PR19_RAW_REGRESSION=PASS
+PR19_G1_REGRESSION=PASS
+PR19_G2_REGRESSION=PASS in existing harness; no real device
+PR19_WEB_PR2_REGRESSION=PASS locally and in GitHub run 40107064393
+PR19_REVIEW_RECONFIRMED=PENDING on latest 69bb7d6
+PR19_P2_THREAD_RESOLVED=NO (thread is outdated but deliberately unresolved pending latest review)
 
-RAW_SEAL_REGRESSION_FOUND=YES (PR18 RawSegmentWriter)
-CATALOG_CONFLICT_REGRESSION_FOUND=YES (RegisterFinalizedSegment reused recovery Upsert)
-RAW_CONCURRENCY=FIXED_IN_LOCAL_INTEGRATION_WORKTREE
-RAW_CONTENT_PRESERVED=PASS (new retry/concurrency tests)
-G1_RECOVERY_PRESERVED=PASS in existing PR18 harness; full chain blocked by PR5 recovery P1
-H3C_RAW_PRESERVED=PASS in existing harness and shared writer state-machine patch
+PR5_HEAD_BEFORE=6a8906a235e920078790b6ac4eeded02bcaf52d1
+PR5_HEAD_AFTER=323aca12ec72c9c817e8ca019b49a270c37d638f
+PR5_UPDATED_FROM_PR1=YES (non-rewriting merge with bc039200)
+PR5_MERGE_CONFLICTS=.github/workflows/p0.yml; README.md; Catalog.cs; RawSegmentWriter.cs
+PR5_P1_ROOT_CAUSE=Recovered .open renamed before durable Catalog recovery intent, so second startup could promote orphan .ndjson to FINALIZED
+PR5_P1_FIX_SUMMARY=Durable raw_recovery_intents plus atomic INCOMPLETE registration/intent cleanup; strict normal Seal Catalog registration
+RECOVERED_OPEN_PRESERVED_INCOMPLETE=PASS
+CRASH_AFTER_RENAME=PASS
+CRASH_AFTER_TAIL_REPAIR=PASS
+SECOND_STARTUP_STATE=INCOMPLETE
+RECOVERY_IDEMPOTENT=PASS
+SQLITE_FAILURE_RECOVERY=PASS
+CATALOG_NO_DUPLICATE_ROWS=PASS
+PR5_P0_REGRESSION=PASS
+PR5_G1_REGRESSION=PASS
+PR5_GITHUB_UBUNTU_CI=PASS (runs 40106145235/40106148614)
+PR5_GITHUB_WINDOWS_CI=PASS (runs 40106145235/40106148614)
+PR5_REVIEW_RECONFIRMED=PENDING independent review of 323aca1
+PR5_P1_THREAD_RESOLVED=NO
 
-INTEGRATION_STRATEGY=Sequential non-rewriting merge after PR1 approval; refresh PR5 first; validate in temporary worktree
-INTEGRATION_SIMULATION=PR1 merge clean; PR5 merge conflicts in workflow/README/Catalog/Raw; stopped safely
-MERGE_CONFLICTS=YES
-SEMANTIC_CONFLICTS=YES (Raw seal state and Catalog registration/recovery ownership)
-BLOCKING_REVIEWS=PR5,7,8,10,11,12,13,17,18 active P1; PR18 ZIP queue P1 remains independent
-
-P0_TESTS=PASS in PR1 CI; PASS in local PR18 integration harness
-G1_TESTS=PASS in existing PR18 harness; not full-chain verified
-G2_TESTS=PASS in existing PR18 harness; no real device
-WEB_PR1_TESTS=typecheck/build/Vitest PASS; Playwright config missing
-WEB_PR2_TESTS=typecheck/build/Vitest PASS; archive P1 unresolved
-
-LINUX_BUILD=PASS (build/harness/smoke and latest PR19 run 40098552288)
-WINDOWS_BUILD=PASS (latest PR19 run 40098552288, including SCM exercise)
-GITHUB_CI=PR19 latest Ubuntu/Windows PASS; first run 40097847169 had a known archive cancellation failure; no combined PR1-to-Web run exists
-
-FIX_BRANCH=audit/p0-g1-stack-integration
-FIX_COMMITS=e025e99,8bec041 (Raw/Catalog fix and audit evidence)
-PUSHED_CHANGES=YES (child PR #19; not merged)
+DOWNSTREAM_PRS_AUDITED=6-18 (read-only)
+DOWNSTREAM_BASE_UPDATES_REQUIRED=YES; official PR6-18 heads do not contain 323aca12
+DOWNSTREAM_RAW_SEMANTIC_RISKS=YES until each child is refreshed and tested
 MAIN_CHANGED=NO
 PRS_MERGED=NO
 FORCE_PUSH=NO
+OLD_NETCONSOLE_CHANGED=NO
 PRODUCTION_DATA_MUTATION=NO
 
-SAFE_MERGE_ORDER=PR1 approval -> refresh/fix PR5 -> PR6 -> PR7 -> PR8 -> PR9 -> PR10 -> PR11 -> PR12 -> PR13 -> PR14 -> PR15 -> PR16 -> PR17 -> PR18
-REQUIRED_MANUAL_APPROVAL=PR1 merge and every subsequent PR merge; Windows Service/legacy OS/real devices remain manual
-NEXT_ACTION=Review local fix; decide whether to push as a child fix PR for PR18, then update PR5 from PR1
-FINAL_STATUS=BLOCKED
+BLOCKING_P0_COUNT=0 in tested worktrees
+BLOCKING_P1_COUNT=PR5 review pending; downstream stale; PR17 TLS/LAN and other active stack findings remain
+OPEN_P2_COUNT=PR19 Raw P2 unresolved pending latest review; other child review threads unchanged
+NEXT_RECOMMENDED_ACTION=Review PR5 323aca1 and PR19 69bb7d6 independently; refresh PR6 only after PR5 approval
+FINAL_STATUS=CI_VERIFIED_REVIEW_PENDING
 ```
