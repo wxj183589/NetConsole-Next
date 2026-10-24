@@ -205,7 +205,11 @@ internal sealed class Catalog(RuntimeSettings settings)
                     failed++;
                     continue;
                 }
-                var relative = RelativeRawPath(path);
+                var scannedRelative = RelativeRawPath(path);
+                var wasIndexed = indexed.TryGetValue(RawPathComparisonKey(scannedRelative), out var row);
+                // Reuse the stored spelling when a case-insensitive Windows lookup
+                // found an existing row so ON CONFLICT hits the same SQLite key.
+                var relative = wasIndexed ? row!.RelativePath : scannedRelative;
                 var inspection = InspectAndRepair(path);
                 discarded += inspection.DiscardedTailBytes;
                 if (inspection.CorruptTail)
@@ -218,8 +222,7 @@ internal sealed class Catalog(RuntimeSettings settings)
                     }
                 }
 
-                var wasIndexed = indexed.TryGetValue(relative, out var row);
-                var hasPendingRecovery = recoveryIntents.TryGetValue(relative, out var pendingIntent);
+                var hasPendingRecovery = recoveryIntents.TryGetValue(RawPathComparisonKey(relative), out var pendingIntent);
                 var sameAsCatalog = wasIndexed && row!.State == "FINALIZED" &&
                     row.RecordCount == inspection.RecordCount && row.ByteCount == inspection.ByteCount &&
                     string.Equals(row.Sha256, inspection.Sha256, StringComparison.OrdinalIgnoreCase);
@@ -230,7 +233,7 @@ internal sealed class Catalog(RuntimeSettings settings)
                     CompleteRecoveredSegment(relative, inspection, pendingIntent!.SourceRelativePath);
                 else
                     UpsertRecoveredSegment(relative, inspection, state);
-                recoveryIntents.Remove(relative);
+                recoveryIntents.Remove(RawPathComparisonKey(relative));
                 if (!wasIndexed) indexedOrphans++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
@@ -270,20 +273,26 @@ internal sealed class Catalog(RuntimeSettings settings)
         using (var existing = db.CreateCommand())
         {
             existing.Transaction = transaction;
-            existing.CommandText = @"SELECT source_id,state,first_received_ms,last_received_ms,
+            // SQLite's default UNIQUE comparison is case-sensitive while a Windows
+            // filesystem is not. Match the physical Raw identity before inserting,
+            // otherwise a restored catalog with different path casing can gain a
+            // second row for the same file.
+            existing.CommandText = @"SELECT relative_path,source_id,state,first_received_ms,last_received_ms,
                 record_count,byte_count,sha256
-                FROM raw_segments WHERE relative_path=$path";
-            existing.Parameters.AddWithValue("$path", path);
+                FROM raw_segments";
             using var reader = existing.ExecuteReader();
-            if (reader.Read())
+            while (reader.Read())
             {
-                var same = reader.GetString(0) == "syslog-local" &&
-                    reader.GetString(1) == "FINALIZED" &&
-                    ReadNullableInt64(reader, 2) == (count == 0 ? null : first) &&
-                    ReadNullableInt64(reader, 3) == (count == 0 ? null : last) &&
-                    reader.GetInt64(4) == count &&
-                    reader.GetInt64(5) == bytes &&
-                    string.Equals(reader.GetString(6), sha, StringComparison.OrdinalIgnoreCase);
+                if (!string.Equals(RawPathComparisonKey(reader.GetString(0)), RawPathComparisonKey(path), StringComparison.Ordinal))
+                    continue;
+
+                var same = reader.GetString(1) == "syslog-local" &&
+                    reader.GetString(2) == "FINALIZED" &&
+                    ReadNullableInt64(reader, 3) == (count == 0 ? null : first) &&
+                    ReadNullableInt64(reader, 4) == (count == 0 ? null : last) &&
+                    reader.GetInt64(5) == count &&
+                    reader.GetInt64(6) == bytes &&
+                    string.Equals(reader.GetString(7), sha, StringComparison.OrdinalIgnoreCase);
                 if (!same)
                     throw new InvalidOperationException($"Raw segment Catalog conflict for '{path}'; existing metadata was preserved.");
                 transaction.Commit();
@@ -369,13 +378,14 @@ internal sealed class Catalog(RuntimeSettings settings)
         using var command = db.CreateCommand();
         command.CommandText = "SELECT relative_path,state,record_count,byte_count,sha256 FROM raw_segments";
         using var reader = command.ExecuteReader();
-        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var result = new Dictionary<string, IndexedSegment>(pathComparer);
+        var result = new Dictionary<string, IndexedSegment>(StringComparer.Ordinal);
         while (reader.Read())
         {
-            var relative = reader.GetString(0).Replace('\\', '/');
-            result[relative] = new(relative, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4));
+            var storedRelative = reader.GetString(0).Replace('\\', '/');
+            var key = RawPathComparisonKey(storedRelative);
+            if (!result.TryAdd(key, new(storedRelative, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4))))
+                throw new InvalidDataException($"Raw Catalog contains duplicate Windows path identities for '{storedRelative}'.");
         }
         return result;
     }
@@ -408,6 +418,12 @@ internal sealed class Catalog(RuntimeSettings settings)
 
     private string RelativeRawPath(string path) => Path.GetRelativePath(settings.DataRoot, path).Replace('\\', '/');
 
+    private static string RawPathComparisonKey(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
+    }
+
     private void MarkMissing(string relative)
     {
         using var db = Open();
@@ -425,16 +441,17 @@ internal sealed class Catalog(RuntimeSettings settings)
             first_received_ms,last_received_ms,record_count,byte_count,sha256
             FROM raw_recovery_intents WHERE state='PENDING'";
         using var reader = command.ExecuteReader();
-        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var result = new Dictionary<string, RecoveryIntent>(comparer);
+        var result = new Dictionary<string, RecoveryIntent>(StringComparer.Ordinal);
         while (reader.Read())
         {
-            var source = reader.GetString(0);
-            var target = reader.GetString(1);
-            result[target] = new(source, target,
+            var source = reader.GetString(0).Replace('\\', '/');
+            var target = reader.GetString(1).Replace('\\', '/');
+            var key = RawPathComparisonKey(target);
+            if (!result.TryAdd(key, new(source, target,
                 reader.IsDBNull(3) ? null : reader.GetInt64(3),
                 reader.IsDBNull(4) ? null : reader.GetInt64(4),
-                reader.GetInt64(5), reader.GetInt64(6), reader.GetString(7));
+                reader.GetInt64(5), reader.GetInt64(6), reader.GetString(7))))
+                throw new InvalidDataException($"Raw recovery intents contain duplicate Windows path identities for '{target}'.");
         }
         return result;
     }

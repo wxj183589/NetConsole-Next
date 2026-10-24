@@ -14,6 +14,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("recovery crash after rename remains incomplete", RecoveryCrashAfterRenameAsync),
     ("recovery crash after tail repair remains incomplete", RecoveryCrashAfterTailRepairAsync),
     ("recovery catalog failure is retryable", RecoveryCatalogFailureAsync),
+    ("Windows path casing does not duplicate Catalog rows", WindowsPathAliasAsync),
     ("empty and binary boundaries", BoundaryAsync),
     ("4MiB segment rolling and unique catalog rows", SegmentRollingAsync)
 };
@@ -312,6 +313,39 @@ static async Task RecoveryCatalogFailureAsync()
         Assert(second.FailedFiles == 0 && restarted.GetRawCounts().Finalized == 0 &&
                restarted.GetRawCounts().Incomplete == 1 && RecoveryIntentCount(root) == 0 && Rows(root).Count == 1,
             $"SQLite recovery retry must reconcile exactly once: {second}");
+    });
+}
+
+static async Task WindowsPathAliasAsync()
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        await writer.AppendAsync(new SyslogPacket(3950, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("case-alias")));
+        await writer.SealAsync();
+
+        var original = Rows(root).Single();
+        var alias = original.RelativePath.ToUpperInvariant();
+        using (var db = OpenDb(root))
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = "UPDATE raw_segments SET relative_path=$alias WHERE relative_path=$original";
+            command.Parameters.AddWithValue("$alias", alias);
+            command.Parameters.AddWithValue("$original", original.RelativePath);
+            Assert(command.ExecuteNonQuery() == 1, "Windows path alias setup must update one Catalog row");
+        }
+
+        var recovery = catalog.RecoverRawSegments();
+        Assert(recovery.FailedFiles == 0, $"case-insensitive path recovery failed: {recovery}");
+        Assert(Rows(root).Count == 1, "Windows path casing must not create a duplicate Catalog row");
+        var recovered = Rows(root).Single();
+        Assert(recovered.RelativePath == alias, "recovery should preserve the stored Catalog path spelling");
+        catalog.RegisterFinalizedSegment(alias, recovered.RecordCount, 3950, 3950,
+            recovered.Sha256, recovered.ByteCount);
+        Assert(Rows(root).Count == 1, "case-insensitive RegisterFinalizedSegment must remain idempotent");
     });
 }
 
