@@ -49,9 +49,9 @@ PR #2、#3、#4 当前不存在，未按编号推断。
 | 15 | `439ee27ce90e` | `#14@bf311cee3298` | `bf311cee3298` | `0/1` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
 | 16 | `293abdf4fbbf` | `#15@439ee27ce90e` | `439ee27ce90e` | `0/1` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS；Codex review failed to complete |
 | 17 | `019e75479756` | `#16@293abdf4fbbf` | `293abdf4fbbf` | `0/3` | 否 | MERGEABLE | Ubuntu/Windows/PowerShell PASS |
-| 18 | `c3ec4ba6862d` | `#17@019e75479756` | `019e75479756` | 更新中 | 否（相对 PR5 新 HEAD） | MERGEABLE/UNSTABLE | Ubuntu PASS；Windows 运行中后通过 |
+| 18 | `c3ec4ba6862d` | `#17@019e75479756` | `019e75479756` | 当前 | 否（相对 PR5 新 HEAD） | MERGEABLE/CLEAN | Ubuntu/Windows/PowerShell PASS |
 
-| 19 | `69bb7d6294e` | `#18@c3ec4ba6862d` | `c3ec4ba6862d` | 本地集成 | 包含 PR1/PR18 修复 | MERGEABLE/CI pending | [PR #19](https://github.com/wxj183589/NetConsole-Next/pull/19) |
+| 19 | `f417f4eb8d3d` | `#18@c3ec4ba6862d` | `c3ec4ba6862d` | 本地集成 | 包含 PR1/PR18 修复 | MERGEABLE/CI PASS | [PR #19](https://github.com/wxj183589/NetConsole-Next/pull/19) |
 
 PR #5 已在独立 worktree 中以非改写 merge commit `323aca12ec72` 同步 PR #1，当前远程 PR #5 为 CLEAN；其 CI 已完成 Ubuntu/Windows PASS。PR #6–#18 的官方 head 尚未同步该新 PR5，因此不能由其“绿色 CI”推导出已包含 PR #1 修复。
 
@@ -99,10 +99,10 @@ PR #18 的 `RegisterFinalizedSegment` 原先直接调用恢复用的 `UpsertReco
 ### 阶段 A：PR #19 Raw 状态机与最新 PR #18
 
 - PR #19 原始 head：`f4cbd45d7cdba30962dd695b0b54c1b479ede04f`。
-- Raw P2 修复提交：`4e6eeff`；PR #18 bounded archive/disk 修复同步：`fc40031`；随后同步 PR #18 Web 回归 head `9473365`、`c3ec4ba`，当前 PR #19 head 为 `69bb7d6`。
+- Raw P2 修复提交：`4e6eeff`；PR #18 bounded archive/disk 修复同步：`fc40031`；随后同步 PR #18 Web 回归 head `9473365`、`c3ec4ba`，当前 PR #19 head 为 `f417f4e`。
 - `PreserveOpenAsync()` 关闭后，Append、H3C Append、Flush、Seal 均拒绝；Flush 失败会保留 `.open` 并显式传播异常。
 - 已验证 Catalog 登记失败后的仅 Catalog 重试、重复 Seal、并发 Seal、Preserve/Seal 竞争和 Raw 字节不变。
-- PR #19 与 PR #18 的每次同步均使用 `--no-commit --no-ff`；最新同步无未解决文件冲突，PR #18 bounded ZIP、磁盘准入、取消和清理测试均保留。
+- PR #19 与 PR #18 的每次同步均使用 `--no-commit --no-ff`；最新同步无未解决文件冲突，PR #18 bounded ZIP、磁盘准入、取消和清理测试均保留。当前 head `f417f4e` 的 Ubuntu/Windows CI 已通过（run `40107457863`）。
 
 ### 阶段 B：PR #5 与最新 PR #1
 
@@ -182,7 +182,7 @@ PR18_CI=Ubuntu PASS; Windows run after latest auth cleanup; review threads resol
 PR18_REVIEW_STATUS=Codex review clean on bounded queue/disk admission; real ZIP64/Windows GUI/LAN pending
 
 PR19_HEAD_BEFORE=f4cbd45d7cdba30962dd695b0b54c1b479ede04f
-PR19_HEAD_AFTER=69bb7d6294ee364e1146f94ec9b620d40fb8d88e
+PR19_HEAD_AFTER=f417f4eb8d3dff8c2da390e97537c8366374a8b8
 PR19_P2_ROOT_CAUSE=Append/Flush/Seal accepted operations after PreserveOpenAsync closed the stream
 PR19_P2_FIX_SUMMARY=Explicit Raw state machine, serialized operation gate, preserved-open failure propagation, retry-only Catalog registration
 APPEND_AFTER_CLOSED_REJECTED=PASS
@@ -199,8 +199,9 @@ PR19_CONFLICTS_RESOLVED=YES
 PR19_RAW_REGRESSION=PASS
 PR19_G1_REGRESSION=PASS
 PR19_G2_REGRESSION=PASS in existing harness; no real device
-PR19_WEB_PR2_REGRESSION=PASS locally and in GitHub run 40107064393
-PR19_REVIEW_RECONFIRMED=PENDING on latest 69bb7d6
+PR19_WEB_PR2_REGRESSION=PASS locally and in GitHub run 40107457863
+PR19_GITHUB_CI=Ubuntu PASS; Windows PASS (run 40107457863)
+PR19_REVIEW_RECONFIRMED=PENDING on latest f417f4e
 PR19_P2_THREAD_RESOLVED=NO (thread is outdated but deliberately unresolved pending latest review)
 
 PR5_HEAD_BEFORE=6a8906a235e920078790b6ac4eeded02bcaf52d1
@@ -235,6 +236,6 @@ PRODUCTION_DATA_MUTATION=NO
 BLOCKING_P0_COUNT=0 in tested worktrees
 BLOCKING_P1_COUNT=PR5 review pending; downstream stale; PR17 TLS/LAN and other active stack findings remain
 OPEN_P2_COUNT=PR19 Raw P2 unresolved pending latest review; other child review threads unchanged
-NEXT_RECOMMENDED_ACTION=Review PR5 323aca1 and PR19 69bb7d6 independently; refresh PR6 only after PR5 approval
+NEXT_RECOMMENDED_ACTION=Review PR5 323aca1 and PR19 f417f4e independently; refresh PR6 only after PR5 approval
 FINAL_STATUS=CI_VERIFIED_REVIEW_PENDING
 ```
