@@ -32,6 +32,7 @@ internal sealed record FileListResult(
     int Total,
     bool HasMore);
 internal sealed record ArchiveSelection(string RootId, IReadOnlyList<string> Paths);
+internal sealed record ArchiveRequest(IReadOnlyList<ArchiveSelection> Selections);
 internal sealed record ArchiveJobSnapshot(
     string Id,
     string State,
