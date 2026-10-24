@@ -127,6 +127,9 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
+        await VerifiesRawPublishFailureIsRetryable();
+        await VerifiesConcurrentRawSealIsSerialized();
+        VerifiesCatalogRegistrationRejectsMetadataConflict();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
         await PersistsH3cTaskOutputAsVerifiedRaw();
         await ReconcilesLegacyWindowsRawPathAliases();
@@ -148,6 +151,86 @@ internal static class SchedulerTests
         await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
+    }
+
+    private static async Task VerifiesRawPublishFailureIsRetryable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            await writer.AppendAsync(new SyslogPacket(7100, "127.0.0.1", 5514, new byte[] { 0, 0xff, 0x0d, 0x0a }));
+            using (var db = OpenCatalog(root))
+            using (var trigger = db.CreateCommand())
+            {
+                trigger.CommandText = "CREATE TRIGGER fail_raw_seal BEFORE INSERT ON raw_segments BEGIN SELECT RAISE(ABORT,'injected seal failure'); END";
+                trigger.ExecuteNonQuery();
+            }
+
+            AssertThrows<SqliteException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            var published = Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories);
+            Assert(published.Length == 1 && !Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Any(),
+                "a Catalog failure after publish must retain one final Raw file and no stale .open file");
+            var rawBeforeRetry = File.ReadAllBytes(published[0]);
+            using (var db = OpenCatalog(root))
+            using (var drop = db.CreateCommand())
+            {
+                drop.CommandText = "DROP TRIGGER fail_raw_seal";
+                drop.ExecuteNonQuery();
+            }
+            await writer.SealAsync();
+            await writer.SealAsync();
+            Assert(rawBeforeRetry.SequenceEqual(File.ReadAllBytes(published[0])),
+                "retry after Catalog failure must not rewrite published Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 1, "retry after Catalog failure must create one finalized Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesConcurrentRawSealIsSerialized()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-concurrent-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            for (var index = 0; index < 32; index++)
+                await writer.AppendAsync(new SyslogPacket(7200 + index, "127.0.0.1", 5514, new byte[index % 31 + 1]));
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => writer.SealAsync()));
+            Assert(Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories).Length == 1,
+                "concurrent SealAsync calls must publish exactly one Raw segment");
+            Assert(catalog.GetRawCounts().Finalized == 1, "concurrent SealAsync calls must create one Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static void VerifiesCatalogRegistrationRejectsMetadataConflict()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-catalog-conflict-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            const string relative = "raw/syslog/catalog-conflict.ndjson";
+            var sha = new string('a', 64);
+            catalog.RegisterFinalizedSegment(relative, 1, 7300, 7300, sha, 42);
+            AssertThrows<InvalidOperationException>(() => catalog.RegisterFinalizedSegment(relative, 2, 7300, 7300, sha, 43));
+            using var db = OpenCatalog(root);
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT record_count,byte_count,sha256,state FROM raw_segments WHERE relative_path=$path";
+            command.Parameters.AddWithValue("$path", relative);
+            using var reader = command.ExecuteReader();
+            Assert(reader.Read() && reader.GetInt64(0) == 1 && reader.GetInt64(1) == 42 &&
+                   reader.GetString(2) == sha && reader.GetString(3) == "FINALIZED",
+                "a conflicting registration must preserve the original Catalog evidence");
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()
