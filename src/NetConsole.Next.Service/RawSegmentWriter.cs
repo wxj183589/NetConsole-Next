@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Runtime.ExceptionServices;
 
 namespace NetConsole.Next.Service;
 
@@ -24,6 +25,14 @@ internal sealed class RawSegmentWriterFactory : IRawSegmentWriterFactory
 // Append-only P0 raw writer. Roll at 4MiB, seal before indexing; retain files on catalog errors.
 internal sealed class RawSegmentWriter
 {
+    private enum SegmentState
+    {
+        Open,
+        PreservedIncomplete,
+        FilePublished,
+        CatalogRegistered
+    }
+
     private readonly Catalog _catalog;
     private readonly string _openPath;
     private readonly string _relativePath;
@@ -37,7 +46,8 @@ internal sealed class RawSegmentWriter
     private long _last, _records, _bytes;
     private string? _checksum;
     private long? _publishedBytes;
-    private bool _filePublished, _catalogRegistered, _closed;
+    private SegmentState _state = SegmentState.Open;
+    private bool _streamDisposed;
 
     public long Bytes => _bytes;
     public string RelativePath => _relativePath;
@@ -82,7 +92,7 @@ internal sealed class RawSegmentWriter
         await _operationGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_filePublished) throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
+            EnsureOpenForAppend();
             _jsonBytes.Clear();
             using (var json = new Utf8JsonWriter(_jsonBytes))
             {
@@ -116,7 +126,8 @@ internal sealed class RawSegmentWriter
             if (captureStatus is not ("COMPLETE" or "PARTIAL")) throw new ArgumentException("H3C capture status is invalid.", nameof(captureStatus));
             if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl))
                 throw new ArgumentException("H3C host is invalid.", nameof(host));
-            if (_filePublished || _records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
+            EnsureOpenForAppend();
+            if (_records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
             _taskRunId = taskRunId;
             var outputBytes = Encoding.UTF8.GetBytes(output);
             if (outputBytes.Length > H3cRawOutput.MaximumBytes)
@@ -159,7 +170,9 @@ internal sealed class RawSegmentWriter
 
     private async Task FlushCoreAsync()
     {
-        if (_closed || _filePublished) return;
+        if (_state is SegmentState.FilePublished or SegmentState.CatalogRegistered) return;
+        if (_state == SegmentState.PreservedIncomplete)
+            throw new InvalidOperationException("A preserved incomplete Raw segment cannot be flushed.");
         var started = Stopwatch.GetTimestamp();
         if (_stagedBytes.Length > 0)
         {
@@ -179,12 +192,21 @@ internal sealed class RawSegmentWriter
         await _operationGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_closed || _filePublished) return;
+            if (_state is SegmentState.PreservedIncomplete or SegmentState.FilePublished or SegmentState.CatalogRegistered)
+                return;
+
+            Exception? flushFailure = null;
             try { await FlushCoreAsync().ConfigureAwait(false); }
-            catch (IOException) { }
-            try { await _stream.DisposeAsync().ConfigureAwait(false); }
-            catch (IOException) { }
-            finally { _closed = true; }
+            catch (Exception ex) { flushFailure = ex; }
+            finally
+            {
+                try { await DisposeStreamAsync().ConfigureAwait(false); }
+                catch (Exception ex) { flushFailure ??= ex; }
+                _state = SegmentState.PreservedIncomplete;
+            }
+
+            if (flushFailure is not null)
+                ExceptionDispatchInfo.Capture(flushFailure).Throw();
         }
         finally { _operationGate.Release(); }
     }
@@ -194,22 +216,21 @@ internal sealed class RawSegmentWriter
         await _operationGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_catalogRegistered) return;
+            if (_state == SegmentState.CatalogRegistered) return;
+            if (_state == SegmentState.PreservedIncomplete)
+                throw new InvalidOperationException("A preserved incomplete Raw segment cannot be sealed.");
             var sealStarted = Stopwatch.GetTimestamp();
-            if (!_filePublished)
+            if (_state == SegmentState.Open)
             {
                 await FlushCoreAsync().ConfigureAwait(false);
-                if (!_closed)
-                {
-                    await _stream.DisposeAsync().ConfigureAwait(false);
-                    _closed = true;
-                }
+                await DisposeStreamAsync().ConfigureAwait(false);
+                _state = SegmentState.PreservedIncomplete;
                 using (var sha = SHA256.Create())
                 using (var input = File.OpenRead(_openPath))
                     _checksum ??= Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
                 Sha256 = _checksum;
                 File.Move(_openPath, PublishedPath);
-                _filePublished = true;
+                _state = SegmentState.FilePublished;
             }
 
             _publishedBytes ??= new FileInfo(PublishedPath).Length;
@@ -220,9 +241,22 @@ internal sealed class RawSegmentWriter
                 _sourceId, _taskRunId);
             LastCatalogWriteDurationMs = Stopwatch.GetElapsedTime(catalogStarted).TotalMilliseconds;
             LastSealDurationMs = Stopwatch.GetElapsedTime(sealStarted).TotalMilliseconds;
-            _catalogRegistered = true;
+            _state = SegmentState.CatalogRegistered;
         }
         finally { _operationGate.Release(); }
+    }
+
+    private void EnsureOpenForAppend()
+    {
+        if (_state != SegmentState.Open)
+            throw new InvalidOperationException($"Raw segment is not writable in state {_state}.");
+    }
+
+    private async ValueTask DisposeStreamAsync()
+    {
+        if (_streamDisposed) return;
+        _streamDisposed = true;
+        await _stream.DisposeAsync().ConfigureAwait(false);
     }
 
     private string PublishedPath => _openPath[..^".open".Length] + ".ndjson";

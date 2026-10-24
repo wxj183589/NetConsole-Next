@@ -128,6 +128,7 @@ internal static class SchedulerTests
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
+        await VerifiesPreservedRawRejectsFurtherOperations();
         await VerifiesConcurrentRawSealIsSerialized();
         VerifiesCatalogRegistrationRejectsMetadataConflict();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
@@ -205,6 +206,42 @@ internal static class SchedulerTests
             Assert(Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories).Length == 1,
                 "concurrent SealAsync calls must publish exactly one Raw segment");
             Assert(catalog.GetRawCounts().Finalized == 1, "concurrent SealAsync calls must create one Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesPreservedRawRejectsFurtherOperations()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-preserved-state-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriter(catalog, path => new FlushFailureStream(
+                new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)));
+            await writer.AppendAsync(new SyslogPacket(7250, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("preserve-state")));
+            AssertThrows<IOException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<IOException>(() => writer.PreserveOpenAsync().GetAwaiter().GetResult());
+
+            var openPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedBytes = File.ReadAllBytes(openPath);
+            Assert(preservedBytes.Length > 0, "a failed flush must retain bytes already written to the .open file");
+            AssertThrows<InvalidOperationException>(() => writer.AppendAsync(
+                new SyslogPacket(7251, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("must-reject")))
+                .GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedBytes.SequenceEqual(File.ReadAllBytes(openPath)),
+                "operations after PreserveOpenAsync must not change the retained Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 0,
+                "a preserved incomplete segment must not create a FINALIZED Catalog row");
+
+            var recovery = catalog.RecoverRawSegments();
+            Assert(recovery.RecoveredOpenFiles == 1 && recovery.FailedFiles == 0,
+                $"G1 recovery should reconcile the preserved .open file: {recovery}");
+            Assert(catalog.GetRawCounts().Incomplete == 1 && catalog.GetRawCounts().Finalized == 0,
+                "recovered preserved content must remain INCOMPLETE");
         }
         finally { await DeleteTestDirectoryWithRetryAsync(root); }
     }
@@ -583,6 +620,15 @@ internal static class SchedulerTests
                 output, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE");
             await openWriter.FlushAsync();
             await openWriter.PreserveOpenAsync();
+            var preservedH3cPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedH3cBytes = File.ReadAllBytes(preservedH3cPath);
+            AssertThrows<InvalidOperationException>(() => openWriter.AppendH3cCommand(profileId, openRunId,
+                "192.0.2.10", H3cCommandPolicy.DisplayVersion, output,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE"));
+            AssertThrows<InvalidOperationException>(() => openWriter.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => openWriter.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedH3cBytes.SequenceEqual(File.ReadAllBytes(preservedH3cPath)),
+                "H3C Append/Flush/Seal after PreserveOpenAsync must not mutate the retained Raw output");
             var recovered = new Catalog(settings);
             recovered.Initialize();
             var recovery = recovered.RecoverRawSegments();
@@ -2019,6 +2065,36 @@ internal static class SchedulerTests
             await inner.WriteAsync(buffer, cancellationToken);
             _written += buffer.Length;
         }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            GC.SuppressFinalize(this);
+        }
+    }
+
+    private sealed class FlushFailureStream(Stream inner) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() => throw new IOException("deterministic flush failure");
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new IOException("deterministic flush failure"));
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(buffer, cancellationToken);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            inner.WriteAsync(buffer, offset, count, cancellationToken);
         protected override void Dispose(bool disposing)
         {
             if (disposing) inner.Dispose();
