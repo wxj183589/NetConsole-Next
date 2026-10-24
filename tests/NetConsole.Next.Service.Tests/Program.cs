@@ -144,10 +144,64 @@ internal static class SchedulerTests
         VerifiesRawPermissionRevocationIsVisible();
         await VerifiesCaptureDiskFullRetainsPartialRawAndFaults();
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
+        VerifiesArchiveResourceBoundariesAndAdmissionRollback();
         VerifiesRollingLogSizeAndRetention();
         await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
+    }
+
+    private static void VerifiesArchiveResourceBoundariesAndAdmissionRollback()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMaxFileEntriesPerJob = 2,
+                ArchiveMaxDirectoryDepth = 1, ArchiveMaxMetadataEntriesPerJob = 16,
+                ArchiveMaxMetadataBytesPerJob = 16 * 512, ArchiveMaxQueuedJobs = 1,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            Directory.CreateDirectory(Path.Combine(raw, "deep", "level", "too-deep"));
+            File.WriteAllText(Path.Combine(raw, "deep", "level", "too-deep", "value.txt"), "value");
+            File.WriteAllText(Path.Combine(raw, "one.txt"), "one");
+            File.WriteAllText(Path.Combine(raw, "two.txt"), "two");
+            File.WriteAllText(Path.Combine(raw, "three.txt"), "three");
+            var files = new FileManagerService(settings);
+            var identity = new WebUserIdentity("admin", "admin", "ADMIN", "session-a");
+            AssertThrows<ArchiveRejectedException>(() => files.Expand(
+                new ArchiveSelection("raw", ["deep"]), new ArchiveExpansionBudget(settings),
+                new HashSet<string>(StringComparer.Ordinal), CancellationToken.None));
+            AssertThrows<ArchiveRejectedException>(() => files.Expand(
+                new ArchiveSelection("raw", [""]), new ArchiveExpansionBudget(settings),
+                new HashSet<string>(StringComparer.Ordinal), CancellationToken.None));
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                AssertThrows<OperationCanceledException>(() => files.Expand(
+                    new ArchiveSelection("raw", ["deep"]), new ArchiveExpansionBudget(settings),
+                    new HashSet<string>(StringComparer.Ordinal), cancelled.Token));
+            }
+
+            var archive = new FileArchiveService(files, settings);
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["one.txt"])]);
+            var first = archive.Create(request, identity);
+            AssertThrows<ArchiveRejectedException>(() => archive.Create(request, identity));
+            var other = archive.Create(request, new WebUserIdentity("other", "other", "ADMIN", "session-b"));
+            AssertThrows<ArchiveRejectedException>(() => archive.Create(request,
+                new WebUserIdentity("third", "third", "ADMIN", "session-c")));
+            Assert(archive.Cancel(first.Id, identity), "queued archive cancellation should be accepted");
+            Assert(archive.Cancel(first.Id, identity), "queued archive cancellation should be idempotent");
+            var afterCancel = archive.Create(request, identity);
+            Assert(afterCancel.State == "QUEUED", "a cancelled queued job must release its admission slot");
+            archive.Cancel(afterCancel.Id, identity);
+            archive.Cancel(other.Id, new WebUserIdentity("other", "other", "ADMIN", "session-b"));
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()
