@@ -122,7 +122,7 @@ PR #18 的 `RegisterFinalizedSegment` 原先直接调用恢复用的 `UpsertReco
 - Vitest：2 个测试文件、2 个测试通过。
 - Playwright：未执行成功，`web/playwright.config.ts` 在该 PR18 树中不存在，属于现有测试入口缺失，不在本次 Raw 修复范围内。
 
-本临时分支未推送时，Windows CI 尚未验证这两个新修复；PR #18 原 HEAD 的 Windows CI 绿色不能替代修复后 Windows 验收。
+PR #19 的 GitHub Actions run [40097847169](https://github.com/wxj183589/NetConsole-Next/actions/runs/40097847169) 已验证新分支：Windows job（含 Windows Service SCM）通过；Ubuntu 在 `tests/web_pr2_e2e.py` 的归档任务取消断言失败。失败发生在 Raw、G1 recovery、SSH protocol、Web contract 和构建均通过之后，属于 PR #18 已知 ZIP 队列 P1，不是本次 Raw/Catalog 修复的失败。
 
 ## 7. 当前阻断评审
 
@@ -204,13 +204,13 @@ G2_TESTS=PASS in existing PR18 harness; no real device
 WEB_PR1_TESTS=typecheck/build/Vitest PASS; Playwright config missing
 WEB_PR2_TESTS=typecheck/build/Vitest PASS; archive P1 unresolved
 
-LINUX_BUILD=PASS (local Docker; CI branch checks PASS)
-WINDOWS_BUILD=PASS for official PR heads; PATCHED_TEMP_BRANCH=NOT_RUN_ON_WINDOWS_CI
-GITHUB_CI=All listed PR branch checks green; no combined PR1-to-Web run exists
+LINUX_BUILD=PASS (build/harness/smoke pass; full PR19 Ubuntu job blocked by existing web_pr2_e2e P1)
+WINDOWS_BUILD=PASS (PR19 run 40097847169, including SCM exercise)
+GITHUB_CI=PR19 Windows PASS; Ubuntu FAIL at known PR18 archive cancellation assertion; no combined PR1-to-Web run exists
 
 FIX_BRANCH=audit/p0-g1-stack-integration
-FIX_COMMITS=e025e99 (local integration fix and audit evidence)
-PUSHED_CHANGES=NO (temporary local integration only)
+FIX_COMMITS=e025e99,8bec041 (Raw/Catalog fix and audit evidence)
+PUSHED_CHANGES=YES (child PR #19; not merged)
 MAIN_CHANGED=NO
 PRS_MERGED=NO
 FORCE_PUSH=NO
@@ -219,5 +219,5 @@ PRODUCTION_DATA_MUTATION=NO
 SAFE_MERGE_ORDER=PR1 approval -> refresh/fix PR5 -> PR6 -> PR7 -> PR8 -> PR9 -> PR10 -> PR11 -> PR12 -> PR13 -> PR14 -> PR15 -> PR16 -> PR17 -> PR18
 REQUIRED_MANUAL_APPROVAL=PR1 merge and every subsequent PR merge; Windows Service/legacy OS/real devices remain manual
 NEXT_ACTION=Review local fix; decide whether to push as a child fix PR for PR18, then update PR5 from PR1
-FINAL_STATUS=INTEGRATION_FIX_REQUIRED
+FINAL_STATUS=BLOCKED
 ```
