@@ -209,7 +209,7 @@ WINDOWS_BUILD=PASS for official PR heads; PATCHED_TEMP_BRANCH=NOT_RUN_ON_WINDOWS
 GITHUB_CI=All listed PR branch checks green; no combined PR1-to-Web run exists
 
 FIX_BRANCH=audit/p0-g1-stack-integration
-FIX_COMMITS=PENDING_COMMIT
+FIX_COMMITS=e025e99 (local integration fix and audit evidence)
 PUSHED_CHANGES=NO (temporary local integration only)
 MAIN_CHANGED=NO
 PRS_MERGED=NO
