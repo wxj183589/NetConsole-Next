@@ -150,6 +150,7 @@ internal static class SchedulerTests
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesArchiveResourceBoundariesAndAdmissionRollback();
         await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveLifecycleCleanupAsync();
         VerifiesRollingLogSizeAndRetention();
         await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
@@ -436,6 +437,71 @@ internal static class SchedulerTests
             finally { await running.StopAsync(CancellationToken.None); }
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesArchiveLifecycleCleanupAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        FileArchiveService? service = null;
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18773, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = 1,
+                ArchiveCleanupIntervalSeconds = 1, ArchiveMaxRetainedTerminalJobs = 1,
+                ArchiveMaxActiveJobsPerUser = 2, ArchiveMaxQueuedJobs = 2,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            var temp = Path.Combine(root, "archive-tmp");
+            Directory.CreateDirectory(raw);
+            Directory.CreateDirectory(temp);
+            File.WriteAllText(Path.Combine(raw, "lifecycle.txt"), "lifecycle");
+            var startupOrphan = Path.Combine(temp, "startup-orphan.zip.part");
+            File.WriteAllText(startupOrphan, "orphan");
+            File.SetLastWriteTimeUtc(startupOrphan, DateTime.UtcNow.AddDays(-2));
+
+            var settingsFiles = new FileManagerService(settings);
+            var disk = new FakeArchiveDiskSpaceProvider(1024);
+            service = new FileArchiveService(settingsFiles, settings, disk);
+            var identity = new WebUserIdentity("admin", "admin", "ADMIN", "lifecycle");
+            await service.StartAsync(CancellationToken.None);
+            await WaitUntil(() => !File.Exists(startupOrphan), TimeSpan.FromSeconds(3));
+            Console.WriteLine("STARTUP_ORPHAN_CLEANUP=PASS");
+
+            var idleOrphan = Path.Combine(temp, "idle-orphan.zip.part");
+            File.WriteAllText(idleOrphan, "orphan");
+            File.SetLastWriteTimeUtc(idleOrphan, DateTime.UtcNow.AddDays(-2));
+            await WaitUntil(() => !File.Exists(idleOrphan), TimeSpan.FromSeconds(5));
+            Console.WriteLine("PERIODIC_CLEANUP_TIME_ELAPSED=PASS");
+            Console.WriteLine("IDLE_CLEANUP_TIME_ELAPSED=PASS");
+
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["lifecycle.txt"])]);
+            var completed = service.Create(request, identity);
+            await WaitUntil(() => service.Get(completed.Id, identity)?.State == "COMPLETED", TimeSpan.FromSeconds(5));
+            var download = service.OpenDownload(completed.Id, identity);
+            Assert(download is not null, "a completed archive must provide a download lease");
+            var trigger = service.Create(request, identity);
+            service.Cancel(trigger.Id, identity);
+            Assert(service.Get(completed.Id, identity) is not null,
+                "maintenance must not remove an archive while its download lease is active");
+            download!.Stream.Dispose();
+            var releaseTrigger = service.Create(request, identity);
+            service.Cancel(releaseTrigger.Id, identity);
+            Assert(service.Get(completed.Id, identity) is null,
+                "maintenance must remove a retained terminal archive after its download lease is released");
+            Console.WriteLine("DOWNLOAD_CLEANUP_RACE=PASS");
+            Console.WriteLine("RETAINED_JOB_LIMIT_EXHAUSTION=PASS");
+            await service.StopAsync(CancellationToken.None);
+            service = null;
+        }
+        finally
+        {
+            if (service is not null) await service.StopAsync(CancellationToken.None);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()

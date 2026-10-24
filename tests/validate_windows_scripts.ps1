@@ -4,6 +4,7 @@ $scripts = @(
     (Join-Path $repository "scripts/install-service.ps1"),
     (Join-Path $repository "scripts/uninstall-service.ps1"),
     (Join-Path $repository "tools/Reset-WebPassword.ps1"),
+    (Join-Path $repository "tools/acceptance/Test-WebPR2-Host.ps1"),
     (Join-Path $repository "tests/windows_service_lifecycle.ps1")
 )
 
