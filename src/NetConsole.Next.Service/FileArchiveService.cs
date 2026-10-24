@@ -73,7 +73,7 @@ internal sealed class FileArchiveService : BackgroundService
                 job = new ArchiveJob(Guid.NewGuid().ToString("N"), owner.UserId, owner.SessionId, files, totalBytes,
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), TempRoot, reservation);
                 _jobs[job.Id] = job;
-                if (!_queue.Writer.TryWrite(job.Id))
+                if (!TryEnqueueLocked(job.Id))
                     throw new ArchiveRejectedException("ARCHIVE_QUEUE_FULL", "The archive queue is full; try again after an existing task completes.", StatusCodes.Status429TooManyRequests);
                 reservation.Enqueued = true;
                 _queuedJobs++;
@@ -270,6 +270,20 @@ internal sealed class FileArchiveService : BackgroundService
             _runningJobs++;
             return true;
         }
+    }
+
+    private bool TryEnqueueLocked(string id)
+    {
+        if (_queue.Writer.TryWrite(id)) return true;
+        var retained = new List<string>();
+        while (_queue.Reader.TryRead(out var queuedId))
+        {
+            if (_jobs.TryGetValue(queuedId, out var queued) && queued.State == "CANCELLED") continue;
+            retained.Add(queuedId);
+        }
+        foreach (var queuedId in retained)
+            if (!_queue.Writer.TryWrite(queuedId)) return false;
+        return _queue.Writer.TryWrite(id);
     }
 
     private void ReleaseReservation(AdmissionReservation reservation)
