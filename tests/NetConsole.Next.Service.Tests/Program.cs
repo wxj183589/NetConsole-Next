@@ -201,6 +201,26 @@ internal static class SchedulerTests
             Assert(afterCancel.State == "QUEUED", "a cancelled queued job must release its admission slot");
             archive.Cancel(afterCancel.Id, identity);
             archive.Cancel(other.Id, new WebUserIdentity("other", "other", "ADMIN", "session-b"));
+
+            var concurrent = new FileArchiveService(files, new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMaxFileEntriesPerJob = 2,
+                ArchiveMaxQueuedJobs = 2, ArchiveMaxActiveJobsPerUser = 1,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            });
+            var accepted = new System.Collections.Concurrent.ConcurrentBag<ArchiveJobSnapshot>();
+            Parallel.For(0, 16, index =>
+            {
+                try
+                {
+                    accepted.Add(concurrent.Create(request,
+                        new WebUserIdentity($"parallel-{index}", $"parallel-{index}", "ADMIN", $"session-{index}")));
+                }
+                catch (ArchiveRejectedException) { }
+            });
+            Assert(accepted.Count > 0 && accepted.Count <= 3 && accepted.Select(job => job.Id).Distinct().Count() == accepted.Count,
+                "simultaneous archive admission must remain bounded and must not duplicate jobs");
         }
         finally { Directory.Delete(root, true); }
     }
