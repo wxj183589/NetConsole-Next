@@ -346,6 +346,22 @@ static async Task WindowsPathAliasAsync()
         catalog.RegisterFinalizedSegment(alias, recovered.RecordCount, 3950, 3950,
             recovered.Sha256, recovered.ByteCount);
         Assert(Rows(root).Count == 1, "case-insensitive RegisterFinalizedSegment must remain idempotent");
+
+        var backslashAlias = alias.Replace('/', '\\');
+        using (var db = OpenDb(root))
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = "UPDATE raw_segments SET relative_path=$alias WHERE relative_path=$original";
+            command.Parameters.AddWithValue("$alias", backslashAlias);
+            command.Parameters.AddWithValue("$original", alias);
+            Assert(command.ExecuteNonQuery() == 1, "Windows backslash alias setup must update one Catalog row");
+        }
+
+        var backslashRecovery = catalog.RecoverRawSegments();
+        Assert(backslashRecovery.FailedFiles == 0, $"backslash path recovery failed: {backslashRecovery}");
+        Assert(Rows(root).Count == 1, "Windows backslash casing must not create a duplicate Catalog row");
+        Assert(Rows(root).Single().RelativePath == backslashAlias,
+            "recovery should preserve the persisted backslash path spelling");
     });
 }
 

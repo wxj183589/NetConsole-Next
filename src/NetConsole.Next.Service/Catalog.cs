@@ -381,7 +381,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         var result = new Dictionary<string, IndexedSegment>(StringComparer.Ordinal);
         while (reader.Read())
         {
-            var storedRelative = reader.GetString(0).Replace('\\', '/');
+            var storedRelative = reader.GetString(0);
             var key = RawPathComparisonKey(storedRelative);
             if (!result.TryAdd(key, new(storedRelative, reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetInt64(2),
                 reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4))))
@@ -444,8 +444,8 @@ internal sealed class Catalog(RuntimeSettings settings)
         var result = new Dictionary<string, RecoveryIntent>(StringComparer.Ordinal);
         while (reader.Read())
         {
-            var source = reader.GetString(0).Replace('\\', '/');
-            var target = reader.GetString(1).Replace('\\', '/');
+            var source = reader.GetString(0);
+            var target = reader.GetString(1);
             var key = RawPathComparisonKey(target);
             if (!result.TryAdd(key, new(source, target,
                 reader.IsDBNull(3) ? null : reader.GetInt64(3),
