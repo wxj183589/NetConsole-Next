@@ -15,6 +15,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("recovery crash after tail repair remains incomplete", RecoveryCrashAfterTailRepairAsync),
     ("recovery catalog failure is retryable", RecoveryCatalogFailureAsync),
     ("Windows path casing does not duplicate Catalog rows", WindowsPathAliasAsync),
+    ("Linux backslash filenames remain distinct", LinuxBackslashFilenameAsync),
     ("empty and binary boundaries", BoundaryAsync),
     ("4MiB segment rolling and unique catalog rows", SegmentRollingAsync)
 };
@@ -362,6 +363,30 @@ static async Task WindowsPathAliasAsync()
         Assert(Rows(root).Count == 1, "Windows backslash casing must not create a duplicate Catalog row");
         Assert(Rows(root).Single().RelativePath == backslashAlias,
             "recovery should preserve the persisted backslash path spelling");
+    });
+}
+
+static async Task LinuxBackslashFilenameAsync()
+{
+    if (OperatingSystem.IsWindows()) return;
+
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var folder = Path.Combine(catalog.RawRoot, "syslog", "distinct");
+        Directory.CreateDirectory(Path.Combine(folder, "a"));
+        const string record = "{\"received_ms\":3951,\"sender_ip\":\"127.0.0.1\",\"sender_port\":5514,\"payload_base64\":\"YQ==\"}\n";
+        var nativePath = Path.Combine(folder, "a", "b.ndjson");
+        var backslashFilename = Path.Combine(folder, "a\\b.ndjson");
+        await File.WriteAllTextAsync(nativePath, record);
+        await File.WriteAllTextAsync(backslashFilename, record);
+
+        var recovery = catalog.RecoverRawSegments();
+        Assert(recovery.FailedFiles == 0, $"Linux backslash filename recovery failed: {recovery}");
+        var rows = Rows(root);
+        Assert(rows.Count == 2, "Linux backslash filename must remain a distinct Catalog identity");
+        Assert(rows.Select(row => row.RelativePath).Distinct(StringComparer.Ordinal).Count() == 2,
+            "Linux native and backslash Raw paths must remain distinct");
     });
 }
 

@@ -267,7 +267,7 @@ internal sealed class Catalog(RuntimeSettings settings)
         if (sha.Length != 64 || !sha.All(Uri.IsHexDigit))
             throw new ArgumentException("Raw segment checksum must be a SHA-256 hex string.", nameof(sha));
 
-        var path = relative.Replace('\\', '/');
+        var path = OperatingSystem.IsWindows() ? relative.Replace('\\', '/') : relative;
         using var db = Open();
         using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable, deferred: false);
         using (var existing = db.CreateCommand())
@@ -416,12 +416,16 @@ internal sealed class Catalog(RuntimeSettings settings)
         }
     }
 
-    private string RelativeRawPath(string path) => Path.GetRelativePath(settings.DataRoot, path).Replace('\\', '/');
+    private string RelativeRawPath(string path)
+    {
+        var relative = Path.GetRelativePath(settings.DataRoot, path);
+        return OperatingSystem.IsWindows() ? relative.Replace('\\', '/') : relative;
+    }
 
     private static string RawPathComparisonKey(string relativePath)
     {
-        var normalized = relativePath.Replace('\\', '/');
-        return OperatingSystem.IsWindows() ? normalized.ToUpperInvariant() : normalized;
+        if (!OperatingSystem.IsWindows()) return relativePath;
+        return relativePath.Replace('\\', '/').ToUpperInvariant();
     }
 
     private void MarkMissing(string relative)
