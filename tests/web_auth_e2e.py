@@ -5,6 +5,7 @@ import json
 import os
 import copy
 import signal
+from contextlib import closing
 from pathlib import Path
 import socket
 import sqlite3
@@ -138,13 +139,13 @@ def main():
             assert stale_logout.request("/api/auth/me")[0] == 401
             assert stale_logout.request("/api/auth/csrf")[0] == 401
 
-            with sqlite3.connect(root / "catalog.db") as db:
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
                 row = db.execute("SELECT length(password_salt), length(password_hash), password_iterations FROM web_users WHERE username='admin'").fetchone()
                 assert row and row[0] >= 16 and row[1] == 32 and row[2] >= 200000
 
             # Force expiry in the isolated test database to verify the 401 boundary without waiting 12 hours.
             expired = Client(base); expired.login("superadmin", "superadmin")
-            with sqlite3.connect(root / "catalog.db") as db:
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
                 db.execute("UPDATE web_sessions SET expires_ms=0 WHERE token_hash IS NOT NULL")
                 db.commit()
             assert expired.request("/api/auth/me")[0] == 401
