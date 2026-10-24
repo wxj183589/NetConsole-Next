@@ -4,6 +4,8 @@ import http.cookiejar
 import json
 import os
 import copy
+import signal
+from contextlib import closing
 from pathlib import Path
 import socket
 import sqlite3
@@ -75,8 +77,10 @@ def main():
         port = free_port()
         env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root), NETCONSOLE_NEXT_WEB_PORT=str(port), NETCONSOLE_NEXT_SYSLOG_PORT="0")
         env["NETCONSOLE_NEXT_H3C_ENABLED"] = "1"
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                   creationflags=creationflags)
         base = f"http://127.0.0.1:{port}"
         try:
             health = Client(base)
@@ -135,13 +139,13 @@ def main():
             assert stale_logout.request("/api/auth/me")[0] == 401
             assert stale_logout.request("/api/auth/csrf")[0] == 401
 
-            with sqlite3.connect(root / "catalog.db") as db:
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
                 row = db.execute("SELECT length(password_salt), length(password_hash), password_iterations FROM web_users WHERE username='admin'").fetchone()
                 assert row and row[0] >= 16 and row[1] == 32 and row[2] >= 200000
 
             # Force expiry in the isolated test database to verify the 401 boundary without waiting 12 hours.
             expired = Client(base); expired.login("superadmin", "superadmin")
-            with sqlite3.connect(root / "catalog.db") as db:
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
                 db.execute("UPDATE web_sessions SET expires_ms=0 WHERE token_hash IS NOT NULL")
                 db.commit()
             assert expired.request("/api/auth/me")[0] == 401
@@ -161,7 +165,14 @@ def main():
             print("PASS: admin/superadmin login, refresh-safe CSRF, independent sessions, logout isolation and hashed passwords")
         finally:
             if service.poll() is None:
-                service.terminate(); service.wait(timeout=15)
+                if os.name == "nt":
+                    service.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    service.terminate()
+                try:
+                    service.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    service.kill(); service.wait(timeout=10)
             if service.returncode and service.stdout:
                 print(service.stdout.read()[-4000:])
 

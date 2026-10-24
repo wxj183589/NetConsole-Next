@@ -69,6 +69,61 @@ export interface TaskRun {
   parseStatus?: string | null
 }
 
+export interface HostTool {
+  id: string
+  displayName: string
+  product: string
+  executablePath?: string | null
+  status: string
+  configured: boolean
+  isWindowsTool: boolean
+  detail?: string | null
+}
+
+export interface FileRoot {
+  id: string
+  label: string
+  path: string
+  exists: boolean
+}
+
+export interface FileEntry {
+  name: string
+  relativePath: string
+  kind: 'FILE' | 'DIRECTORY'
+  size: number
+  modifiedMs: number
+  canDownload: boolean
+  canArchive: boolean
+}
+
+export interface FileListResult {
+  rootId: string
+  relativePath: string
+  items: FileEntry[]
+  page: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+}
+
+export interface ArchiveJob {
+  id: string
+  state: string
+  selectedCount: number
+  processedCount: number
+  processedBytes: number
+  totalBytes?: number | null
+  current?: string | null
+  errorCode?: string | null
+  error?: string | null
+  createdMs: number
+  completedMs?: number | null
+  downloadName?: string | null
+  canDownload: boolean
+  canCancel: boolean
+}
+
 export class ApiRequestError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message)
@@ -97,7 +152,10 @@ async function request<T>(path: string, init: RequestInit = {}, allowErrorBody =
     const body = await response.text()
     if (allowErrorBody) throw new ApiRequestError(response.status, body || response.statusText)
     let message = body || response.statusText
-    try { message = JSON.parse(body).error || message } catch { /* plain text */ }
+    try {
+      const parsed = JSON.parse(body)
+      message = parsed.detail ? `${parsed.error || response.statusText}: ${parsed.detail}` : parsed.error || message
+    } catch { /* plain text */ }
     throw new ApiRequestError(response.status, message)
   }
   if (response.status === 204) return undefined as T
@@ -133,6 +191,41 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export function getHostTools(): Promise<HostTool[]> { return request('/api/system/host-tools') }
+export function updateHostTool(id: string, executablePath: string | null): Promise<HostTool> {
+  return request('/api/system/host-tools/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ executablePath }) })
+}
+export function launchHostTool(toolId: string, deviceId: string): Promise<{ status: string; detail?: string | null; toolId: string; deviceId: string }> {
+  return request('/api/system/host-tools/' + encodeURIComponent(toolId) + '/launch', { method: 'POST', body: JSON.stringify({ deviceId }) })
+}
+export function openHostDirectory(rootId: string, relativePath: string): Promise<{ status: string; detail?: string | null }> {
+  return request('/api/system/host-tools/open-directory', { method: 'POST', body: JSON.stringify({ rootId, relativePath }) })
+}
+export function getFileRoots(): Promise<FileRoot[]> { return request('/api/system/files/roots') }
+export function listFiles(params: { rootId: string; path?: string; search?: string; sort?: string; direction?: string; page?: number; pageSize?: number }): Promise<FileListResult> {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)) })
+  return request('/api/system/files/list?' + query.toString())
+}
+export async function downloadFile(rootId: string, path: string): Promise<Blob> {
+  const response = await fetch('/api/system/files/download?' + new URLSearchParams({ rootId, path }), { credentials: 'include' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
+}
+export function createArchiveJob(selections: Array<{ rootId: string; paths: string[] }>): Promise<ArchiveJob> {
+  return request('/api/system/files/archive-jobs', { method: 'POST', body: JSON.stringify({ selections }) })
+}
+export function getArchiveJob(id: string): Promise<ArchiveJob> {
+  return request('/api/system/files/archive-jobs/' + encodeURIComponent(id))
+}
+export function cancelArchiveJob(id: string): Promise<void> {
+  return request('/api/system/files/archive-jobs/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })
+}
+export async function downloadArchive(id: string): Promise<Blob> {
+  const response = await fetch('/api/system/files/archive-jobs/' + encodeURIComponent(id) + '/download', { credentials: 'include' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
+}
 
 export function createH3cProfile(payload: Record<string, unknown>): Promise<TerminalDevice> {
   return request('/api/system/h3c/profiles', { method: 'POST', body: JSON.stringify(payload) })

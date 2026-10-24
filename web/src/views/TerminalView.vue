@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -18,6 +19,7 @@ interface TerminalTab {
 interface ReplayEntry { atMs: number; direction: string; dataB64: string }
 
 const devices = ref<TerminalDevice[]>([])
+const route = useRoute()
 const sessions = ref<TerminalSession[]>([])
 const tabs = reactive<TerminalTab[]>([])
 const activeId = ref('')
@@ -108,7 +110,7 @@ function playReplay(): void { stopReplay(); if (replayIndex.value >= replayEntri
 async function exportSession(format: string): Promise<void> { if (!historySession.value) return; try { const blob = await downloadExport(historySession.value.id, format); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${historySession.value.id}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href) } catch { ElMessage.error('导出失败') } }
 function closeHistory(): void { stopReplay(); historyDialog.value = false }
 async function refreshAll(): Promise<void> { loading.value = true; try { devices.value = await getTerminalDevices(); await refreshHistory() } catch { ElMessage.error('终端能力读取失败') } finally { loading.value = false } }
-onMounted(() => refreshAll())
+onMounted(async () => { await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) await openDevice(device, device.supportedProtocols.includes('SSH') ? 'SSH' : device.supportedProtocols[0] || 'AUTO') })
 onBeforeUnmount(() => { stopReplay(); tabs.forEach((tab) => { tab.socket?.close(); tab.terminal?.dispose() }) })
 </script>
 
