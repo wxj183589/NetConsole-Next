@@ -32,6 +32,7 @@ builder.Services.AddSingleton<DesktopHelperIpc>();
 builder.Services.AddSingleton<HostToolRegistry>();
 builder.Services.AddSingleton<HostToolLaunchService>();
 builder.Services.AddSingleton<FileManagerService>();
+builder.Services.AddSingleton<IArchiveDiskSpaceProvider, DriveInfoArchiveDiskSpaceProvider>();
 builder.Services.AddSingleton<FileArchiveService>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(

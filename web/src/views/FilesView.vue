@@ -56,6 +56,8 @@ async function archiveSelection(): Promise<void> {
       ? (cause.message.includes('ARCHIVE_USER_LIMIT') ? '当前账号的文件打包任务已达上限，请等待已有任务完成。' : '当前文件打包任务较多，请等待已有任务完成后重试。')
       : cause instanceof ApiRequestError && cause.message.includes('ARCHIVE_DISK_SPACE_LOW')
         ? '宿主机临时磁盘空间不足，暂时无法打包。'
+        : cause instanceof ApiRequestError && cause.message.includes('ARCHIVE_STORAGE_UNAVAILABLE')
+          ? '宿主机归档临时存储不可用，暂时无法打包。'
         : cause instanceof Error ? cause.message : '归档任务创建失败'
     ElMessage.error(message)
   } finally { creatingArchive.value = false }

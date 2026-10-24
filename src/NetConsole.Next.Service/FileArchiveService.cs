@@ -13,6 +13,7 @@ internal sealed class FileArchiveService : BackgroundService
 
     private readonly FileManagerService _files;
     private readonly RuntimeSettings _settings;
+    private readonly IArchiveDiskSpaceProvider _diskSpace;
     private readonly Channel<string> _queue;
     private readonly ConcurrentDictionary<string, ArchiveJob> _jobs = new(StringComparer.Ordinal);
     private readonly object _admissionGate = new();
@@ -23,9 +24,13 @@ internal sealed class FileArchiveService : BackgroundService
     private long _reservedInputBytes;
 
     public FileArchiveService(FileManagerService files, RuntimeSettings settings)
+        : this(files, settings, new DriveInfoArchiveDiskSpaceProvider()) { }
+
+    public FileArchiveService(FileManagerService files, RuntimeSettings settings, IArchiveDiskSpaceProvider diskSpace)
     {
         _files = files;
         _settings = settings;
+        _diskSpace = diskSpace;
         _queue = Channel.CreateBounded<string>(new BoundedChannelOptions(settings.ArchiveMaxQueuedJobs)
         {
             SingleReader = true,
@@ -45,6 +50,10 @@ internal sealed class FileArchiveService : BackgroundService
             if (request.Selections is null || request.Selections.Count == 0 || request.Selections.Count > 50)
                 throw new ArchiveRejectedException("ARCHIVE_RESOURCE_LIMIT", "The archive request contains too many selections.", StatusCodes.Status413PayloadTooLarge);
 
+            // This is an admission check against the volume that owns archive-tmp.
+            // It must happen before Resolve/Expand can touch the selected tree. The
+            // worker repeats the check because this is only a TOCTOU admission gate.
+            EnsureAvailableDisk();
             var budget = new ArchiveExpansionBudget(_settings);
             var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
             var seenFiles = new HashSet<string>(comparer);
@@ -166,7 +175,7 @@ internal sealed class FileArchiveService : BackgroundService
             EnsureAvailableDisk();
             await using (var file = new FileStream(partPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 CopyBufferBytes, FileOptions.Asynchronous | FileOptions.SequentialScan))
-            await using (var output = new ArchiveOutputStream(file, _settings.ArchiveMaxTempBytesPerJob, _settings.ArchiveMinFreeDiskBytes))
+            await using (var output = new ArchiveOutputStream(file, _settings.ArchiveMaxTempBytesPerJob, _settings.ArchiveMinFreeDiskBytes, _diskSpace))
             {
                 using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: false);
                 foreach (var item in job.Files)
@@ -383,16 +392,29 @@ internal sealed class FileArchiveService : BackgroundService
 
     private void EnsureAvailableDisk()
     {
+        long? available;
         try
         {
-            var root = Path.GetPathRoot(TempRoot);
-            if (!string.IsNullOrEmpty(root) && new DriveInfo(root).AvailableFreeSpace < _settings.ArchiveMinFreeDiskBytes)
-                throw new ArchiveRejectedException("ARCHIVE_DISK_SPACE_LOW", "The host has insufficient free space for an archive.", StatusCodes.Status503ServiceUnavailable);
+            available = _diskSpace.GetAvailableFreeSpace(TempRoot);
         }
-        catch (DriveNotFoundException) { }
+        catch (Exception) { available = null; }
+        if (!available.HasValue)
+            throw new ArchiveRejectedException("ARCHIVE_STORAGE_UNAVAILABLE", "Archive storage availability could not be verified.", StatusCodes.Status503ServiceUnavailable);
+        if (available.Value < _settings.ArchiveMinFreeDiskBytes)
+            throw new ArchiveRejectedException("ARCHIVE_DISK_SPACE_LOW", "The host has insufficient free space for an archive.", StatusCodes.Status503ServiceUnavailable);
     }
 
     private string TempRoot => Path.Combine(_settings.DataRoot, "archive-tmp");
+
+    internal (int ActiveJobs, int QueuedJobs, int RunningJobs, long ReservedInputBytes, int JobCount) AdmissionState
+    {
+        get
+        {
+            lock (_admissionGate)
+                return (_activeJobs, _queuedJobs, _runningJobs, _reservedInputBytes, _jobs.Count);
+        }
+    }
+
     private static void TryDelete(string? path) { try { if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { } }
 
     private static IReadOnlyList<(ResolvedFile File, string EntryName, long Size)> MakeUniqueEntryNames(
@@ -575,7 +597,7 @@ internal sealed class FileArchiveService : BackgroundService
         public override async ValueTask DisposeAsync() { await inner.DisposeAsync(); ReleaseOnce(); GC.SuppressFinalize(this); }
     }
 
-    private sealed class ArchiveOutputStream(FileStream inner, long maxBytes, long minFreeBytes) : Stream
+    private sealed class ArchiveOutputStream(FileStream inner, long maxBytes, long minFreeBytes, IArchiveDiskSpaceProvider diskSpace) : Stream
     {
         private long _nextDiskCheck;
         private void EnsureCapacity(int count)
@@ -583,16 +605,13 @@ internal sealed class FileArchiveService : BackgroundService
             if (count < 0 || inner.Position > maxBytes - count)
                 throw new ArchiveRejectedException("ARCHIVE_DISK_SPACE_LOW", "The archive temporary-file budget was exceeded.", StatusCodes.Status503ServiceUnavailable);
             if (inner.Position < _nextDiskCheck && inner.Position > 0) return;
-            var root = Path.GetPathRoot(inner.Name);
-            if (!string.IsNullOrEmpty(root))
-            {
-                try
-                {
-                    if (new DriveInfo(root).AvailableFreeSpace < minFreeBytes)
-                        throw new ArchiveRejectedException("ARCHIVE_DISK_SPACE_LOW", "The host has insufficient free space for an archive.", StatusCodes.Status503ServiceUnavailable);
-                }
-                catch (DriveNotFoundException) { }
-            }
+            long? available;
+            try { available = diskSpace.GetAvailableFreeSpace(inner.Name); }
+            catch (Exception) { available = null; }
+            if (!available.HasValue)
+                throw new ArchiveRejectedException("ARCHIVE_STORAGE_UNAVAILABLE", "Archive storage availability could not be verified.", StatusCodes.Status503ServiceUnavailable);
+            if (available.Value < minFreeBytes)
+                throw new ArchiveRejectedException("ARCHIVE_DISK_SPACE_LOW", "The host has insufficient free space for an archive.", StatusCodes.Status503ServiceUnavailable);
             _nextDiskCheck = inner.Position + DiskCheckIntervalBytes;
         }
         public override bool CanRead => false;

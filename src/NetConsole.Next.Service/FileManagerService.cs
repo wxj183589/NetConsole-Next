@@ -7,6 +7,7 @@ internal sealed record ResolvedFile(string RootId, string RelativePath, string F
 internal sealed class FileManagerService
 {
     private readonly RuntimeSettings _settings;
+    private int _expansionCallCount;
     private static readonly FileExtensionContentTypeProvider ContentTypes = new();
     private static readonly (string Id, string Label, string Directory)[] RootDefinitions =
     [
@@ -89,6 +90,7 @@ internal sealed class FileManagerService
         ISet<string> seenFiles,
         CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _expansionCallCount);
         var output = new List<(ResolvedFile, string, long)>();
         var pending = new Stack<(ResolvedFile File, int Depth)>();
         var paths = selection.Paths ?? Array.Empty<string>();
@@ -134,6 +136,8 @@ internal sealed class FileManagerService
 
         return output;
     }
+
+    internal int ExpansionCallCount => Volatile.Read(ref _expansionCallCount);
 
     private static void AddFile(
         ResolvedFile resolved,

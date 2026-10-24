@@ -19,6 +19,8 @@ The default service budget is deliberately finite:
 
 These limits can be lowered or raised within bounded environment-variable ranges. Admission reserves a job slot before directory expansion and reserves input bytes before enqueue. A bounded channel rejects excess requests with `429` and stable codes such as `ARCHIVE_QUEUE_FULL`, `ARCHIVE_USER_LIMIT` and `ARCHIVE_RESOURCE_LIMIT`; rejected requests do not create a job or temporary file.
 
+Before directory expansion, admission checks the available space on the volume containing the service `archive-tmp` directory. The check uses `ArchiveMinFreeDiskBytes`; space below the threshold returns HTTP `503` with `ARCHIVE_DISK_SPACE_LOW`, without scanning, creating a job, creating a temporary file or retaining a reservation. If the volume cannot be identified or its free space cannot be read, admission fails closed with HTTP `503` and `ARCHIVE_STORAGE_UNAVAILABLE`. Space exactly at the threshold is accepted. This is a TOCTOU gate, not a guarantee: the worker repeats the check before writing and during ZIP output, and still enforces the per-job temporary-file limit.
+
 Directory expansion is iterative and cancellable. It counts files, directories and metadata as it walks, rejects reparse points, and fails with an explicit scan/input-change error if a selected path changes. The service never holds the admission lock during disk traversal.
 
 ## ZIP lifecycle and cancellation
@@ -26,3 +28,5 @@ Directory expansion is iterative and cancellable. It counts files, directories a
 Jobs use `QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELLED`. A task cancellation token is linked with the service stop token and is passed into every file read/write. A cancelled job cannot become `COMPLETED`; its `.zip.part` file is removed and its active/input reservation is released. A completed ZIP is renamed from `.zip.part` only after the archive is closed. Downloads use a lease so maintenance cannot remove an actively streamed ZIP.
 
 An independent five-minute maintenance timer removes expired terminal jobs and orphan temporary files even when the queue is idle. Startup repeats orphan cleanup, and service shutdown cancels outstanding work. Cleanup only touches files owned by the archive job directory; Raw, Syslog, SQLite, terminal recordings and published reports are outside its scope. ZIP64 is provided by .NET `ZipArchive` when required; a real multi-gigabyte ZIP64 run remains unexecuted in CI.
+
+Disk-failure tests use an injected `IArchiveDiskSpaceProvider`, so CI can deterministically cover below-threshold, exact-threshold, recovered-space, unavailable-volume and runtime-space-drop paths without filling a runner disk. The runtime failure path removes `.zip.part`, does not publish an incomplete ZIP, and releases the user and aggregate reservations.
