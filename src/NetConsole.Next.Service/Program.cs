@@ -279,19 +279,19 @@ app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.Re
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
 {
-    if (!IsSuperAdmin(context)) return Results.Forbid();
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     try { return Results.Ok(registry.Configure(toolId, request.ExecutablePath, CurrentIdentity(context).Username)); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 app.MapPost("/api/system/host-tools/{toolId}/launch", async (HttpContext context, string toolId, HostToolLaunchRequest request, HostToolLaunchService launcher) =>
 {
-    if (!IsSuperAdmin(context)) return Results.Forbid();
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     var result = await launcher.LaunchAsync(toolId, request.DeviceId, context.RequestAborted);
     return Results.Ok(result);
 });
 app.MapPost("/api/system/host-tools/open-directory", async (HttpContext context, HostDirectoryRequest request, FileManagerService files, DesktopHelperIpc helper) =>
 {
-    if (!IsSuperAdmin(context)) return Results.Forbid();
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     try
     {
         var resolved = files.Resolve(request.RootId, request.RelativePath, true);
