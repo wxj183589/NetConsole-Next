@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 
@@ -9,6 +10,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("catalog failure after rename and retry", CatalogFailureRetryAsync),
     ("worker finally repeated seal", WorkerFinallyAsync),
     ("concurrent seal is serialized", ConcurrentSealAsync),
+    ("preserved segment rejects further writes", PreservedSegmentStateAsync),
+    ("recovery crash after rename remains incomplete", RecoveryCrashAfterRenameAsync),
+    ("recovery crash after tail repair remains incomplete", RecoveryCrashAfterTailRepairAsync),
+    ("recovery catalog failure is retryable", RecoveryCatalogFailureAsync),
     ("empty and binary boundaries", BoundaryAsync),
     ("4MiB segment rolling and unique catalog rows", SegmentRollingAsync)
 };
@@ -196,6 +201,120 @@ static async Task ConcurrentSealAsync()
     });
 }
 
+static async Task PreservedSegmentStateAsync()
+{
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        await writer.AppendAsync(new SyslogPacket(3600, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("preserved")));
+        await writer.FlushAsync();
+        await writer.PreserveOpenAsync();
+
+        var open = OpenFiles(catalog).Single();
+        var bytes = File.ReadAllBytes(open);
+        await AssertThrowsAsync<InvalidOperationException>(() => writer.AppendAsync(
+            new SyslogPacket(3601, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("rejected"))));
+        await AssertThrowsAsync<InvalidOperationException>(() => writer.FlushAsync());
+        await AssertThrowsAsync<InvalidOperationException>(() => writer.SealAsync());
+        Assert(bytes.SequenceEqual(File.ReadAllBytes(open)), "closed Raw writer must not mutate preserved bytes");
+        Assert(Rows(root).Count == 0, "preserving an open segment must not create a FINALIZED row");
+
+        var recovery = catalog.RecoverRawSegments();
+        Assert(recovery.RecoveredOpenFiles == 1 && catalog.GetRawCounts().Incomplete == 1 &&
+               catalog.GetRawCounts().Finalized == 0, $"preserved segment recovery was unsafe: {recovery}");
+    });
+}
+
+static async Task RecoveryCrashAfterRenameAsync()
+{
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        await writer.AppendAsync(new SyslogPacket(3700, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("rename-crash")));
+        await writer.FlushAsync();
+        await writer.PreserveOpenAsync();
+        catalog.RecoveryAfterRenameHook = _ => throw new SimulatedRecoveryCrashException();
+        AssertThrows<SimulatedRecoveryCrashException>(() => catalog.RecoverRawSegments());
+        Assert(!OpenFiles(catalog).Any() && RawFiles(catalog).Length == 1,
+            "simulated crash after rename must leave the published Raw bytes in place");
+        Assert(Rows(root).Count == 0 && RecoveryIntentCount(root) == 1,
+            "rename crash must leave a durable pending recovery intent without a Catalog row");
+
+        var restarted = CreateCatalog(root);
+        var recovery = restarted.RecoverRawSegments();
+        Assert(recovery.FailedFiles == 0 && restarted.GetRawCounts().Finalized == 0 &&
+               restarted.GetRawCounts().Incomplete == 1 && RecoveryIntentCount(root) == 0,
+            $"second startup must conservatively finish the recovery as INCOMPLETE: {recovery}");
+        var repeated = restarted.RecoverRawSegments();
+        Assert(repeated.FailedFiles == 0 && Rows(root).Count == 1 && restarted.GetRawCounts().Finalized == 0,
+            "repeated recovery must remain idempotent and must not promote the segment");
+    });
+}
+
+static async Task RecoveryCrashAfterTailRepairAsync()
+{
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        await writer.AppendAsync(new SyslogPacket(3800, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("valid-prefix")));
+        await writer.FlushAsync();
+        await writer.PreserveOpenAsync();
+        var open = OpenFiles(catalog).Single();
+        var validLength = new FileInfo(open).Length;
+        await File.AppendAllTextAsync(open, "{\"broken\":\n");
+        catalog.RecoveryBeforeRenameHook = _ => throw new SimulatedRecoveryCrashException();
+        AssertThrows<SimulatedRecoveryCrashException>(() => catalog.RecoverRawSegments());
+        Assert(OpenFiles(catalog).Length == 1 && new FileInfo(open).Length == validLength && Rows(root).Count == 0,
+            "crash after tail repair must retain the repaired .open and avoid Catalog finalization");
+        Assert(Directory.GetFiles(Path.Combine(root, "recovery-evidence"), "*.tail.bin").Length == 1,
+            "tail repair must retain the discarded bytes as evidence");
+
+        var restarted = CreateCatalog(root);
+        var recovery = restarted.RecoverRawSegments();
+        Assert(recovery.FailedFiles == 0 && restarted.GetRawCounts().Finalized == 0 &&
+               restarted.GetRawCounts().Incomplete == 1 && RecoveryIntentCount(root) == 0,
+            $"recovery after a tail-repair crash must remain incomplete: {recovery}");
+    });
+}
+
+static async Task RecoveryCatalogFailureAsync()
+{
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        await writer.AppendAsync(new SyslogPacket(3900, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("sqlite-failure")));
+        await writer.FlushAsync();
+        await writer.PreserveOpenAsync();
+        using (var db = OpenDb(root))
+        using (var trigger = db.CreateCommand())
+        {
+            trigger.CommandText = "CREATE TRIGGER fail_recovery_insert BEFORE INSERT ON raw_segments BEGIN SELECT RAISE(ABORT, 'injected recovery failure'); END";
+            trigger.ExecuteNonQuery();
+        }
+
+        var first = catalog.RecoverRawSegments();
+        Assert(first.FailedFiles == 1 && !OpenFiles(catalog).Any() && RawFiles(catalog).Length == 1 &&
+               Rows(root).Count == 0 && RecoveryIntentCount(root) == 1,
+            $"SQLite failure after rename must retain intent and Raw bytes: {first}");
+        using (var db = OpenDb(root))
+        using (var drop = db.CreateCommand())
+        {
+            drop.CommandText = "DROP TRIGGER fail_recovery_insert";
+            drop.ExecuteNonQuery();
+        }
+
+        var restarted = CreateCatalog(root);
+        var second = restarted.RecoverRawSegments();
+        Assert(second.FailedFiles == 0 && restarted.GetRawCounts().Finalized == 0 &&
+               restarted.GetRawCounts().Incomplete == 1 && RecoveryIntentCount(root) == 0 && Rows(root).Count == 1,
+            $"SQLite recovery retry must reconcile exactly once: {second}");
+    });
+}
+
 static async Task BoundaryAsync()
 {
     await WithRootAsync(async root =>
@@ -288,6 +407,25 @@ static string Sha256(string path)
     return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
 }
 
+static SqliteConnection OpenDb(string root)
+{
+    var db = new SqliteConnection(new SqliteConnectionStringBuilder
+    {
+        DataSource = Path.Combine(root, "catalog.db"),
+        Pooling = false
+    }.ToString());
+    db.Open();
+    return db;
+}
+
+static int RecoveryIntentCount(string root)
+{
+    using var db = OpenDb(root);
+    using var command = db.CreateCommand();
+    command.CommandText = "SELECT COUNT(*) FROM raw_recovery_intents";
+    return Convert.ToInt32(command.ExecuteScalar());
+}
+
 static List<Row> Rows(string root)
 {
     using var db = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -339,3 +477,5 @@ static void Assert(bool condition, string message)
 }
 
 record Row(string RelativePath, long RecordCount, long ByteCount, string Sha256);
+
+sealed class SimulatedRecoveryCrashException : Exception { }

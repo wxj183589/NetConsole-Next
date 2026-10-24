@@ -1,6 +1,6 @@
 # NetConsole Next
 
-**未来主力仓库；当前处于 P0 技术原型阶段，不可作为生产采集软件。**
+**未来主力仓库；当前处于 P0/G1 稳定性原型阶段，不可作为生产采集软件。**
 
 ## 产品方向
 
@@ -11,11 +11,13 @@
 - HTTP/FTP/TFTP/WebDAV/SSH/SFTP 服务均为未来按需启用组件，**默认不开启**；当前不建设 Agent Controller。
 - 优先对比 C# 与精简 Python。当前 P0 使用 .NET 10 仅用于验证，不声明支持 Windows 8。
 
-## 已实现的 P0 范围
+## 已实现范围
 
-当前分支的代码仅验证：SQLite Schema v1 初始化、数据目录安全标识、本机 loopback 健康 API、可选本机 UDP Syslog 接收、有界接收队列、Raw NDJSON 精确保留原始字节、正常结束时封段与 SQLite 索引。
+当前实现包括：SQLite Schema v1、数据目录安全标识、本机 loopback 健康 API、可选 UDP Syslog、有界接收队列、Raw NDJSON 二进制保真、受控结束时封段与 SQLite 索引。G1 基础增加了启动时 Raw/SQLite 对账、遗留 `.open` 恢复、有效 NDJSON 前缀校验与损坏尾部截断、未索引段补登、缺失文件标记、任务运行记录、跨进程单实例锁，以及进程资源和采集状态快照。
 
-**未实现：**正式 Windows Service / Local Manager、Web 登录认证与业务界面、SSH/SNMP、任务调度与进程恢复、文件服务、段崩溃恢复/回读对账。未进行长期工业主机测试，不能宣称真实环境的数据完整性。
+Windows Service 与本机 Local Manager CLI 已有基础代码：Service Control Manager 启停适配、安装脚本，以及 `status`、`start`、`stop`、`open-data` 命令。实际 Windows 安装、服务账户/权限和目标主机行为仍待验证。
+
+**未实现：**Web 登录认证与业务界面、SSH/SNMP、文件服务、长周期运行和设备回归。不能宣称真实现场的数据完整性或 UDP 零丢包。
 
 ### .NET 10 原型本地运行
 
@@ -43,11 +45,32 @@ dotnet run --project src/NetConsole.Next.Service
 
 ~~~sh
 dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
+dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
 dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
 python3 tests/smoke.py
+python3 tests/g1_recovery.py
 ~~~
 
-Linux smoke 检查健康端点、UDP 原始字节、4MiB Raw 分段和 SQLite catalog；C# harness 覆盖正常封段、catalog 登记失败后的重试、重复 Seal、内容校验和 Worker-style finally 关闭；Windows CI 执行 Service 编译和同一 harness。跨进程掉电后的自动恢复和 catalog 对账仍属于后续 G1，**尚未通过验收**。
+Linux smoke 验证健康端点、UDP 二进制保真、Raw 封段和 SQLite catalog。G1 集成测试模拟强制退出、`.open` 损坏尾部、未索引有效/损坏段、缺失文件、单实例和任务状态。Windows CI 编译 Service 与 Local Manager；Windows 服务真实安装/启动、旧系统兼容和现场长周期测试仍待目标环境验证。
+
+### Windows Service 与 Local Manager 基础用法
+
+在 Windows x64 上发布并安装 Service（安装需要提升权限）：
+
+~~~powershell
+dotnet publish src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release -r win-x64 --self-contained false
+.\scripts\install-service.ps1 -ServiceExecutable .\src\NetConsole.Next.Service\bin\Release\net10.0\win-x64\publish\NetConsole.Next.Service.exe
+~~~
+
+Windows 默认新数据根为 `%ProgramData%\NetConsoleNext\data`；若目录非空且没有合法标记，Service 会拒绝启动。Local Manager 是本机命令行工具，不开放远程控制：
+
+~~~powershell
+dotnet run --project src/NetConsole.Next.LocalManager -- status
+dotnet run --project src/NetConsole.Next.LocalManager -- start
+dotnet run --project src/NetConsole.Next.LocalManager -- open-data
+~~~
+
+健康端点仅绑定 `127.0.0.1`。应用层计数不包含操作系统 UDP 缓冲区丢包。Raw 启动恢复只保留完整、可解析且以换行结束的记录；遇到第一个损坏记录时，会先将损坏尾部字节及其 SHA-256、原始段路径、偏移写入数据根下的 `recovery-evidence/`，验证证据后再截断原段并标记为 `INCOMPLETE`。恢复中的文件转换先写入持久化恢复意图；即使在 `.open` 重命名后再次崩溃，下次启动仍按 `INCOMPLETE` 处理，不会提升为 `FINALIZED`。证据文件不通过 Web/API 发布；恢复证据写入失败时保持源文件不变。合法但未索引的完整 `.ndjson` 会补登；SQLite 指向不存在文件时标记为 `MISSING`。自动恢复不会把不完整段伪装为完整段。
 
 参见 [ADR](docs/ADR-0001.md)、[路线与门禁](docs/ROADMAP.md)。
 
