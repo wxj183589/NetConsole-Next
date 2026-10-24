@@ -32,6 +32,7 @@ builder.Services.AddSingleton<DesktopHelperIpc>();
 builder.Services.AddSingleton<HostToolRegistry>();
 builder.Services.AddSingleton<HostToolLaunchService>();
 builder.Services.AddSingleton<FileManagerService>();
+builder.Services.AddSingleton<IArchiveDiskSpaceProvider, DriveInfoArchiveDiskSpaceProvider>();
 builder.Services.AddSingleton<FileArchiveService>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
@@ -330,9 +331,10 @@ app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveReque
     try
     {
         var identity = CurrentIdentity(context);
-        var job = archives.Create(request, identity);
+        var job = archives.Create(request, identity, context.RequestAborted);
         return Results.Accepted($"/api/system/files/archive-jobs/{job.Id}", job);
     }
+    catch (ArchiveRejectedException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
@@ -343,7 +345,7 @@ app.MapPost("/api/system/files/archive-jobs/{id}/cancel", (HttpContext context, 
 app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
 {
     var result = archives.OpenDownload(id, CurrentIdentity(context));
-    return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "application/zip", result.Value.Name, enableRangeProcessing: true);
+    return result is null ? Results.NotFound() : Results.File(result.Stream, "application/zip", result.Name, enableRangeProcessing: true);
 });
 if (settings.TerminalEnabled)
 {

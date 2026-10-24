@@ -15,7 +15,14 @@ def main():
     contains("src/NetConsole.Next.Service/DesktopHelperIpc.cs", "NamedPipeClientStream", "NetConsoleNext.DesktopHelper")
     contains("src/NetConsole.Next.DesktopHelper/Program.cs", "OPEN_DIRECTORY", "UseShellExecute = false", "securecrt", "xshell", "putty")
     contains("src/NetConsole.Next.Service/FileManagerService.cs", "Path traversal is blocked", "Reparse point traversal is blocked", "catalog.db", "credentials")
-    contains("src/NetConsole.Next.Service/FileArchiveService.cs", "ZipArchiveMode.Create", "CANCELLED", "archive-tmp")
+    contains("src/NetConsole.Next.Service/FileArchiveService.cs", "Channel.CreateBounded", "TryWrite", "ArchiveMaxQueuedJobs", "ArchiveMaxActiveJobsPerUser", "CreateLinkedTokenSource", "zip.part", "PeriodicTimer", "TryClaimRemoval", "EnsureAvailableDisk();")
+    archive = (ROOT / "src/NetConsole.Next.Service/FileArchiveService.cs").read_text(encoding="utf-8")
+    assert "Channel.CreateUnbounded" not in archive
+    assert archive.index("EnsureAvailableDisk();") < archive.index("_files.Expand("), "archive disk admission must precede directory expansion"
+    contains("src/NetConsole.Next.Service/ArchiveDiskSpace.cs", "IArchiveDiskSpaceProvider", "DriveInfo", "AvailableFreeSpace")
+    contains("src/NetConsole.Next.Service/FileManagerService.cs", "ArchiveExpansionBudget", "Stack<(ResolvedFile File, int Depth)>")
+    contains("src/NetConsole.Next.Service/HostToolModels.cs", "ARCHIVE_DIRECTORY_DEPTH_LIMIT", "ARCHIVE_METADATA_LIMIT")
+    contains("src/NetConsole.Next.Service/RuntimeSettings.cs", "ArchiveMaxAggregateReservedBytes", "ArchiveMaxRetainedTerminalJobs", "ArchiveCleanupIntervalSeconds")
     contains("src/NetConsole.Next.Credentials/WebPasswordRecovery.cs", "web_password_reset_audit", "revoked_ms", "Rfc2898DeriveBytes.Pbkdf2")
     contains("src/NetConsole.Next.LocalManager/Program.cs", "web-password reset", "ReadConfirmedSecret", "WindowsBuiltInRole.Administrator")
     contains("web/src/router.ts", "ToolsView.vue", "FilesView.vue")

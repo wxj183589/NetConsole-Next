@@ -169,6 +169,7 @@ button { cursor: pointer; }
 .archive-card { margin-top: 14px; padding-bottom: 13px; }
 .archive-card .card__header { margin-bottom: 12px; }
 .bad-text { display: block; margin: 10px 17px 0; color: var(--nc-danger); }
+.good-text { display: block; margin: 10px 17px 0; color: var(--nc-success); }
 .muted { color: var(--nc-text-secondary); }
 @media (max-width: 1250px) { .tool-grid { grid-template-columns: 1fr; } .file-layout { grid-template-columns: 190px minmax(0, 1fr); } }
 

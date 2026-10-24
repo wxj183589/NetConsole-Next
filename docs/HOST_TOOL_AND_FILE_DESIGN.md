@@ -18,3 +18,9 @@ File management exposes logical roots only: raw, terminal recordings, inbox, arc
 
 The helper is a host-side Windows interactive-session executable, not a browser extension or a LAN endpoint. A service running in Session 0 cannot prove that a user desktop is available; HOST_DESKTOP_UNAVAILABLE is an expected result until the helper is installed and running in that session.
 
+## Archive reliability budget
+
+ZIP work is intentionally a small, bounded background subsystem: one worker, eight queued jobs, two active jobs per Web user, 10,000 files/20 GiB input per job, depth 32, 5,000 directories, 25,000 metadata entries and 32 GiB aggregate reserved input by default. The admission reservation is acquired before directory expansion; queue, per-user, input and disk-budget failures return stable `429`/`503` codes instead of HTTP 500.
+
+The scanner is iterative and cancellable. Running copies use a linked per-job/service-stop token, publish only after closing and renaming a `.zip.part`, and cannot overwrite a `CANCELLED` state with `COMPLETED`. A periodic maintenance loop runs every five minutes, enforces terminal-job retention, protects active download leases, and removes only archive-owned temporary files. Startup and shutdown paths also handle orphan/incomplete ZIP resources. Resource-pressure and cancellation evidence is isolated to CI test data roots; no user Windows data root is used.
+
