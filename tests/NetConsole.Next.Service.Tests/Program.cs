@@ -162,8 +162,9 @@ internal static class SchedulerTests
                 DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
                 SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMaxFileEntriesPerJob = 2,
                 ArchiveMaxDirectoryDepth = 1, ArchiveMaxMetadataEntriesPerJob = 16,
-                ArchiveMaxMetadataBytesPerJob = 16 * 512, ArchiveMaxQueuedJobs = 1,
-                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxAggregateReservedBytes = 1024 * 1024
+                ArchiveMaxMetadataBytesPerJob = 16 * 512, ArchiveMaxActiveJobsPerUser = 1,
+                ArchiveMaxQueuedJobs = 2,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
             };
             var raw = Path.Combine(root, "raw");
             Directory.CreateDirectory(Path.Combine(raw, "deep", "level", "too-deep"));
