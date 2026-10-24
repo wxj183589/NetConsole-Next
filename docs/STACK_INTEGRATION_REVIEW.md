@@ -122,7 +122,7 @@ PR #18 的 `RegisterFinalizedSegment` 原先直接调用恢复用的 `UpsertReco
 - Vitest：2 个测试文件、2 个测试通过。
 - Playwright：未执行成功，`web/playwright.config.ts` 在该 PR18 树中不存在，属于现有测试入口缺失，不在本次 Raw 修复范围内。
 
-PR #19 的 GitHub Actions run [40097847169](https://github.com/wxj183589/NetConsole-Next/actions/runs/40097847169) 已验证新分支：Windows job（含 Windows Service SCM）通过；Ubuntu 在 `tests/web_pr2_e2e.py` 的归档任务取消断言失败。失败发生在 Raw、G1 recovery、SSH protocol、Web contract 和构建均通过之后，属于 PR #18 已知 ZIP 队列 P1，不是本次 Raw/Catalog 修复的失败。
+PR #19 的首次 Actions run `40097847169` 在 Ubuntu 的 `tests/web_pr2_e2e.py` 归档任务取消断言处失败，Windows job（含 Windows Service SCM）通过；随后同一提交链的最新 run [40098225401](https://github.com/wxj183589/NetConsole-Next/actions/runs/40098225401) 的 Ubuntu 和 Windows 均成功。该首次失败发生在 Raw、G1 recovery、SSH protocol、Web contract 和构建均通过之后，属于 PR #18 已知 ZIP 队列 P1/测试敏感性，不是本次 Raw/Catalog 修复的失败。
 
 ## 7. 当前阻断评审
 
@@ -204,9 +204,9 @@ G2_TESTS=PASS in existing PR18 harness; no real device
 WEB_PR1_TESTS=typecheck/build/Vitest PASS; Playwright config missing
 WEB_PR2_TESTS=typecheck/build/Vitest PASS; archive P1 unresolved
 
-LINUX_BUILD=PASS (build/harness/smoke pass; full PR19 Ubuntu job blocked by existing web_pr2_e2e P1)
-WINDOWS_BUILD=PASS (PR19 run 40097847169, including SCM exercise)
-GITHUB_CI=PR19 Windows PASS; Ubuntu FAIL at known PR18 archive cancellation assertion; no combined PR1-to-Web run exists
+LINUX_BUILD=PASS (build/harness/smoke and latest PR19 run 40098225401)
+WINDOWS_BUILD=PASS (latest PR19 run 40098225401, including SCM exercise)
+GITHUB_CI=PR19 latest Ubuntu/Windows PASS; first run 40097847169 had a known archive cancellation failure; no combined PR1-to-Web run exists
 
 FIX_BRANCH=audit/p0-g1-stack-integration
 FIX_COMMITS=e025e99,8bec041 (Raw/Catalog fix and audit evidence)
