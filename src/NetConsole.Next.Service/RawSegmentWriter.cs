@@ -15,6 +15,7 @@ internal sealed class RawSegmentWriter
     private readonly string _relativePath;
     private readonly FileStream _stream;
     private readonly StreamWriter _writer;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
     private long? _publishedBytes;
@@ -47,55 +48,84 @@ internal sealed class RawSegmentWriter
 
     public async Task AppendAsync(SyslogPacket packet)
     {
-        if (_writerClosed || _filePublished)
-            throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
-        var line = JsonSerializer.Serialize(new
+        await _operationGate.WaitAsync();
+        try
         {
-            received_ms = packet.ReceivedMs,
-            sender_ip = packet.SenderIp,
-            sender_port = packet.SenderPort,
-            payload_base64 = Convert.ToBase64String(packet.Payload)
-        });
-        await _writer.WriteLineAsync(line);
-        _bytes += Encoding.UTF8.GetByteCount(line) + 1;
-        _first = Math.Min(_first, packet.ReceivedMs);
-        _last = Math.Max(_last, packet.ReceivedMs);
-        _records++;
+            if (_writerClosed || _filePublished)
+                throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
+            var line = JsonSerializer.Serialize(new
+            {
+                received_ms = packet.ReceivedMs,
+                sender_ip = packet.SenderIp,
+                sender_port = packet.SenderPort,
+                payload_base64 = Convert.ToBase64String(packet.Payload)
+            });
+            await _writer.WriteLineAsync(line);
+            _bytes += Encoding.UTF8.GetByteCount(line) + 1;
+            _first = Math.Min(_first, packet.ReceivedMs);
+            _last = Math.Max(_last, packet.ReceivedMs);
+            _records++;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
     }
 
     public async Task FlushAsync()
     {
-        if (_writerClosed) return;
-        await _writer.FlushAsync();
-        _stream.Flush(flushToDisk: true);
+        await _operationGate.WaitAsync();
+        try
+        {
+            await FlushCoreAsync();
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
     }
 
     public async Task SealAsync()
     {
-        if (_catalogRegistered) return;
-
-        if (!_filePublished)
+        await _operationGate.WaitAsync();
+        try
         {
-            await FlushAsync();
-            if (!_writerClosed)
+            if (_catalogRegistered) return;
+
+            if (!_filePublished)
             {
-                await _writer.DisposeAsync();
-                _writerClosed = true;
+                await FlushCoreAsync();
+                if (!_writerClosed)
+                {
+                    await _writer.DisposeAsync();
+                    _writerClosed = true;
+                }
+
+                using (var sha = SHA256.Create())
+                using (var input = File.OpenRead(_openPath))
+                    _checksum ??= Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
+
+                File.Move(_openPath, _publishedPath);
+                // Publishing is separate from catalog registration. A later SealAsync
+                // must never return to the old .open path after this move succeeds.
+                _filePublished = true;
             }
 
-            using (var sha = SHA256.Create())
-            using (var input = File.OpenRead(_openPath))
-                _checksum ??= Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
-
-            File.Move(_openPath, _publishedPath);
-            // Publishing is separate from catalog registration. A later SealAsync
-            // must never return to the old .open path after this move succeeds.
-            _filePublished = true;
+            _publishedBytes ??= new FileInfo(_publishedPath).Length;
+            _register(_relativePath, _records,
+                _first == long.MaxValue ? 0 : _first, _last, _checksum!, _publishedBytes.Value);
+            _catalogRegistered = true;
         }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
 
-        _publishedBytes ??= new FileInfo(_publishedPath).Length;
-        _register(_relativePath, _records,
-            _first == long.MaxValue ? 0 : _first, _last, _checksum!, _publishedBytes.Value);
-        _catalogRegistered = true;
+    private async Task FlushCoreAsync()
+    {
+        if (_writerClosed) return;
+        await _writer.FlushAsync();
+        _stream.Flush(flushToDisk: true);
     }
 }

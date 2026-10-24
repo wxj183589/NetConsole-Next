@@ -8,6 +8,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("normal seal and repeated seal", NormalSealAsync),
     ("catalog failure after rename and retry", CatalogFailureRetryAsync),
     ("worker finally repeated seal", WorkerFinallyAsync),
+    ("concurrent seal is serialized", ConcurrentSealAsync),
     ("empty and binary boundaries", BoundaryAsync),
     ("4MiB segment rolling and unique catalog rows", SegmentRollingAsync)
 };
@@ -131,6 +132,32 @@ static async Task WorkerFinallyAsync()
         Assert(attempts == 2 && Rows(root).Count == 1, "worker-style finally must complete the retry");
         Assert(RawFiles(catalog).Length == 1 && !OpenFiles(catalog).Any(),
             "worker-style finally must retain one published Raw file");
+    });
+}
+
+static async Task ConcurrentSealAsync()
+{
+    await WithRootAsync(async root =>
+    {
+        var catalog = CreateCatalog(root);
+        var writer = new RawSegmentWriter(catalog);
+        var payload = Enumerable.Range(0, 64 * 1024).Select(index => (byte)(index % 251)).ToArray();
+        for (var index = 0; index < 32; index++)
+            await writer.AppendAsync(new SyslogPacket(3500 + index, "127.0.0.1", 5514, payload));
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seals = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            await start.Task;
+            await writer.SealAsync();
+        })).ToArray();
+        start.SetResult();
+        await Task.WhenAll(seals);
+
+        Assert(RawFiles(catalog).Length == 1 && !OpenFiles(catalog).Any(),
+            "concurrent SealAsync calls must publish one file without a stale .open path");
+        Assert(Rows(root).Count == 1 && Rows(root)[0].RecordCount == 32,
+            "concurrent SealAsync calls must create one catalog row");
     });
 }
 
