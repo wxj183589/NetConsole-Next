@@ -83,30 +83,87 @@ internal sealed class FileManagerService
         return (new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan), name, contentType);
     }
 
-    public IReadOnlyList<(ResolvedFile File, string EntryName, long Size)> Expand(ArchiveSelection selection)
+    public IReadOnlyList<(ResolvedFile File, string EntryName, long Size)> Expand(
+        ArchiveSelection selection,
+        ArchiveExpansionBudget budget,
+        ISet<string> seenFiles,
+        CancellationToken cancellationToken)
     {
         var output = new List<(ResolvedFile, string, long)>();
-        foreach (var requested in selection.Paths ?? Array.Empty<string>())
+        var pending = new Stack<(ResolvedFile File, int Depth)>();
+        var paths = selection.Paths ?? Array.Empty<string>();
+        if (paths.Count > 1_000)
+            throw new ArchiveRejectedException("ARCHIVE_RESOURCE_LIMIT", "A single archive selection contains too many paths.", StatusCodes.Status413PayloadTooLarge);
+
+        foreach (var requested in paths.Reverse())
+            pending.Push((Resolve(selection.RootId, requested, true), 0));
+
+        while (pending.Count > 0)
         {
-            var resolved = Resolve(selection.RootId, requested, true);
-            Add(resolved, output, selection.RootId);
+            cancellationToken.ThrowIfCancellationRequested();
+            var (resolved, depth) = pending.Pop();
+            if (!resolved.IsDirectory)
+            {
+                AddFile(resolved, selection.RootId, output, budget, seenFiles);
+                continue;
+            }
+
+            budget.CountDirectory(depth);
+            try
+            {
+                foreach (var path in Directory.EnumerateFileSystemEntries(resolved.FullPath))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    budget.CountMetadata();
+                    if (IsReparse(path) || IsProtected(path, Path.GetFileName(path))) continue;
+                    try
+                    {
+                        pending.Push((Resolve(selection.RootId, ToRelative(selection.RootId, path), true), depth + 1));
+                    }
+                    catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                        throw new ArchiveRejectedException("ARCHIVE_INPUT_CHANGED", "A selected file or directory changed during the archive scan.", StatusCodes.Status409Conflict);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new ArchiveRejectedException("ARCHIVE_SCAN_FAILED", "A selected directory could not be scanned safely.", StatusCodes.Status409Conflict);
+            }
         }
+
         return output;
     }
 
-    private void Add(ResolvedFile resolved, List<(ResolvedFile, string, long)> output, string rootId)
+    private static void AddFile(
+        ResolvedFile resolved,
+        string rootId,
+        List<(ResolvedFile File, string EntryName, long Size)> output,
+        ArchiveExpansionBudget budget,
+        ISet<string> seenFiles)
     {
-        if (!resolved.IsDirectory)
+        if (!File.Exists(resolved.FullPath) || IsReparse(resolved.FullPath))
+            throw new ArchiveRejectedException("ARCHIVE_INPUT_CHANGED", "A selected file changed during the archive scan.", StatusCodes.Status409Conflict);
+        var fullPath = Path.GetFullPath(resolved.FullPath);
+        if (!seenFiles.Add(fullPath)) return;
+        try
         {
-            var info = new FileInfo(resolved.FullPath);
+            var info = new FileInfo(fullPath);
+            budget.CountMetadata();
+            budget.CountFile(info.Length);
             output.Add((resolved, Path.Combine(rootId, resolved.RelativePath).Replace(Path.DirectorySeparatorChar, '/'), info.Length));
-            return;
         }
-        foreach (var path in Directory.EnumerateFileSystemEntries(resolved.FullPath))
+        catch (FileNotFoundException)
         {
-            if (IsReparse(path) || IsProtected(path, Path.GetFileName(path))) continue;
-            var child = Resolve(rootId, ToRelative(rootId, path), true);
-            Add(child, output, rootId);
+            throw new ArchiveRejectedException("ARCHIVE_INPUT_CHANGED", "A selected file changed during the archive scan.", StatusCodes.Status409Conflict);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new ArchiveRejectedException("ARCHIVE_SCAN_FAILED", "A selected file could not be inspected safely.", StatusCodes.Status409Conflict);
+        }
+        catch (IOException)
+        {
+            throw new ArchiveRejectedException("ARCHIVE_SCAN_FAILED", "A selected file could not be inspected safely.", StatusCodes.Status409Conflict);
         }
     }
 

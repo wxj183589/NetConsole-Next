@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Real service/API PR-2 smoke test using an isolated data root.
+"""Real service/API PR-2 resource-control and file/archive smoke test.
 
-It verifies file access, ZIP jobs, role boundaries and traversal protection. It
-intentionally does not claim a real SecureCRT/Xshell/PuTTY or Explorer launch.
+The service runs against an isolated data root with deliberately small queue
+limits and a development-only copy delay. This makes queued and running
+cancellation deterministic without using production data or filling a CI
+runner disk. It intentionally does not claim a real Windows GUI launch.
 """
-import copy
 import http.cookiejar
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +18,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+
 
 class Client:
     def __init__(self, base):
@@ -35,17 +39,40 @@ class Client:
                 value = response.read()
                 return response.status, value if raw else (json.loads(value) if value else None)
         except urllib.error.HTTPError as error:
-            return error.code, error.read()
+            value = error.read()
+            return error.code, value if raw else (json.loads(value) if value else None)
 
     def login(self, username, password):
         status, result = self.request("/api/auth/login", "POST", {"username": username, "password": password})
         assert status == 200, (status, result)
         self.csrf = result["csrfToken"]
 
+
 def port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def wait_job(client, job_id, expected=None, timeout=10):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        status, last = client.request("/api/system/files/archive-jobs/" + job_id)
+        assert status == 200, (status, last)
+        if expected is None and last["state"] in ("COMPLETED", "FAILED", "CANCELLED"):
+            return last
+        if expected is not None and last["state"] == expected:
+            return last
+        time.sleep(.05)
+    raise AssertionError(("job timeout", job_id, last))
+
+
+def create_job(client, selections):
+    status, result = client.request("/api/system/files/archive-jobs", "POST", {"selections": selections})
+    assert status == 202, (status, result)
+    return result
+
 
 def main():
     repo = Path(__file__).resolve().parents[1]
@@ -55,7 +82,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="netconsole-next-pr2-") as temp:
         root = Path(temp) / "data"
         selected = port()
-        service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root), NETCONSOLE_NEXT_WEB_PORT=str(selected), NETCONSOLE_NEXT_SYSLOG_PORT="0"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        env = dict(os.environ,
+                   DOTNET_ENVIRONMENT="Development",
+                   NETCONSOLE_NEXT_DATA_ROOT=str(root),
+                   NETCONSOLE_NEXT_WEB_PORT=str(selected),
+                   NETCONSOLE_NEXT_SYSLOG_PORT="0",
+                   NETCONSOLE_NEXT_ARCHIVE_MAX_RUNNING_JOBS="1",
+                   NETCONSOLE_NEXT_ARCHIVE_MAX_QUEUED_JOBS="1",
+                   NETCONSOLE_NEXT_ARCHIVE_MAX_ACTIVE_JOBS_PER_USER="2",
+                   NETCONSOLE_NEXT_ARCHIVE_MAX_FILE_ENTRIES="4",
+                   NETCONSOLE_NEXT_ARCHIVE_MAX_METADATA_ENTRIES="64",
+                   NETCONSOLE_NEXT_ARCHIVE_TEST_COPY_DELAY_MS="5",
+                   NETCONSOLE_NEXT_ARCHIVE_CLEANUP_INTERVAL_SECONDS="1")
+        service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         base = f"http://127.0.0.1:{selected}"
         try:
             client = Client(base)
@@ -68,14 +108,23 @@ def main():
                 time.sleep(.1)
             else:
                 raise AssertionError("service did not become healthy")
+
             (root / "raw" / "nested").mkdir(parents=True)
             (root / "raw" / "hello.txt").write_bytes("真实文件\n".encode())
             (root / "raw" / "nested" / "中文.txt").write_bytes(b"nested")
+            (root / "raw" / "many").mkdir()
+            for index in range(5):
+                (root / "raw" / "many" / f"{index}.txt").write_bytes(f"file-{index}".encode())
+            (root / "raw" / "big.bin").write_bytes(b"0123456789abcdef" * 1_048_576)
             (root / "raw" / "credentials").mkdir()
             (root / "raw" / "credentials" / "secret.txt").write_bytes(b"blocked")
             (root / "raw" / "blocked.open").write_bytes(b"blocked")
-            admin, superadmin = Client(base), Client(base)
-            admin.login("admin", "admin"); superadmin.login("superadmin", "superadmin")
+
+            admin, other_admin, superadmin = Client(base), Client(base), Client(base)
+            admin.login("admin", "admin")
+            other_admin.login("admin", "admin")
+            superadmin.login("superadmin", "superadmin")
+
             status, listing = admin.request("/api/system/files/list?rootId=raw&path=")
             assert status == 200 and any(item["name"] == "hello.txt" for item in listing["items"])
             status, data = admin.request("/api/system/files/download?" + urllib.parse.urlencode({"rootId": "raw", "path": "hello.txt"}), raw=True)
@@ -84,33 +133,67 @@ def main():
             assert admin.request("/api/system/files/download?" + urllib.parse.urlencode({"rootId": "raw", "path": "catalog.db"}))[0] == 400
             admin_tool_status = admin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
             assert admin_tool_status[0] == 403, admin_tool_status
-            superadmin_tool_status = superadmin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
-            assert superadmin_tool_status[0] == 200, superadmin_tool_status
+            assert superadmin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})[0] == 200
             assert superadmin.request("/api/system/host-tools/securecrt/launch", "POST", {"deviceId": "not-registered"})[1]["status"] == "INVALID_DEVICE"
-            status, job = admin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["hello.txt", "nested"]}]})
-            assert status == 202, (status, job)
-            for _ in range(100):
-                status, snapshot = admin.request("/api/system/files/archive-jobs/" + job["id"])
-                if snapshot["state"] in ("COMPLETED", "FAILED", "CANCELLED"):
-                    break
-                time.sleep(.05)
-            assert snapshot["state"] == "COMPLETED", snapshot
-            status, zipped = admin.request("/api/system/files/archive-jobs/" + job["id"] + "/download", raw=True)
-            assert status == 200 and zipped[:2] == b"PK"
+
+            status, rejected = admin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["many"]}]})
+            assert status == 413 and rejected["error"] == "ARCHIVE_RESOURCE_LIMIT", (status, rejected)
+            print("LARGE_DIRECTORY_REJECTED_EARLY=PASS")
+
+            first = create_job(admin, [{"rootId": "raw", "paths": ["big.bin"]}])
+            wait_job(admin, first["id"], "RUNNING")
+            second = create_job(admin, [{"rootId": "raw", "paths": ["nested"]}])
+            wait_job(admin, second["id"], "QUEUED")
+            status, user_limit = other_admin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["hello.txt"]}]})
+            assert status == 429 and user_limit["error"] == "ARCHIVE_USER_LIMIT", (status, user_limit)
+            status, queue_full = superadmin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["hello.txt"]}]})
+            assert status == 429 and queue_full["error"] == "ARCHIVE_QUEUE_FULL", (status, queue_full)
+            print("QUEUE_BOUND_ENFORCED=PASS")
+            print("PER_USER_LIMIT_ENFORCED=PASS")
+            print("QUEUE_FULL_RETURNS_CONTROLLED_ERROR=PASS")
+
+            assert admin.request("/api/system/files/archive-jobs/" + second["id"] + "/cancel", "POST")[0] == 200
+            cancelled = wait_job(admin, second["id"], "CANCELLED")
+            assert cancelled["state"] == "CANCELLED"
+            assert admin.request("/api/system/files/archive-jobs/" + second["id"] + "/cancel", "POST")[0] == 200
+            print("CANCEL_QUEUED_JOB=PASS")
+            print("CANCEL_IDEMPOTENT=PASS")
+
+            assert admin.request("/api/system/files/archive-jobs/" + first["id"] + "/cancel", "POST")[0] == 200
+            cancelled_first = wait_job(admin, first["id"], "CANCELLED")
+            assert cancelled_first["state"] == "CANCELLED"
+            time.sleep(.2)
+            assert admin.request("/api/system/files/archive-jobs/" + first["id"] + "/download", raw=True)[0] == 404
+            assert not list((root / "archive-tmp").glob(first["id"] + ".zip.part"))
+            print("CANCEL_RUNNING_JOB=PASS")
+            print("CANCEL_DURING_LARGE_FILE_COPY=PASS")
+            print("CANCELLED_NOT_COMPLETED=PASS")
+            print("CANCEL_TEMP_CLEANUP=PASS")
+            print("CANCEL_RELEASES_QUOTA=PASS")
+
+            completed = create_job(superadmin, [{"rootId": "raw", "paths": ["hello.txt", "nested"]}])
+            result = wait_job(superadmin, completed["id"])
+            assert result["state"] == "COMPLETED", result
+            status, zipped = superadmin.request("/api/system/files/archive-jobs/" + completed["id"] + "/download", raw=True)
+            assert status == 200
+            with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
+                assert archive.testzip() is None
+                assert set(archive.namelist()) == {"raw/hello.txt", "raw/nested/中文.txt"}
+                assert archive.read("raw/hello.txt") == "真实文件\n".encode()
             print("FILE_LIST=PASS")
             print("SINGLE_DOWNLOAD=PASS")
-            print("PATH_TRAVERSAL_AND_SENSITIVE_BLOCK=PASS")
-            print("ADMIN_EXTERNAL_TOOL_DENIED=PASS")
-            print("SUPERADMIN_TOOL_POLICY=PASS")
+            print("ZIP_CONTENT_INTEGRITY=PASS")
             print("ZIP_JOB_AND_DOWNLOAD=PASS")
+            print("ZIP64_LARGE_ARCHIVE=NOT_RUN")
             print("REAL_WINDOWS_GUI=NOT_RUN")
-            print("PASS: isolated real service API/file/archive/role contract")
+            print("PASS: isolated real service API, archive resource admission, cancellation and ZIP integrity contract")
         finally:
             if service.poll() is None:
                 service.terminate()
                 service.wait(timeout=15)
             if service.returncode and service.stdout:
                 print(service.stdout.read()[-4000:])
+
 
 if __name__ == "__main__":
     main()

@@ -4,4 +4,25 @@ files exposes only these logical roots: raw, terminal-recordings, inbox, archive
 
 Every request rejects absolute paths, drive-qualified paths, dot-dot segments, control characters and reparse-point traversal. SQLite catalog files, local API tokens, credentials, password material, .open files and recovery markers are blocked. The implementation does not expose delete, move or arbitrary host-shell operations.
 
-Single files are streamed with range support. A file/folder/mixed selection is expanded server-side into an owner-bound background ZIP job. Job state survives a browser refresh while the service process remains alive; it includes file/byte progress, cancellation and 24-hour temp cleanup. ZIP64 is provided by .NET ZipArchive when the archive requires it.
+Single files are streamed with range support. A file/folder/mixed selection is expanded server-side into an owner-bound background ZIP job. Job state survives a browser refresh while the service process remains alive; it includes file/byte progress, cancellation and periodic cleanup.
+
+## Archive resource budget
+
+The default service budget is deliberately finite:
+
+- one running job and eight queued jobs;
+- two active jobs per Web user/session identity;
+- 10,000 file entries and 20 GiB of input per job;
+- 5,000 scanned directories, depth 32 and 25,000 metadata entries per scan;
+- 64 MiB metadata budget per scan and 32 GiB aggregate reserved input bytes;
+- 128 retained terminal job records, with 24-hour completed and one-hour failed/cancelled retention.
+
+These limits can be lowered or raised within bounded environment-variable ranges. Admission reserves a job slot before directory expansion and reserves input bytes before enqueue. A bounded channel rejects excess requests with `429` and stable codes such as `ARCHIVE_QUEUE_FULL`, `ARCHIVE_USER_LIMIT` and `ARCHIVE_RESOURCE_LIMIT`; rejected requests do not create a job or temporary file.
+
+Directory expansion is iterative and cancellable. It counts files, directories and metadata as it walks, rejects reparse points, and fails with an explicit scan/input-change error if a selected path changes. The service never holds the admission lock during disk traversal.
+
+## ZIP lifecycle and cancellation
+
+Jobs use `QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELLED`. A task cancellation token is linked with the service stop token and is passed into every file read/write. A cancelled job cannot become `COMPLETED`; its `.zip.part` file is removed and its active/input reservation is released. A completed ZIP is renamed from `.zip.part` only after the archive is closed. Downloads use a lease so maintenance cannot remove an actively streamed ZIP.
+
+An independent five-minute maintenance timer removes expired terminal jobs and orphan temporary files even when the queue is idle. Startup repeats orphan cleanup, and service shutdown cancels outstanding work. Cleanup only touches files owned by the archive job directory; Raw, Syslog, SQLite, terminal recordings and published reports are outside its scope. ZIP64 is provided by .NET `ZipArchive` when required; a real multi-gigabyte ZIP64 run remains unexecuted in CI.

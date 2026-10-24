@@ -9,10 +9,12 @@
 - Traversal, reparse-point and sensitive-file protections.
 - Elevated local password reset command/scripts with session and CSRF revocation.
 - PR-1 auth/CSRF and G2.3/G2.4 terminal code remains in place.
+- ZIP admission is bounded before scan: one running/eight queued jobs, two active jobs per user, finite file/input/metadata/directory budgets and aggregate reserved input bytes.
+- ZIP cancellation is linked to the running copy, terminal states are monotonic, `.zip.part` files are unpublished until complete, and a periodic maintenance loop cleans expired jobs and orphan archive files.
 
 ## Evidence and limitations
 
-tests/web_pr2_contract.py is a fail-closed source contract check. tests/web_pr2_e2e.py starts the real .NET Service against an isolated data root and verifies list/download/archive/role/traversal behavior. It does not claim a real Windows GUI launch.
+tests/web_pr2_contract.py is a fail-closed source contract check. tests/web_pr2_e2e.py starts the real .NET Service against an isolated data root with small queue limits and a development-only bounded copy delay. It verifies list/download/archive/role/traversal behavior, controlled queue rejection, per-user admission, queued/running cancellation, temp cleanup and standard ZIP CRC/content integrity. It does not claim a real Windows GUI launch or a multi-gigabyte ZIP64 run.
 
 The final report must keep these values explicit:
 

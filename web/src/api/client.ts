@@ -115,6 +115,7 @@ export interface ArchiveJob {
   processedBytes: number
   totalBytes?: number | null
   current?: string | null
+  errorCode?: string | null
   error?: string | null
   createdMs: number
   completedMs?: number | null
@@ -151,7 +152,10 @@ async function request<T>(path: string, init: RequestInit = {}, allowErrorBody =
     const body = await response.text()
     if (allowErrorBody) throw new ApiRequestError(response.status, body || response.statusText)
     let message = body || response.statusText
-    try { message = JSON.parse(body).error || message } catch { /* plain text */ }
+    try {
+      const parsed = JSON.parse(body)
+      message = parsed.detail ? `${parsed.error || response.statusText}: ${parsed.detail}` : parsed.error || message
+    } catch { /* plain text */ }
     throw new ApiRequestError(response.status, message)
   }
   if (response.status === 204) return undefined as T
