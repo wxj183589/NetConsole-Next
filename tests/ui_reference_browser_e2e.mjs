@@ -52,6 +52,7 @@ await screenshot('overview-dark.png')
 await page.getByTitle('切换浅色主题').click()
 
 await visit('/devices', 'devices-light.png')
+const deviceRows = await page.locator('.data-table tbody .device-name').count()
 await page.getByTitle('切换深色主题').click()
 await settle()
 await screenshot('devices-dark.png')
@@ -80,7 +81,7 @@ const report = {
   failedRequests,
   badResponses,
   authOrMissingResponses,
-  deviceRows: await page.locator('.data-table tbody tr').count(),
+  deviceRows,
 }
 fs.writeFileSync(path.join(outputDir, 'browser-evidence.json'), JSON.stringify(report, null, 2), 'utf8')
 console.log(JSON.stringify(report, null, 2))

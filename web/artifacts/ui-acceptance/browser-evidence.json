@@ -1,0 +1,28 @@
+{
+  "baseUrl": "http://127.0.0.1:18772",
+  "chromePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "viewportChecks": [
+    "1920x1080",
+    "1440x900",
+    "1366x768"
+  ],
+  "screenshots": [
+    "devices-dark.png",
+    "devices-light.png",
+    "files.png",
+    "overview-1366x768.png",
+    "overview-1440x900.png",
+    "overview-dark.png",
+    "overview-light.png",
+    "settings.png",
+    "tasks.png",
+    "terminal-dark.png",
+    "tools.png"
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "badResponses": [],
+  "authOrMissingResponses": [],
+  "deviceRows": 0
+}
