@@ -31,6 +31,43 @@ internal sealed record TaskRunSnapshot(string Id, string? SourceId, string TaskT
     long? QueuedMs, long? StartedMs, long? DeadlineMs, long? EndedMs, string? FailureReason, string? DefinitionId,
     string? RawOutputPath, string? RawOutputSha256, long? RawOutputBytes, string? ParsedResultJson,
     string? CaptureStatus, string? ParseStatus);
+internal sealed record DeviceInventorySummary(
+    long TotalRecords,
+    long ValidDevices,
+    long InvalidRecords,
+    long EnabledDevices,
+    long DisabledDevices,
+    long OnlineDevices,
+    long OfflineDevices,
+    long UnknownStatus);
+internal sealed record DeviceInventoryItem(
+    string Id,
+    string Name,
+    string ManagementAddress,
+    int Port,
+    string Username,
+    string Vendor,
+    string Model,
+    string DeviceType,
+    string Protocol,
+    string Site,
+    string Group,
+    bool Enabled,
+    string ConnectionStatus,
+    long? LastSeenMs,
+    bool CredentialConfigured,
+    string HostKeyUpdatePolicy,
+    string TerminalEncoding,
+    string? LastDisconnectReason,
+    bool IsValid,
+    IReadOnlyList<string> QualityIssues);
+internal sealed record DeviceInventoryPage(
+    int Page,
+    int PageSize,
+    long Total,
+    bool HasMore,
+    DeviceInventorySummary Summary,
+    IReadOnlyList<DeviceInventoryItem> Items);
 internal sealed record TaskDefinitionSnapshot(string Id, string TaskType, string Target, string Command,
     long TimeoutMs, bool Enabled, string RestartPolicy);
 internal sealed record RawIntegrityAuditSnapshot(string Id, string RelativePath, long DetectedMs, string Reason,
@@ -1048,6 +1085,112 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                 reader.GetString(4), reader.IsDBNull(5) ? string.Empty : reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8),
                 reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0));
         return profiles;
+    }
+
+    public DeviceInventoryPage QueryDeviceInventory(int page = 1, int pageSize = 20,
+        string? search = null, string? status = null)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var filters = new List<string>();
+        if (!string.IsNullOrWhiteSpace(search)) filters.Add("(p.id LIKE $search OR p.host LIKE $search OR p.username LIKE $search)");
+        switch (status?.Trim().ToUpperInvariant())
+        {
+            case "ENABLED": filters.Add("p.enabled=1"); break;
+            case "DISABLED": filters.Add("p.enabled=0"); break;
+            case "ONLINE": filters.Add("s.state='CONNECTED'"); break;
+            case "OFFLINE": filters.Add("s.state IN ('DISCONNECTED','FAILED','CLOSED')"); break;
+            case "UNKNOWN": filters.Add("p.enabled=1 AND (s.state IS NULL OR s.state NOT IN ('CONNECTED','DISCONNECTED','FAILED','CLOSED'))"); break;
+        }
+
+        var where = filters.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", filters);
+        using var db = Open();
+        using var summary = db.CreateCommand();
+        summary.CommandText = $@"WITH latest AS (
+                SELECT target_id,state,ROW_NUMBER() OVER(PARTITION BY target_id ORDER BY started_ms DESC) AS rn
+                FROM terminal_sessions
+            )
+            SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN TRIM(p.id)<>'' AND TRIM(p.host)<>'' AND TRIM(p.terminal_protocol)<>'' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN TRIM(p.id)='' OR TRIM(p.host)='' OR TRIM(p.terminal_protocol)='' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN p.enabled=1 THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN p.enabled=0 THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN s.state='CONNECTED' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN s.state IN ('DISCONNECTED','FAILED','CLOSED') THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN p.enabled=1 AND (s.state IS NULL OR s.state NOT IN ('CONNECTED','DISCONNECTED','FAILED','CLOSED')) THEN 1 ELSE 0 END),0)
+            FROM h3c_device_profiles p
+            LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
+            {where}";
+        if (!string.IsNullOrWhiteSpace(search)) summary.Parameters.AddWithValue("$search", $"%{search.Trim()}%");
+        using var summaryReader = summary.ExecuteReader();
+        summaryReader.Read();
+        var total = summaryReader.GetInt64(0);
+        var counts = new DeviceInventorySummary(total, summaryReader.GetInt64(1), summaryReader.GetInt64(2),
+            summaryReader.GetInt64(3), summaryReader.GetInt64(4), summaryReader.GetInt64(5),
+            summaryReader.GetInt64(6), summaryReader.GetInt64(7));
+
+        using var command = db.CreateCommand();
+        command.CommandText = $@"WITH latest AS (
+                SELECT target_id,state,started_ms,disconnect_reason,
+                    ROW_NUMBER() OVER(PARTITION BY target_id ORDER BY started_ms DESC) AS rn
+                FROM terminal_sessions
+            )
+            SELECT p.id,p.host,p.port,p.username,p.credential_reference,p.enabled,
+                p.host_key_update_policy,p.terminal_encoding,p.terminal_protocol,p.updated_ms,
+                COALESCE(NULLIF(st.name,''),'—'),s.state,s.started_ms,s.disconnect_reason
+            FROM h3c_device_profiles p
+            LEFT JOIN collection_sources cs ON cs.id=p.source_id
+            LEFT JOIN sites st ON st.id=cs.site_id
+            LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
+            {where}
+            ORDER BY p.updated_ms DESC,p.id ASC
+            LIMIT $limit OFFSET $offset";
+        command.Parameters.AddWithValue("$limit", pageSize);
+        command.Parameters.AddWithValue("$offset", (page - 1) * pageSize);
+        if (!string.IsNullOrWhiteSpace(search)) command.Parameters.AddWithValue("$search", $"%{search.Trim()}%");
+        using var reader = command.ExecuteReader();
+        var items = new List<DeviceInventoryItem>();
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            var host = reader.GetString(1);
+            var port = reader.GetInt32(2);
+            var username = reader.GetString(3);
+            var credential = reader.GetString(4);
+            var enabled = reader.GetInt32(5) != 0;
+            var policy = reader.GetString(6);
+            var encoding = reader.GetString(7);
+            var protocol = reader.GetString(8);
+            var issues = new List<string>();
+            if (string.IsNullOrWhiteSpace(id)) issues.Add("MISSING_ID");
+            if (string.IsNullOrWhiteSpace(host)) issues.Add("MISSING_ADDRESS");
+            if (string.IsNullOrWhiteSpace(protocol)) issues.Add("MISSING_PROTOCOL");
+            var state = reader.IsDBNull(11) ? "UNKNOWN" : reader.GetString(11);
+            if (!enabled) state = "DISABLED";
+            items.Add(new DeviceInventoryItem(
+                id,
+                string.IsNullOrWhiteSpace(id) ? "未命名设备" : id,
+                string.IsNullOrWhiteSpace(host) ? "—" : host,
+                port,
+                string.IsNullOrWhiteSpace(username) ? "—" : username,
+                "—",
+                "—",
+                "H3C 终端配置",
+                string.IsNullOrWhiteSpace(protocol) ? "—" : protocol,
+                reader.GetString(10),
+                "H3C",
+                enabled,
+                state,
+                reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                !string.IsNullOrWhiteSpace(credential),
+                string.IsNullOrWhiteSpace(policy) ? "—" : policy,
+                string.IsNullOrWhiteSpace(encoding) ? "—" : encoding,
+                reader.IsDBNull(13) ? null : reader.GetString(13),
+                issues.Count == 0,
+                issues));
+        }
+
+        return new DeviceInventoryPage(page, pageSize, total, (long)page * pageSize < total, counts, items);
     }
 
     public void SetH3cCompatibility(string id, string hostKeyUpdatePolicy, bool allowLegacyAlgorithms,

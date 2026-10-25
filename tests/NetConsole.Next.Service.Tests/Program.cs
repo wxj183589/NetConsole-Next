@@ -126,6 +126,7 @@ internal static class SchedulerTests
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
+        VerifiesDeviceInventoryMappingAndCounts();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();
@@ -690,6 +691,69 @@ internal static class SchedulerTests
                        WindowsDpapiCredentialVault.Get(root, "LAB_SWITCH_A") is null,
                     "credential revocation must make the reference unavailable");
             }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void VerifiesDeviceInventoryMappingAndCounts()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-inventory-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            using (var db = OpenCatalog(root))
+            {
+                using (var sources = db.CreateCommand())
+                {
+                    sources.CommandText = @"INSERT INTO collection_sources(id,site_id,kind,label) VALUES
+                        ('ui-source-online','local','H3C_SSH','UI online'),
+                        ('ui-source-offline','local','H3C_SSH','UI offline'),
+                        ('ui-source-unknown','local','H3C_SSH','UI unknown'),
+                        ('ui-source-invalid','local','H3C_SSH','UI invalid')";
+                    sources.ExecuteNonQuery();
+                }
+                using (var profiles = db.CreateCommand())
+                {
+                    profiles.CommandText = @"INSERT INTO h3c_device_profiles
+                        (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
+                         host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback)
+                        VALUES
+                        ('device-online','ui-source-online','192.0.2.10',22,'reader','CRED','SHA256:online',1,1,400,'AUTO_UPDATE',0,'AUTO','SSH',0),
+                        ('device-offline','ui-source-offline','192.0.2.11',22,'reader','CRED','SHA256:offline',1,2,300,'AUTO_UPDATE',0,'AUTO','SSH',0),
+                        ('device-unknown','ui-source-unknown','192.0.2.12',22,'reader','CRED','SHA256:unknown',1,3,200,'AUTO_UPDATE',0,'AUTO','SSH',0),
+                        ('','ui-source-invalid','',22,'','CRED','SHA256:invalid',0,4,100,'AUTO_UPDATE',0,'AUTO','',0)";
+                    profiles.ExecuteNonQuery();
+                }
+                using var sessions = db.CreateCommand();
+                sessions.CommandText = @"INSERT INTO terminal_sessions
+                    (id,target_id,target_name,protocol,mode,host,port,state,started_ms,last_activity_ms,disconnect_reason)
+                    VALUES
+                    ('ui-session-online','device-online','device-online','SSH','RESTRICTED_READONLY','192.0.2.10',22,'CONNECTED',500,500,NULL),
+                    ('ui-session-offline','device-offline','device-offline','SSH','RESTRICTED_READONLY','192.0.2.11',22,'DISCONNECTED',400,400,'synthetic test')";
+                sessions.ExecuteNonQuery();
+            }
+
+            var page = catalog.QueryDeviceInventory(page: 1, pageSize: 2);
+            Assert(page.Total == 4 && page.Items.Count == 2 && page.HasMore,
+                $"device inventory pagination should expose all records without rendering all rows: {page}");
+            Assert(page.Summary.TotalRecords == 4 && page.Summary.ValidDevices == 3 && page.Summary.InvalidRecords == 1 &&
+                   page.Summary.EnabledDevices == 3 && page.Summary.DisabledDevices == 1 &&
+                   page.Summary.OnlineDevices == 1 && page.Summary.OfflineDevices == 1 && page.Summary.UnknownStatus == 1,
+                $"device inventory summary counts must distinguish validity, enablement and connection status: {page.Summary}");
+
+            var invalid = catalog.QueryDeviceInventory(pageSize: 20).Items.Single(item => !item.IsValid);
+            Assert(invalid.Name == "未命名设备" && invalid.ManagementAddress == "—" && invalid.Protocol == "—" &&
+                   invalid.ConnectionStatus == "DISABLED" && invalid.QualityIssues.Contains("MISSING_ID") &&
+                   invalid.QualityIssues.Contains("MISSING_ADDRESS") && invalid.QualityIssues.Contains("MISSING_PROTOCOL"),
+                $"invalid device fields must map to truthful display fallbacks and quality issues: {invalid}");
+
+            Assert(catalog.QueryDeviceInventory(pageSize: 20, status: "ONLINE").Total == 1 &&
+                   catalog.QueryDeviceInventory(pageSize: 20, status: "UNKNOWN").Total == 1 &&
+                   catalog.QueryDeviceInventory(pageSize: 20, status: "DISABLED").Total == 1 &&
+                   catalog.QueryDeviceInventory(pageSize: 20, search: "192.0.2.11").Total == 1,
+                "device inventory status and search filters must operate on real catalog/session fields");
         }
         finally { Directory.Delete(root, true); }
     }

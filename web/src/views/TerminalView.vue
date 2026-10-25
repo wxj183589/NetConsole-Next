@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { Connection, Document, Search, Setting, SwitchButton } from '@element-plus/icons-vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
   closeTerminalSession, createTerminalSession, downloadExport, getRecordingIntegrity, getReplay, getSerialPorts,
@@ -19,6 +20,9 @@ interface TerminalTab {
 interface ReplayEntry { atMs: number; direction: string; dataB64: string }
 
 const devices = ref<TerminalDevice[]>([])
+const deviceSearch = ref('')
+const activeDeviceId = ref('')
+const selectedProtocol = ref('AUTO')
 const route = useRoute()
 const sessions = ref<TerminalSession[]>([])
 const tabs = reactive<TerminalTab[]>([])
@@ -40,15 +44,18 @@ const replaySpeed = ref(1)
 const replaySearch = ref('')
 let replayTimer: ReturnType<typeof setTimeout> | undefined
 
-const terminalTheme = { background: '#0b111a', foreground: '#dbe8f8', cursor: '#5d9cff', selectionBackground: '#294a76' }
+const terminalTheme = { background: '#08111d', foreground: '#dbe8f8', cursor: '#5d9cff', selectionBackground: '#294a76' }
+const filteredDevices = computed(() => {
+  const query = deviceSearch.value.trim().toLowerCase()
+  return devices.value.filter(device => !query || `${device.id} ${device.host} ${device.username}`.toLowerCase().includes(query))
+})
+const selectedDevice = computed(() => devices.value.find(device => device.id === activeDeviceId.value) || null)
 function activeTab(): TerminalTab | undefined { return tabs.find((tab) => tab.id === activeId.value) }
 function visibleTabs(): TerminalTab[] { const active = activeTab(); if (!active) return []; return split.value ? tabs.filter((tab) => tab.id === active.id || tab.id === tabs.find((candidate) => candidate.id !== active.id)?.id) : [active] }
-function setPaneRef(id: string, element: Element | null): void {
-  if (element instanceof HTMLElement) { paneRefs.set(id, element); mountTerminal(tabs.find((tab) => tab.id === id)) }
-}
+function setPaneRef(id: string, element: Element | null): void { if (element instanceof HTMLElement) { paneRefs.set(id, element); mountTerminal(tabs.find((tab) => tab.id === id)) } }
 function mountTerminal(tab?: TerminalTab): void {
   if (!tab || tab.terminal || !paneRefs.has(tab.id)) return
-  const terminal = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 5000, fontSize: 13, theme: terminalTheme })
+  const terminal = new Terminal({ convertEol: true, cursorBlink: true, scrollback: 5000, fontSize: 13, fontFamily: 'Cascadia Mono, Consolas, monospace', theme: terminalTheme })
   const fit = new FitAddon(); const searchAddon = new SearchAddon()
   terminal.loadAddon(fit); terminal.loadAddon(searchAddon); tab.terminal = terminal; tab.fit = fit; tab.search = searchAddon
   terminal.open(paneRefs.get(tab.id)!); fit.fit(); terminal.onResize((size) => sendSocket(tab, { type: 'resize', columns: size.cols, rows: size.rows }))
@@ -64,7 +71,13 @@ function handleInput(tab: TerminalTab, data: string): void {
   tab.inputBuffer += data; tab.terminal?.write(data)
 }
 function sendSocket(tab: TerminalTab, message: Record<string, unknown>): void { if (tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(JSON.stringify(message)) }
+function selectDevice(device: TerminalDevice): void {
+  activeDeviceId.value = device.id
+  selectedProtocol.value = device.supportedProtocols.includes('SSH') ? 'SSH' : device.supportedProtocols[0] || 'AUTO'
+}
+async function openSelectedDevice(): Promise<void> { if (selectedDevice.value) await openDevice(selectedDevice.value, selectedProtocol.value) }
 async function openDevice(device: TerminalDevice, protocol: string): Promise<void> {
+  selectDevice(device); selectedProtocol.value = protocol
   const tab: TerminalTab = { id: crypto.randomUUID(), label: `${device.host} · ${protocol}`, targetId: device.id, protocol, inputBuffer: '', connected: false }
   tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
   try {
@@ -73,10 +86,7 @@ async function openDevice(device: TerminalDevice, protocol: string): Promise<voi
     tab.socket = new WebSocket(`${scheme}://${location.host}/api/system/terminal/sessions/${tab.sessionId}/stream?ticket=${encodeURIComponent(ticket.ticket)}`)
     tab.socket.binaryType = 'arraybuffer'
     tab.socket.onopen = () => { tab.connected = true; tab.fit?.fit(); tab.terminal?.writeln('\x1b[32m已连接\x1b[0m') }
-    tab.socket.onmessage = async (event) => {
-      if (typeof event.data === 'string') { try { const message = JSON.parse(event.data); if (message.type === 'error') tab.terminal?.writeln(`\r\n\x1b[31m${message.error}\x1b[0m`) } catch { /* ignore malformed status */ } }
-      else tab.terminal?.write(new Uint8Array(event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer()))
-    }
+    tab.socket.onmessage = async (event) => { if (typeof event.data === 'string') { try { const message = JSON.parse(event.data); if (message.type === 'error') tab.terminal?.writeln(`\r\n\x1b[31m${message.error}\x1b[0m`) } catch { /* ignore malformed status */ } } else tab.terminal?.write(new Uint8Array(event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer())) }
     tab.socket.onclose = () => { tab.connected = false; tab.terminal?.writeln('\r\n\x1b[90m已断开\x1b[0m') }
     tab.socket.onerror = () => ElMessage.error(`${tab.label} WebSocket 连接失败`)
   } catch (cause) { tab.terminal?.writeln(`\r\n\x1b[31m${cause instanceof Error ? cause.message : '连接失败'}\x1b[0m`); ElMessage.error('终端会话创建失败') }
@@ -87,9 +97,7 @@ async function closeTab(tab: TerminalTab): Promise<void> {
   await refreshHistory()
 }
 async function reconnect(): Promise<void> { const tab = activeTab(); if (!tab?.sessionId) return; tab.socket?.close(); try { const ticket = await issueTerminalTicket(tab.sessionId); const scheme = location.protocol === 'https:' ? 'wss' : 'ws'; tab.socket = new WebSocket(`${scheme}://${location.host}/api/system/terminal/sessions/${tab.sessionId}/stream?ticket=${encodeURIComponent(ticket.ticket)}`) } catch { ElMessage.error('重连失败') } }
-async function openSerial(): Promise<void> {
-  try { serialPorts.value = await getSerialPorts(); if (!serialPorts.value.length) { ElMessage.info('服务端未发现可用 COM 端口'); return }; selectedSerialPort.value = serialPorts.value[0]; serialDialog.value = true } catch { ElMessage.error('COM 端口读取失败') }
-}
+async function openSerial(): Promise<void> { try { serialPorts.value = await getSerialPorts(); if (!serialPorts.value.length) { ElMessage.info('服务端未发现可用 COM 端口'); return }; selectedSerialPort.value = serialPorts.value[0]; serialDialog.value = true } catch { ElMessage.error('COM 端口读取失败') } }
 async function openSerialSession(): Promise<void> {
   serialDialog.value = false
   const tab: TerminalTab = { id: crypto.randomUUID(), label: selectedSerialPort.value, targetId: `serial:${selectedSerialPort.value}`, protocol: 'SERIAL', inputBuffer: '', connected: false }
@@ -109,20 +117,42 @@ function stopReplay(): void { if (replayTimer) clearTimeout(replayTimer); replay
 function playReplay(): void { stopReplay(); if (replayIndex.value >= replayEntries.value.length) replayIndex.value = 0; const step = () => { if (replayIndex.value >= replayEntries.value.length) return; const current = replayEntries.value[replayIndex.value]; replayIndex.value += 1; replayTimer = setTimeout(step, Math.max(12, ((replayEntries.value[replayIndex.value]?.atMs || current.atMs + 120) - current.atMs) / replaySpeed.value)) }; step() }
 async function exportSession(format: string): Promise<void> { if (!historySession.value) return; try { const blob = await downloadExport(historySession.value.id, format); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${historySession.value.id}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href) } catch { ElMessage.error('导出失败') } }
 function closeHistory(): void { stopReplay(); historyDialog.value = false }
-async function refreshAll(): Promise<void> { loading.value = true; try { devices.value = await getTerminalDevices(); await refreshHistory() } catch { ElMessage.error('终端能力读取失败') } finally { loading.value = false } }
-onMounted(async () => { await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) await openDevice(device, device.supportedProtocols.includes('SSH') ? 'SSH' : device.supportedProtocols[0] || 'AUTO') })
+async function refreshAll(): Promise<void> { loading.value = true; try { devices.value = await getTerminalDevices(); if (!activeDeviceId.value && devices.value[0]) selectDevice(devices.value[0]); await refreshHistory() } catch { devices.value = []; sessions.value = []; ElMessage.info('当前服务未提供可用终端设备，页面保留真实空状态') } finally { loading.value = false } }
+onMounted(async () => { await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) } })
 onBeforeUnmount(() => { stopReplay(); tabs.forEach((tab) => { tab.socket?.close(); tab.terminal?.dispose() }) })
 </script>
 
 <template>
   <NcLayout title="终端控制台" description="SSH / Telnet / COM · 受控只读会话 · 录制、回放与导出">
-    <template #actions><el-button size="small" @click="refreshAll">刷新</el-button><el-button size="small" @click="openSerial">打开 COM</el-button></template>
-    <div class="terminal-layout">
-      <aside class="card terminal-sidebar"><div class="card__header"><h2>登记设备</h2><span class="state-pill">{{ devices.length }}</span></div><div class="device-list"><div v-for="device in devices" :key="device.id" class="device-list__item"><strong>{{ device.host }}:{{ device.port }}</strong><small>{{ device.username }} · {{ device.enabled ? '已授权' : '已禁用' }}</small><div class="toolbar"><el-button v-for="protocol in device.supportedProtocols" :key="protocol" text size="small" :disabled="!device.enabled" @click="openDevice(device, protocol)">{{ protocol }}</el-button></div></div><div v-if="!devices.length" class="empty-state"><div><strong>暂无可用设备</strong><small>设备必须先由服务端登记；不生成模拟设备。</small></div></div></div><div class="card__header"><h2>会话历史</h2><el-button text size="small" @click="refreshHistory">刷新</el-button></div><div class="history-list"><div v-for="session in sessions" :key="session.id" class="history-item" @click="openHistory(session)"><strong>{{ session.targetName }}</strong><small>{{ session.protocol }} · <span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></small><small>{{ formatTime(session.startedMs) }}</small></div><div v-if="!sessions.length" class="empty-state"><div><strong>暂无会话</strong><small>终端会话关闭后会保留在服务端 Catalog 中。</small></div></div></div></aside>
-      <section class="card terminal-main"><div class="terminal-toolbar"><el-button size="small" :disabled="!tabs.length" @click="split = !split">{{ split ? '取消分屏' : '分屏' }}</el-button><el-button size="small" :disabled="!activeTab()" @click="reconnect">重连</el-button><el-button size="small" :disabled="!activeTab()" @click="activeTab() && closeTab(activeTab()!)">断开</el-button><div class="terminal-toolbar__grow" /><input v-model="search" placeholder="搜索当前终端，回车定位" @keydown.enter="activeTab()?.search?.findNext(search)" /></div><div class="terminal-tabs"><button v-for="tab in tabs" :key="tab.id" :class="['terminal-tab', { active: activeId === tab.id }]" type="button" @click="activeId = tab.id"><span>{{ tab.label }} {{ tab.connected ? '●' : '○' }}</span><span class="terminal-tab__close" @click.stop="closeTab(tab)">×</span></button><span v-if="!tabs.length" style="padding:8px 10px;color:#758aa8;font-size:11px">从左侧选择设备打开受控终端</span></div><div :class="['terminal-panes', { split }]" v-if="tabs.length"><div v-for="tab in visibleTabs()" :key="tab.id" class="terminal-pane"><div :ref="(element) => setPaneRef(tab.id, element as Element | null)" class="terminal-host" /></div></div><div v-else class="terminal-placeholder">内置终端尚未打开会话</div></section>
+    <div class="terminal-workbench">
+      <aside class="terminal-device-panel">
+        <div class="terminal-panel-head"><div><h2>设备列表</h2><small>{{ devices.length }} 条当前可用记录</small></div><el-button text size="small" :loading="loading" @click="refreshAll">刷新</el-button></div>
+        <div class="terminal-device-search"><label class="global-search"><el-icon><Search /></el-icon><input v-model="deviceSearch" placeholder="搜索设备、地址…" /></label></div>
+        <div class="terminal-device-list"><button v-for="device in filteredDevices" :key="device.id" :class="['terminal-device-row', { 'is-active': activeDeviceId === device.id }]" type="button" @click="selectDevice(device)"><strong>{{ device.host || '未命名设备' }}</strong><small>{{ device.username || '—' }} · {{ device.enabled ? '已授权' : '已禁用' }}</small><span class="terminal-device-row__meta"><span>{{ device.terminalProtocol || 'AUTO' }}</span><span :class="['state-pill', device.enabled ? 'good' : 'bad']">{{ device.enabled ? '可用' : '禁用' }}</span></span></button><div v-if="!filteredDevices.length" class="terminal-history-empty"><div><el-icon><Monitor /></el-icon><p>暂无可用设备</p><small>服务端必须先登记真实设备。</small></div></div></div>
+      </aside>
+
+      <section class="terminal-inspector">
+        <div class="terminal-panel-head"><div><h2>连接配置</h2><small>根据登记 Profile 展示</small></div><el-icon><Setting /></el-icon></div>
+        <div v-if="selectedDevice" class="terminal-inspector__body">
+          <div class="terminal-device-title"><el-icon><Connection /></el-icon><div><h2>{{ selectedDevice.id }}</h2><p>{{ selectedDevice.host }}:{{ selectedDevice.port }} · {{ selectedDevice.username }}</p></div></div>
+          <dl class="terminal-detail-list"><div class="terminal-detail-row"><dt>协议</dt><dd>{{ selectedDevice.terminalProtocol || 'AUTO' }}</dd></div><div class="terminal-detail-row"><dt>Host Key</dt><dd>{{ selectedDevice.hostKeyUpdatePolicy }}</dd></div><div class="terminal-detail-row"><dt>编码</dt><dd>{{ selectedDevice.terminalEncoding }}</dd></div><div class="terminal-detail-row"><dt>凭据</dt><dd>{{ selectedDevice.username ? '由服务端引用' : '未配置' }}</dd></div></dl>
+          <div class="protocol-switch"><button v-for="protocol in selectedDevice.supportedProtocols" :key="protocol" :class="{ 'is-active': selectedProtocol === protocol }" type="button" @click="selectedProtocol = protocol">{{ protocol === 'SERIAL' ? 'COM / Console' : protocol }}</button></div>
+          <div class="terminal-params"><div class="terminal-param"><span>地址</span><span class="mono">{{ selectedDevice.host }}:{{ selectedDevice.port }}</span></div><div class="terminal-param"><span>模式</span><span>RESTRICTED_READONLY</span></div><div class="terminal-param"><span>回退</span><span>{{ selectedDevice.allowTelnetFallback ? '允许 Telnet' : '按 Profile 约束' }}</span></div></div>
+          <el-button class="terminal-open-button" type="primary" :disabled="!selectedDevice.enabled" @click="openSelectedDevice"><el-icon><Connection /></el-icon>打开受控终端</el-button>
+        </div>
+        <div v-else class="terminal-history-empty"><div><el-icon><Document /></el-icon><p>请选择设备</p><small>当前预览不创建模拟设备或连接。</small></div></div>
+      </section>
+
+      <section class="terminal-console">
+        <div class="terminal-console__toolbar"><span v-if="activeTab()" class="terminal-status"><i class="status-dot status-dot--success" />{{ activeTab()?.connected ? '受限只读' : '未连接' }}</span><span v-else class="terminal-status"><i class="status-dot" />等待会话</span><span class="toolbar-spacer" /><el-button size="small" :disabled="!tabs.length" @click="split = !split">{{ split ? '取消分屏' : '分屏' }}</el-button><el-button size="small" :disabled="!activeTab()" @click="reconnect">重连</el-button><el-button size="small" :disabled="!activeTab()" @click="activeTab() && closeTab(activeTab()!)"><el-icon><SwitchButton /></el-icon>断开</el-button><el-button size="small" @click="openSerial">COM</el-button><input v-model="search" placeholder="搜索终端" @keydown.enter="activeTab()?.search?.findNext(search)" /></div>
+        <div class="terminal-tabs"><button v-for="tab in tabs" :key="tab.id" :class="['terminal-tab', { active: activeId === tab.id }]" type="button" @click="activeId = tab.id"><span>{{ tab.label }} {{ tab.connected ? '●' : '○' }}</span><span class="terminal-tab__close" @click.stop="closeTab(tab)">×</span></button><span v-if="!tabs.length" style="padding:8px 10px;color:#758aa8;font-size:11px">从左侧选择设备打开受控终端</span></div>
+        <div :class="['terminal-panes', { split }]" v-if="tabs.length"><div v-for="tab in visibleTabs()" :key="tab.id" class="terminal-pane"><div :ref="(element) => setPaneRef(tab.id, element as Element | null)" class="terminal-host" /></div></div><div v-else class="terminal-placeholder"><div><el-icon><Connection /></el-icon><p>内置终端尚未打开会话</p><small>SSH、Telnet、COM 都必须经过服务端受控会话。</small></div></div>
+      </section>
+
+      <section class="terminal-history-dock"><div class="terminal-history-tabs"><button class="terminal-history-tab is-active" type="button"><el-icon><Document /></el-icon> 会话历史</button><button class="terminal-history-tab" type="button">终端回放</button><button class="terminal-history-tab" type="button">任务记录</button><span class="toolbar-spacer" /><el-button text size="small" @click="refreshHistory">刷新历史</el-button></div><div class="terminal-history-body"><table v-if="sessions.length" class="terminal-history-table"><thead><tr><th>目标设备</th><th>协议</th><th>开始时间</th><th>录制状态</th><th>完整性</th><th>操作</th></tr></thead><tbody><tr v-for="session in sessions.slice(0, 6)" :key="session.id"><td>{{ session.targetName }}</td><td>{{ session.protocol }}</td><td>{{ formatTime(session.startedMs) }}</td><td><span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></td><td>{{ session.recordingComplete ? 'COMPLETE' : '待确认' }}</td><td><el-button text size="small" @click="openHistory(session)">回放 / 导出</el-button></td></tr></tbody></table><div v-else class="terminal-history-empty"><div><el-icon><Document /></el-icon><p>暂无会话历史</p><small>终端会话结束后，服务端才会出现可回放记录。</small></div></div></div></section>
     </div>
+
     <el-dialog v-model="serialDialog" title="打开本地 COM Console" width="420px"><label class="form-field"><span>端口</span><select v-model="selectedSerialPort"><option v-for="port in serialPorts" :key="port" :value="port">{{ port }}</option></select></label><template #footer><el-button @click="serialDialog = false">取消</el-button><el-button type="primary" @click="openSerialSession">打开</el-button></template></el-dialog>
     <el-dialog :model-value="historyDialog" title="会话历史 / 只读回放" width="860px" @close="closeHistory"><template v-if="historySession"><div class="toolbar" style="margin-bottom:12px"><span>{{ historySession.targetName }} · {{ historySession.protocol }}</span><span :class="['state-pill', stateClass(historyIntegrity?.status || '')]">{{ historyIntegrity?.status || '读取中' }}</span><span class="state-pill">{{ historyIntegrity?.hashMatches ? 'SHA-256 匹配' : '完整性待确认' }}</span><div style="flex:1" /><el-button size="small" @click="exportSession('TXT')">TXT</el-button><el-button size="small" @click="exportSession('JSONL')">JSONL</el-button><el-button size="small" @click="exportSession('HTML')">HTML</el-button></div><div class="toolbar" style="margin-bottom:12px"><el-button size="small" @click="replayIndex = 0; stopReplay()">重新开始</el-button><el-button size="small" @click="playReplay">播放</el-button><label style="font-size:12px;color:var(--nc-text-secondary)">速度 <select v-model.number="replaySpeed"><option :value="0.5">0.5x</option><option :value="1">1x</option><option :value="2">2x</option><option :value="4">4x</option></select></label><input v-model="replaySearch" placeholder="搜索回放" style="min-height:30px;border:1px solid var(--nc-border);border-radius:6px;padding:0 8px" /></div><pre class="history-replay">{{ replaySearch ? replayText().replace(new RegExp(replaySearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (match) => `【${match}】`) : replayText() }}</pre><div class="section-label">事件时间轴</div><div class="table-wrap"><table class="data-table"><tbody><tr v-for="event in historyEvents" :key="`${event.atMs}-${event.eventType}`"><td>{{ formatTime(event.atMs) }}</td><td>{{ event.eventType }}</td><td class="muted mono">{{ event.detailJson }}</td></tr></tbody></table></div></template></el-dialog>
   </NcLayout>
 </template>
-
