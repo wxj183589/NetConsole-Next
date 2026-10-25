@@ -127,6 +127,10 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
+        await VerifiesRawPublishFailureIsRetryable();
+        await VerifiesPreservedRawRejectsFurtherOperations();
+        await VerifiesConcurrentRawSealIsSerialized();
+        VerifiesCatalogRegistrationRejectsMetadataConflict();
         VerifiesLocalSecurityTokenRotationAndDpapiBoundary();
         await PersistsH3cTaskOutputAsVerifiedRaw();
         await ReconcilesLegacyWindowsRawPathAliases();
@@ -144,10 +148,360 @@ internal static class SchedulerTests
         VerifiesRawPermissionRevocationIsVisible();
         await VerifiesCaptureDiskFullRetainsPartialRawAndFaults();
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
+        VerifiesArchiveResourceBoundariesAndAdmissionRollback();
+        await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveLifecycleCleanupAsync();
         VerifiesRollingLogSizeAndRetention();
         await TerminalCoreTests.RunAsync();
         RejectsInvalidRequests();
         Console.WriteLine("PASS: bounded/persisted scheduling, H3C parser and Raw output, migration, incremental recovery, SQLite/permission fault injection, queue rejection, timeout, cancellation and session lifecycle");
+    }
+
+    private static async Task VerifiesRawPublishFailureIsRetryable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            await writer.AppendAsync(new SyslogPacket(7100, "127.0.0.1", 5514, new byte[] { 0, 0xff, 0x0d, 0x0a }));
+            using (var db = OpenCatalog(root))
+            using (var trigger = db.CreateCommand())
+            {
+                trigger.CommandText = "CREATE TRIGGER fail_raw_seal BEFORE INSERT ON raw_segments BEGIN SELECT RAISE(ABORT,'injected seal failure'); END";
+                trigger.ExecuteNonQuery();
+            }
+
+            AssertThrows<SqliteException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            var published = Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories);
+            Assert(published.Length == 1 && !Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Any(),
+                "a Catalog failure after publish must retain one final Raw file and no stale .open file");
+            var rawBeforeRetry = File.ReadAllBytes(published[0]);
+            using (var db = OpenCatalog(root))
+            using (var drop = db.CreateCommand())
+            {
+                drop.CommandText = "DROP TRIGGER fail_raw_seal";
+                drop.ExecuteNonQuery();
+            }
+            await writer.SealAsync();
+            await writer.SealAsync();
+            Assert(rawBeforeRetry.SequenceEqual(File.ReadAllBytes(published[0])),
+                "retry after Catalog failure must not rewrite published Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 1, "retry after Catalog failure must create one finalized Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesConcurrentRawSealIsSerialized()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-seal-concurrent-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriterFactory().Create(catalog);
+            for (var index = 0; index < 32; index++)
+                await writer.AppendAsync(new SyslogPacket(7200 + index, "127.0.0.1", 5514, new byte[index % 31 + 1]));
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => writer.SealAsync()));
+            Assert(Directory.GetFiles(catalog.RawRoot, "*.ndjson", SearchOption.AllDirectories).Length == 1,
+                "concurrent SealAsync calls must publish exactly one Raw segment");
+            Assert(catalog.GetRawCounts().Finalized == 1, "concurrent SealAsync calls must create one Catalog row");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static async Task VerifiesPreservedRawRejectsFurtherOperations()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-raw-preserved-state-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var writer = new RawSegmentWriter(catalog, path => new FlushFailureStream(
+                new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32768, FileOptions.Asynchronous)));
+            await writer.AppendAsync(new SyslogPacket(7250, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("preserve-state")));
+            AssertThrows<IOException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<IOException>(() => writer.PreserveOpenAsync().GetAwaiter().GetResult());
+
+            var openPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedBytes = File.ReadAllBytes(openPath);
+            Assert(preservedBytes.Length > 0, "a failed flush must retain bytes already written to the .open file");
+            AssertThrows<InvalidOperationException>(() => writer.AppendAsync(
+                new SyslogPacket(7251, "127.0.0.1", 5514, Encoding.UTF8.GetBytes("must-reject")))
+                .GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => writer.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedBytes.SequenceEqual(File.ReadAllBytes(openPath)),
+                "operations after PreserveOpenAsync must not change the retained Raw bytes");
+            Assert(catalog.GetRawCounts().Finalized == 0,
+                "a preserved incomplete segment must not create a FINALIZED Catalog row");
+
+            var recovery = catalog.RecoverRawSegments();
+            Assert(recovery.RecoveredOpenFiles == 1 && recovery.FailedFiles == 0,
+                $"G1 recovery should reconcile the preserved .open file: {recovery}");
+            Assert(catalog.GetRawCounts().Incomplete == 1 && catalog.GetRawCounts().Finalized == 0,
+                "recovered preserved content must remain INCOMPLETE");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
+    }
+
+    private static void VerifiesCatalogRegistrationRejectsMetadataConflict()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-catalog-conflict-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            const string relative = "raw/syslog/catalog-conflict.ndjson";
+            var sha = new string('a', 64);
+            catalog.RegisterFinalizedSegment(relative, 1, 7300, 7300, sha, 42);
+            AssertThrows<InvalidOperationException>(() => catalog.RegisterFinalizedSegment(relative, 2, 7300, 7300, sha, 43));
+            using var db = OpenCatalog(root);
+            using var command = db.CreateCommand();
+            command.CommandText = "SELECT record_count,byte_count,sha256,state FROM raw_segments WHERE relative_path=$path";
+            command.Parameters.AddWithValue("$path", relative);
+            using var reader = command.ExecuteReader();
+            Assert(reader.Read() && reader.GetInt64(0) == 1 && reader.GetInt64(1) == 42 &&
+                   reader.GetString(2) == sha && reader.GetString(3) == "FINALIZED",
+                "a conflicting registration must preserve the original Catalog evidence");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+
+    private static void VerifiesArchiveResourceBoundariesAndAdmissionRollback()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMaxFileEntriesPerJob = 2,
+                ArchiveMaxDirectoryDepth = 1, ArchiveMaxMetadataEntriesPerJob = 16,
+                ArchiveMaxMetadataBytesPerJob = 16 * 512, ArchiveMaxActiveJobsPerUser = 1,
+                ArchiveMaxQueuedJobs = 2,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            Directory.CreateDirectory(Path.Combine(raw, "deep", "level", "too-deep"));
+            File.WriteAllText(Path.Combine(raw, "deep", "level", "too-deep", "value.txt"), "value");
+            File.WriteAllText(Path.Combine(raw, "one.txt"), "one");
+            File.WriteAllText(Path.Combine(raw, "two.txt"), "two");
+            File.WriteAllText(Path.Combine(raw, "three.txt"), "three");
+            var files = new FileManagerService(settings);
+            var identity = new WebUserIdentity("admin", "admin", "ADMIN", "session-a");
+            AssertThrows<ArchiveRejectedException>(() => files.Expand(
+                new ArchiveSelection("raw", ["deep"]), new ArchiveExpansionBudget(settings),
+                new HashSet<string>(StringComparer.Ordinal), CancellationToken.None));
+            AssertThrows<ArchiveRejectedException>(() => files.Expand(
+                new ArchiveSelection("raw", [""]), new ArchiveExpansionBudget(settings),
+                new HashSet<string>(StringComparer.Ordinal), CancellationToken.None));
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                AssertThrows<OperationCanceledException>(() => files.Expand(
+                    new ArchiveSelection("raw", ["deep"]), new ArchiveExpansionBudget(settings),
+                    new HashSet<string>(StringComparer.Ordinal), cancelled.Token));
+            }
+
+            var archive = new FileArchiveService(files, settings);
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["one.txt"])]);
+            var first = archive.Create(request, identity);
+            AssertThrows<ArchiveRejectedException>(() => archive.Create(request, identity));
+            var other = archive.Create(request, new WebUserIdentity("other", "other", "ADMIN", "session-b"));
+            AssertThrows<ArchiveRejectedException>(() => archive.Create(request,
+                new WebUserIdentity("third", "third", "ADMIN", "session-c")));
+            Assert(archive.Cancel(first.Id, identity), "queued archive cancellation should be accepted");
+            Assert(archive.Cancel(first.Id, identity), "queued archive cancellation should be idempotent");
+            var afterCancel = archive.Create(request, identity);
+            Assert(afterCancel.State == "QUEUED", "a cancelled queued job must release its admission slot");
+            archive.Cancel(afterCancel.Id, identity);
+            archive.Cancel(other.Id, new WebUserIdentity("other", "other", "ADMIN", "session-b"));
+
+            var concurrent = new FileArchiveService(files, new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMaxFileEntriesPerJob = 2,
+                ArchiveMaxQueuedJobs = 2, ArchiveMaxActiveJobsPerUser = 1,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            });
+            var accepted = new System.Collections.Concurrent.ConcurrentBag<ArchiveJobSnapshot>();
+            Parallel.For(0, 16, index =>
+            {
+                try
+                {
+                    accepted.Add(concurrent.Create(request,
+                        new WebUserIdentity($"parallel-{index}", $"parallel-{index}", "ADMIN", $"session-{index}")));
+                }
+                catch (ArchiveRejectedException) { }
+            });
+            Assert(accepted.Count > 0 && accepted.Count <= 3 && accepted.Select(job => job.Id).Distinct().Count() == accepted.Count,
+                "simultaneous archive admission must remain bounded and must not duplicate jobs");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesArchiveDiskAdmissionAndRuntimeFailure()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-disk-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var minimum = 1024L;
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = minimum,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxQueuedJobs = 2,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            Directory.CreateDirectory(raw);
+            File.WriteAllText(Path.Combine(raw, "admission.txt"), "admission");
+            var files = new FileManagerService(settings);
+            var identity = new WebUserIdentity("admin", "admin", "ADMIN", "disk-admission");
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["admission.txt"])]);
+            var disk = new FakeArchiveDiskSpaceProvider(minimum - 1);
+            var archive = new FileArchiveService(files, settings, disk);
+            var beforeAdmission = archive.AdmissionState;
+
+            ArchiveRejectedException? low = null;
+            try { archive.Create(request, identity); }
+            catch (ArchiveRejectedException ex) { low = ex; }
+            Assert(low is not null && low.Code == "ARCHIVE_DISK_SPACE_LOW" && low.StatusCode == 503,
+                "low archive disk admission must return the stable 503 error");
+            Assert(files.ExpansionCallCount == 0, "low archive disk admission must reject before directory expansion");
+            Assert(archive.AdmissionState == beforeAdmission, "low archive disk admission must release every reservation and create no job");
+            Assert(disk.Paths.Count == 1 && Path.GetFullPath(disk.Paths[0]) == Path.GetFullPath(Path.Combine(root, "archive-tmp")),
+                "archive admission must inspect the archive temporary volume");
+            Assert(!Directory.Exists(Path.Combine(root, "archive-tmp")), "low archive admission must not create the archive temp directory");
+
+            disk.Available = null;
+            ArchiveRejectedException? unavailable = null;
+            try { archive.Create(request, identity); }
+            catch (ArchiveRejectedException ex) { unavailable = ex; }
+            Assert(unavailable is not null && unavailable.Code == "ARCHIVE_STORAGE_UNAVAILABLE" && unavailable.StatusCode == 503,
+                "unverifiable archive storage must fail closed with a diagnostic error");
+            Assert(files.ExpansionCallCount == 0, "unverifiable archive storage must reject before directory expansion");
+            Assert(archive.AdmissionState == beforeAdmission, "unverifiable archive storage must not leak admission state");
+
+            disk.Available = minimum;
+            var atBoundary = archive.Create(request, identity);
+            Assert(atBoundary.State == "QUEUED", "available space exactly at the configured threshold must be admitted");
+            archive.Cancel(atBoundary.Id, identity);
+            disk.Available = minimum + 1;
+            var recovered = archive.Create(request, identity);
+            Assert(recovered.State == "QUEUED", "disk recovery must release all failed admission reservations");
+            archive.Cancel(recovered.Id, identity);
+            Assert(!Directory.Exists(Path.Combine(root, "archive-tmp")), "admission-only disk checks must not create temp output");
+
+            var runRoot = Path.Combine(root, "runtime");
+            var runSettings = new RuntimeSettings
+            {
+                DataRoot = runRoot, WebPort = 18772, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = minimum,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxQueuedJobs = 1,
+                ArchiveTestCopyDelayMilliseconds = 1, ArchiveMaxInputBytesPerJob = 32 * 1024 * 1024
+            };
+            var runRaw = Path.Combine(runRoot, "raw");
+            Directory.CreateDirectory(runRaw);
+            var large = new byte[8 * 1024 * 1024];
+            RandomNumberGenerator.Fill(large);
+            File.WriteAllBytes(Path.Combine(runRaw, "runtime.bin"), large);
+            var runFiles = new FileManagerService(runSettings);
+            var runDisk = new FakeArchiveDiskSpaceProvider(minimum + 1);
+            var running = new FileArchiveService(runFiles, runSettings, runDisk);
+            await running.StartAsync(CancellationToken.None);
+            try
+            {
+                var runningJob = running.Create(new ArchiveRequest([new ArchiveSelection("raw", ["runtime.bin"])]), identity);
+                await WaitUntil(() => running.Get(runningJob.Id, identity)?.State == "RUNNING", TimeSpan.FromSeconds(3));
+                runDisk.Available = minimum - 1;
+                await WaitUntil(() => running.Get(runningJob.Id, identity)?.State == "FAILED", TimeSpan.FromSeconds(10));
+                var failed = running.Get(runningJob.Id, identity);
+                Assert(failed is not null && failed.ErrorCode == "ARCHIVE_DISK_SPACE_LOW", "a runtime disk drop must fail the ZIP safely");
+                Assert(!File.Exists(Path.Combine(runRoot, "archive-tmp", runningJob.Id + ".zip.part")), "runtime disk failure must delete the partial ZIP");
+                Assert(!File.Exists(Path.Combine(runRoot, "archive-tmp", runningJob.Id + ".zip")), "runtime disk failure must not publish a partial ZIP");
+                runDisk.Available = minimum + 1;
+                var retry = running.Create(new ArchiveRequest([new ArchiveSelection("raw", ["runtime.bin"])]), identity);
+                Assert(retry.State is "QUEUED" or "RUNNING", "runtime disk failure must release the user admission slot");
+                running.Cancel(retry.Id, identity);
+            }
+            finally { await running.StopAsync(CancellationToken.None); }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesArchiveLifecycleCleanupAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        FileArchiveService? service = null;
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18773, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = 1,
+                ArchiveCleanupIntervalSeconds = 1, ArchiveMaxRetainedTerminalJobs = 1,
+                ArchiveMaxActiveJobsPerUser = 2, ArchiveMaxQueuedJobs = 2,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            var temp = Path.Combine(root, "archive-tmp");
+            Directory.CreateDirectory(raw);
+            Directory.CreateDirectory(temp);
+            File.WriteAllText(Path.Combine(raw, "lifecycle.txt"), "lifecycle");
+            var startupOrphan = Path.Combine(temp, "startup-orphan.zip.part");
+            File.WriteAllText(startupOrphan, "orphan");
+            File.SetLastWriteTimeUtc(startupOrphan, DateTime.UtcNow.AddDays(-2));
+
+            var settingsFiles = new FileManagerService(settings);
+            var disk = new FakeArchiveDiskSpaceProvider(1024);
+            service = new FileArchiveService(settingsFiles, settings, disk);
+            var identity = new WebUserIdentity("admin", "admin", "ADMIN", "lifecycle");
+            await service.StartAsync(CancellationToken.None);
+            await WaitUntil(() => !File.Exists(startupOrphan), TimeSpan.FromSeconds(3));
+            Console.WriteLine("STARTUP_ORPHAN_CLEANUP=PASS");
+
+            var idleOrphan = Path.Combine(temp, "idle-orphan.zip.part");
+            File.WriteAllText(idleOrphan, "orphan");
+            File.SetLastWriteTimeUtc(idleOrphan, DateTime.UtcNow.AddDays(-2));
+            await WaitUntil(() => !File.Exists(idleOrphan), TimeSpan.FromSeconds(5));
+            Console.WriteLine("PERIODIC_CLEANUP_TIME_ELAPSED=PASS");
+            Console.WriteLine("IDLE_CLEANUP_TIME_ELAPSED=PASS");
+
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["lifecycle.txt"])]);
+            var completed = service.Create(request, identity);
+            await WaitUntil(() => service.Get(completed.Id, identity)?.State == "COMPLETED", TimeSpan.FromSeconds(5));
+            var download = service.OpenDownload(completed.Id, identity);
+            Assert(download is not null, "a completed archive must provide a download lease");
+            var trigger = service.Create(request, identity);
+            service.Cancel(trigger.Id, identity);
+            Assert(service.Get(completed.Id, identity) is not null,
+                "maintenance must not remove an archive while its download lease is active");
+            download!.Stream.Dispose();
+            var releaseTrigger = service.Create(request, identity);
+            service.Cancel(releaseTrigger.Id, identity);
+            Assert(service.Get(completed.Id, identity) is null,
+                "maintenance must remove a retained terminal archive after its download lease is released");
+            Console.WriteLine("DOWNLOAD_CLEANUP_RACE=PASS");
+            Console.WriteLine("RETAINED_JOB_LIMIT_EXHAUSTION=PASS");
+            await service.StopAsync(CancellationToken.None);
+            service = null;
+        }
+        finally
+        {
+            if (service is not null) await service.StopAsync(CancellationToken.None);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()
@@ -500,6 +854,15 @@ internal static class SchedulerTests
                 output, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE");
             await openWriter.FlushAsync();
             await openWriter.PreserveOpenAsync();
+            var preservedH3cPath = Directory.GetFiles(catalog.RawRoot, "*.open", SearchOption.AllDirectories).Single();
+            var preservedH3cBytes = File.ReadAllBytes(preservedH3cPath);
+            AssertThrows<InvalidOperationException>(() => openWriter.AppendH3cCommand(profileId, openRunId,
+                "192.0.2.10", H3cCommandPolicy.DisplayVersion, output,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "COMPLETE"));
+            AssertThrows<InvalidOperationException>(() => openWriter.FlushAsync().GetAwaiter().GetResult());
+            AssertThrows<InvalidOperationException>(() => openWriter.SealAsync().GetAwaiter().GetResult());
+            Assert(preservedH3cBytes.SequenceEqual(File.ReadAllBytes(preservedH3cPath)),
+                "H3C Append/Flush/Seal after PreserveOpenAsync must not mutate the retained Raw output");
             var recovered = new Catalog(settings);
             recovered.Initialize();
             var recovery = recovered.RecoverRawSegments();
@@ -874,7 +1237,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 8, "v8 terminal compatibility migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 10, "v10 Web password recovery migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
@@ -1764,6 +2127,20 @@ internal static class SchedulerTests
         throw new InvalidOperationException($"Expected {typeof(T).Name}.");
     }
 
+    private sealed class FakeArchiveDiskSpaceProvider(long? available) : IArchiveDiskSpaceProvider
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _paths = new();
+
+        public long? Available { get; set; } = available;
+        public IReadOnlyList<string> Paths => _paths.ToArray();
+
+        public long? GetAvailableFreeSpace(string path)
+        {
+            _paths.Enqueue(path);
+            return Available;
+        }
+    }
+
     private sealed class FakeSessionFactory(Func<string, FakeBehavior> behaviorFactory) : IDeviceSessionFactory
     {
         private int _active;
@@ -1936,6 +2313,36 @@ internal static class SchedulerTests
             await inner.WriteAsync(buffer, cancellationToken);
             _written += buffer.Length;
         }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync();
+            GC.SuppressFinalize(this);
+        }
+    }
+
+    private sealed class FlushFailureStream(Stream inner) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() => throw new IOException("deterministic flush failure");
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new IOException("deterministic flush failure"));
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => inner.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(buffer, cancellationToken);
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            inner.WriteAsync(buffer, offset, count, cancellationToken);
         protected override void Dispose(bool disposing)
         {
             if (disposing) inner.Dispose();

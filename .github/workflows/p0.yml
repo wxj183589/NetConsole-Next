@@ -13,6 +13,7 @@ jobs:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
       - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
+      - run: dotnet build src/NetConsole.Next.DesktopHelper/NetConsole.Next.DesktopHelper.csproj -c Release
       - run: dotnet run --project src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release -- --help
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
       - uses: actions/setup-python@v5
@@ -25,12 +26,17 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: npx playwright --version
+        working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: python -m pip install --disable-pip-version-check --requirement tests/requirements-ssh-protocol.txt
       - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
       - run: python3 tests/smoke.py
+      - run: python3 tests/web_auth_e2e.py
       - run: python3 tests/g1_recovery.py
+      - run: python3 tests/web_pr2_contract.py
+      - run: python3 tests/web_pr2_e2e.py
       - run: python tests/terminal_ui_contract.py
       - run: python tests/terminal_e2e.py
         env:
@@ -47,6 +53,7 @@ jobs:
           dotnet-version: 10.0.x
       - run: dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Release
       - run: dotnet build src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release
+      - run: dotnet build src/NetConsole.Next.DesktopHelper/NetConsole.Next.DesktopHelper.csproj -c Release
       - run: dotnet run --project src/NetConsole.Next.LocalManager/NetConsole.Next.LocalManager.csproj -c Release -- --help
       - run: dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release
       - uses: actions/setup-python@v5
@@ -59,11 +66,15 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: npx playwright --version
+        working-directory: web
       - run: npx playwright install chromium
         working-directory: web
       - run: python -m pip install --disable-pip-version-check --requirement tests/requirements-ssh-protocol.txt
       - run: python tests/ssh_protocol_sim.py tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll
       - run: python tests/terminal_ui_contract.py
+      - run: python3 tests/web_pr2_contract.py
+      - run: python3 tests/web_auth_e2e.py
       - run: python tests/terminal_e2e.py
         env:
           NETCONSOLE_NEXT_E2E_DATA_PARENT: ${{ runner.temp }}

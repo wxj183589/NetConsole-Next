@@ -19,6 +19,8 @@ if (args[0] is "api-token" or "rotate-api-token")
     return args.Length <= 2 ? ManageApiToken(args[0], args.Length > 1 ? args[1] : null) : InvalidArguments();
 if (args[0] == "credential")
     return ManageCredential(args);
+if (args[0] == "web-password")
+    return ManageWebPassword(args);
 
 if (args.Length != 1 || args[0] is not ("status" or "start" or "stop" or "restart"))
 {
@@ -80,6 +82,7 @@ static void PrintHelp()
     Console.WriteLine("  rotate-api-token [data-root] Rotate the local API bearer token");
     Console.WriteLine("  credential set <REF> [data-root] Store/update an H3C DPAPI secret");
     Console.WriteLine("  credential revoke <REF> [data-root] Revoke an H3C DPAPI secret");
+    Console.WriteLine("  web-password reset [data-root]  Reset a local Web user password (Windows administrator)");
 }
 
 static int InvalidArguments()
@@ -245,6 +248,67 @@ static int ManageCredential(string[] arguments)
         Console.Error.WriteLine($"Credential operation failed: {ex.GetType().Name}.");
         return 1;
     }
+}
+
+static int ManageWebPassword(string[] arguments)
+{
+    if (arguments.Length is < 2 or > 3 || arguments[1] != "reset")
+    {
+        Console.Error.WriteLine("Use: web-password reset [data-root]. Passwords are entered interactively and are never command-line arguments.");
+        return 2;
+    }
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("Web password recovery is available only on Windows.");
+        return 2;
+    }
+    using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+    if (!principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+    {
+        Console.Error.WriteLine("Run this command from an elevated Windows administrator prompt.");
+        return 1;
+    }
+    try
+    {
+        var root = ResolveManagedRoot(arguments.Length == 3 ? arguments[2] : null);
+        Console.WriteLine("NetConsole Next Web password recovery (the service may be running or stopped).");
+        Console.Write("Account [1=admin, 2=superadmin, 3=cancel]: ");
+        var account = Console.ReadLine()?.Trim();
+        var username = account switch { "1" => "admin", "2" => "superadmin", _ => null };
+        if (username is null) { Console.WriteLine("No changes were made."); return 0; }
+        Console.Write("Password [1=restore default, 2=enter custom, 3=cancel]: ");
+        var mode = Console.ReadLine()?.Trim();
+        var password = mode switch
+        {
+            "1" => username,
+            "2" => ReadConfirmedSecret(),
+            _ => null
+        };
+        if (password is null) { Console.WriteLine("No changes were made."); return 0; }
+        var result = WebPasswordRecovery.Reset(root, username, password, "local-manager");
+        Console.WriteLine($"{result.Username} password reset; revoked {result.RevokedSessions} existing Web session(s).");
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException or Microsoft.Data.Sqlite.SqliteException)
+    {
+        Console.Error.WriteLine($"Web password recovery failed: {ex.GetType().Name}.");
+        return 1;
+    }
+}
+
+static string? ReadConfirmedSecret()
+{
+    Console.Write("New password: ");
+    var first = ReadSecret();
+    Console.Write("Repeat new password: ");
+    var second = ReadSecret();
+    if (first.Length < 8 || !string.Equals(first, second, StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("Passwords must match and contain at least 8 characters.");
+        return null;
+    }
+    return first;
 }
 
 static string ResolveManagedRoot(string? requestedRoot)

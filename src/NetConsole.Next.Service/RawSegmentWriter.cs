@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Runtime.ExceptionServices;
 
 namespace NetConsole.Next.Service;
 
@@ -24,17 +25,29 @@ internal sealed class RawSegmentWriterFactory : IRawSegmentWriterFactory
 // Append-only P0 raw writer. Roll at 4MiB, seal before indexing; retain files on catalog errors.
 internal sealed class RawSegmentWriter
 {
+    private enum SegmentState
+    {
+        Open,
+        PreservedIncomplete,
+        FilePublished,
+        CatalogRegistered
+    }
+
     private readonly Catalog _catalog;
     private readonly string _openPath;
     private readonly string _relativePath;
     private readonly string _sourceId;
     private readonly Stream _stream;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
     private string? _taskRunId;
     private readonly MemoryStream _stagedBytes = new(256 * 1024);
     private readonly ArrayBufferWriter<byte> _jsonBytes = new(4096);
     private long _first = long.MaxValue;
     private long _last, _records, _bytes;
-    private bool _sealed, _closed, _dirty;
+    private string? _checksum;
+    private long? _publishedBytes;
+    private SegmentState _state = SegmentState.Open;
+    private bool _streamDisposed;
 
     public long Bytes => _bytes;
     public string RelativePath => _relativePath;
@@ -74,123 +87,179 @@ internal sealed class RawSegmentWriter
     public RawSegmentWriter(Catalog catalog, Func<string, Stream> streamFactory)
         : this(catalog, "syslog-local", "syslog", streamFactory) { }
 
-    public Task AppendAsync(SyslogPacket packet)
+    public async Task AppendAsync(SyslogPacket packet)
     {
-        if (_sealed) throw new InvalidOperationException("A sealed Raw segment cannot be changed.");
-        _jsonBytes.Clear();
-        using (var json = new Utf8JsonWriter(_jsonBytes))
+        await _operationGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            json.WriteStartObject();
-            json.WriteNumber("received_ms", packet.ReceivedMs);
-            json.WriteString("sender_ip", packet.SenderIp);
-            json.WriteNumber("sender_port", packet.SenderPort);
-            json.WriteBase64String("payload_base64", packet.Payload);
-            json.WriteEndObject();
+            EnsureOpenForAppend();
+            _jsonBytes.Clear();
+            using (var json = new Utf8JsonWriter(_jsonBytes))
+            {
+                json.WriteStartObject();
+                json.WriteNumber("received_ms", packet.ReceivedMs);
+                json.WriteString("sender_ip", packet.SenderIp);
+                json.WriteNumber("sender_port", packet.SenderPort);
+                json.WriteBase64String("payload_base64", packet.Payload);
+                json.WriteEndObject();
+            }
+            _stagedBytes.Write(_jsonBytes.WrittenSpan);
+            _stagedBytes.WriteByte((byte)'\n');
+            _bytes += _jsonBytes.WrittenCount + 1;
+            _first = Math.Min(_first, packet.ReceivedMs);
+            _last = Math.Max(_last, packet.ReceivedMs);
+            _records++;
         }
-        _stagedBytes.Write(_jsonBytes.WrittenSpan);
-        _stagedBytes.WriteByte((byte)'\n');
-        _bytes += _jsonBytes.WrittenCount + 1;
-        _dirty = true;
-        _first = Math.Min(_first, packet.ReceivedMs);
-        _last = Math.Max(_last, packet.ReceivedMs);
-        _records++;
-        return Task.CompletedTask;
+        finally { _operationGate.Release(); }
     }
 
     public byte[] AppendH3cCommand(string profileId, string taskRunId, string host, string command,
         string output, long capturedMs, string captureStatus)
     {
-        if (_sourceId != "h3c-" + profileId || !Guid.TryParseExact(profileId, "N", out _) ||
-            !Guid.TryParseExact(taskRunId, "N", out _))
-            throw new ArgumentException("H3C profile/task identity does not match the Raw source.");
-        if (!H3cCommandPolicy.IsAllowed(command)) throw new ArgumentException("H3C command is not allowlisted.", nameof(command));
-        if (captureStatus is not ("COMPLETE" or "PARTIAL")) throw new ArgumentException("H3C capture status is invalid.", nameof(captureStatus));
-        if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl))
-            throw new ArgumentException("H3C host is invalid.", nameof(host));
-        if (_sealed || _records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
-        _taskRunId = taskRunId;
-        var outputBytes = Encoding.UTF8.GetBytes(output);
-        if (outputBytes.Length > H3cRawOutput.MaximumBytes)
-            throw new InvalidDataException($"H3C output exceeds the {H3cRawOutput.MaximumBytes}-byte storage limit.");
-        var outputSha = SHA256.HashData(outputBytes);
-        var outputShaHex = Convert.ToHexString(outputSha).ToLowerInvariant();
-        _jsonBytes.Clear();
-        using (var json = new Utf8JsonWriter(_jsonBytes))
+        _operationGate.Wait();
+        try
         {
-            json.WriteStartObject();
-            json.WriteString("record_type", "h3c_command");
-            json.WriteNumber("captured_ms", capturedMs);
-            json.WriteString("source_id", _sourceId);
-            json.WriteString("device_profile_id", profileId);
-            json.WriteString("task_run_id", taskRunId);
-            json.WriteString("device_host", host);
-            json.WriteString("command", command);
-            json.WriteString("capture_status", captureStatus);
-            json.WriteNumber("output_byte_count", outputBytes.Length);
-            json.WriteString("output_sha256", outputShaHex);
-            json.WriteBase64String("output_utf8_base64", outputBytes);
-            json.WriteEndObject();
+            if (_sourceId != "h3c-" + profileId || !Guid.TryParseExact(profileId, "N", out _) ||
+                !Guid.TryParseExact(taskRunId, "N", out _))
+                throw new ArgumentException("H3C profile/task identity does not match the Raw source.");
+            if (!H3cCommandPolicy.IsAllowed(command)) throw new ArgumentException("H3C command is not allowlisted.", nameof(command));
+            if (captureStatus is not ("COMPLETE" or "PARTIAL")) throw new ArgumentException("H3C capture status is invalid.", nameof(captureStatus));
+            if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl))
+                throw new ArgumentException("H3C host is invalid.", nameof(host));
+            EnsureOpenForAppend();
+            if (_records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
+            _taskRunId = taskRunId;
+            var outputBytes = Encoding.UTF8.GetBytes(output);
+            if (outputBytes.Length > H3cRawOutput.MaximumBytes)
+                throw new InvalidDataException($"H3C output exceeds the {H3cRawOutput.MaximumBytes}-byte storage limit.");
+            var outputSha = SHA256.HashData(outputBytes);
+            var outputShaHex = Convert.ToHexString(outputSha).ToLowerInvariant();
+            _jsonBytes.Clear();
+            using (var json = new Utf8JsonWriter(_jsonBytes))
+            {
+                json.WriteStartObject();
+                json.WriteString("record_type", "h3c_command");
+                json.WriteNumber("captured_ms", capturedMs);
+                json.WriteString("source_id", _sourceId);
+                json.WriteString("device_profile_id", profileId);
+                json.WriteString("task_run_id", taskRunId);
+                json.WriteString("device_host", host);
+                json.WriteString("command", command);
+                json.WriteString("capture_status", captureStatus);
+                json.WriteNumber("output_byte_count", outputBytes.Length);
+                json.WriteString("output_sha256", outputShaHex);
+                json.WriteBase64String("output_utf8_base64", outputBytes);
+                json.WriteEndObject();
+            }
+            _stagedBytes.Write(_jsonBytes.WrittenSpan);
+            _stagedBytes.WriteByte((byte)'\n');
+            _bytes = _jsonBytes.WrittenCount + 1;
+            _first = _last = capturedMs;
+            _records = 1;
+            return outputSha;
         }
-        _stagedBytes.Write(_jsonBytes.WrittenSpan);
-        _stagedBytes.WriteByte((byte)'\n');
-        _bytes = _jsonBytes.WrittenCount + 1;
-        _dirty = true;
-        _first = _last = capturedMs;
-        _records = 1;
-        return outputSha;
+        finally { _operationGate.Release(); }
     }
 
     public async Task FlushAsync()
     {
-        if (_closed) throw new InvalidOperationException("A closed Raw segment cannot be flushed.");
+        await _operationGate.WaitAsync().ConfigureAwait(false);
+        try { await FlushCoreAsync().ConfigureAwait(false); }
+        finally { _operationGate.Release(); }
+    }
+
+    private async Task FlushCoreAsync()
+    {
+        if (_state is SegmentState.FilePublished or SegmentState.CatalogRegistered) return;
+        if (_state == SegmentState.PreservedIncomplete)
+            throw new InvalidOperationException("A preserved incomplete Raw segment cannot be flushed.");
         var started = Stopwatch.GetTimestamp();
         if (_stagedBytes.Length > 0)
         {
             _stagedBytes.Position = 0;
-            await _stagedBytes.CopyToAsync(_stream);
+            await _stagedBytes.CopyToAsync(_stream).ConfigureAwait(false);
             _stagedBytes.SetLength(0);
             _stagedBytes.Position = 0;
         }
-        await _stream.FlushAsync();
+        await _stream.FlushAsync().ConfigureAwait(false);
         if (_stream is FileStream file) file.Flush(flushToDisk: true);
         else _stream.Flush();
         LastSyncDurationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        _dirty = false;
     }
 
     public async Task PreserveOpenAsync()
     {
-        if (_closed) return;
-        try { await FlushAsync(); }
-        catch (IOException) { }
-        try { await _stream.DisposeAsync(); }
-        catch (IOException) { }
-        finally { _closed = true; }
+        await _operationGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_state is SegmentState.PreservedIncomplete or SegmentState.FilePublished or SegmentState.CatalogRegistered)
+                return;
+
+            Exception? flushFailure = null;
+            try { await FlushCoreAsync().ConfigureAwait(false); }
+            catch (Exception ex) { flushFailure = ex; }
+            finally
+            {
+                try { await DisposeStreamAsync().ConfigureAwait(false); }
+                catch (Exception ex) { flushFailure ??= ex; }
+                _state = SegmentState.PreservedIncomplete;
+            }
+
+            if (flushFailure is not null)
+                ExceptionDispatchInfo.Capture(flushFailure).Throw();
+        }
+        finally { _operationGate.Release(); }
     }
 
     public async Task SealAsync()
     {
-        if (_sealed) return;
-        var sealStarted = Stopwatch.GetTimestamp();
-        if (_dirty) await FlushAsync();
-        await _stream.DisposeAsync();
-        _closed = true;
-        string checksum;
-        using (var sha = SHA256.Create())
-        using (var input = File.OpenRead(_openPath))
-            checksum = Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
-        Sha256 = checksum;
-        var published = _openPath[..^".open".Length] + ".ndjson";
-        File.Move(_openPath, published);
-        // If the DB write fails, the final file is deliberately preserved for reconciliation.
-        var catalogStarted = Stopwatch.GetTimestamp();
-        _catalog.RegisterFinalizedSegment(_relativePath, _records,
-            _first == long.MaxValue ? 0 : _first, _last, checksum, new FileInfo(published).Length,
-            _sourceId, _taskRunId);
-        LastCatalogWriteDurationMs = Stopwatch.GetElapsedTime(catalogStarted).TotalMilliseconds;
-        LastSealDurationMs = Stopwatch.GetElapsedTime(sealStarted).TotalMilliseconds;
-        _sealed = true;
+        await _operationGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_state == SegmentState.CatalogRegistered) return;
+            if (_state == SegmentState.PreservedIncomplete)
+                throw new InvalidOperationException("A preserved incomplete Raw segment cannot be sealed.");
+            var sealStarted = Stopwatch.GetTimestamp();
+            if (_state == SegmentState.Open)
+            {
+                await FlushCoreAsync().ConfigureAwait(false);
+                await DisposeStreamAsync().ConfigureAwait(false);
+                _state = SegmentState.PreservedIncomplete;
+                using (var sha = SHA256.Create())
+                using (var input = File.OpenRead(_openPath))
+                    _checksum ??= Convert.ToHexString(sha.ComputeHash(input)).ToLowerInvariant();
+                Sha256 = _checksum;
+                File.Move(_openPath, PublishedPath);
+                _state = SegmentState.FilePublished;
+            }
+
+            _publishedBytes ??= new FileInfo(PublishedPath).Length;
+            // If the DB write fails, the final file is deliberately preserved for reconciliation.
+            var catalogStarted = Stopwatch.GetTimestamp();
+            _catalog.RegisterFinalizedSegment(_relativePath, _records,
+                _first == long.MaxValue ? 0 : _first, _last, _checksum!, _publishedBytes.Value,
+                _sourceId, _taskRunId);
+            LastCatalogWriteDurationMs = Stopwatch.GetElapsedTime(catalogStarted).TotalMilliseconds;
+            LastSealDurationMs = Stopwatch.GetElapsedTime(sealStarted).TotalMilliseconds;
+            _state = SegmentState.CatalogRegistered;
+        }
+        finally { _operationGate.Release(); }
     }
+
+    private void EnsureOpenForAppend()
+    {
+        if (_state != SegmentState.Open)
+            throw new InvalidOperationException($"Raw segment is not writable in state {_state}.");
+    }
+
+    private async ValueTask DisposeStreamAsync()
+    {
+        if (_streamDisposed) return;
+        _streamDisposed = true;
+        await _stream.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private string PublishedPath => _openPath[..^".open".Length] + ".ndjson";
 
 }
 

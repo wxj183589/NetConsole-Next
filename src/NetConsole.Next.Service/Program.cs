@@ -12,9 +12,11 @@ var settings = RuntimeSettings.FromEnvironment();
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "NetConsoleNext");
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
-builder.WebHost.UseUrls($"http://127.0.0.1:{settings.WebPort}");
+var webBind = settings.WebBindAddress == "::" ? "[::]" : settings.WebBindAddress;
+builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
+builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
     ? new EnvironmentH3cCredentialProvider(enabled: true)
@@ -26,6 +28,12 @@ builder.Services.AddSingleton<TerminalSessionManager>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
 builder.Services.AddSingleton<TerminalExportService>();
+builder.Services.AddSingleton<DesktopHelperIpc>();
+builder.Services.AddSingleton<HostToolRegistry>();
+builder.Services.AddSingleton<HostToolLaunchService>();
+builder.Services.AddSingleton<FileManagerService>();
+builder.Services.AddSingleton<IArchiveDiskSpaceProvider, DriveInfoArchiveDiskSpaceProvider>();
+builder.Services.AddSingleton<FileArchiveService>();
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -48,6 +56,7 @@ builder.Services.AddHostedService<ServiceRunLifecycle>();
 builder.Services.AddHostedService<ProcessResourceMonitor>();
 builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FileArchiveService>());
 
 var app = builder.Build();
 app.UseDefaultFiles();
@@ -55,7 +64,9 @@ app.UseStaticFiles();
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 app.Use(async (context, next) =>
 {
-    if (!(context.Request.Path.Value?.StartsWith("/api/system", StringComparison.OrdinalIgnoreCase) ?? false))
+    var isSystemApi = context.Request.Path.StartsWithSegments("/api/system");
+    var isAuthApi = context.Request.Path.StartsWithSegments("/api/auth");
+    if (!isSystemApi && !isAuthApi)
     {
         await next();
         return;
@@ -63,51 +74,62 @@ app.Use(async (context, next) =>
 
     var remote = context.Connection.RemoteIpAddress;
     var requestHost = context.Request.Host;
-    var validHost = (string.Equals(requestHost.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(requestHost.Host, "localhost", StringComparison.OrdinalIgnoreCase)) &&
-                    requestHost.Port == settings.WebPort;
-    if (remote is null || !System.Net.IPAddress.IsLoopback(remote) || !validHost)
+    var validHost = IsAllowedWebHost(requestHost, settings);
+    var validRemote = remote is not null && (System.Net.IPAddress.IsLoopback(remote) || settings.WebLanEnabled);
+    if (!validRemote || !validHost)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         return;
     }
 
-    if (string.Equals(context.Request.Path.Value, "/api/system/health", StringComparison.OrdinalIgnoreCase))
+    if (string.Equals(context.Request.Path.Value, "/api/system/health", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(context.Request.Path.Value, "/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(context.Request.Path.Value, "/api/auth/csrf", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(context.Request.Path.Value, "/api/auth/me", StringComparison.OrdinalIgnoreCase))
     {
         await next();
         return;
     }
 
-    var websocketStream = context.WebSockets.IsWebSocketRequest &&
-        context.Request.Path.Value?.EndsWith("/stream", StringComparison.OrdinalIgnoreCase) == true;
-    if (websocketStream)
+    var authStore = context.RequestServices.GetRequiredService<WebAuthStore>();
+    var bearer = context.Request.Headers.Authorization.ToString();
+    WebUserIdentity? identity = null;
+    if (bearer.StartsWith("Bearer ", StringComparison.Ordinal))
     {
-        await next();
-        return;
+        string expectedToken;
+        try { expectedToken = LocalApiTokenStore.ReadExisting(settings.DataRoot); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return;
+        }
+        var presented = bearer[7..];
+        var expectedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
+        var presentedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
+        if (CryptographicOperations.FixedTimeEquals(expectedDigest, presentedDigest))
+            identity = new WebUserIdentity("local-api-token", "local-api-token", "SUPERADMIN", "local-api-token");
     }
-
-    string expectedToken;
-    try { expectedToken = LocalApiTokenStore.ReadExisting(settings.DataRoot); }
-    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-    {
-        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        return;
-    }
-    var values = context.Request.Headers["Authorization"];
-    if (values.Count != 1 || !values[0]!.StartsWith("Bearer ", StringComparison.Ordinal))
+    else identity = authStore.ValidateSession(context.Request.Cookies[WebCookieNames.Session]);
+    if (identity is null)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        context.Response.Headers["WWW-Authenticate"] = "Bearer";
+        if (isSystemApi) context.Response.Headers["WWW-Authenticate"] = "Bearer";
         return;
     }
-    var presented = values[0]![7..];
-    var expectedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken));
-    var presentedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
-    if (!CryptographicOperations.FixedTimeEquals(expectedDigest, presentedDigest))
+    context.Items[WebCookieNames.IdentityItem] = identity;
+    if (!bearer.StartsWith("Bearer ", StringComparison.Ordinal) && IsWriteRequest(context.Request.Method))
     {
-        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        context.Response.Headers["WWW-Authenticate"] = "Bearer";
-        return;
+        var origin = context.Request.Headers.Origin.ToString();
+        var expectedOrigin = $"{context.Request.Scheme}://{context.Request.Host}";
+        var csrfHeader = context.Request.Headers[WebCookieNames.CsrfHeader].ToString();
+        var csrfCookie = context.Request.Cookies[WebCookieNames.Csrf];
+        if (!string.Equals(origin, expectedOrigin, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(csrfCookie) || !string.Equals(csrfHeader, csrfCookie, StringComparison.Ordinal) ||
+            !authStore.ValidateCsrf(context.Request.Cookies[WebCookieNames.Session] ?? string.Empty, csrfHeader))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
     }
     await next();
 });
@@ -153,8 +175,50 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or I
 }
 
 var processStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+app.MapPost("/api/auth/login", (HttpContext context, WebAuthStore auth, WebLoginRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
+        return Results.BadRequest(new { error = "Username and password are required." });
+    var result = auth.TryLogin(request.Username, request.Password, context.Connection.RemoteIpAddress?.ToString(), out var rateLimited);
+    if (rateLimited) return Results.Problem("Too many failed login attempts.", statusCode: StatusCodes.Status429TooManyRequests);
+    if (result is null) return Results.Unauthorized();
+    SetWebCookies(context, result.SessionToken, result.CsrfToken);
+    return Results.Ok(new { user = new { username = result.User.Username, role = result.User.Role }, csrfToken = result.CsrfToken });
+});
+app.MapGet("/api/auth/me", (HttpContext context, WebAuthStore auth) =>
+{
+    var identity = auth.ValidateSession(context.Request.Cookies[WebCookieNames.Session]);
+    return identity is null ? Results.Unauthorized() : Results.Ok(new { username = identity.Username, role = identity.Role });
+});
+app.MapGet("/api/auth/csrf", (HttpContext context, WebAuthStore auth) =>
+{
+    var sessionToken = context.Request.Cookies[WebCookieNames.Session];
+    var csrf = auth.GetOrCreateCsrf(sessionToken, context.Request.Cookies[WebCookieNames.Csrf]);
+    if (csrf is null) return Results.Unauthorized();
+    context.Response.Cookies.Append(WebCookieNames.Csrf, csrf, WebCookieOptions(httpOnly: false));
+    return Results.Ok(new { csrfToken = csrf });
+});
+app.MapPost("/api/auth/logout", (HttpContext context, WebAuthStore auth) =>
+{
+    auth.RevokeSession(context.Request.Cookies[WebCookieNames.Session]);
+    context.Response.Cookies.Delete(WebCookieNames.Session, WebCookieOptions(httpOnly: true));
+    context.Response.Cookies.Delete(WebCookieNames.Csrf, WebCookieOptions(httpOnly: false));
+    return Results.Ok(new { loggedOut = true });
+});
+app.MapPost("/api/auth/password", (HttpContext context, WebAuthStore auth, WebPasswordRequest request) =>
+{
+    var sessionToken = context.Request.Cookies[WebCookieNames.Session];
+    var identity = auth.ValidateSession(sessionToken);
+    if (identity is null) return Results.Unauthorized();
+    if (!IsValidCookieWrite(context, auth, sessionToken)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (request.NewPassword.Length < 8) return Results.BadRequest(new { error = "New password must contain at least 8 characters." });
+    var target = string.IsNullOrWhiteSpace(request.Username) ? identity.Username : request.Username.Trim();
+    if (!auth.ChangePassword(identity, target, request.CurrentPassword, request.NewPassword))
+        return Results.BadRequest(new { error = "Current password is invalid or the user is not permitted." });
+    return Results.Ok(new { updated = true });
+});
 app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress, Catalog rawCatalog,
-    RuntimeStatus status, RuntimeResources resources, FileLogDiagnostics logDiagnostics) =>
+    RuntimeStatus status, RuntimeResources resources, FileLogDiagnostics logDiagnostics, WebAuthStore auth) =>
 {
     var resource = resources.Snapshot;
     CatalogHealthSnapshot? storage = null;
@@ -209,9 +273,80 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         unresolvedIntegrityIssues = storage?.UnresolvedIntegrityIssues,
         recentIntegrityAudits = storage?.RecentIntegrityAudits,
         resources = resource
+        ,instanceId = auth.InstanceIdOrUnknown
     });
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
+app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Ok(registry.Configure(toolId, request.ExecutablePath, CurrentIdentity(context).Username)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/host-tools/{toolId}/launch", async (HttpContext context, string toolId, HostToolLaunchRequest request, HostToolLaunchService launcher) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    var result = await launcher.LaunchAsync(toolId, request.DeviceId, context.RequestAborted);
+    return Results.Ok(result);
+});
+app.MapPost("/api/system/host-tools/open-directory", async (HttpContext context, HostDirectoryRequest request, FileManagerService files, DesktopHelperIpc helper) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try
+    {
+        var resolved = files.Resolve(request.RootId, request.RelativePath, true);
+        if (!resolved.IsDirectory) return Results.BadRequest(new { error = "A directory is required." });
+        var response = await helper.SendAsync(new { operation = "OPEN_DIRECTORY", rootId = request.RootId, relativePath = resolved.RelativePath, directoryPath = resolved.FullPath }, context.RequestAborted);
+        return Results.Ok(response);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/roots", (FileManagerService files) => Results.Ok(files.Roots()));
+app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService files) =>
+{
+    try
+    {
+        var result = files.List(request.Query["rootId"].ToString(), request.Query["path"].ToString(),
+            request.Query["search"].ToString(), request.Query["sort"].ToString(), request.Query["direction"].ToString(),
+            ParseQueryInt(request.Query["page"], 1), ParseQueryInt(request.Query["pageSize"], 100));
+        return Results.Ok(result);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerService files) =>
+{
+    try
+    {
+        var result = files.OpenDownload(request.Query["rootId"].ToString(), request.Query["path"].ToString());
+        return Results.File(result.Stream, result.ContentType, result.DownloadName, enableRangeProcessing: true);
+    }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
+{
+    try
+    {
+        var identity = CurrentIdentity(context);
+        var job = archives.Create(request, identity, context.RequestAborted);
+        return Results.Accepted($"/api/system/files/archive-jobs/{job.Id}", job);
+    }
+    catch (ArchiveRejectedException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/files/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
+    archives.Get(id, CurrentIdentity(context)) is { } job ? Results.Ok(job) : Results.NotFound());
+app.MapPost("/api/system/files/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
+    archives.Cancel(id, CurrentIdentity(context)) ? Results.Ok(new { cancelled = true }) : Results.NotFound());
+app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
+{
+    var result = archives.OpenDownload(id, CurrentIdentity(context));
+    return result is null ? Results.NotFound() : Results.File(result.Stream, "application/zip", result.Name, enableRangeProcessing: true);
+});
 if (settings.TerminalEnabled)
 {
     app.MapGet("/api/system/terminal/devices", (Catalog rawCatalog, TerminalSessionManager manager) =>
@@ -324,9 +459,11 @@ if (settings.TerminalEnabled)
     app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
         string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
-        var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}" };
+        var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}", $"http://[::1]:{settings.WebPort}" };
         var origin = context.Request.Headers.Origin.ToString();
-        if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+        var lanOrigin = settings.WebLanEnabled && origin.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            Uri.TryCreate(origin, UriKind.Absolute, out var parsedOrigin) && parsedOrigin.Port == settings.WebPort;
+        if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) && !lanOrigin)
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -427,11 +564,13 @@ if (settings.H3cEnabled)
     });
 }
 app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
-    (string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
+    (HttpContext context, string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
     {
+        if (context.Items[WebCookieNames.IdentityItem] is not WebUserIdentity { Role: "SUPERADMIN" } identity)
+            return Results.Forbid();
         try
         {
-            rawCatalog.QuarantineIntegrityAudit(auditId, "local-api-token", request.Detail);
+            rawCatalog.QuarantineIntegrityAudit(auditId, identity.Username, request.Detail);
             var unresolved = rawCatalog.GetUnresolvedIntegrityIssueCount();
             status.ReassessIntegrityIssues(unresolved);
             return Results.Ok(new { auditId, disposition = "QUARANTINED", unresolvedIntegrityIssues = unresolved,
@@ -442,7 +581,55 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 
+// Vue Router uses history mode. API and WebSocket routes are mapped above; all other
+// application paths must return the same offline entry so browser refresh keeps working.
+app.MapFallbackToFile("index.html");
+
 app.Run();
+
+static bool IsAllowedWebHost(HostString host, RuntimeSettings settings)
+{
+    if (host.Port != settings.WebPort) return false;
+    if (string.Equals(host.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(host.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(host.Host, "[::1]", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(host.Host, "::1", StringComparison.OrdinalIgnoreCase)) return true;
+    return settings.WebLanEnabled && !string.IsNullOrWhiteSpace(host.Host);
+}
+
+static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;
+static WebUserIdentity CurrentIdentity(HttpContext context) =>
+    context.Items[WebCookieNames.IdentityItem] as WebUserIdentity ?? throw new UnauthorizedAccessException("Web identity is missing.");
+static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
+
+static bool IsWriteRequest(string method) => method is "POST" or "PUT" or "PATCH" or "DELETE";
+
+static bool IsValidCookieWrite(HttpContext context, WebAuthStore auth, string? sessionToken)
+{
+    var origin = context.Request.Headers.Origin.ToString();
+    var expectedOrigin = $"{context.Request.Scheme}://{context.Request.Host}";
+    var csrfHeader = context.Request.Headers[WebCookieNames.CsrfHeader].ToString();
+    var csrfCookie = context.Request.Cookies[WebCookieNames.Csrf];
+    return !string.IsNullOrWhiteSpace(sessionToken) && string.Equals(origin, expectedOrigin, StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(csrfCookie) && string.Equals(csrfHeader, csrfCookie, StringComparison.Ordinal) &&
+        auth.ValidateCsrf(sessionToken, csrfHeader);
+}
+
+static void SetWebCookies(HttpContext context, string sessionToken, string csrfToken)
+{
+    context.Response.Cookies.Append(WebCookieNames.Session, sessionToken, WebCookieOptions(httpOnly: true));
+    context.Response.Cookies.Append(WebCookieNames.Csrf, csrfToken, WebCookieOptions(httpOnly: false));
+}
+
+static CookieOptions WebCookieOptions(bool httpOnly) => new()
+{
+    HttpOnly = httpOnly,
+    SameSite = SameSiteMode.Lax,
+    Secure = false,
+    IsEssential = true,
+    Path = "/",
+    MaxAge = TimeSpan.FromHours(12),
+};
 
 static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
 {
@@ -498,6 +685,16 @@ static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRun
     }
 }
 
+internal static class WebCookieNames
+{
+    public const string Session = "netconsole_session";
+    public const string Csrf = "netconsole_csrf";
+    public const string CsrfHeader = "X-NC-CSRF";
+    public const string IdentityItem = "netconsole_identity";
+}
+
+internal sealed record WebLoginRequest(string Username, string Password);
+internal sealed record WebPasswordRequest(string NewPassword, string? CurrentPassword = null, string? Username = null);
 internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,

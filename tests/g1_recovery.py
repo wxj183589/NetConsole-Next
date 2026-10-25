@@ -47,7 +47,7 @@ def start_service(repo, dll, root):
                NETCONSOLE_NEXT_SYSLOG_PORT=str(udp_port))
     proc = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True)
+                            text=True, encoding="utf-8", errors="replace")
     ACTIVE_PROCESSES.append(proc)
     return proc, f"http://127.0.0.1:{web_port}", udp_port
 

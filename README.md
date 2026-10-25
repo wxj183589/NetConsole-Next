@@ -6,7 +6,7 @@
 
 - **P0 系统稳定性，P1 原始数据采集优先**；之后依次为工具集、实时分析、离线分析和报告。
 - 主运行平台：Intel/AMD Windows x64 低配置工业 Mini 主机；Win8/8.1、Server2012/R2、Linux/银河麒麟、ARM64 均须实测兼容。
-- Headless Core Service + Web UI；桌面仅保留未来的本机 Local Manager（服务启停、采集文件目录、日志）。
+- Headless Core Service + Web UI；桌面仅保留本机 Local Manager 与可选 Desktop Helper（服务启停、受控文件目录、宿主机 GUI 协作）。
 - 全新 SQLite + Raw 目录，绝不与旧 NetConsole 共用数据根，不兼容旧数据库。
 - HTTP/FTP/TFTP/WebDAV/SSH/SFTP 服务均为未来按需启用组件，**默认不开启**；当前不建设 Agent Controller。
 - 优先对比 C# 与精简 Python。当前 P0 使用 .NET 10 仅用于验证，不声明支持 Windows 8。
@@ -17,9 +17,9 @@
 
 设备采集框架提供有界调度队列、最大并发限制、持久 Task Definition/Run、超时、取消和失败记录。G2.1 加固 H3C Comware SSH 只读组件，仅允许 `display version` 和 `display interface brief`，使用 SHA-256 Host Key pin、算法 allowlist、受限输出读取、Paramiko 本机 SSH wire 模拟及脱敏 golden tests；未连接真实设备。SSH 功能默认关闭，需显式设置 `NETCONSOLE_NEXT_H3C_ENABLED=1`。Windows 正式凭据通过 Local Manager 写入 DPAPI `LocalMachine` 加密 vault，数据库只存引用；Linux/Kylin 没有 DPAPI provider。环境变量凭据仅在显式 Development 模式并设置 `NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS=1` 时启用。
 
-Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，数据根 ACL 仅授予 SYSTEM、Administrators 与服务身份；Local Manager 提供 Service 控制、目录打开、`api-token`、`rotate-api-token`、`credential set` 与 `credential revoke`。`/api/system/*` 管理端点要求本机 bearer token、loopback 来源和匹配 Host；健康端点只读且不要求 token。Windows Server 2025 CI 已验证 Service EXE 与 SCM 生命周期（PR #10）；G2.1 的新 ACL、DPAPI 和令牌轮换工作流等待本轮 Windows CI。Windows 10/11、旧 Windows 和低配置工业机仍待实机验证。
+Windows Service 与本机 Local Manager CLI 有基础实现：安装时使用专用虚拟服务账户，数据根 ACL 仅授予 SYSTEM、Administrators 与服务身份；Local Manager 提供 Service 控制、目录打开、`api-token`、`rotate-api-token`、`credential set`、`credential revoke` 与 `web-password reset`。Web PR-2 增加了 SUPERADMIN-only 宿主机工具注册、Named Pipe Desktop Helper、逻辑根文件管理、后台 ZIP 与本机密码恢复；`/api/system/*` 管理端点要求来源/Host、Cookie 会话或本机 bearer token，Cookie 写入要求 CSRF。真实 Windows 桌面程序启动仍待目标主机验收。
 
-**未实现或待验收：**Web 业务界面、SNMP、Syslog 多来源、MR 采集、文件服务、真实 H3C 设备/Comware Exec 兼容、设备并发性能和长周期运行。DPAPI 是本机 Windows vault，不是远程凭据服务。不能宣称真实现场的数据完整性、UDP 零丢包或工业机性能达标。
+**待验收或后续：**SNMP、Syslog 多来源、MR 采集、真实 SecureCRT/Xshell/PuTTY/Explorer 启动、真实 H3C 设备/Comware Exec 兼容、设备并发性能和长周期运行。Web PR-2 文件管理是受控本机逻辑根访问，不是通用文件服务。DPAPI 是本机 Windows vault，不是远程凭据服务。不能宣称真实现场的数据完整性、UDP 零丢包或工业机性能达标。
 
 ### .NET 10 原型本地运行
 

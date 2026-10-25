@@ -46,7 +46,8 @@ def start_service(dll, root, rcvbuf, service_cpu=None):
     env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root), NETCONSOLE_NEXT_WEB_PORT=str(web_port),
                NETCONSOLE_NEXT_SYSLOG_PORT=str(udp_port), NETCONSOLE_NEXT_SYSLOG_RCVBUF_BYTES=str(rcvbuf))
     dotnet = os.environ.get("DOTNET") or shutil.which("dotnet") or "/tmp/netconsole-dotnet/dotnet"
-    proc = subprocess.Popen([dotnet, str(dll)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen([dotnet, str(dll)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding="utf-8", errors="replace")
     if service_cpu is not None:
         os.sched_setaffinity(proc.pid, {service_cpu})
     return proc, f"http://127.0.0.1:{web_port}", udp_port
@@ -117,7 +118,8 @@ def compile_native_sender(directory):
 def native_send_packets(sender, port, count, payload_size, rate, sender_cpu=None):
     set_affinity = (lambda: os.sched_setaffinity(0, {sender_cpu})) if sender_cpu is not None else None
     result = subprocess.run([str(sender), "127.0.0.1", str(port), str(count), str(payload_size), str(rate)],
-                            capture_output=True, text=True, check=True, preexec_fn=set_affinity)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+                            preexec_fn=set_affinity)
     report = json.loads(result.stdout)
     report["sequenceStart"] = 0
     report["sequenceEndExclusive"] = report.pop("attempts")
@@ -206,7 +208,7 @@ def socket_queue_info(port):
         return {"available": False, "note": "ss is not installed; per-socket drop counters unavailable"}
     try:
         output = subprocess.run(["ss", "-u", "-n", "-i", "sport", "=", f":{port}"],
-                                capture_output=True, text=True, timeout=2).stdout
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2).stdout
         return {"available": bool(output.strip()), "raw": output.strip() or None,
                 "note": "ss socket memory/drop fields are kernel/tool dependent; values are not attributed unless the socket is selected"}
     except (OSError, subprocess.TimeoutExpired):
@@ -453,7 +455,7 @@ def main():
             raise AssertionError(f"lossless normal-load case failed: {case['scenario']} {case['targetPps']} pps, {case['payloadBytes']} bytes")
     environment = {"os": platform.platform(), "kernel": platform.release(), "python": platform.python_version(),
                    "dotnet": subprocess.run([os.environ.get("DOTNET") or shutil.which("dotnet") or "/tmp/netconsole-dotnet/dotnet", "--version"],
-                                            capture_output=True, text=True).stdout.strip(),
+                                            capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip(),
                    "processorCount": os.cpu_count(), "effectiveCpuCores": None,
                    "cpuAffinity": available_cpus, "serviceCpu": service_cpu, "senderCpu": sender_cpu,
                    "dataDirectoryIsolatedTemporary": True,
