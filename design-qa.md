@@ -1,31 +1,35 @@
-# Design QA
+# P2B5 Product Design QA
 
-## Result
+final result: passed
 
-`passed` for the reference UI and isolated real-browser acceptance.
+## Comparison target
 
-## Evidence reviewed
+- Source visual truth: `D:\下载\ChatGPT 图像 2026年10月24日 02_08_27-1.png` (1680×943) and `D:\下载\NetConsole Next 运行总览界面合集.png` (1536×1024).
+- Implementation: `web/artifacts/p2b5-network-planning-browser/planning-light-1680x943.png` (1680×943 CSS px, deviceScaleFactor 1).
+- Additional implementation evidence: light 1920×1080, dark 1440×900, dark 1366×768, domains/VLAN/diff/operations and Admin no-scope state.
+- State: isolated v14 fixture, Superadmin, Network Planning route, device `p2b4-device-a`, light theme for the primary comparison.
 
-- `web/artifacts/ui-acceptance/overview-light.png`
-- `web/artifacts/ui-acceptance/overview-dark.png`
-- `web/artifacts/ui-acceptance/devices-light.png`
-- `web/artifacts/ui-acceptance/terminal-dark.png`
-- `web/artifacts/ui-acceptance/tasks.png`
-- `web/artifacts/ui-acceptance/tools.png`
-- `web/artifacts/ui-acceptance/files.png`
-- `web/artifacts/ui-acceptance/settings.png`
-- `web/artifacts/ui-acceptance/browser-evidence.json`
+The source images are the established NetConsole Next visual language; their page content is device/terminal/dashboard rather than the new P2B5 route. The comparison therefore checks shared shell, density, tokens, typography, tables, state colors and responsive behavior, while treating the network-planning information architecture as an intentional P2B5 extension.
 
-## Checks
+## Findings
 
-- Navigation and header are consistent across the captured routes.
-- Light and dark themes preserve contrast and semantic status colors.
-- Dashboard has the reference information hierarchy while keeping true empty states.
-- Device management uses compact filters/table/pagination and does not render the unavailable 782 records.
-- Terminal page has the requested three-column workstation and bottom history area, with a dark terminal surface.
-- Captured pages show no visible `undefined`, `null`, `[object Object]`, or dangling address colon.
-- Real Chrome run reported zero console errors, page errors, failed requests, bad responses, and post-login auth/missing responses.
+- No actionable P0/P1/P2 differences found in the captured P2B5 states.
+- Shared dark navigation shell, blue active state, light canvas, compact table headers, rounded cards, status pills and primary action treatment are consistent with the reference system.
+- The planning screen keeps explicit source, revision, scope, history and authorization states visible rather than imitating the reference with decorative or fake rows.
+- P3 follow-up: with a larger real dataset, review table density and pagination at 1366×768; the isolated fixture intentionally contains only a few rows.
 
-## Known differences
+## Required fidelity surfaces
 
-The reference images contain populated device, alert, RSSI and terminal-output examples. The isolated preview Catalog contains zero H3C profiles and terminal collection is disabled, so the acceptance captures truthful empty states. This is a data-availability difference, not a visual fixture substituted for runtime data.
+- Fonts/typography: existing product font tokens and monospace values for IP/source identity; hierarchy and compact labels remain readable at all captured viewports.
+- Spacing/layout rhythm: shell, toolbar, tabs, two-column cards and table rows remain within the viewport at 1920×1080, 1680×943, 1440×900 and 1366×768.
+- Colors/tokens: existing light/dark variables, blue active/primary, green success, warning/conflict pills and neutral canvas are reused.
+- Image/asset fidelity: no new decorative image is required by the planning screen; existing product icons/component icon library is used, with no placeholder art.
+- Copy/content: all visible business data in the evidence is isolated fixture data; unavailable gates explicitly say that the UI will not fabricate data.
+
+## Interaction and diagnostics
+
+The browser evidence tests navigation, filters/device selection, address create/update/history, VLAN create, review, import Preview/Dry-Run/Confirm, diff, operation history, theme/viewport changes and Admin denied-by-default behavior. `browser-evidence.json` reports zero console errors, page errors, failed requests and unexpected HTTP responses; expected auth/scope 401/403 responses are recorded separately.
+
+## Comparison history
+
+The first browser pass found a stale published asset copy, v14 being rejected by the v13 reader, a locator ambiguity, and numeric form normalization. These were fixed by running the service from its published content root, accepting v13-compatible reads on v14 while preserving strict migration validation, tightening locators, and normalizing numeric form values. The final same-size 1680×943 capture and responsive captures passed without an actionable P0/P1/P2 finding.

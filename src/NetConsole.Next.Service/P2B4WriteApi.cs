@@ -83,6 +83,25 @@ internal sealed record P2B4ImportStatus(
     long CreatedMs,
     long UpdatedMs);
 
+internal sealed record P2B4HistoryRead(
+    string TargetId,
+    long Revision,
+    string SnapshotJson,
+    long ArchivedMs);
+
+internal sealed record P2B4ReviewRead(
+    string Id,
+    string Actor,
+    string TargetType,
+    string TargetId,
+    string SourceKind,
+    string SourceReference,
+    long TargetRevision,
+    string Decision,
+    string Reason,
+    string ConflictState,
+    long CreatedMs);
+
 internal static class P2B4WriteFeatureGate
 {
     public const string WriteEnvironmentVariable = "NETCONSOLE_NEXT_P2B_WRITE_ENABLED";
@@ -340,6 +359,74 @@ internal sealed class P2B4WriteRepository
             request = JsonDocument.Parse(reader.GetString(4)).RootElement, progress = JsonDocument.Parse(reader.GetString(5)).RootElement,
             createdMs = reader.GetInt64(6), updatedMs = reader.GetInt64(7), startedMs = NullableLong(reader, 8), completedMs = NullableLong(reader, 9)
         };
+    }
+
+    public IReadOnlyList<object> ListOperations(string actor, int limit)
+    {
+        EnsureWriteBoundary();
+        using var connection = OpenWriteConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT id,actor,kind,state,request_json,progress_json,created_ms,updated_ms,started_ms,completed_ms FROM p2b4_operations WHERE actor=$actor ORDER BY updated_ms DESC,id DESC LIMIT $limit";
+        Add(command, "$actor", actor); Add(command, "$limit", Math.Clamp(limit, 1, 100));
+        var rows = new List<object>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new
+            {
+                id = reader.GetString(0), actor = reader.GetString(1), kind = reader.GetString(2), state = reader.GetString(3),
+                // Do not expose request_json here: import operations can contain raw CSV payloads.
+                progress = JsonDocument.Parse(reader.GetString(5)).RootElement,
+                createdMs = reader.GetInt64(6), updatedMs = reader.GetInt64(7), startedMs = NullableLong(reader, 8), completedMs = NullableLong(reader, 9)
+            });
+        }
+        return rows;
+    }
+
+    public IReadOnlyList<P2B4HistoryRead> ReadAddressHistory(string actor, string deviceId, string addressId)
+    {
+        EnsureWriteBoundary();
+        using var connection = OpenWriteConnection();
+        using (var target = connection.CreateCommand())
+        {
+            target.CommandText = "SELECT 1 FROM device_addresses WHERE id=$id AND device_id=$device";
+            Add(target, "$id", addressId); Add(target, "$device", deviceId);
+            if (target.ExecuteScalar() is null) throw new P2B4WriteException("ADDRESS_NOT_FOUND", "The address does not exist.", 404);
+        }
+        return ReadHistory(connection, "p2b4_address_history", "address_id", addressId);
+    }
+
+    public IReadOnlyList<P2B4HistoryRead> ReadVlanHistory(string actor, string planId)
+    {
+        EnsureWriteBoundary();
+        using var connection = OpenWriteConnection();
+        return ReadHistory(connection, "p2b4_vlan_history", "plan_id", planId);
+    }
+
+    public IReadOnlyList<P2B4ReviewRead> ListReviews(string actor, string? targetType, string? targetId, int limit)
+    {
+        EnsureWriteBoundary();
+        using var connection = OpenWriteConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id,actor,target_type,target_id,source_kind,source_reference,target_revision,decision,reason,conflict_state,created_ms FROM network_reviews WHERE actor=$actor AND ($type IS NULL OR target_type=$type) AND ($target IS NULL OR target_id=$target) ORDER BY created_ms DESC,id DESC LIMIT $limit";
+        Add(command, "$actor", actor);
+        Add(command, "$type", string.IsNullOrWhiteSpace(targetType) ? null : targetType.Trim().ToUpperInvariant());
+        Add(command, "$target", string.IsNullOrWhiteSpace(targetId) ? null : targetId.Trim()); Add(command, "$limit", Math.Clamp(limit, 1, 100));
+        var rows = new List<P2B4ReviewRead>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetInt64(10)));
+        return rows;
+    }
+
+    private static IReadOnlyList<P2B4HistoryRead> ReadHistory(SqliteConnection connection, string table, string keyColumn, string targetId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {keyColumn},revision,snapshot_json,archived_ms FROM {table} WHERE {keyColumn}=$id ORDER BY revision DESC";
+        Add(command, "$id", targetId);
+        var rows = new List<P2B4HistoryRead>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) rows.Add(new(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt64(3)));
+        return rows;
     }
 
     public void RecoverInterruptedOperations()

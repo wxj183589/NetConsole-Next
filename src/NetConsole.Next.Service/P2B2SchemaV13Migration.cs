@@ -168,6 +168,16 @@ internal static class P2B2SchemaV13Migration
 
     public static void ValidateV13Schema(SqliteConnection connection)
     {
+        ValidateV13CompatibleSchema(connection, allowV14: false);
+    }
+
+    public static void ValidateV13ReadSchema(SqliteConnection connection)
+    {
+        ValidateV13CompatibleSchema(connection, allowV14: true);
+    }
+
+    private static void ValidateV13CompatibleSchema(SqliteConnection connection, bool allowV14)
+    {
         var requiredTables = new[]
         {
             "network_domains", "network_domain_scopes", "device_domain_memberships",
@@ -182,8 +192,11 @@ internal static class P2B2SchemaV13Migration
             if (Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) != 1)
                 throw new InvalidDataException($"Schema v13 table is missing: {table}");
         }
-        if (ReadSchemaVersion(connection) != 13)
-            throw new InvalidDataException("Schema v13 is not registered after migration.");
+        var version = ReadSchemaVersion(connection);
+        if (version != 13 && (!allowV14 || version != 14))
+            throw new InvalidDataException(allowV14
+                ? "Schema v13-compatible read tables are not registered."
+                : "Schema v13 is not registered after migration.");
     }
 
     private static (int Backfilled, int PendingDomainCount, int ConflictCount) BackfillLegacyAddresses(

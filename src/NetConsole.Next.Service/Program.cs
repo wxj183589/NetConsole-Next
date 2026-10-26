@@ -496,6 +496,30 @@ app.MapGet("/api/system/p2b4-operations/{id}", (HttpContext context, string id, 
     try { return repository.GetOperation(CurrentIdentity(context).Username, id) is { } operation ? Results.Ok(operation) : Results.NotFound(); }
     catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
 });
+app.MapGet("/api/system/p2b4-operations", (HttpContext context, HttpRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.ListOperations(CurrentIdentity(context).Username, P2B4QueryLimit(request))); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapGet("/api/system/network-reviews", (HttpContext context, HttpRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.ListReviews(CurrentIdentity(context).Username, QueryValue(request, "targetType"), QueryValue(request, "targetId"), P2B4QueryLimit(request))); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapGet("/api/system/devices/{id}/addresses/{addressId}/history", (HttpContext context, string id, string addressId, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.ReadAddressHistory(CurrentIdentity(context).Username, id, addressId)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapGet("/api/system/vlan-plans/{id}/history", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.ReadVlanHistory(CurrentIdentity(context).Username, id)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
@@ -902,6 +926,14 @@ static string? QueryValue(HttpRequest request, string name, string? fallback = n
 {
     var value = request.Query[name].ToString();
     return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+}
+static int P2B4QueryLimit(HttpRequest request)
+{
+    var raw = QueryValue(request, "limit");
+    if (raw is null) return 50;
+    if (!int.TryParse(raw, out var limit) || limit is < 1 or > 100)
+        throw new P2B4WriteException("INVALID_QUERY", "limit must be between 1 and 100.", 400);
+    return limit;
 }
 static string? OptionalEnum(HttpRequest request, string name, params string[] allowed)
 {

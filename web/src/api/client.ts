@@ -154,6 +154,178 @@ export interface DeviceBatchOperation {
   items: DeviceBatchOperationItem[]
 }
 
+export interface P2B3Page<T> {
+  limit: number
+  total: number
+  hasMore: boolean
+  nextCursor?: string | null
+  items: T[]
+}
+export interface P2B3Scope {
+  scopeKind: string
+  scopeReference: string
+  resolution: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+}
+export interface P2B3Address {
+  id: string
+  deviceId: string
+  networkDomainId?: string | null
+  addressFamily: string
+  normalizedAddress: string
+  prefixLength: number
+  gatewayAddress?: string | null
+  vrfName: string
+  addressRole: string
+  interfaceReference: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+  observedAtMs?: number | null
+  validFromMs?: number | null
+  validToMs?: number | null
+  domainResolutionState: string
+  conflictState: string
+  lifecycle: string
+  effectiveSourceKind?: string | null
+  effectiveSourceReference?: string | null
+  effectiveState: string
+}
+export interface P2B3Membership {
+  id: string
+  deviceId: string
+  networkDomainId: string
+  domainName: string
+  domainKind: string
+  membershipRole: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+  lifecycle: string
+  scopeResolution: string
+  scopes: P2B3Scope[]
+  conflictState: string
+}
+export interface P2B3Domain {
+  id: string
+  name: string
+  domainKind: string
+  parentDomainId?: string | null
+  vrfName: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+  lifecycle: string
+  scopeResolution: string
+  scopes: P2B3Scope[]
+  authorizationState: string
+}
+export interface P2B3VlanPlan {
+  id: string
+  networkDomainId: string
+  vlanId: number
+  name: string
+  purpose: string
+  taggingMode: string
+  nativeVlanId?: number | null
+  pvid?: number | null
+  qinQOuterId?: number | null
+  qinQInnerId?: number | null
+  scopeResolution: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+  lifecycle: string
+  validFromMs?: number | null
+  validToMs?: number | null
+  conflictState: string
+  effectiveState: string
+  effectiveSourceKind?: string | null
+  effectiveSourceReference?: string | null
+}
+export interface P2B3DiffFact {
+  id: string
+  sourceKind: string
+  sourceReference: string
+  revision: number
+  networkDomainId?: string | null
+  interfaceReference: string
+  value: string
+  conflictState: string
+  domainResolutionState: string
+  lifecycle: string
+  validFromMs?: number | null
+  validToMs?: number | null
+  factCount: number
+  incomplete: boolean
+}
+export interface P2B3DiffItem {
+  key: string
+  status: string
+  effectiveState: string
+  effectiveSourceKind?: string | null
+  effectiveSourceReference?: string | null
+  planned: P2B3DiffFact[]
+  observed: P2B3DiffFact[]
+}
+export interface P2B3NetworkDiff {
+  deviceId: string
+  asOfMs?: number | null
+  truncated: boolean
+  addressItems: P2B3DiffItem[]
+  vlanItems: P2B3DiffItem[]
+}
+export interface P2B4WriteResult {
+  operationId: string
+  state: string
+  entityId?: string | null
+  code?: string | null
+  detail?: string | null
+}
+export interface P2B4ImportStatus {
+  importId: string
+  operationId: string
+  state: string
+  rowCount: number
+  validCount: number
+  errors: string[]
+  createdMs: number
+  updatedMs: number
+}
+export interface P2B4Operation {
+  id: string
+  actor: string
+  kind: string
+  state: string
+  request?: Record<string, unknown>
+  progress: Record<string, unknown>
+  createdMs: number
+  updatedMs: number
+  startedMs?: number | null
+  completedMs?: number | null
+}
+export interface P2B4History {
+  targetId: string
+  revision: number
+  snapshotJson: string
+  archivedMs: number
+}
+export interface P2B4Review {
+  id: string
+  actor: string
+  targetType: string
+  targetId: string
+  sourceKind: string
+  sourceReference: string
+  targetRevision: number
+  decision: string
+  reason: string
+  conflictState: string
+  createdMs: number
+}
+
 export interface TerminalDevice {
   id: string
   host: string
@@ -326,6 +498,57 @@ export function getDeviceInventory(params: { page?: number; pageSize?: number; s
   return request('/api/system/devices?' + query.toString())
 }
 export function getDeviceInventoryDetail(id: string): Promise<DeviceInventoryDetail> { return request('/api/system/devices/' + encodeURIComponent(id)) }
+function queryPath(path: string, params: Record<string, unknown>): string {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== '') query.set(key, String(value)) })
+  const encoded = query.toString()
+  return encoded ? `${path}?${encoded}` : path
+}
+export function getDeviceAddresses(deviceId: string, params: { limit?: number; cursor?: string; domainId?: string; sourceKind?: string; addressFamily?: string; lifecycle?: string } = {}): Promise<P2B3Page<P2B3Address>> {
+  return request(queryPath(`/api/system/devices/${encodeURIComponent(deviceId)}/addresses`, params))
+}
+export function getDeviceMemberships(deviceId: string, params: { limit?: number; cursor?: string; siteId?: string; domainId?: string; lifecycle?: string } = {}): Promise<P2B3Page<P2B3Membership>> {
+  return request(queryPath(`/api/system/devices/${encodeURIComponent(deviceId)}/network-memberships`, params))
+}
+export function getNetworkDomains(params: { limit?: number; cursor?: string; siteId?: string; stationId?: string; lineId?: string; sectionId?: string; domainKind?: string; scopeResolution?: string; lifecycle?: string; search?: string } = {}): Promise<P2B3Page<P2B3Domain>> {
+  return request(queryPath('/api/system/network-domains', params))
+}
+export function getVlanPlans(params: { limit?: number; cursor?: string; domainId?: string; siteId?: string; sourceKind?: string; scopeResolution?: string; lifecycle?: string; vlanId?: number; asOf?: number } = {}): Promise<P2B3Page<P2B3VlanPlan>> {
+  return request(queryPath('/api/system/vlan-plans', params))
+}
+export function getNetworkDiff(deviceId: string, params: { domainId?: string; resolutionState?: string; asOf?: number } = {}): Promise<P2B3NetworkDiff> {
+  return request(queryPath(`/api/system/devices/${encodeURIComponent(deviceId)}/network-diff`, params))
+}
+export function createNetworkAddress(deviceId: string, payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request(`/api/system/devices/${encodeURIComponent(deviceId)}/addresses`, { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateNetworkAddress(deviceId: string, addressId: string, payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request(`/api/system/devices/${encodeURIComponent(deviceId)}/addresses/${encodeURIComponent(addressId)}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function createNetworkMembership(deviceId: string, payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request(`/api/system/devices/${encodeURIComponent(deviceId)}/network-memberships`, { method: 'POST', body: JSON.stringify(payload) })
+}
+export function createVlanPlan(payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request('/api/system/vlan-plans', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateVlanPlan(planId: string, payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request(`/api/system/vlan-plans/${encodeURIComponent(planId)}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function createNetworkReview(payload: Record<string, unknown>): Promise<P2B4WriteResult> {
+  return request('/api/system/network-reviews', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function createNetworkImport(payload: { idempotencyKey: string; csv: string; expiresMs?: number }): Promise<P2B4ImportStatus> {
+  return request('/api/system/import-runs', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function getNetworkImport(importId: string): Promise<P2B4ImportStatus> { return request(`/api/system/import-runs/${encodeURIComponent(importId)}`) }
+export function dryRunNetworkImport(importId: string): Promise<P2B4ImportStatus> { return request(`/api/system/import-runs/${encodeURIComponent(importId)}/dry-run`, { method: 'POST' }) }
+export function confirmNetworkImport(importId: string): Promise<P2B4ImportStatus> { return request(`/api/system/import-runs/${encodeURIComponent(importId)}/confirm`, { method: 'POST' }) }
+export function cancelNetworkImport(importId: string): Promise<P2B4ImportStatus> { return request(`/api/system/import-runs/${encodeURIComponent(importId)}/cancel`, { method: 'POST' }) }
+export function getP2B4Operation(operationId: string): Promise<P2B4Operation> { return request(`/api/system/p2b4-operations/${encodeURIComponent(operationId)}`) }
+export function getP2B4Operations(limit = 50): Promise<P2B4Operation[]> { return request(queryPath('/api/system/p2b4-operations', { limit })) }
+export function getNetworkReviews(params: { targetType?: string; targetId?: string; limit?: number } = {}): Promise<P2B4Review[]> { return request(queryPath('/api/system/network-reviews', params)) }
+export function getAddressHistory(deviceId: string, addressId: string): Promise<P2B4History[]> { return request(`/api/system/devices/${encodeURIComponent(deviceId)}/addresses/${encodeURIComponent(addressId)}/history`) }
+export function getVlanHistory(planId: string): Promise<P2B4History[]> { return request(`/api/system/vlan-plans/${encodeURIComponent(planId)}/history`) }
 export function getDeviceGroups(siteId?: string): Promise<DeviceGroup[]> {
   const query = siteId ? '?' + new URLSearchParams({ siteId }).toString() : ''
   return request('/api/system/device-groups' + query)

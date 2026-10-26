@@ -528,8 +528,8 @@ internal sealed class P2B3ReadRepository
             using var version = connection.CreateCommand();
             version.CommandText = "SELECT COALESCE(MAX(version),0) FROM schema_versions";
             var schemaVersion = Convert.ToInt32(version.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-            if (schemaVersion != 13) throw new P2B3SchemaUnavailableException("P2B_SCHEMA_UNAVAILABLE");
-            P2B2SchemaV13Migration.ValidateV13Schema(connection);
+            if (schemaVersion is not (13 or 14)) throw new P2B3SchemaUnavailableException("P2B_SCHEMA_UNAVAILABLE");
+            P2B2SchemaV13Migration.ValidateV13ReadSchema(connection);
         }
         catch (SqliteException)
         {

@@ -12,6 +12,7 @@ const router = createRouter({
       children: [
         { path: '', component: () => import('./views/DashboardView.vue'), name: 'dashboard', meta: { label: '运行总览' } },
         { path: 'devices', component: () => import('./views/DevicesView.vue'), name: 'devices', meta: { label: '设备管理' } },
+        { path: 'network-planning', component: () => import('./views/NetworkPlanningView.vue'), name: 'network-planning', meta: { label: '网络规划' } },
         { path: 'terminal', component: () => import('./views/TerminalView.vue'), name: 'terminal', meta: { label: '终端控制台' } },
         { path: 'tasks', component: () => import('./views/TasksView.vue'), name: 'tasks', meta: { label: '任务中心' } },
         ...['wireless', 'rail'].map((path) => ({ path, component: () => import('./views/DisabledView.vue'), name: path, meta: { label: ({ wireless: '无线管理', rail: '轨道交通' } as Record<string, string>)[path] } })),

@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 export interface WorkspaceTab { path: string; label: string; pinned?: boolean }
 
 const labels: Record<string, string> = {
-  '/': '运行总览', '/devices': '设备管理', '/terminal': '终端控制台', '/tasks': '任务中心',
+  '/': '运行总览', '/devices': '设备管理', '/network-planning': '网络规划', '/terminal': '终端控制台', '/tasks': '任务中心',
   '/wireless': '无线管理', '/rail': '轨道交通', '/tools': '工具集', '/files': '文件管理', '/settings': '系统设置',
 }
 

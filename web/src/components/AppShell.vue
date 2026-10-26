@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Bell, Connection, DataLine, FolderOpened, Guide, House, List, Monitor,
-  Operation, Search, Setting, Tools, TrendCharts, UserFilled,
+  Operation, Search, Setting, Tools, TrendCharts, UserFilled, Share,
 } from '@element-plus/icons-vue'
 import { getDeviceInventory, getHealth, type HealthSnapshot } from '../api/client'
 import { useAuthStore } from '../stores/auth'
@@ -23,6 +23,7 @@ const sidebarCollapsed = ref(false)
 const nav = [
   { path: '/', label: '运行总览', icon: House },
   { path: '/devices', label: '设备管理', icon: Monitor },
+  { path: '/network-planning', label: '网络规划', icon: Share },
   { path: '/terminal', label: '终端控制台', icon: Connection },
   { path: '/tasks', label: '任务中心', icon: List },
   { path: '/wireless', label: '无线管理', icon: TrendCharts, disabled: true },
