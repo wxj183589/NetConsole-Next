@@ -112,6 +112,48 @@ export interface DeviceImportPreview {
   rows: Array<{ line: number; action: string; deviceId: string; name: string; managementIp: string; detail: string; canCommit: boolean }>
 }
 
+export type DeviceBatchKind = 'BATCH_ENABLE' | 'BATCH_DISABLE' | 'BATCH_SET_GROUP' | 'BATCH_SET_SITE' | 'BATCH_UPDATE_METADATA'
+export interface DeviceBatchRequest {
+  kind: DeviceBatchKind
+  idempotencyKey: string
+  deviceIds: string[]
+  siteId?: string
+  groupId?: string
+  name?: string
+  vendor?: string
+  model?: string
+  deviceType?: string
+  description?: string
+}
+export interface DeviceBatchOperationItem {
+  deviceId: string
+  expectedRevision: number
+  beforeJson: string
+  requestedJson: string
+  outcome: string
+  detail: string
+}
+export interface DeviceBatchOperation {
+  id: string
+  actor: string
+  kind: DeviceBatchKind
+  state: string
+  targetCount: number
+  completedCount: number
+  conflictCount: number
+  failedCount: number
+  createdMs: number
+  updatedMs: number
+  startedMs?: number | null
+  completedMs?: number | null
+  requestJson: string
+  progressJson: string
+  canConfirm: boolean
+  canCancel: boolean
+  canRetry: boolean
+  items: DeviceBatchOperationItem[]
+}
+
 export interface TerminalDevice {
   id: string
   host: string
@@ -302,6 +344,18 @@ export function previewDeviceImport(csv: string): Promise<DeviceImportPreview> {
 }
 export function commitDeviceImport(previewId: string): Promise<{ previewId: string; created: number; updated: number; committedAtMs: number }> {
   return request('/api/system/devices/import/commit', { method: 'POST', body: JSON.stringify({ previewId, confirm: true }) })
+}
+export function createDeviceBatch(payload: DeviceBatchRequest): Promise<DeviceBatchOperation> {
+  return request('/api/system/devices/batch', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function getDeviceBatchOperation(id: string): Promise<DeviceBatchOperation> {
+  return request('/api/system/device-operations/' + encodeURIComponent(id))
+}
+export function confirmDeviceBatch(id: string): Promise<DeviceBatchOperation> {
+  return request('/api/system/devices/batch/' + encodeURIComponent(id) + '/confirm', { method: 'POST' })
+}
+export function cancelDeviceBatch(id: string): Promise<DeviceBatchOperation> {
+  return request('/api/system/devices/batch/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })
 }
 export function getTerminalDevices(): Promise<TerminalDevice[]> { return request('/api/system/terminal/devices') }
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }

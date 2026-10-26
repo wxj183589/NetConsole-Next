@@ -56,6 +56,20 @@ try {
   await page.locator('select[aria-label="设备分组"]').selectOption({ label: 'Browser Group' })
   await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).waitFor()
 
+  const batchRow = page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).first()
+  await batchRow.locator('input[type="checkbox"]').check()
+  await page.getByRole('button', { name: '批量禁用' }).click()
+  const batchInput = page.getByRole('dialog', { name: '批量禁用' })
+  await batchInput.getByRole('button', { name: '生成预览' }).click()
+  const batchPreview = page.getByRole('dialog', { name: '批量操作预览' })
+  await batchPreview.getByText('待确认').waitFor()
+  await page.reload({ waitUntil: 'networkidle' })
+  const recoveredBatchPreview = page.getByRole('dialog', { name: '批量操作预览' })
+  await recoveredBatchPreview.getByText('待确认').waitFor()
+  await recoveredBatchPreview.getByRole('button', { name: '确认批量提交' }).click()
+  await page.getByText('批量操作已原子提交').waitFor()
+  await page.screenshot({ path: `${output}/device-batch-recovered-and-committed.png`, fullPage: true })
+
   const csv = 'deviceId,name,managementIp,vendor,model,deviceType,siteId,groupName,description,enabled\n,browser-import,192.0.2.92,H3C,X,AP,local,Browser Group,imported,true'
   await page.locator('#device-import-file').setInputFiles({ name: 'devices.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   const importDialog = page.getByRole('dialog', { name: 'CSV 导入预览' })

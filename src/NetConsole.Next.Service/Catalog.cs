@@ -158,6 +158,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV9Migration(db);
         ApplyV10Migration(db);
         ApplyV11Migration(db);
+        ApplyV12Migration(db);
+        RecoverDeviceBatchOperations(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -372,6 +374,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v11.sql")
             ?? throw new InvalidOperationException("Embedded schema_v11.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV12Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v12.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v12.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

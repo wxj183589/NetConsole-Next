@@ -559,11 +559,12 @@ internal sealed partial class Catalog
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("A device changed after preview; import was rolled back.");
     }
 
-    private static void InsertDeviceAudit(SqliteConnection db, SqliteTransaction transaction, string actor, string action, string subjectId, object detail)
+    private static void InsertDeviceAudit(SqliteConnection db, SqliteTransaction transaction, string actor, string action, string subjectId, object detail, string outcome = "SUCCESS")
     {
         using var command = db.CreateCommand(); command.Transaction = transaction;
-        command.CommandText = "INSERT INTO audit_events(id,at_ms,action,outcome,detail_json) VALUES($id,$at,$action,'SUCCESS',$detail)";
+        command.CommandText = "INSERT INTO audit_events(id,at_ms,action,outcome,detail_json) VALUES($id,$at,$action,$outcome,$detail)";
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N")); command.Parameters.AddWithValue("$at", UtcNowMs()); command.Parameters.AddWithValue("$action", action);
+        command.Parameters.AddWithValue("$outcome", outcome);
         command.Parameters.AddWithValue("$detail", JsonSerializer.Serialize(new { actor, subjectId, detail })); command.ExecuteNonQuery();
     }
 

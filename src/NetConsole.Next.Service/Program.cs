@@ -292,52 +292,92 @@ app.MapGet("/api/system/devices", (HttpRequest request, Catalog rawCatalog) =>
         request.Query["search"].ToString(), request.Query["status"].ToString(),
         request.Query["siteId"].ToString(), request.Query["groupId"].ToString()));
 });
+app.MapPost("/api/system/devices/batch", (HttpContext context, DeviceBatchOperationRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED");
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.CreateDeviceBatchOperation(request, actor)); }
+    catch (DeviceBatchResourceLimitException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_BATCH_FAILED", "FAILED", "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_BATCH_FAILED", "CONFLICT", "devices", null, Array.Empty<string>(), "IDEMPOTENCY_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/device-operations/{id}", (HttpContext context, string id, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id);
+    try { return rawCatalog.GetDeviceBatchOperation(id, CurrentIdentity(context).Username) is { } operation ? Results.Ok(operation) : Results.NotFound(); }
+    catch (UnauthorizedAccessException) { return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id); }
+});
+app.MapPost("/api/system/devices/batch/{id}/confirm", (HttpContext context, string id, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.ConfirmDeviceBatchOperation(id, actor)); }
+    catch (DeviceBatchConflictException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_BATCH_CONFLICT", "CONFLICT", id, id, Array.Empty<string>(), "DEVICE_VERSION_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message, operationId = ex.OperationId }); }
+    catch (DeviceBatchResourceLimitException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+    catch (UnauthorizedAccessException) { return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices/batch/{id}/cancel", (HttpContext context, string id, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.CancelDeviceBatchOperation(id, actor)); }
+    catch (UnauthorizedAccessException) { return DevicePermissionDenied(context, rawCatalog, "DEVICE_BATCH_PERMISSION_DENIED", id); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_BATCH_CANCEL_FAILED", "CONFLICT", id, id, Array.Empty<string>(), "CANCEL_NOT_ALLOWED"); return Results.Conflict(new { error = ex.Message }); }
+});
 app.MapGet("/api/system/devices/{id}", (string id, Catalog rawCatalog) =>
     rawCatalog.GetDeviceInventoryDetail(id) is { } detail ? Results.Ok(detail) : Results.NotFound());
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
 {
-    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    try { return Results.Created("/api/system/device-groups", rawCatalog.CreateDeviceGroup(request.SiteId, request.Name, request.Description, CurrentIdentity(context).Username)); }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
-    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_GROUP_PERMISSION_DENIED", request.SiteId);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Created("/api/system/device-groups", rawCatalog.CreateDeviceGroup(request.SiteId, request.Name, request.Description, actor)); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "FAILED", request.SiteId, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "FAILED", request.SiteId, null, Array.Empty<string>(), "SITE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "CONFLICT", request.SiteId, null, Array.Empty<string>(), "GROUP_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
-    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_WRITE_PERMISSION_DENIED", request.Id ?? "devices");
+    var actor = CurrentIdentity(context).Username;
     try
     {
-        var detail = rawCatalog.CreateDeviceInventory(request, CurrentIdentity(context).Username);
+        var detail = rawCatalog.CreateDeviceInventory(request, actor);
         return Results.Created($"/api/system/devices/{detail.Item.Id}", detail);
     }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
-    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "SITE_OR_GROUP_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "CONFLICT", request.Id ?? "devices", null, Array.Empty<string>(), "DEVICE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
-    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    try { return Results.Ok(rawCatalog.UpdateDeviceInventory(id, request, CurrentIdentity(context).Username)); }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
-    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_WRITE_PERMISSION_DENIED", id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.UpdateDeviceInventory(id, request, actor)); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_UPDATE_FAILED", "FAILED", id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_UPDATE_FAILED", "FAILED", id, null, Array.Empty<string>(), "DEVICE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_UPDATE_FAILED", "CONFLICT", id, null, Array.Empty<string>(), "DEVICE_VERSION_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapPost("/api/system/devices/import/preview", (HttpContext context, DeviceImportPreviewRequest request, Catalog rawCatalog) =>
 {
-    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    try { return Results.Ok(rawCatalog.PreviewDeviceImport(request.Csv, CurrentIdentity(context).Username)); }
-    catch (DeviceImportResourceLimitException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_IMPORT_PERMISSION_DENIED", "devices");
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.PreviewDeviceImport(request.Csv, actor)); }
+    catch (DeviceImportResourceLimitException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_PREVIEW_FAILED", "FAILED", "devices", null, Array.Empty<string>(), "RESOURCE_LIMIT"); return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_PREVIEW_FAILED", "FAILED", "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
 });
 app.MapPost("/api/system/devices/import/commit", (HttpContext context, DeviceImportCommitRequest request, Catalog rawCatalog) =>
 {
-    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    try { return Results.Ok(rawCatalog.CommitDeviceImport(request.PreviewId, request.Confirm, CurrentIdentity(context).Username)); }
-    catch (UnauthorizedAccessException) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
-    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
-    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_IMPORT_PERMISSION_DENIED", request.PreviewId);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.CommitDeviceImport(request.PreviewId, request.Confirm, actor)); }
+    catch (UnauthorizedAccessException) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "FAILED", request.PreviewId, null, Array.Empty<string>(), "PREVIEW_OWNER_MISMATCH"); return Results.StatusCode(StatusCodes.Status403Forbidden); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "FAILED", request.PreviewId, null, Array.Empty<string>(), "PREVIEW_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "CONFLICT", request.PreviewId, null, Array.Empty<string>(), "IMPORT_VERSION_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
@@ -664,6 +704,16 @@ static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out
 static WebUserIdentity CurrentIdentity(HttpContext context) =>
     context.Items[WebCookieNames.IdentityItem] as WebUserIdentity ?? throw new UnauthorizedAccessException("Web identity is missing.");
 static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
+static IResult DevicePermissionDenied(HttpContext context, Catalog catalog, string action, string subjectId = "devices")
+{
+    try
+    {
+        var identity = CurrentIdentity(context);
+        catalog.TryRecordDeviceAuditEvent(identity.Username, action, "DENIED", subjectId, null, Array.Empty<string>(), "SUPERADMIN_REQUIRED");
+    }
+    catch (Exception ex) { Console.Error.WriteLine($"DEVICE_PERMISSION_AUDIT_FAILED:{action}:{ex.GetType().Name}"); }
+    return Results.StatusCode(StatusCodes.Status403Forbidden);
+}
 
 static bool IsWriteRequest(string method) => method is "POST" or "PUT" or "PATCH" or "DELETE";
 

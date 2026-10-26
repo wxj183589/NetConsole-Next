@@ -129,6 +129,7 @@ internal static class SchedulerTests
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();
+        await VerifiesDeviceManagementPhase2A();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();
@@ -817,6 +818,121 @@ internal static class SchedulerTests
         finally { Directory.Delete(root, true); }
     }
 
+    private static async Task VerifiesDeviceManagementPhase2A()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-p2a-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            using (var db = OpenCatalog(root))
+            using (var sites = db.CreateCommand())
+            {
+                sites.CommandText = "INSERT INTO sites(id,name) VALUES('site-2','P2A Site 2')";
+                sites.ExecuteNonQuery();
+            }
+
+            var localGroup = catalog.CreateDeviceGroup("local", "P2A Local", "batch fixture", "p2a");
+            var first = catalog.CreateDeviceInventory(new(null, "P2A One", "192.0.2.121", "H3C", "S", "AP", "local", localGroup.Id, "one", true, null), "p2a");
+            var second = catalog.CreateDeviceInventory(new(null, "P2A Two", "192.0.2.122", "H3C", "S", "AP", "local", localGroup.Id, "two", true, null), "p2a");
+            var third = catalog.CreateDeviceInventory(new(null, "P2A Three", "192.0.2.123", "H3C", "S", "AP", "local", localGroup.Id, "three", true, null), "p2a");
+            var ids = new[] { first.Item.Id, second.Item.Id, third.Item.Id };
+
+            var disableRequest = new DeviceBatchOperationRequest("BATCH_DISABLE", "p2a-disable", ids, null, null);
+            var disablePreview = catalog.CreateDeviceBatchOperation(disableRequest, "p2a");
+            var disableRetry = catalog.CreateDeviceBatchOperation(disableRequest, "p2a");
+            Assert(disablePreview.Id == disableRetry.Id && disablePreview.State == "PENDING_CONFIRM" && disablePreview.TargetCount == 3,
+                "batch preview must persist explicit targets and return the same operation for an identical idempotency key");
+            var disabled = catalog.ConfirmDeviceBatchOperation(disablePreview.Id, "p2a");
+            Assert(disabled.State == "SUCCEEDED" && disabled.CompletedCount == 3 && ids.All(id => catalog.GetDeviceInventoryDetail(id)!.Item.Enabled == false),
+                "a confirmed disable batch must atomically update every selected device");
+            Assert(catalog.ConfirmDeviceBatchOperation(disablePreview.Id, "p2a").State == "SUCCEEDED",
+                "repeating a successful batch confirmation must be idempotent");
+
+            var groupOperation = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_SET_GROUP", "p2a-group", ids, null, localGroup.Id), "p2a");
+            var grouped = catalog.ConfirmDeviceBatchOperation(groupOperation.Id, "p2a");
+            Assert(grouped.State == "SUCCEEDED" && ids.All(id => catalog.GetDeviceInventoryDetail(id)!.Item.GroupId == localGroup.Id),
+                "batch group assignment must validate the group/site boundary and update all targets");
+
+            var siteOperation = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_SET_SITE", "p2a-site", ids, "site-2"), "p2a");
+            var moved = catalog.ConfirmDeviceBatchOperation(siteOperation.Id, "p2a");
+            var movedItems = ids.Select(id => catalog.GetDeviceInventoryDetail(id)!.Item).ToArray();
+            Assert(moved.State == "SUCCEEDED" && movedItems.All(item => item.SiteId == "site-2" && string.IsNullOrEmpty(item.GroupId)),
+                $"batch site assignment must clear the old group and preserve all-or-nothing semantics: {moved.State}; {string.Join(" | ", movedItems.Select(item => $"{item.Id}:{item.SiteId}:{item.GroupId}"))}; {string.Join(" | ", moved.Items.Select(item => $"{item.DeviceId}:{item.Outcome}:{item.Detail}"))}");
+
+            var metadata = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_UPDATE_METADATA", "p2a-metadata", new[] { first.Item.Id, second.Item.Id }, Name: "P2A Updated", Vendor: "H3C"), "p2a");
+            Assert(catalog.ConfirmDeviceBatchOperation(metadata.Id, "p2a").State == "SUCCEEDED" &&
+                   catalog.GetDeviceInventoryDetail(first.Item.Id)!.Item.Name == "P2A Updated" &&
+                   catalog.GetDeviceInventoryDetail(second.Item.Id)!.Item.Name == "P2A Updated",
+                "metadata batches must update only explicitly requested fields");
+
+            var conflict = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-conflict", new[] { first.Item.Id, second.Item.Id }), "p2a");
+            var current = catalog.GetDeviceInventoryDetail(first.Item.Id)!;
+            catalog.UpdateDeviceInventory(first.Item.Id, new(first.Item.Id, current.Item.Name, current.Item.ManagementIp, "H3C", "S", "AP", "site-2", null, current.Description, true, null), "p2a");
+            AssertThrows<DeviceBatchConflictException>(() => catalog.ConfirmDeviceBatchOperation(conflict.Id, "p2a"));
+            var conflicted = catalog.GetDeviceBatchOperation(conflict.Id, "p2a")!;
+            Assert(conflicted.State == "CONFLICT" && conflicted.ConflictCount == 1 && catalog.GetDeviceInventoryDetail(second.Item.Id)!.Item.Enabled == false,
+                "a version conflict must write no device from the batch and must remain explicitly auditable");
+
+            var missing = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-missing", new[] { "missing-device" }), "p2a");
+            Assert(missing.State == "CONFLICT" && missing.Items.Single().Detail == "DEVICE_NOT_FOUND",
+                "preview must retain a missing explicit target as a conflict instead of dropping it");
+            AssertThrows<InvalidOperationException>(() => catalog.ConfirmDeviceBatchOperation(missing.Id, "p2a"));
+
+            var cancelled = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-cancel", new[] { third.Item.Id }), "p2a");
+            Assert(catalog.CancelDeviceBatchOperation(cancelled.Id, "p2a").State == "CANCELLED" &&
+                   AssertThrowsReturn<InvalidOperationException>(() => catalog.ConfirmDeviceBatchOperation(cancelled.Id, "p2a")),
+                "a pending operation must support explicit cancellation and reject later confirmation");
+
+            var retry = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-retry", new[] { second.Item.Id }), "p2a");
+            using (var db = OpenCatalog(root))
+            using (var fail = db.CreateCommand())
+            {
+                fail.CommandText = "UPDATE device_operations SET state='FAILED' WHERE id=$id; UPDATE device_operation_items SET outcome='FAILED',detail='INJECTED_FAILURE' WHERE operation_id=$id";
+                fail.Parameters.AddWithValue("$id", retry.Id); fail.ExecuteNonQuery();
+            }
+            Assert(catalog.ConfirmDeviceBatchOperation(retry.Id, "p2a").State == "SUCCEEDED" && catalog.GetDeviceInventoryDetail(second.Item.Id)!.Item.Enabled,
+                "a failed operation must reset only its failed items before a safe retry");
+
+            var concurrent = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_DISABLE", "p2a-concurrent", new[] { third.Item.Id }), "p2a");
+            var confirmations = await Task.WhenAll(
+                Task.Run(() => TryConfirmBatch(catalog, concurrent.Id)),
+                Task.Run(() => TryConfirmBatch(catalog, concurrent.Id)));
+            Assert(confirmations.Count(result => result == "SUCCEEDED") >= 1 && catalog.GetDeviceInventoryDetail(third.Item.Id)!.Item.Enabled == false,
+                "concurrent confirmation must converge on one committed operation without double-writing the device");
+
+            AssertThrows<UnauthorizedAccessException>(() => catalog.GetDeviceBatchOperation(disablePreview.Id, "other-admin"));
+            AssertThrows<DeviceBatchResourceLimitException>(() => catalog.CreateDeviceBatchOperation(
+                new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-limit", Enumerable.Range(0, 101).Select(index => $"device-{index}").ToArray()), "p2a"));
+            using (var db = OpenCatalog(root))
+            using (var audits = db.CreateCommand())
+            {
+                audits.CommandText = "SELECT action,detail_json FROM audit_events WHERE action LIKE 'DEVICE_BATCH_%'";
+                using var rows = audits.ExecuteReader();
+                var auditRows = new List<(string Action, string Detail)>();
+                while (rows.Read()) auditRows.Add((rows.GetString(0), rows.GetString(1)));
+                Assert(auditRows.Any(item => item.Action == "DEVICE_BATCH_SUCCESS") && auditRows.All(item => !item.Detail.Contains("password", StringComparison.OrdinalIgnoreCase)),
+                    "batch success and audit payloads must be queryable without credentials or secret fields");
+            }
+
+            await Task.Yield();
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static string TryConfirmBatch(Catalog catalog, string operationId)
+    {
+        try { return catalog.ConfirmDeviceBatchOperation(operationId, "p2a").State; }
+        catch (Exception exception) { return exception.GetType().Name; }
+    }
+
+    private static bool AssertThrowsReturn<T>(Action action) where T : Exception
+    {
+        AssertThrows<T>(action);
+        return true;
+    }
+
     private static async Task VerifiesDeviceManagementSafetyBoundaries()
     {
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-safety-" + Guid.NewGuid().ToString("N"));
@@ -1452,7 +1568,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 11, "v11 device inventory migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 12, "v12 device batch operation migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
