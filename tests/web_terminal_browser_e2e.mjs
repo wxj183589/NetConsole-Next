@@ -74,6 +74,7 @@ try {
   await page.locator('.terminal-workbench').waitFor()
   const sshId = '00000000000000000000000000000001'
   const telnetId = '00000000000000000000000000000002'
+  await page.getByTestId('terminal-device-row').nth(1).waitFor()
   if (await page.getByTestId('terminal-device-row').count() !== 2) throw new Error('expected two registered terminal devices')
 
   await selectDevice(sshId, 'SSH')
