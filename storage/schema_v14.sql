@@ -88,6 +88,3 @@ CREATE TABLE IF NOT EXISTS network_import_runs(
     UNIQUE(actor,idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_network_import_runs_actor_state ON network_import_runs(actor,state,updated_ms);
-
-INSERT OR IGNORE INTO schema_versions(version,applied_ms)
-VALUES(14,CAST(strftime('%s','now') AS INTEGER)*1000);

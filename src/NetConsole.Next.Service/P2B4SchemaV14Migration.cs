@@ -133,8 +133,7 @@ internal static class P2B4SchemaV14Migration
         using var reader = new StreamReader(resource);
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = reader.ReadToEnd().Replace(
-            "INSERT OR IGNORE INTO schema_versions(version,applied_ms)\nVALUES(14,CAST(strftime('%s','now') AS INTEGER)*1000);", "", StringComparison.Ordinal);
+        command.CommandText = reader.ReadToEnd();
         command.ExecuteNonQuery();
     }
 }
