@@ -1,6 +1,6 @@
 # NetConsole Next 设备管理 Phase 1
 
-状态：`DEVICE_PHASE1_VERIFIED`（本地服务测试、前端构建和隔离真实浏览器验收通过）。
+状态：`DEVICE_PHASE1_VERIFIED`（本地服务测试、前端构建、隔离真实浏览器验收和 GitHub Ubuntu/Windows/PowerShell CI 均通过）。
 
 ## 范围
 

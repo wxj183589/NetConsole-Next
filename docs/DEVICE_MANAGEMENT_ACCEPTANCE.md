@@ -14,7 +14,7 @@
 | Vue Vitest | 已通过既有 3 files / 4 tests |
 | Vite production build | 已通过；保留现有大 chunk warning |
 | Git diff check | PASS（最终提交前） |
-| GitHub Ubuntu/Windows CI | 待 Phase 1 Draft PR 创建后记录 |
+| GitHub Ubuntu/Windows CI | PASS：run `40272653066`（Ubuntu/Windows）；Windows syntax `40272653095` |
 
 ## 浏览器验收清单
 
