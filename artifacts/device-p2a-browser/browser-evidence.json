@@ -1,5 +1,5 @@
 {
-  "gitSha": "bf854e6f3fea84161f684e6d8395f839bd6a98f2",
+  "gitSha": "af1e56f314d83142eca808463f7f24052bb9e97d",
   "base": "http://127.0.0.1:18774",
   "viewports": [
     {
@@ -17,14 +17,7 @@
   ],
   "consoleErrors": [],
   "pageErrors": [],
-  "failedRequests": [
-    {
-      "page": "admin",
-      "method": "POST",
-      "url": "http://127.0.0.1:18774/api/system/devices",
-      "failure": "net::ERR_ABORTED"
-    }
-  ],
+  "failedRequests": [],
   "unexpectedHttpErrors": [],
   "websocketErrors": [],
   "unhandledRejections": [],
