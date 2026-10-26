@@ -16,6 +16,7 @@ var webBind = settings.WebBindAddress == "::" ? "[::]" : settings.WebBindAddress
 builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
+builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
@@ -329,6 +330,91 @@ app.MapPost("/api/system/devices/batch/{id}/cancel", (HttpContext context, strin
 });
 app.MapGet("/api/system/devices/{id}", (string id, Catalog rawCatalog) =>
     rawCatalog.GetDeviceInventoryDetail(id) is { } detail ? Results.Ok(detail) : Results.NotFound());
+app.MapGet("/api/system/devices/{id}/addresses", (HttpContext context, HttpRequest request, string id, P2B3ReadRepository repository) =>
+{
+    if (P2B3ReadGuard(context) is { } denied) return denied;
+    try
+    {
+        if (!repository.DeviceExists(id)) return Results.NotFound();
+        var page = P2B3PageOptions.From(request);
+        var result = repository.ReadAddresses(id, page, QueryValue(request, "domainId"),
+            OptionalEnum(request, "sourceKind", "PLANNED", "OBSERVED", "IMPORTED", "MANUAL"),
+            OptionalEnum(request, "addressFamily", "IPV4", "IPV6"), QueryValue(request, "lifecycle", "ACTIVE"));
+        return Results.Ok(result);
+    }
+    catch (P2B3QueryException ex) { return P2B3BadQuery(ex.Message); }
+    catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+    { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
+app.MapGet("/api/system/devices/{id}/network-memberships", (HttpContext context, HttpRequest request, string id, P2B3ReadRepository repository) =>
+{
+    if (P2B3ReadGuard(context) is { } denied) return denied;
+    try
+    {
+        if (!repository.DeviceExists(id)) return Results.NotFound();
+        var page = P2B3PageOptions.From(request);
+        return Results.Ok(repository.ReadMemberships(id, page, QueryValue(request, "siteId"),
+            QueryValue(request, "domainId"), QueryValue(request, "lifecycle", "ACTIVE")));
+    }
+    catch (P2B3QueryException ex) { return P2B3BadQuery(ex.Message); }
+    catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+    { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
+app.MapGet("/api/system/network-domains", (HttpContext context, HttpRequest request, P2B3ReadRepository repository) =>
+{
+    if (P2B3ReadGuard(context) is { } denied) return denied;
+    try
+    {
+        var page = P2B3PageOptions.From(request);
+        return Results.Ok(repository.ReadDomains(page, QueryValue(request, "siteId"), QueryValue(request, "stationId"),
+            QueryValue(request, "lineId"), QueryValue(request, "sectionId"),
+            OptionalEnum(request, "domainKind", "MANAGEMENT", "BUSINESS", "OUT_OF_BAND", "TRAIN_GROUND", "SHARED_SERVICE", "OTHER"),
+            OptionalEnum(request, "scopeResolution", "RESOLVED", "UNRESOLVED", "CONFLICT"),
+            QueryValue(request, "lifecycle", "ACTIVE"), QueryValue(request, "search")));
+    }
+    catch (P2B3QueryException ex) { return P2B3BadQuery(ex.Message); }
+    catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+    { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
+app.MapGet("/api/system/vlan-plans", (HttpContext context, HttpRequest request, P2B3ReadRepository repository) =>
+{
+    if (P2B3ReadGuard(context) is { } denied) return denied;
+    try
+    {
+        int? vlanId = null;
+        if (!string.IsNullOrWhiteSpace(request.Query["vlanId"]))
+        {
+            if (!int.TryParse(request.Query["vlanId"], out var parsed) || parsed is < 1 or > 4094)
+                throw new P2B3QueryException("vlanId must be between 1 and 4094.");
+            vlanId = parsed;
+        }
+        return Results.Ok(repository.ReadVlanPlans(P2B3PageOptions.From(request), QueryValue(request, "domainId"),
+            QueryValue(request, "siteId"), OptionalEnum(request, "sourceKind", "PLANNED", "OBSERVED", "IMPORTED", "MANUAL"),
+            OptionalEnum(request, "scopeResolution", "RESOLVED", "UNRESOLVED", "CONFLICT"),
+            QueryValue(request, "lifecycle", "ACTIVE"), vlanId, AsOf(request)));
+    }
+    catch (P2B3QueryException ex) { return P2B3BadQuery(ex.Message); }
+    catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+    { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
+app.MapGet("/api/system/devices/{id}/network-diff", (HttpContext context, HttpRequest request, string id, P2B3ReadRepository repository) =>
+{
+    if (P2B3ReadGuard(context) is { } denied) return denied;
+    try
+    {
+        if (!repository.DeviceExists(id)) return Results.NotFound();
+        return Results.Ok(repository.ReadNetworkDiff(id, QueryValue(request, "domainId"),
+            OptionalEnum(request, "resolutionState", "RESOLVED", "PENDING_DOMAIN", "CONFLICT"), AsOf(request)));
+    }
+    catch (P2B3QueryException ex) { return P2B3BadQuery(ex.Message); }
+    catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+    { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
@@ -701,6 +787,42 @@ static bool IsAllowedWebHost(HostString host, RuntimeSettings settings)
 }
 
 static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;
+static IResult? P2B3ReadGuard(HttpContext context)
+{
+    if (!P2B3ReadApiFeatureGate.IsEnabled()) return P2B3SchemaUnavailable("FEATURE_DISABLED");
+    var identity = CurrentIdentity(context);
+    // Existing Auth has ADMIN/SUPERADMIN roles but no per-user site claims. Do not
+    // invent a site scope for ADMIN; expose the new scoped reads only to the role
+    // whose current contract is explicitly global.
+    if (!string.Equals(identity.Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase))
+        return Results.Json(new { error = "P2B_SITE_SCOPE_UNAVAILABLE", detail = "The current Auth identity has no reliable site scope for P2B3 reads." }, statusCode: StatusCodes.Status403Forbidden);
+    return null;
+}
+static IResult P2B3SchemaUnavailable(string reason) =>
+    Results.Json(new { error = "P2B_SCHEMA_UNAVAILABLE", reason }, statusCode: StatusCodes.Status503ServiceUnavailable);
+static IResult P2B3BadQuery(string detail) =>
+    Results.Json(new { error = "INVALID_QUERY", detail }, statusCode: StatusCodes.Status400BadRequest);
+static string? QueryValue(HttpRequest request, string name, string? fallback = null)
+{
+    var value = request.Query[name].ToString();
+    return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+}
+static string? OptionalEnum(HttpRequest request, string name, params string[] allowed)
+{
+    var value = QueryValue(request, name);
+    if (value is null) return null;
+    if (!allowed.Contains(value, StringComparer.OrdinalIgnoreCase))
+        throw new P2B3QueryException($"{name} is invalid.");
+    return allowed.First(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase));
+}
+static long? AsOf(HttpRequest request)
+{
+    var value = QueryValue(request, "asOf");
+    if (value is null) return null;
+    if (!long.TryParse(value, out var parsed) || parsed < 0)
+        throw new P2B3QueryException("asOf must be a non-negative Unix millisecond timestamp.");
+    return parsed;
+}
 static WebUserIdentity CurrentIdentity(HttpContext context) =>
     context.Items[WebCookieNames.IdentityItem] as WebUserIdentity ?? throw new UnauthorizedAccessException("Web identity is missing.");
 static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
