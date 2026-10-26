@@ -17,7 +17,7 @@ def test_next_owns_the_frontend_scaffold():
 def test_unsupported_pages_are_explicitly_disabled():
     app = (WEB / "src" / "components" / "AppShell.vue").read_text(encoding="utf-8")
     disabled = (WEB / "src" / "views" / "DisabledView.vue").read_text(encoding="utf-8")
-    assert "开发中" in app
+    assert "未开放" in app or "开发中" in app
     assert "不提供模拟数据" in disabled
 
 

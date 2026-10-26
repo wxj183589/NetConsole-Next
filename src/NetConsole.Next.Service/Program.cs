@@ -272,9 +272,24 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         integrityAuditCount = storage?.IntegrityAuditCount,
         unresolvedIntegrityIssues = storage?.UnresolvedIntegrityIssues,
         recentIntegrityAudits = storage?.RecentIntegrityAudits,
-        resources = resource
+        resources = new
+        {
+            processCpuPercent = resource.ProcessCpuPercent,
+            resource.WorkingSetBytes,
+            resource.ThreadCount,
+            resource.HandleCount,
+            resource.DataVolumeFreeBytes,
+            resource.SampledAtMs
+        }
         ,instanceId = auth.InstanceIdOrUnknown
     });
+});
+app.MapGet("/api/system/devices", (HttpRequest request, Catalog rawCatalog) =>
+{
+    var page = int.TryParse(request.Query["page"], out var requestedPage) ? requestedPage : 1;
+    var pageSize = int.TryParse(request.Query["pageSize"], out var requestedPageSize) ? requestedPageSize : 20;
+    return Results.Ok(rawCatalog.QueryDeviceInventory(page, pageSize,
+        request.Query["search"].ToString(), request.Query["status"].ToString()));
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));

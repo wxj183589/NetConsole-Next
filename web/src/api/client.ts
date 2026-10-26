@@ -7,6 +7,7 @@ export interface HealthSnapshot {
   status: string
   serviceState: string
   healthState: string
+  healthError?: string | null
   collectionState: string
   collectionError?: string | null
   h3cCollectionEnabled: boolean
@@ -17,8 +18,58 @@ export interface HealthSnapshot {
   rawFlushedRecords: number
   h3cMetrics?: { activeSshSessions: number; collectionFailures: number }
   unresolvedIntegrityIssues?: number
-  resources?: { workingSetBytes: number; threadCount: number }
+  resources?: {
+    processCpuPercent?: number | null
+    workingSetBytes: number
+    threadCount: number
+    handleCount?: number | null
+    dataVolumeFreeBytes?: number | null
+    sampledAtMs?: number
+  }
   instanceId?: string
+}
+
+export interface DeviceInventorySummary {
+  totalRecords: number
+  validDevices: number
+  invalidRecords: number
+  enabledDevices: number
+  disabledDevices: number
+  onlineDevices: number
+  offlineDevices: number
+  unknownStatus: number
+}
+
+export interface DeviceInventoryItem {
+  id: string
+  name: string
+  managementAddress: string
+  port: number
+  username: string
+  vendor: string
+  model: string
+  deviceType: string
+  protocol: string
+  site: string
+  group: string
+  enabled: boolean
+  connectionStatus: string
+  lastSeenMs?: number | null
+  credentialConfigured: boolean
+  hostKeyUpdatePolicy: string
+  terminalEncoding: string
+  lastDisconnectReason?: string | null
+  isValid: boolean
+  qualityIssues: string[]
+}
+
+export interface DeviceInventoryPage {
+  page: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+  summary: DeviceInventorySummary
+  items: DeviceInventoryItem[]
 }
 
 export interface TerminalDevice {
@@ -187,6 +238,11 @@ export function changePassword(payload: { currentPassword?: string; newPassword:
 }
 
 export function getHealth(): Promise<HealthSnapshot> { return request('/api/system/health') }
+export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string } = {}): Promise<DeviceInventoryPage> {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })
+  return request('/api/system/devices?' + query.toString())
+}
 export function getTerminalDevices(): Promise<TerminalDevice[]> { return request('/api/system/terminal/devices') }
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
