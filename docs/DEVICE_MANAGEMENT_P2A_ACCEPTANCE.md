@@ -12,7 +12,7 @@ The isolated service harness covers:
 - cancellation, failure retry and concurrent confirmation;
 - owner authorization, 100-target resource limit and audit redaction.
 
-The Web checks cover TypeScript compilation and production asset generation for the batch selection, preview, confirm, cancel and refresh-recovery UI.
+The Web checks cover TypeScript compilation and production asset generation for the batch selection, preview, confirm, cancel and refresh-recovery UI. The Windows Chrome E2E also exercised the real service: select one device, create a disable preview, reload the page, recover the persisted operation and confirm it.
 
 ## Commands and results
 
@@ -30,8 +30,8 @@ The .NET build reports the repository's existing `SQLitePCLRaw.lib.e_sqlite3 2.1
 
 ## Browser and CI boundary
 
-The implementation is browser-ready and keeps the existing device-management selectors intact. Required final evidence is a real Windows Chrome run against the local service, plus the repository's Ubuntu and Windows CI jobs. Those external/runtime checks are not represented as passed unless their logs are available. Real devices, production data and the development Authority are out of scope.
+The implementation is browser-ready and keeps the existing device-management selectors intact. Windows Chrome evidence passed with `tests/device_management_browser_e2e.mjs` against `http://127.0.0.1:18773`; the temporary data root and screenshots were retired after inspection. GitHub Actions run `40302560590` passed both Ubuntu and Windows jobs, and Windows deployment syntax run `40302560532` passed. Real devices, production data and the development Authority are out of scope.
 
 ## PR21 review status
 
-PR #21 latest head was reviewed against the four P1 fixes and associated CI evidence. The GitHub review state remained `COMMENTED` with no formal `APPROVED` review, so the correct combined status is `P2A_VERIFIED_PR21_APPROVAL_PENDING` until an authorized reviewer records approval.
+PR #21 latest head was reviewed against the four P1 fixes and associated CI evidence. The GitHub review state remained `COMMENTED` with no formal `APPROVED` review. P2-A Draft PR #22 is open at `https://github.com/wxj183589/NetConsole-Next/pull/22`, so the correct combined status is `P2A_VERIFIED_PR21_APPROVAL_PENDING` until an authorized reviewer records approval.
