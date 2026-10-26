@@ -14,6 +14,8 @@ The isolated service harness covers:
 
 The Web checks cover TypeScript compilation and production asset generation for the batch selection, preview, confirm, cancel and refresh-recovery UI. The Windows Chrome E2E also exercised the real service: select one device, create a disable preview, reload the page, recover the persisted operation and confirm it.
 
+The final hardening adds two real-process/browser gates. `tests/device_batch_crash_recovery/device_batch_crash_recovery.py` covers before-confirm, after-claim, before-commit, after-commit and injected failure-audit restart points against an isolated SQLite root. `tests/device_p2a_browser_diagnostics.mjs` covers light/dark themes, 1920×1080, 1440×900 and 1366×768, all five batch kinds, preview/confirm/cancel/conflict/retry/reload recovery, logout/relogin, admin isolation and browser diagnostics. See `docs/DEVICE_BATCH_CRASH_RECOVERY.md` and `docs/DEVICE_P2A_BROWSER_DIAGNOSTICS.md`.
+
 ## Commands and results
 
 Run from the P2-A worktree:
@@ -24,13 +26,15 @@ dotnet build tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.c
 dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj --no-build  PASS
 pnpm --dir web run typecheck                                                               PASS
 pnpm --dir web run build                                                                  PASS
+python tests/device_batch_crash_recovery/device_batch_crash_recovery.py ...              PASS
+node tests/device_p2a_browser_diagnostics.mjs                                             PASS
 ```
 
 The .NET build reports the repository's existing `SQLitePCLRaw.lib.e_sqlite3 2.1.11` NU1903 warning. The Web build retains the existing large-chunk warning. Neither is a P2-A compile failure.
 
 ## Browser and CI boundary
 
-The implementation is browser-ready and keeps the existing device-management selectors intact. Windows Chrome evidence passed with `tests/device_management_browser_e2e.mjs` against `http://127.0.0.1:18773`; the temporary data root and screenshots were retired after inspection. GitHub Actions run `40302560590` passed both Ubuntu and Windows jobs, and Windows deployment syntax run `40302560532` passed. Real devices, production data and the development Authority are out of scope.
+The implementation is browser-ready and keeps the existing device-management selectors intact. The final Chrome evidence is stored under `artifacts/device-p2a-browser/` and is bound to the P2-A hardening SHA in `browser-evidence.json`; the crash harness evidence is written to the workspace diagnostic directory and removed after review. GitHub Actions final-head URLs are recorded in the completion report after the final push. Real devices, production data and the development Authority are out of scope.
 
 ## PR21 review status
 

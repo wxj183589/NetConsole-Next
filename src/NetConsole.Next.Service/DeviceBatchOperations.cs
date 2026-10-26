@@ -184,6 +184,7 @@ internal sealed partial class Catalog
         actor = RequiredText(actor, "actor", 128);
         var claimed = ClaimBatchOperation(operationId, actor);
         if (claimed.State == "SUCCEEDED") return ToBatchView(claimed);
+        DeviceBatchCrashTestHooks.WaitFor("AFTER_CLAIM");
 
         try
         {
@@ -264,24 +265,29 @@ internal sealed partial class Catalog
 
     private static void RecoverDeviceBatchOperations(SqliteConnection db)
     {
-        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
-        var interrupted = new List<(string Id, string Actor, string Kind)>();
-        using (var query = db.CreateCommand())
+        var interrupted = new List<(string Id, string Actor, string Kind, int Total)>();
+        using (var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable))
         {
+            using var query = db.CreateCommand();
             query.Transaction = transaction;
-            query.CommandText = "SELECT id,actor,kind FROM device_operations WHERE state IN ('QUEUED','RUNNING')";
+            query.CommandText = @"SELECT o.id,o.actor,o.kind,COUNT(i.device_id)
+                FROM device_operations o LEFT JOIN device_operation_items i ON i.operation_id=o.id
+                WHERE o.state IN ('QUEUED','RUNNING') GROUP BY o.id,o.actor,o.kind";
             using var reader = query.ExecuteReader();
-            while (reader.Read()) interrupted.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            while (reader.Read()) interrupted.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3)));
+            reader.Close();
+            foreach (var operation in interrupted)
+            {
+                var now = UtcNowMs();
+                UpdateBatchState(db, transaction, operation.Id, "INTERRUPTED", now, now,
+                    JsonSerializer.Serialize(new { total = operation.Total, completed = 0, conflicts = 0, failures = 1, reason = "SERVICE_RESTART" }));
+            }
+            transaction.Commit();
         }
+
         foreach (var operation in interrupted)
-        {
-            var now = UtcNowMs();
-            UpdateBatchState(db, transaction, operation.Id, "INTERRUPTED", now, now,
-                JsonSerializer.Serialize(new { total = 0, completed = 0, conflicts = 0, failures = 1, reason = "SERVICE_RESTART" }));
-            InsertDeviceAudit(db, transaction, operation.Actor, "DEVICE_BATCH_INTERRUPTED", operation.Id,
-                new { correlationId = operation.Id, kind = operation.Kind, targetCount = 0, safeChangedFields = Array.Empty<string>(), safeFailureReason = "SERVICE_RESTART" }, "FAILED");
-        }
-        transaction.Commit();
+            TryWriteBatchAudit(db, operation.Actor, "DEVICE_BATCH_INTERRUPTED", operation.Id,
+                new { correlationId = operation.Id, kind = operation.Kind, targetCount = operation.Total, safeChangedFields = Array.Empty<string>(), safeFailureReason = "SERVICE_RESTART" }, "FAILED");
     }
 
     private static DeviceBatchOperationRequest NormalizeBatchRequest(DeviceBatchOperationRequest request)
@@ -449,6 +455,7 @@ internal sealed partial class Catalog
             throw new DeviceBatchConflictException(claimed.Id, "One or more devices changed after preview; the batch was not written.");
         }
         var now = UtcNowMs();
+        var updateIndex = 0;
         foreach (var item in claimed.Items.Where(item => item.Outcome == "PENDING"))
         {
             var requested = JsonSerializer.Deserialize<BatchInventoryState>(item.RequestedJson)!;
@@ -468,28 +475,34 @@ internal sealed partial class Catalog
                 throw new DeviceBatchConflictException(claimed.Id, "A device changed during batch commit.");
             }
             MarkBatchItem(db, transaction, claimed.Id, requested.DeviceId, "UPDATED", "UPDATED");
+            updateIndex++;
+            DeviceBatchCrashTestHooks.WaitFor($"AFTER_UPDATE_{updateIndex}");
         }
         var progress = JsonSerializer.Serialize(new { total = claimed.Items.Count, completed = claimed.Items.Count, conflicts = 0, failures = 0 });
         UpdateBatchState(db, transaction, claimed.Id, "SUCCEEDED", now, now, progress);
         InsertDeviceAudit(db, transaction, claimed.Actor, "DEVICE_BATCH_SUCCESS", claimed.Id,
             new { correlationId = claimed.Id, kind = claimed.Kind, targetCount = claimed.Items.Count, safeChangedFields = ChangedFields(claimed.RequestJson), safeFailureReason = (string?)null });
         transaction.Commit();
+        DeviceBatchCrashTestHooks.WaitFor("AFTER_COMMIT");
     }
 
     private void FinalizeBatchConflict(StoredBatchOperation claimed, IReadOnlyList<(string DeviceId, string Detail)> conflicts)
     {
         try
         {
-            using var db = Open(); using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+            using var db = Open();
             var detailById = conflicts.ToDictionary(item => item.DeviceId, item => item.Detail, StringComparer.Ordinal);
-            foreach (var item in claimed.Items.Where(item => item.Outcome == "PENDING"))
-                MarkBatchItem(db, transaction, claimed.Id, item.DeviceId, detailById.TryGetValue(item.DeviceId, out var detail) ? "CONFLICT" : "FAILED", detailById.TryGetValue(item.DeviceId, out detail) ? detail : "BATCH_CONFLICT");
-            var now = UtcNowMs();
-            UpdateBatchState(db, transaction, claimed.Id, "CONFLICT", now, now,
-                JsonSerializer.Serialize(new { total = claimed.Items.Count, completed = 0, conflicts = conflicts.Count, failures = 0 }));
-            InsertDeviceAudit(db, transaction, claimed.Actor, "DEVICE_BATCH_CONFLICT", claimed.Id,
+            using (var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable))
+            {
+                foreach (var item in claimed.Items.Where(item => item.Outcome == "PENDING"))
+                    MarkBatchItem(db, transaction, claimed.Id, item.DeviceId, detailById.TryGetValue(item.DeviceId, out var detail) ? "CONFLICT" : "FAILED", detailById.TryGetValue(item.DeviceId, out detail) ? detail : "BATCH_CONFLICT");
+                var now = UtcNowMs();
+                UpdateBatchState(db, transaction, claimed.Id, "CONFLICT", now, now,
+                    JsonSerializer.Serialize(new { total = claimed.Items.Count, completed = 0, conflicts = conflicts.Count, failures = 0 }));
+                transaction.Commit();
+            }
+            TryWriteBatchAudit(db, claimed.Actor, "DEVICE_BATCH_CONFLICT", claimed.Id,
                 new { correlationId = claimed.Id, kind = claimed.Kind, targetCount = claimed.Items.Count, safeChangedFields = ChangedFields(claimed.RequestJson), safeFailureReason = "DEVICE_VERSION_OR_SCOPE_CONFLICT" }, "CONFLICT");
-            transaction.Commit();
         }
         catch (Exception ex) { Console.Error.WriteLine($"DEVICE_BATCH_CONFLICT_AUDIT_FAILED:{claimed.Id}:{ex.GetType().Name}"); }
     }
@@ -498,18 +511,39 @@ internal sealed partial class Catalog
     {
         try
         {
-            using var db = Open(); using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
-            var stored = ReadStoredBatchOperation(db, transaction, operationId);
+            using var db = Open();
+            var stored = ReadStoredBatchOperation(db, null, operationId);
             if (stored is null) return;
-            foreach (var item in stored.Items.Where(item => item.Outcome == "PENDING")) MarkBatchItem(db, transaction, operationId, item.DeviceId, "FAILED", "BATCH_FAILED");
-            var now = UtcNowMs();
-            UpdateBatchState(db, transaction, operationId, "FAILED", now, now,
-                JsonSerializer.Serialize(new { total = stored.Items.Count, completed = 0, conflicts = 0, failures = stored.Items.Count, reason = "BATCH_FAILED" }));
-            InsertDeviceAudit(db, transaction, actor, "DEVICE_BATCH_FAILED", operationId,
+            using (var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable))
+            {
+                stored = ReadStoredBatchOperation(db, transaction, operationId);
+                if (stored is null) return;
+                foreach (var item in stored.Items.Where(item => item.Outcome == "PENDING")) MarkBatchItem(db, transaction, operationId, item.DeviceId, "FAILED", "BATCH_FAILED");
+                var now = UtcNowMs();
+                UpdateBatchState(db, transaction, operationId, "FAILED", now, now,
+                    JsonSerializer.Serialize(new { total = stored.Items.Count, completed = 0, conflicts = 0, failures = stored.Items.Count, reason = "BATCH_FAILED" }));
+                transaction.Commit();
+            }
+            TryWriteBatchAudit(db, actor, "DEVICE_BATCH_FAILED", operationId,
                 new { correlationId = operationId, kind = stored.Kind, targetCount = stored.Items.Count, safeChangedFields = ChangedFields(stored.RequestJson), safeFailureReason = SafeFailureCode(exception) }, "FAILED");
-            transaction.Commit();
         }
         catch (Exception ex) { Console.Error.WriteLine($"DEVICE_BATCH_FAILURE_AUDIT_FAILED:{operationId}:{ex.GetType().Name}"); }
+    }
+
+    private static void TryWriteBatchAudit(SqliteConnection db, string actor, string action, string subjectId, object detail, string outcome)
+    {
+        try
+        {
+            if (action == "DEVICE_BATCH_FAILED") DeviceBatchCrashTestHooks.WaitFor("BEFORE_FAILURE_AUDIT");
+            using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+            InsertDeviceAudit(db, transaction, actor, action, subjectId, detail, outcome);
+            transaction.Commit();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"DEVICE_BATCH_AUDIT_WRITE_FAILED:{action}:{subjectId}:{ex.GetType().Name}");
+            if (action == "DEVICE_BATCH_FAILED") DeviceBatchCrashTestHooks.WaitFor("AFTER_FAILURE_AUDIT_ERROR");
+        }
     }
 
     private static string SafeFailureCode(Exception exception) => exception switch

@@ -412,7 +412,16 @@ button, input, select { color: inherit; }
 .form-grid { gap: 10px; }
 .el-button { --el-border-radius-base: 5px; font-size: 11px; }
 .el-button--small { padding: 7px 11px; }
-.el-dialog { border-radius: 8px; }
+.el-dialog {
+  border-radius: 8px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  margin: 16px auto !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.el-dialog__body { min-height: 0; overflow: auto; }
 .el-dialog__title { font-size: 15px; }
 .table-actions { display: inline-flex; align-items: center; gap: 2px; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }

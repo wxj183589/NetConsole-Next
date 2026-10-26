@@ -880,10 +880,28 @@ internal static class SchedulerTests
                 "preview must retain a missing explicit target as a conflict instead of dropping it");
             AssertThrows<InvalidOperationException>(() => catalog.ConfirmDeviceBatchOperation(missing.Id, "p2a"));
 
+            var csvRace = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_DISABLE", "p2a-csv-race", new[] { first.Item.Id }), "p2a");
+            var csvCurrent = catalog.GetDeviceInventoryDetail(first.Item.Id)!.Item;
+            var csvPreview = catalog.PreviewDeviceImport($"deviceId,name,managementIp,vendor,model,deviceType,siteId,description,enabled\n{csvCurrent.Id},CSV race,{csvCurrent.ManagementIp},H3C,S,AP,{csvCurrent.SiteId},csv race,true", "p2a-csv-race");
+            catalog.CommitDeviceImport(csvPreview.PreviewId, true, "p2a-csv-race");
+            AssertThrows<DeviceBatchConflictException>(() => catalog.ConfirmDeviceBatchOperation(csvRace.Id, "p2a"));
+            Assert(catalog.GetDeviceBatchOperation(csvRace.Id, "p2a")!.State == "CONFLICT" &&
+                   catalog.GetDeviceInventoryDetail(first.Item.Id)!.Item.Name == "CSV race",
+                "a CSV commit after batch preview must win its own revision and force the stale batch into conflict");
+
             var cancelled = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-cancel", new[] { third.Item.Id }), "p2a");
             Assert(catalog.CancelDeviceBatchOperation(cancelled.Id, "p2a").State == "CANCELLED" &&
                    AssertThrowsReturn<InvalidOperationException>(() => catalog.ConfirmDeviceBatchOperation(cancelled.Id, "p2a")),
                 "a pending operation must support explicit cancellation and reject later confirmation");
+
+            var cancelRace = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-cancel-race", new[] { second.Item.Id }), "p2a");
+            var cancelRaceResults = await Task.WhenAll(
+                Task.Run(() => TryConfirmBatch(catalog, cancelRace.Id)),
+                Task.Run(() => TryCancelBatch(catalog, cancelRace.Id)));
+            var cancelRaceFinal = catalog.GetDeviceBatchOperation(cancelRace.Id, "p2a")!;
+            Assert(cancelRaceFinal.State is "SUCCEEDED" or "CANCELLED" &&
+                   cancelRaceResults.Any(result => result is "SUCCEEDED" or "CANCELLED"),
+                $"confirm/cancel race must converge to one terminal state: {cancelRaceFinal.State}; {string.Join(" | ", cancelRaceResults)}");
 
             var retry = catalog.CreateDeviceBatchOperation(new DeviceBatchOperationRequest("BATCH_ENABLE", "p2a-retry", new[] { second.Item.Id }), "p2a");
             using (var db = OpenCatalog(root))
@@ -924,6 +942,12 @@ internal static class SchedulerTests
     private static string TryConfirmBatch(Catalog catalog, string operationId)
     {
         try { return catalog.ConfirmDeviceBatchOperation(operationId, "p2a").State; }
+        catch (Exception exception) { return exception.GetType().Name; }
+    }
+
+    private static string TryCancelBatch(Catalog catalog, string operationId)
+    {
+        try { return catalog.CancelDeviceBatchOperation(operationId, "p2a").State; }
         catch (Exception exception) { return exception.GetType().Name; }
     }
 
