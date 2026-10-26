@@ -17,6 +17,7 @@ internal static class P2B2SchemaV13Tests
             VerifiesV13RelationsAndIntegrity();
             VerifiesTransactionalFaultRecovery();
             VerifiesMigrationAuthorizationBoundary();
+            P2B2MigrationPathSecurityTests.Run();
         }
         finally
         {

@@ -34,12 +34,79 @@ internal sealed record P2B2MigrationContext(
         if (!string.Equals(Environment.GetEnvironmentVariable(ExplicitMigrationEnvironmentVariable), "1", StringComparison.Ordinal))
             throw new InvalidOperationException($"Set {ExplicitMigrationEnvironmentVariable}=1 only for an isolated migration test.");
 
-        var databasePath = Path.GetFullPath(DatabasePath);
-        var tempRoot = Path.GetFullPath(Path.GetTempPath());
-        if (!databasePath.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("P2B-2 migration authorization is restricted to a temporary isolated database.");
-        if (!string.Equals(Path.GetFullPath(connection.DataSource), databasePath, StringComparison.OrdinalIgnoreCase))
+        var databasePath = P2B2MigrationPathSecurity.CanonicalizeDatabasePath(DatabasePath, "migration context");
+        var tempRoot = P2B2MigrationPathSecurity.CanonicalizeDatabasePath(Path.GetTempPath(), "temporary root");
+        P2B2MigrationPathSecurity.ValidateTemporaryDatabaseBoundary(databasePath, tempRoot);
+        P2B2MigrationPathSecurity.ValidateNoReparsePoints(tempRoot);
+        P2B2MigrationPathSecurity.ValidateNoReparsePoints(databasePath);
+
+        var connectionPath = P2B2MigrationPathSecurity.CanonicalizeDatabasePath(connection.DataSource, "open connection");
+        if (!P2B2MigrationPathSecurity.PathsEqual(connectionPath, databasePath))
             throw new InvalidOperationException("Migration context database path does not match the open connection.");
+    }
+}
+
+internal static class P2B2MigrationPathSecurity
+{
+    public static string CanonicalizeDatabasePath(string path, string label)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+            throw new InvalidOperationException($"P2B-2 {label} must be an absolute filesystem path.");
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+        {
+            throw new InvalidOperationException($"P2B-2 {label} is not a valid filesystem path.", exception);
+        }
+    }
+
+    public static bool PathsEqual(string left, string right) =>
+        string.Equals(Path.TrimEndingDirectorySeparator(left), Path.TrimEndingDirectorySeparator(right),
+            StringComparison.OrdinalIgnoreCase);
+
+    public static void ValidateTemporaryDatabaseBoundary(string databasePath, string tempRoot)
+    {
+        var rootWithSeparator = tempRoot.EndsWith(Path.DirectorySeparatorChar) ||
+                                tempRoot.EndsWith(Path.AltDirectorySeparatorChar)
+            ? tempRoot
+            : tempRoot + Path.DirectorySeparatorChar;
+        if (!PathsEqual(databasePath, tempRoot) &&
+            !databasePath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("P2B-2 migration authorization is restricted to a temporary isolated database.");
+    }
+
+    public static void ValidateNoReparsePoints(string path)
+    {
+        var current = path;
+        while (!string.IsNullOrEmpty(current))
+        {
+            try
+            {
+                var attributes = File.GetAttributes(current);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"P2B-2 migration path contains a symlink, junction or reparse point: {current}");
+            }
+            catch (FileNotFoundException)
+            {
+                // The database file may not exist yet; its existing parents are still checked.
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // The database directory may be created by the isolated fixture; its existing parents are checked.
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                throw new InvalidOperationException($"P2B-2 migration path cannot be inspected safely: {current}", exception);
+            }
+
+            var parent = Directory.GetParent(current)?.FullName;
+            if (string.IsNullOrEmpty(parent) || PathsEqual(parent, current))
+                break;
+            current = parent;
+        }
     }
 }
 
