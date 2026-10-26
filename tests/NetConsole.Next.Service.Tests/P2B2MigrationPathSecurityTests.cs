@@ -38,34 +38,30 @@ internal static class P2B2MigrationPathSecurityTests
     private static void VerifiesPathPrefixEscapeIsRejected()
     {
         var tempRoot = TrimEndingSeparators(Path.GetFullPath(Path.GetTempPath()));
-        var parent = Directory.GetParent(tempRoot)?.FullName ?? throw new InvalidOperationException("Temp parent is unavailable.");
-        var outsideRoot = Path.Combine(parent, Path.GetFileName(tempRoot) + "-p2b2-prefix-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(outsideRoot);
+        var outsidePath = tempRoot + "-p2b2-prefix-" + Guid.NewGuid().ToString("N") + Path.DirectorySeparatorChar + "catalog.db";
+        var root = CreateRoot("netconsole-next-p2b2-path-prefix-");
         try
         {
-            var databasePath = Path.Combine(outsideRoot, "catalog.db");
-            using var connection = Open(databasePath);
-            ExpectRejected(() => P2B2MigrationContext.ForIsolatedTest(databasePath).Validate(connection));
+            using var connection = Open(Path.Combine(root, "connection.db"));
+            ExpectRejected(() => P2B2MigrationContext.ForIsolatedTest(outsidePath).Validate(connection));
             Console.WriteLine("MIGRATION_PATH_PREFIX_ESCAPE_REJECTED=PASS");
         }
-        finally { DeleteDirectory(outsideRoot); }
+        finally { DeleteDirectory(root); }
     }
 
     private static void VerifiesDotDotEscapeIsRejected()
     {
         var tempRoot = TrimEndingSeparators(Path.GetFullPath(Path.GetTempPath()));
-        var parent = Directory.GetParent(tempRoot)?.FullName ?? throw new InvalidOperationException("Temp parent is unavailable.");
         var outsideRootName = Path.GetFileName(tempRoot) + "-p2b2-dotdot-" + Guid.NewGuid().ToString("N");
-        var outsideRoot = Path.Combine(parent, outsideRootName);
-        Directory.CreateDirectory(outsideRoot);
+        var escapedPath = Path.Combine(tempRoot, "..", outsideRootName, "catalog.db");
+        var root = CreateRoot("netconsole-next-p2b2-path-dotdot-");
         try
         {
-            var databasePath = Path.Combine(tempRoot, "..", outsideRootName, "catalog.db");
-            using var connection = Open(databasePath);
-            ExpectRejected(() => P2B2MigrationContext.ForIsolatedTest(databasePath).Validate(connection));
+            using var connection = Open(Path.Combine(root, "connection.db"));
+            ExpectRejected(() => P2B2MigrationContext.ForIsolatedTest(escapedPath).Validate(connection));
             Console.WriteLine("MIGRATION_DOT_DOT_ESCAPE_REJECTED=PASS");
         }
-        finally { DeleteDirectory(outsideRoot); }
+        finally { DeleteDirectory(root); }
     }
 
     private static void VerifiesConnectionPathMismatchIsRejected()
