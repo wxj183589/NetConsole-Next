@@ -39,6 +39,10 @@ E2E 已通过：
 
 本地构建保留仓库既有 \`SQLitePCLRaw.lib.e_sqlite3\` \`NU1903\` advisory；无编译错误。
 
+## 最终审查补充
+
+本轮新增并通过 Cursor 过滤绑定、无序 Diff 集合、重复来源事实、跨 Domain/Interface、stale review、未解析 Domain，以及 100/101/1000 facts 和 observed/planned 跨截断边界测试。超过每组 100 条时返回 INCOMPLETE，不再生成确定性 MATCH、MISMATCH 或 PLANNED_ONLY。
+
 ## CI 与审批
 
 P2B3 分支需要在最终 push 后记录 Ubuntu、Windows 和 PowerShell CI run URL。PR23–PR25 当前没有 formal approval，因此即使所有自动化通过，最终状态仍为：

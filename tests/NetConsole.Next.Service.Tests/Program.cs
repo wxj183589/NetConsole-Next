@@ -134,6 +134,7 @@ internal static class SchedulerTests
         await VerifiesDeviceManagementPhase2A();
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
+        P2B3DiffContractTests.Run();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();

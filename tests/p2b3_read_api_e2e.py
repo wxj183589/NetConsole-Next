@@ -304,11 +304,16 @@ def main():
             }))
             assert status == 200 and len(second["items"]) == 20
             assert {item["id"] for item in first["items"]}.isdisjoint(item["id"] for item in second["items"])
+            status, _ = superadmin.request("/api/system/devices/p2b3-device/addresses?" + urllib.parse.urlencode({
+                "limit": 20, "cursor": first["nextCursor"], "sourceKind": "OBSERVED",
+            }))
+            assert status == 400
             assert_problem(superadmin.request("/api/system/devices/p2b3-device/addresses?limit=0"), 400, "INVALID_QUERY")
             assert_problem(superadmin.request("/api/system/devices/p2b3-device/addresses?limit=101"), 400, "INVALID_QUERY")
             print("P2B3_DEVICE_ADDRESS_API=PASS")
             print("SERVER_SIDE_PAGINATION=PASS")
             print("STABLE_SORTING=PASS")
+            print("CURSOR_FILTER_BINDING=PASS")
             print("QUERY_BOUNDS=PASS")
             print("SQL_PARAMETERIZATION=PASS")
 
@@ -326,7 +331,9 @@ def main():
             status, diff = superadmin.request("/api/system/devices/p2b3-device/network-diff")
             assert status == 200
             states = {item["status"] for item in diff["addressItems"]}
-            assert {"MATCH", "MISMATCH", "PLANNED_ONLY"}.issubset(states), diff
+            assert diff["truncated"] and "INCOMPLETE" in states and {"MATCH", "MISMATCH"}.issubset(states), diff
+            assert not any(item["status"] == "PLANNED_ONLY" and item["key"] == "domain-local|bulk0"
+                           for item in diff["addressItems"]), diff
             assert any(item["status"] == "CONFLICT" and any(
                 fact["conflictState"] == "REVIEW_REQUIRED" for fact in item["planned"]
             ) for item in diff["addressItems"]), diff

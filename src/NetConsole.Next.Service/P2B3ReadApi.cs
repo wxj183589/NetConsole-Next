@@ -1,10 +1,12 @@
 using System.Text;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 namespace NetConsole.Next.Service;
 
 internal sealed class P2B3SchemaUnavailableException(string reason) : Exception(reason);
 internal sealed class P2B3QueryException(string message) : Exception(message);
+internal sealed record P2B3CursorPayload(string Id, string FilterFingerprint);
 
 internal static class P2B3ReadApiFeatureGate
 {
@@ -29,8 +31,26 @@ internal sealed record P2B3PageOptions(int Limit, string? Cursor)
         return new(limit, string.IsNullOrWhiteSpace(rawCursor) ? null : DecodeCursor(rawCursor));
     }
 
-    public static string EncodeCursor(string id) =>
-        Convert.ToBase64String(Encoding.UTF8.GetBytes(id)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    public static string EncodeCursor(string id, string filterFingerprint) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new P2B3CursorPayload(id, filterFingerprint))))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    public static string? CursorId(string? cursor, string filterFingerprint)
+    {
+        if (cursor is null) return null;
+        try
+        {
+            var payload = JsonSerializer.Deserialize<P2B3CursorPayload>(cursor)
+                ?? throw new P2B3QueryException("cursor is invalid.");
+            if (string.IsNullOrWhiteSpace(payload.Id) || !string.Equals(payload.FilterFingerprint, filterFingerprint, StringComparison.Ordinal))
+                throw new P2B3QueryException("cursor does not match the current filters.");
+            return payload.Id;
+        }
+        catch (JsonException)
+        {
+            throw new P2B3QueryException("cursor is invalid.");
+        }
+    }
 
     private static string DecodeCursor(string value)
     {
@@ -151,7 +171,12 @@ internal sealed record P2B3DiffFact(
     string InterfaceReference,
     string Value,
     string ConflictState,
-    string DomainResolutionState);
+    string DomainResolutionState,
+    string Lifecycle,
+    long? ValidFromMs,
+    long? ValidToMs,
+    int FactCount,
+    bool Incomplete);
 
 internal sealed record P2B3DiffItem(
     string Key,
@@ -209,6 +234,8 @@ internal sealed class P2B3ReadRepository
                       " AND ($source IS NULL OR a.source_kind=$source)" +
                       " AND ($family IS NULL OR a.address_family=$family)" +
                       " AND ($lifecycle IS NULL OR a.lifecycle=$lifecycle)";
+        var cursorFingerprint = CursorFingerprint("addresses", device, domainId, sourceKind, addressFamily, lifecycle);
+        var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
         var total = Count(connection, $"SELECT COUNT(*) FROM device_addresses a WHERE {filters}",
             ("$device", device), ("$domain", NullIfBlank(domainId)), ("$source", NullIfBlank(sourceKind)),
             ("$family", NullIfBlank(addressFamily)), ("$lifecycle", NullIfBlank(lifecycle)));
@@ -246,7 +273,7 @@ internal sealed class P2B3ReadRepository
             """;
         AddParameters(command, ("$device", device), ("$domain", NullIfBlank(domainId)),
             ("$source", NullIfBlank(sourceKind)), ("$family", NullIfBlank(addressFamily)),
-            ("$lifecycle", NullIfBlank(lifecycle)), ("$cursor", page.Cursor), ("$take", page.Limit + 1));
+            ("$lifecycle", NullIfBlank(lifecycle)), ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3AddressRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -260,7 +287,7 @@ internal sealed class P2B3ReadRepository
                 NullableInt64(reader, 15), domainState, conflict, reader.GetString(18),
                 NullableString(reader, 20), NullableString(reader, 21), NullableString(reader, 19) ?? "CONFLICT")));
         }
-        return ToPage(rows, page, total);
+        return ToPage(rows, page, total, cursorFingerprint);
     }
 
     public P2B3ReadPage<P2B3MembershipRead> ReadMemberships(string deviceId, P2B3PageOptions page,
@@ -272,6 +299,8 @@ internal sealed class P2B3ReadRepository
                       " AND ($domain IS NULL OR m.network_domain_id=$domain)" +
                       " AND ($lifecycle IS NULL OR m.lifecycle=$lifecycle)" +
                       " AND ($site IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=m.network_domain_id AND s.scope_kind='SITE' AND s.scope_reference=$site))";
+        var cursorFingerprint = CursorFingerprint("memberships", device, siteId, domainId, lifecycle);
+        var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
         var total = Count(connection, $"SELECT COUNT(*) FROM device_domain_memberships m WHERE {filters}",
             ("$device", device), ("$domain", NullIfBlank(domainId)), ("$lifecycle", NullIfBlank(lifecycle)), ("$site", NullIfBlank(siteId)));
         using var command = connection.CreateCommand();
@@ -284,7 +313,7 @@ internal sealed class P2B3ReadRepository
             """;
         AddParameters(command, ("$device", device), ("$domain", NullIfBlank(domainId)),
             ("$lifecycle", NullIfBlank(lifecycle)), ("$site", NullIfBlank(siteId)),
-            ("$cursor", page.Cursor), ("$take", page.Limit + 1));
+            ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3MembershipRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -298,7 +327,7 @@ internal sealed class P2B3ReadRepository
         reader.Close();
         var scopes = ReadScopes(connection, rows.Select(x => x.Value.NetworkDomainId));
         rows = rows.Select(row => (row.Id, row.Value with { Scopes = scopes.TryGetValue(row.Value.NetworkDomainId, out var domainScopes) ? domainScopes : Array.Empty<P2B3ScopeRead>() })).ToList();
-        return ToPage(rows, page, total);
+        return ToPage(rows, page, total, cursorFingerprint);
     }
 
     public P2B3ReadPage<P2B3DomainRead> ReadDomains(P2B3PageOptions page, string? siteId, string? stationId,
@@ -313,6 +342,8 @@ internal sealed class P2B3ReadRepository
                       " AND ($resolution IS NULL OR d.scope_resolution=$resolution)" +
                       " AND ($lifecycle IS NULL OR d.lifecycle=$lifecycle)" +
                       " AND ($search IS NULL OR d.id LIKE $search OR d.name LIKE $search)";
+        var cursorFingerprint = CursorFingerprint("domains", siteId, stationId, lineId, sectionId, domainKind, scopeResolution, lifecycle, search);
+        var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
         var parameters = DomainParameters(siteId, stationId, lineId, sectionId, domainKind, scopeResolution, lifecycle, search);
         var total = Count(connection, $"SELECT COUNT(*) FROM network_domains d WHERE {filters}", parameters);
         using var command = connection.CreateCommand();
@@ -324,7 +355,7 @@ internal sealed class P2B3ReadRepository
             ORDER BY d.id ASC LIMIT $take
             """;
         AddParameters(command, parameters);
-        AddParameters(command, ("$cursor", page.Cursor), ("$take", page.Limit + 1));
+        AddParameters(command, ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3DomainRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -337,7 +368,7 @@ internal sealed class P2B3ReadRepository
         reader.Close();
         var scopes = ReadScopes(connection, rows.Select(x => x.Value.Id));
         rows = rows.Select(row => (row.Id, row.Value with { Scopes = scopes.TryGetValue(row.Value.Id, out var domainScopes) ? domainScopes : Array.Empty<P2B3ScopeRead>() })).ToList();
-        return ToPage(rows, page, total);
+        return ToPage(rows, page, total, cursorFingerprint);
     }
 
     public P2B3ReadPage<P2B3VlanPlanRead> ReadVlanPlans(P2B3PageOptions page, string? domainId, string? siteId,
@@ -351,6 +382,9 @@ internal sealed class P2B3ReadRepository
                       " AND ($lifecycle IS NULL OR p.lifecycle=$lifecycle)" +
                       " AND ($vlan IS NULL OR p.vlan_id=$vlan)" +
                       " AND ($asOf IS NULL OR (p.valid_from_ms IS NULL OR p.valid_from_ms<=$asOf) AND (p.valid_to_ms IS NULL OR p.valid_to_ms>$asOf))";
+        var cursorFingerprint = CursorFingerprint("vlan-plans", domainId, siteId, sourceKind, scopeResolution, lifecycle,
+            vlanId?.ToString(System.Globalization.CultureInfo.InvariantCulture), asOfMs?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
         var parameters = new (string Name, object? Value)[]
         {
             ("$domain", NullIfBlank(domainId)), ("$site", NullIfBlank(siteId)), ("$source", NullIfBlank(sourceKind)),
@@ -377,7 +411,7 @@ internal sealed class P2B3ReadRepository
             ORDER BY p.id ASC LIMIT $take
             """;
         AddParameters(command, parameters);
-        AddParameters(command, ("$cursor", page.Cursor), ("$take", page.Limit + 1));
+        AddParameters(command, ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3VlanPlanRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -391,7 +425,7 @@ internal sealed class P2B3ReadRepository
                 NullableInt64(reader, 16), conflict, state, state == "CONSISTENT" ? source : null,
                 state == "CONSISTENT" ? reader.GetString(12) : null)));
         }
-        return ToPage(rows, page, total);
+        return ToPage(rows, page, total, cursorFingerprint);
     }
 
     public P2B3NetworkDiffRead ReadNetworkDiff(string deviceId, string? domainId, string? resolutionState, long? asOfMs)
@@ -403,29 +437,45 @@ internal sealed class P2B3ReadRepository
             " AND ($asOf IS NULL OR (a.valid_from_ms IS NULL OR a.valid_from_ms<=$asOf) AND (a.valid_to_ms IS NULL OR a.valid_to_ms>$asOf))";
         using var address = connection.CreateCommand();
         address.CommandText = $"""
-            SELECT a.id,a.source_kind,a.source_reference,a.revision,a.network_domain_id,a.interface_reference,
-                   a.address_family||':'||a.normalized_address||'/'||a.prefix_length||':'||COALESCE(a.gateway_address,'')||':'||a.vrf_name AS value,
-                   a.conflict_state,a.domain_resolution_state
-            FROM device_addresses a WHERE {addressFilters} ORDER BY a.id ASC LIMIT $take
+            WITH ranked AS (
+                SELECT a.id,a.source_kind,a.source_reference,a.revision,a.network_domain_id,a.interface_reference,
+                       a.address_family||':'||a.normalized_address||'/'||a.prefix_length||':'||COALESCE(a.gateway_address,'')||':'||a.vrf_name AS value,
+                       a.conflict_state,a.domain_resolution_state,a.lifecycle,a.valid_from_ms,a.valid_to_ms,
+                       COUNT(*) OVER (PARTITION BY a.network_domain_id,a.interface_reference) AS fact_count,
+                       ROW_NUMBER() OVER (PARTITION BY a.network_domain_id,a.interface_reference ORDER BY a.id ASC) AS fact_rank
+                FROM device_addresses a WHERE {addressFilters}
+            )
+            SELECT id,source_kind,source_reference,revision,network_domain_id,interface_reference,value,
+                   conflict_state,domain_resolution_state,lifecycle,valid_from_ms,valid_to_ms,fact_count
+            FROM ranked WHERE fact_rank <= $groupTake
+            ORDER BY network_domain_id,interface_reference,id
             """;
         AddParameters(address, ("$device", device), ("$domain", NullIfBlank(domainId)), ("$resolution", NullIfBlank(resolutionState)),
-            ("$asOf", asOfMs), ("$take", P2B3PageOptions.MaximumLimit + 1));
+            ("$asOf", asOfMs), ("$groupTake", P2B3PageOptions.MaximumLimit));
         var addressFacts = ReadDiffFacts(address);
 
         using var vlan = connection.CreateCommand();
         var vlanFilters = "v.device_id=$device AND ($domain IS NULL OR v.network_domain_id=$domain)" +
             " AND ($asOf IS NULL OR (v.valid_from_ms IS NULL OR v.valid_from_ms<=$asOf) AND (v.valid_to_ms IS NULL OR v.valid_to_ms>$asOf))";
         vlan.CommandText = $"""
-            SELECT v.id,v.source_kind,v.source_reference,v.revision,v.network_domain_id,v.interface_reference,
-                   v.vlan_id||':'||v.tagging_mode||':'||COALESCE(v.native_vlan_id,'')||':'||COALESCE(v.pvid,'')||':'||
-                   COALESCE(v.qinq_outer_id,'')||':'||COALESCE(v.qinq_inner_id,'') AS value,
-                   CASE WHEN v.source_kind='OBSERVED' THEN 'NONE' ELSE 'NONE' END AS conflict_state,
-                   'RESOLVED' AS domain_resolution_state
-            FROM vlan_assignments v JOIN network_domains d ON d.id=v.network_domain_id
-            WHERE {vlanFilters} ORDER BY v.id ASC LIMIT $take
+            WITH ranked AS (
+                SELECT v.id,v.source_kind,v.source_reference,v.revision,v.network_domain_id,v.interface_reference,
+                       v.vlan_id||':'||v.tagging_mode||':'||COALESCE(v.native_vlan_id,'')||':'||COALESCE(v.pvid,'')||':'||
+                       COALESCE(v.qinq_outer_id,'')||':'||COALESCE(v.qinq_inner_id,'') AS value,
+                       'NONE' AS conflict_state,d.scope_resolution AS domain_resolution_state,v.lifecycle,
+                       v.valid_from_ms,v.valid_to_ms,
+                       COUNT(*) OVER (PARTITION BY v.network_domain_id,v.interface_reference) AS fact_count,
+                       ROW_NUMBER() OVER (PARTITION BY v.network_domain_id,v.interface_reference ORDER BY v.id ASC) AS fact_rank
+                FROM vlan_assignments v JOIN network_domains d ON d.id=v.network_domain_id
+                WHERE {vlanFilters}
+            )
+            SELECT id,source_kind,source_reference,revision,network_domain_id,interface_reference,value,
+                   conflict_state,domain_resolution_state,lifecycle,valid_from_ms,valid_to_ms,fact_count
+            FROM ranked WHERE fact_rank <= $groupTake
+            ORDER BY network_domain_id,interface_reference,id
             """;
         AddParameters(vlan, ("$device", device), ("$domain", NullIfBlank(domainId)), ("$asOf", asOfMs),
-            ("$take", P2B3PageOptions.MaximumLimit + 1));
+            ("$groupTake", P2B3PageOptions.MaximumLimit));
         var vlanFacts = ReadDiffFacts(vlan);
         return new(device, asOfMs, addressFacts.Truncated || vlanFacts.Truncated,
             BuildDiffItems(addressFacts.Facts), BuildDiffItems(vlanFacts.Facts));
@@ -526,13 +576,14 @@ internal sealed class P2B3ReadRepository
         while (reader.Read())
         {
             facts.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3),
-                NullableString(reader, 4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetString(8)));
+                NullableString(reader, 4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetString(8),
+                reader.GetString(9), NullableInt64(reader, 10), NullableInt64(reader, 11), reader.GetInt32(12),
+                reader.GetInt32(12) > P2B3PageOptions.MaximumLimit));
         }
-        var truncated = facts.Count > P2B3PageOptions.MaximumLimit;
-        return (truncated ? facts.Take(P2B3PageOptions.MaximumLimit).ToArray() : facts, truncated);
+        return (facts, facts.Any(fact => fact.Incomplete));
     }
 
-    private static IReadOnlyList<P2B3DiffItem> BuildDiffItems(IReadOnlyList<P2B3DiffFact> facts)
+    internal static IReadOnlyList<P2B3DiffItem> BuildDiffItems(IReadOnlyList<P2B3DiffFact> facts)
     {
         return facts.GroupBy(f => $"{f.NetworkDomainId ?? "<unresolved>"}|{f.InterfaceReference}", StringComparer.Ordinal)
             .OrderBy(group => group.Key, StringComparer.Ordinal)
@@ -540,11 +591,13 @@ internal sealed class P2B3ReadRepository
             {
                 var planned = group.Where(f => f.SourceKind != "OBSERVED").ToArray();
                 var observed = group.Where(f => f.SourceKind == "OBSERVED").ToArray();
+                var incomplete = group.Any(f => f.Incomplete);
                 var conflict = group.Any(f => f.ConflictState is not "NONE" and not "HISTORICAL_REUSE_ALLOWED");
                 var unresolved = group.Any(f => f.DomainResolutionState != "RESOLVED");
                 var valuesMatch = planned.Length > 0 && observed.Length > 0 &&
-                    planned.Select(f => f.Value).Distinct(StringComparer.Ordinal).SequenceEqual(observed.Select(f => f.Value).Distinct(StringComparer.Ordinal));
-                var status = conflict ? "CONFLICT" : unresolved ? "UNRESOLVED" : planned.Length == 0 ? "OBSERVED_ONLY" :
+                    new HashSet<string>(planned.Select(ComparableValue), StringComparer.Ordinal)
+                        .SetEquals(new HashSet<string>(observed.Select(ComparableValue), StringComparer.Ordinal));
+                var status = incomplete ? "INCOMPLETE" : conflict ? "CONFLICT" : unresolved ? "UNRESOLVED" : planned.Length == 0 ? "OBSERVED_ONLY" :
                     observed.Length == 0 ? "PLANNED_ONLY" : valuesMatch ? "MATCH" : "MISMATCH";
                 var effectiveState = status == "MATCH" ? "CONSISTENT" : status;
                 return new P2B3DiffItem(group.Key, status, effectiveState, null, null, planned, observed);
@@ -569,13 +622,20 @@ internal sealed class P2B3ReadRepository
         return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static P2B3ReadPage<T> ToPage<T>(List<(string Id, T Value)> rows, P2B3PageOptions page, long total)
+    private static P2B3ReadPage<T> ToPage<T>(List<(string Id, T Value)> rows, P2B3PageOptions page, long total, string cursorFingerprint)
     {
         var hasMore = rows.Count > page.Limit;
         if (hasMore) rows.RemoveRange(page.Limit, rows.Count - page.Limit);
-        return new(page.Limit, total, hasMore, hasMore ? P2B3PageOptions.EncodeCursor(rows[^1].Id) : null,
+        return new(page.Limit, total, hasMore, hasMore ? P2B3PageOptions.EncodeCursor(rows[^1].Id, cursorFingerprint) : null,
             rows.Select(row => row.Value).ToArray());
     }
+
+    private static string ComparableValue(P2B3DiffFact fact) =>
+        string.Join('\u001f', fact.Value, fact.Lifecycle, fact.ValidFromMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+            fact.ValidToMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "");
+
+    private static string CursorFingerprint(params string?[] values) =>
+        string.Join('\u001f', values.Select(value => value ?? "<null>"));
 
     private static string RequiredId(string value, string label)
     {
