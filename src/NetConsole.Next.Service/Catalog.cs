@@ -60,7 +60,15 @@ internal sealed record DeviceInventoryItem(
     string TerminalEncoding,
     string? LastDisconnectReason,
     bool IsValid,
-    IReadOnlyList<string> QualityIssues);
+    IReadOnlyList<string> QualityIssues,
+    string DeviceId = "",
+    string ManagementIp = "",
+    string SiteId = "",
+    string GroupId = "",
+    string Description = "",
+    long CreatedAt = 0,
+    long UpdatedAt = 0,
+    string? TerminalProfileId = null);
 internal sealed record DeviceInventoryPage(
     int Page,
     int PageSize,
@@ -149,6 +157,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV8Migration(db);
         ApplyV9Migration(db);
         ApplyV10Migration(db);
+        ApplyV11Migration(db);
 
         using (var foreignKeys = db.CreateCommand())
         {
@@ -350,6 +359,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v10.sql")
             ?? throw new InvalidOperationException("Embedded schema_v10.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV11Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v11.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v11.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -1050,6 +1072,22 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             binding.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
             binding.Parameters.AddWithValue("$fingerprint", fingerprint);
             binding.ExecuteNonQuery();
+        }
+        // Keep the new inventory projection in sync with the legacy terminal-profile API.
+        // The terminal profile id remains unchanged so persisted sessions/history stay addressable.
+        using (var inventory = db.CreateCommand())
+        {
+            inventory.Transaction = transaction;
+            inventory.CommandText = @"INSERT OR IGNORE INTO device_inventory
+                (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
+                VALUES($id,$name,$host,'H3C','', 'H3C_TERMINAL','local','Created from terminal profile', $enabled,$created,$updated,$id)";
+            inventory.Parameters.AddWithValue("$id", profile.Id);
+            inventory.Parameters.AddWithValue("$name", profile.Id);
+            inventory.Parameters.AddWithValue("$host", profile.Host);
+            inventory.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
+            inventory.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
+            inventory.Parameters.AddWithValue("$updated", now);
+            inventory.ExecuteNonQuery();
         }
         transaction.Commit();
     }

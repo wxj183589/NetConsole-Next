@@ -61,6 +61,14 @@ export interface DeviceInventoryItem {
   lastDisconnectReason?: string | null
   isValid: boolean
   qualityIssues: string[]
+  deviceId?: string
+  managementIp?: string
+  siteId?: string
+  groupId?: string
+  description?: string
+  createdAt?: number
+  updatedAt?: number
+  terminalProfileId?: string | null
 }
 
 export interface DeviceInventoryPage {
@@ -70,6 +78,38 @@ export interface DeviceInventoryPage {
   hasMore: boolean
   summary: DeviceInventorySummary
   items: DeviceInventoryItem[]
+}
+
+export interface DeviceGroup {
+  id: string
+  siteId: string
+  name: string
+  description: string
+  createdMs: number
+  updatedMs: number
+  deviceCount: number
+}
+
+export interface DeviceInventoryDetail {
+  item: DeviceInventoryItem
+  description: string
+  createdMs: number
+  updatedMs: number
+  terminalProfileId?: string | null
+  terminalProfile?: TerminalDevice | null
+  recentSessions: TerminalSession[]
+  auditEvents: Array<{ id: string; atMs: number; action: string; outcome: string; detailJson: string }>
+}
+
+export interface DeviceImportPreview {
+  previewId: string
+  expiresAtMs: number
+  totalRows: number
+  createCount: number
+  updateCount: number
+  conflictCount: number
+  errorCount: number
+  rows: Array<{ line: number; action: string; deviceId: string; name: string; managementIp: string; detail: string; canCommit: boolean }>
 }
 
 export interface TerminalDevice {
@@ -238,10 +278,30 @@ export function changePassword(payload: { currentPassword?: string; newPassword:
 }
 
 export function getHealth(): Promise<HealthSnapshot> { return request('/api/system/health') }
-export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string } = {}): Promise<DeviceInventoryPage> {
+export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string; siteId?: string; groupId?: string } = {}): Promise<DeviceInventoryPage> {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })
   return request('/api/system/devices?' + query.toString())
+}
+export function getDeviceInventoryDetail(id: string): Promise<DeviceInventoryDetail> { return request('/api/system/devices/' + encodeURIComponent(id)) }
+export function getDeviceGroups(siteId?: string): Promise<DeviceGroup[]> {
+  const query = siteId ? '?' + new URLSearchParams({ siteId }).toString() : ''
+  return request('/api/system/device-groups' + query)
+}
+export function createDeviceGroup(payload: { siteId: string; name: string; description?: string }): Promise<DeviceGroup> {
+  return request('/api/system/device-groups', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function createDevice(payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
+  return request('/api/system/devices', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateDevice(id: string, payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
+  return request('/api/system/devices/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function previewDeviceImport(csv: string): Promise<DeviceImportPreview> {
+  return request('/api/system/devices/import/preview', { method: 'POST', body: JSON.stringify({ csv }) })
+}
+export function commitDeviceImport(previewId: string): Promise<{ previewId: string; created: number; updated: number; committedAtMs: number }> {
+  return request('/api/system/devices/import/commit', { method: 'POST', body: JSON.stringify({ previewId, confirm: true }) })
 }
 export function getTerminalDevices(): Promise<TerminalDevice[]> { return request('/api/system/terminal/devices') }
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }

@@ -288,8 +288,54 @@ app.MapGet("/api/system/devices", (HttpRequest request, Catalog rawCatalog) =>
 {
     var page = int.TryParse(request.Query["page"], out var requestedPage) ? requestedPage : 1;
     var pageSize = int.TryParse(request.Query["pageSize"], out var requestedPageSize) ? requestedPageSize : 20;
-    return Results.Ok(rawCatalog.QueryDeviceInventory(page, pageSize,
-        request.Query["search"].ToString(), request.Query["status"].ToString()));
+    return Results.Ok(rawCatalog.QueryManagedDeviceInventory(page, pageSize,
+        request.Query["search"].ToString(), request.Query["status"].ToString(),
+        request.Query["siteId"].ToString(), request.Query["groupId"].ToString()));
+});
+app.MapGet("/api/system/devices/{id}", (string id, Catalog rawCatalog) =>
+    rawCatalog.GetDeviceInventoryDetail(id) is { } detail ? Results.Ok(detail) : Results.NotFound());
+app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
+    Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
+app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Created("/api/system/device-groups", rawCatalog.CreateDeviceGroup(request.SiteId, request.Name, request.Description, CurrentIdentity(context).Username)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try
+    {
+        var detail = rawCatalog.CreateDeviceInventory(request, CurrentIdentity(context).Username);
+        return Results.Created($"/api/system/devices/{detail.Item.Id}", detail);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Ok(rawCatalog.UpdateDeviceInventory(id, request, CurrentIdentity(context).Username)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices/import/preview", (HttpContext context, DeviceImportPreviewRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Ok(rawCatalog.PreviewDeviceImport(request.Csv)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices/import/commit", (HttpContext context, DeviceImportCommitRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Ok(rawCatalog.CommitDeviceImport(request.PreviewId, request.Confirm, CurrentIdentity(context).Username)); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
@@ -710,6 +756,7 @@ internal static class WebCookieNames
 
 internal sealed record WebLoginRequest(string Username, string Password);
 internal sealed record WebPasswordRequest(string NewPassword, string? CurrentPassword = null, string? Username = null);
+internal sealed record DeviceGroupRequest(string SiteId, string Name, string? Description = null);
 internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,

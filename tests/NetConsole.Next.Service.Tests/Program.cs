@@ -127,6 +127,7 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         VerifiesDeviceInventoryMappingAndCounts();
+        VerifiesDeviceManagementPhase1();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();
@@ -758,6 +759,63 @@ internal static class SchedulerTests
         finally { Directory.Delete(root, true); }
     }
 
+    private static void VerifiesDeviceManagementPhase1()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-phase1-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var group = catalog.CreateDeviceGroup("local", "Phase1", "isolated fixture", "test");
+            var created = catalog.CreateDeviceInventory(new(null, "Phase 1 AP", "192.0.2.50", "H3C", "S", "NETWORK_DEVICE", "local", group.Id, "fixture", true, null), "test");
+            Assert(created.Item.ManagementIp == "192.0.2.50" && created.Item.GroupId == group.Id && created.Item.TerminalProfileId is null,
+                "device inventory create must persist the normalized management IP, site/group and optional terminal-profile link");
+
+            var updated = catalog.UpdateDeviceInventory(created.Item.Id,
+                new(created.Item.Id, "Phase 1 AP renamed", "192.0.2.51", "H3C", "S", "NETWORK_DEVICE", "local", group.Id, "updated", true, null), "test");
+            Assert(updated.Item.ManagementIp == "192.0.2.51" && updated.Item.Name == "Phase 1 AP renamed",
+                "device inventory edit must keep a stable device id while changing the management IP");
+
+            var preview = catalog.PreviewDeviceImport($"deviceId,name,managementIp,vendor,model,deviceType,siteId,groupName,description,enabled\n,Imported AP,192.0.2.52,H3C,X,AP,local,Phase1,from csv,true\n{created.Item.Id},Phase 1 AP renamed,192.0.2.53,H3C,S,NETWORK_DEVICE,local,Phase1,move,true");
+            Assert(preview.CreateCount == 1 && preview.UpdateCount == 1 && preview.ConflictCount == 0 && preview.ErrorCount == 0,
+                "CSV preview must classify create/update rows without writing them");
+            var committed = catalog.CommitDeviceImport(preview.PreviewId, true, "test");
+            Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+                "CSV commit must atomically create/update the previewed inventory rows");
+
+            var conflict = catalog.PreviewDeviceImport("name,managementIp\nDuplicate,192.0.2.52\nDuplicate again,192.0.2.52");
+            Assert(conflict.ConflictCount == 1 && conflict.ErrorCount == 1,
+                "CSV duplicate management IP must be reported as a conflict");
+            AssertThrows<InvalidOperationException>(() => catalog.CommitDeviceImport(conflict.PreviewId, true, "test"));
+            Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+                "conflicted import must roll back the whole batch");
+            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp,password\nBad,192.0.2.61,nope"));
+
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.70", 22, "reader", "PHASE1_CREDENTIAL", fingerprint, true, 0, 0));
+            using (var db = OpenCatalog(root))
+            using (var session = db.CreateCommand())
+            {
+                session.CommandText = @"INSERT INTO terminal_sessions
+                    (id,target_id,target_name,protocol,mode,host,port,state,started_ms,last_activity_ms,disconnect_reason)
+                    VALUES('phase1-session',$target,'profile','SSH','RESTRICTED_READONLY','192.0.2.70',22,'CLOSED',900,900,'fixture')";
+                session.Parameters.AddWithValue("$target", profileId); session.ExecuteNonQuery();
+            }
+            var bridge = catalog.GetDeviceInventoryDetail(profileId)!;
+            var profileUpdated = catalog.UpdateDeviceInventory(profileId,
+                new(profileId, "Linked terminal", "192.0.2.71", "H3C", "S", "H3C_TERMINAL", "local", null, "IP changed", true, profileId), "test");
+            Assert(profileUpdated.TerminalProfileId == profileId && profileUpdated.RecentSessions.Any(item => item.Id == "phase1-session") &&
+                   catalog.GetH3cDeviceProfile(profileId)!.Host == "192.0.2.70",
+                "editing inventory IP must preserve the terminal profile host and existing session history");
+            var audits = catalog.GetDeviceInventoryDetail(created.Item.Id)!.AuditEvents;
+            Assert(audits.Any(item => item.Action.StartsWith("DEVICE_", StringComparison.Ordinal)),
+                "device mutations must leave audit_events evidence without credential fields");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static async Task PersistsH3cTaskOutputAsVerifiedRaw()
     {
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-h3c-" + Guid.NewGuid().ToString("N"));
@@ -1301,7 +1359,7 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 10, "v10 Web password recovery migration should be present after repeated initialization");
+                Assert(Convert.ToInt32(version.ExecuteScalar()) == 11, "v11 device inventory migration should be present after repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }
