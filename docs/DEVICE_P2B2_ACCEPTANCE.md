@@ -10,7 +10,7 @@
 
 ## CI 与审批
 
-PR23/PR24 当前仍为 Draft/Open，尚无正式 approval；P2B-2 应以 Draft PR 供 review。P2B1 已有的 Windows syntax 和 G1 CI 证据需保留：G1 首次 Ubuntu archive admission 曾因时序失败，重跑后通过；这不应被改写为“首次全绿”。本分支 PR25=`https://github.com/wxj183589/NetConsole-Next/pull/25`：Windows deployment syntax run `40345480852` SUCCESS；G1 run `40345480857` Ubuntu/Windows SUCCESS。
+PR23/PR24 当前仍为 Draft/Open，尚无正式 approval；P2B-2 应以 Draft PR 供 review。P2B1 已有的 Windows syntax 和 G1 CI 证据需保留：G1 首次 Ubuntu archive admission 曾因时序失败，重跑后通过；这不应被改写为“首次全绿”。本分支 PR25=`https://github.com/wxj183589/NetConsole-Next/pull/25`：Windows deployment syntax run `40346448663` SUCCESS；G1 run `40346448548` Ubuntu/Windows SUCCESS。
 
 ## 数据安全
 
