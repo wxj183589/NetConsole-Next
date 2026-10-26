@@ -327,13 +327,15 @@ app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceIn
 app.MapPost("/api/system/devices/import/preview", (HttpContext context, DeviceImportPreviewRequest request, Catalog rawCatalog) =>
 {
     if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    try { return Results.Ok(rawCatalog.PreviewDeviceImport(request.Csv)); }
+    try { return Results.Ok(rawCatalog.PreviewDeviceImport(request.Csv, CurrentIdentity(context).Username)); }
+    catch (DeviceImportResourceLimitException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 app.MapPost("/api/system/devices/import/commit", (HttpContext context, DeviceImportCommitRequest request, Catalog rawCatalog) =>
 {
     if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
     try { return Results.Ok(rawCatalog.CommitDeviceImport(request.PreviewId, request.Confirm, CurrentIdentity(context).Username)); }
+    catch (UnauthorizedAccessException) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
     catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });

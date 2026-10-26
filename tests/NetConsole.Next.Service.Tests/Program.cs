@@ -128,6 +128,7 @@ internal static class SchedulerTests
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
+        await VerifiesDeviceManagementSafetyBoundaries();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();
@@ -777,20 +778,20 @@ internal static class SchedulerTests
             Assert(updated.Item.ManagementIp == "192.0.2.51" && updated.Item.Name == "Phase 1 AP renamed",
                 "device inventory edit must keep a stable device id while changing the management IP");
 
-            var preview = catalog.PreviewDeviceImport($"deviceId,name,managementIp,vendor,model,deviceType,siteId,groupName,description,enabled\n,Imported AP,192.0.2.52,H3C,X,AP,local,Phase1,from csv,true\n{created.Item.Id},Phase 1 AP renamed,192.0.2.53,H3C,S,NETWORK_DEVICE,local,Phase1,move,true");
+            var preview = catalog.PreviewDeviceImport($"deviceId,name,managementIp,vendor,model,deviceType,siteId,groupName,description,enabled\n,Imported AP,192.0.2.52,H3C,X,AP,local,Phase1,from csv,true\n{created.Item.Id},Phase 1 AP renamed,192.0.2.53,H3C,S,NETWORK_DEVICE,local,Phase1,move,true", "test");
             Assert(preview.CreateCount == 1 && preview.UpdateCount == 1 && preview.ConflictCount == 0 && preview.ErrorCount == 0,
                 "CSV preview must classify create/update rows without writing them");
             var committed = catalog.CommitDeviceImport(preview.PreviewId, true, "test");
             Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
                 "CSV commit must atomically create/update the previewed inventory rows");
 
-            var conflict = catalog.PreviewDeviceImport("name,managementIp\nDuplicate,192.0.2.52\nDuplicate again,192.0.2.52");
+            var conflict = catalog.PreviewDeviceImport("name,managementIp\nDuplicate,192.0.2.52\nDuplicate again,192.0.2.52", "test");
             Assert(conflict.ConflictCount == 1 && conflict.ErrorCount == 1,
                 "CSV duplicate management IP must be reported as a conflict");
             AssertThrows<InvalidOperationException>(() => catalog.CommitDeviceImport(conflict.PreviewId, true, "test"));
             Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
                 "conflicted import must roll back the whole batch");
-            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp,password\nBad,192.0.2.61,nope"));
+            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp,password\nBad,192.0.2.61,nope", "test"));
 
             var profileId = Guid.NewGuid().ToString("N");
             var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
@@ -814,6 +815,98 @@ internal static class SchedulerTests
                 "device mutations must leave audit_events evidence without credential fields");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesDeviceManagementSafetyBoundaries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-safety-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            var profileId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.80", 22, "reader", "PHASE1_SAFETY_A", fingerprint, true, 0, 0));
+            var linked = catalog.GetDeviceInventoryDetail(profileId)!;
+            var duplicateHostProfileId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(duplicateHostProfileId, "192.0.2.80", 22, "reader", "PHASE1_SAFETY_DUPLICATE", fingerprint, true, 0, 0));
+            Assert(catalog.QueryManagedDeviceInventory(pageSize: 100).Items.Count(item => item.ManagementIp == "192.0.2.80") == 1 &&
+                   catalog.GetH3cDeviceProfile(duplicateHostProfileId) is not null,
+                "legacy terminal-profile bridge must not create duplicate inventory rows for one site-scoped management IP");
+
+            using (var db = OpenCatalog(root))
+            using (var disable = db.CreateCommand())
+            {
+                disable.CommandText = "UPDATE h3c_device_profiles SET enabled=0 WHERE id=$id; UPDATE collection_sources SET enabled=0 WHERE id=(SELECT source_id FROM h3c_device_profiles WHERE id=$id);";
+                disable.Parameters.AddWithValue("$id", profileId);
+                disable.ExecuteNonQuery();
+            }
+            catalog.UpdateDeviceInventory(profileId, new(profileId, linked.Item.Name, linked.Item.ManagementIp, "H3C", "S", "H3C_TERMINAL", "local", null, "disabled terminal fixture", true, profileId), "test");
+            Assert(ReadProfileAndSourceEnabled(root, profileId) == (false, false),
+                "device inventory enablement must not re-enable a manually disabled terminal profile or collection source");
+            catalog.UpdateDeviceInventory(profileId, new(profileId, linked.Item.Name, linked.Item.ManagementIp, "H3C", "S", "H3C_TERMINAL", "local", null, "disabled inventory", false, profileId), "test");
+            catalog.UpdateDeviceInventory(profileId, new(profileId, linked.Item.Name, linked.Item.ManagementIp, "H3C", "S", "H3C_TERMINAL", "local", null, "re-enabled inventory", true, profileId), "test");
+            Assert(ReadProfileAndSourceEnabled(root, profileId) == (false, false),
+                "device disable and re-enable must not mutate terminal or collection-source state");
+
+            var secondProfileId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(secondProfileId, "192.0.2.81", 22, "reader", "PHASE1_SAFETY_B", fingerprint, true, 0, 0));
+            var second = catalog.GetDeviceInventoryDetail(secondProfileId)!;
+            catalog.UpdateDeviceInventory(secondProfileId, new(secondProfileId, second.Item.Name, second.Item.ManagementIp, "H3C", "S", "H3C_TERMINAL", "local", null, "unlinked", true, null), "test");
+            catalog.UpdateDeviceInventory(profileId, new(profileId, linked.Item.Name, linked.Item.ManagementIp, "H3C", "S", "H3C_TERMINAL", "local", null, "reassigned", false, secondProfileId), "test");
+            Assert(ReadProfileAndSourceEnabled(root, profileId) == (false, false) && ReadProfileAndSourceEnabled(root, secondProfileId) == (true, true),
+                "profile reassignment must not rewrite either the old or the new profile/source state");
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(new(null, "duplicate profile", "192.0.2.82", "H3C", "S", "H3C_TERMINAL", "local", null, "", true, secondProfileId), "test"));
+
+            catalog.CreateTaskDefinition("phase1-safety-task", "H3C_SSH_READONLY", secondProfileId, "display version", TimeSpan.FromSeconds(1));
+            Assert(!string.IsNullOrWhiteSpace(catalog.CreateTaskRun("phase1-safety-task")),
+                "inventory disablement must not silently cancel or bypass the separately governed terminal task policy");
+
+            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp\n\"bad\"suffix,192.0.2.90", "test"));
+            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,name,managementIp\nDuplicate,Duplicate,192.0.2.91", "test"));
+            AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp\nExtra,192.0.2.92,ignored", "test"));
+            var quoted = catalog.PreviewDeviceImport("name,managementIp,description\n\"Quoted, \"\"device\"\"\",192.0.2.93,fixture", "quoted-test");
+            Assert(quoted.ErrorCount == 0 && quoted.CreateCount == 1, "CSV quoted commas and escaped quotes must remain one strict record");
+            var duplicateId = catalog.PreviewDeviceImport("deviceId,name,managementIp\nsame-id,One,192.0.2.94\nsame-id,Two,192.0.2.95", "edge-test");
+            Assert(duplicateId.ConflictCount == 1 && duplicateId.ErrorCount == 1 && duplicateId.CreateCount == 1,
+                "CSV must reject duplicate device ids within one batch instead of failing during commit");
+            var formula = catalog.PreviewDeviceImport("name,managementIp\n=SUM,192.0.2.96", "edge-test");
+            Assert(formula.ConflictCount == 1 && formula.ErrorCount == 1, "CSV formula-like text must be rejected before persistence");
+
+            var stale = catalog.PreviewDeviceImport($"deviceId,name,managementIp\n{profileId},stale preview,192.0.2.80", "stale-test");
+            catalog.UpdateDeviceInventory(profileId, new(profileId, "changed after preview", "192.0.2.80", "H3C", "S", "H3C_TERMINAL", "local", null, "changed", false, secondProfileId), "test");
+            AssertThrows<InvalidOperationException>(() => catalog.CommitDeviceImport(stale.PreviewId, true, "stale-test"));
+            Assert(catalog.GetDeviceInventoryDetail(profileId)!.Item.Name == "changed after preview", "stale CSV commit must not overwrite a newer device update");
+
+            var idempotent = catalog.PreviewDeviceImport("name,managementIp\nIdempotent,192.0.2.97", "commit-test");
+            var firstCommit = catalog.CommitDeviceImport(idempotent.PreviewId, true, "commit-test");
+            var retryCommit = catalog.CommitDeviceImport(idempotent.PreviewId, true, "commit-test");
+            Assert(firstCommit == retryCommit && catalog.QueryManagedDeviceInventory(pageSize: 100).Items.Count(item => item.ManagementIp == "192.0.2.97") == 1,
+                "repeating a successful CSV commit must return the bounded receipt instead of applying the batch twice");
+            AssertThrows<UnauthorizedAccessException>(() => catalog.CommitDeviceImport(idempotent.PreviewId, true, "other-admin"));
+
+            var resourceCsv = "name,managementIp\nResource,192.0.2.100";
+            for (var index = 0; index < 8; index++) catalog.PreviewDeviceImport(resourceCsv, "resource-admin");
+            AssertThrows<DeviceImportResourceLimitException>(() => catalog.PreviewDeviceImport(resourceCsv, "resource-admin"));
+            var tooManyRows = new StringBuilder("name,managementIp\n");
+            for (var index = 0; index < 10_001; index++) tooManyRows.Append($"Row{index},192.0.2.{(index % 200) + 1}\n");
+            AssertThrows<DeviceImportResourceLimitException>(() => catalog.PreviewDeviceImport(tooManyRows.ToString(), "row-admin"));
+
+            await Task.Yield();
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static (bool ProfileEnabled, bool SourceEnabled) ReadProfileAndSourceEnabled(string root, string profileId)
+    {
+        using var db = OpenCatalog(root);
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT p.enabled,cs.enabled FROM h3c_device_profiles p JOIN collection_sources cs ON cs.id=p.source_id WHERE p.id=$id";
+        command.Parameters.AddWithValue("$id", profileId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) throw new InvalidOperationException("profile fixture was not found");
+        return (reader.GetInt32(0) != 0, reader.GetInt32(1) != 0);
     }
 
     private static async Task PersistsH3cTaskOutputAsVerifiedRaw()

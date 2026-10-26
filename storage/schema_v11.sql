@@ -29,12 +29,24 @@ CREATE INDEX IF NOT EXISTS idx_device_inventory_site_group ON device_inventory(s
 CREATE INDEX IF NOT EXISTS idx_device_inventory_ip ON device_inventory(site_id,management_ip);
 CREATE INDEX IF NOT EXISTS idx_device_inventory_enabled ON device_inventory(enabled,updated_ms);
 
+WITH legacy_profiles AS (
+    SELECT p.id,p.host,p.enabled,p.created_ms,p.updated_ms,COALESCE(cs.site_id,'local') AS site_id,
+        ROW_NUMBER() OVER (PARTITION BY COALESCE(cs.site_id,'local'),p.host ORDER BY p.created_ms,p.id) AS rn
+    FROM h3c_device_profiles p
+    LEFT JOIN collection_sources cs ON cs.id=p.source_id
+), bridge_candidates AS (
+    SELECT p.id,p.host,p.enabled,p.created_ms,p.updated_ms,p.site_id
+    FROM legacy_profiles p
+    WHERE p.rn=1
+      AND NOT EXISTS(
+          SELECT 1 FROM device_inventory d
+          WHERE d.id=p.id OR d.terminal_profile_id=p.id
+             OR (d.site_id=p.site_id AND d.management_ip=p.host))
+)
 INSERT OR IGNORE INTO device_inventory
     (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
-SELECT p.id,p.id,p.host,'H3C','', 'H3C_TERMINAL',COALESCE(cs.site_id,'local'),'Legacy terminal profile bridge',
-    p.enabled,p.created_ms,p.updated_ms,p.id
-FROM h3c_device_profiles p
-LEFT JOIN collection_sources cs ON cs.id=p.source_id;
+SELECT id,id,host,'H3C','', 'H3C_TERMINAL',site_id,'Legacy terminal profile bridge',enabled,created_ms,updated_ms,id
+FROM bridge_candidates;
 
 INSERT OR IGNORE INTO schema_versions(version,applied_ms)
 VALUES(11,CAST(strftime('%s','now') AS INTEGER)*1000);

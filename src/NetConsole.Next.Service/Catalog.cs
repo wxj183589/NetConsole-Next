@@ -1080,7 +1080,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             inventory.Transaction = transaction;
             inventory.CommandText = @"INSERT OR IGNORE INTO device_inventory
                 (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
-                VALUES($id,$name,$host,'H3C','', 'H3C_TERMINAL','local','Created from terminal profile', $enabled,$created,$updated,$id)";
+                SELECT $id,$name,$host,'H3C','', 'H3C_TERMINAL','local','Created from terminal profile', $enabled,$created,$updated,$id
+                WHERE NOT EXISTS(SELECT 1 FROM device_inventory WHERE site_id='local' AND management_ip=$host)";
             inventory.Parameters.AddWithValue("$id", profile.Id);
             inventory.Parameters.AddWithValue("$name", profile.Id);
             inventory.Parameters.AddWithValue("$host", profile.Host);

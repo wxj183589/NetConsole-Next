@@ -21,7 +21,9 @@ Cookie 会话写入仍由全局 Origin + CSRF 校验保护；LocalManager bearer
 
 ## 兼容策略
 
-schema v11 新增 `device_inventory`、`device_groups`。初始化会为既有 H3C profile 建立同 ID 的库存桥接记录；旧 H3C profile API 仍可写入桥接记录。编辑库存管理 IP 不改动终端档案 host，详情会提示 `TERMINAL_PROFILE_ADDRESS_DIFFERS`，终端历史继续按原 profile ID 读取。
+schema v11 新增 `device_inventory`、`device_groups`。初始化会为既有 H3C profile 建立按站点/IP 去重的库存桥接记录；旧 H3C profile API 仍可写入桥接记录，但不会制造同站点/IP 的重复库存。GET 查询不隐式写入桥接。编辑库存管理 IP 不改动终端档案 host，详情会提示 `TERMINAL_PROFILE_ADDRESS_DIFFERS`，终端历史继续按原 profile ID 读取。
+
+库存 `enabled` 只表示资料层状态，不会隐式修改 `h3c_device_profiles.enabled` 或 `collection_sources.enabled`；终端连接、采集源和任务运行状态由各自边界控制。
 
 ## 非目标
 

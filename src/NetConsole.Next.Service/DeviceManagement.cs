@@ -43,25 +43,38 @@ internal sealed record DeviceImportPreviewResult(string PreviewId, long ExpiresA
     int CreateCount, int UpdateCount, int ConflictCount, int ErrorCount, IReadOnlyList<DeviceImportRowView> Rows);
 internal sealed record DeviceImportCommitResult(string PreviewId, int Created, int Updated, long CommittedAtMs);
 
+internal sealed class DeviceImportResourceLimitException(string message) : InvalidOperationException(message);
+
 internal sealed record DeviceImportCandidate(int Line, string Action, string DeviceId, string Name,
     string ManagementIp, string Vendor, string Model, string DeviceType, string SiteId, string? GroupId,
-    string Description, bool Enabled, string? TerminalProfileId, string Detail);
+    string Description, bool Enabled, string? TerminalProfileId, long? ExpectedUpdatedMs, string Detail);
 
-internal sealed class DeviceImportPreviewState(DeviceImportPreviewResult result, IReadOnlyList<DeviceImportCandidate> candidates)
+internal sealed class DeviceImportPreviewState(DeviceImportPreviewResult result, IReadOnlyList<DeviceImportCandidate> candidates, string actor)
 {
     public DeviceImportPreviewResult Result { get; } = result;
     public IReadOnlyList<DeviceImportCandidate> Candidates { get; } = candidates;
+    public string Actor { get; } = actor;
+    public bool Committing { get; set; }
 }
+
+internal sealed record DeviceImportCommitReceipt(string Actor, DeviceImportCommitResult Result, long ExpiresAtMs);
 
 internal sealed partial class Catalog
 {
+    private const int MaximumDeviceImportBytes = 2 * 1024 * 1024;
+    private const int MaximumDeviceImportRows = 10_000;
+    private const int MaximumDeviceImportCellCharacters = 4_096;
+    private const int MaximumDeviceImportPreviews = 32;
+    private const int MaximumDeviceImportPreviewsPerActor = 8;
+    private const int MaximumDeviceImportReceipts = 64;
+    private static readonly TimeSpan DeviceImportLifetime = TimeSpan.FromMinutes(10);
     private readonly object _deviceImportGate = new();
     private readonly Dictionary<string, (DeviceImportPreviewState State, long ExpiresAtMs)> _deviceImportPreviews = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DeviceImportCommitReceipt> _deviceImportReceipts = new(StringComparer.Ordinal);
 
     public DeviceInventoryPage QueryManagedDeviceInventory(int page = 1, int pageSize = 20,
         string? search = null, string? status = null, string? siteId = null, string? groupId = null)
     {
-        EnsureInventoryBridgeRows();
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
         var filters = InventoryFilters(search, status, siteId, groupId);
@@ -124,7 +137,6 @@ internal sealed partial class Catalog
 
     public DeviceInventoryDetail? GetDeviceInventoryDetail(string id)
     {
-        EnsureInventoryBridgeRows();
         var page = QueryManagedDeviceInventory(1, 100, id, null, null, null);
         var item = page.Items.FirstOrDefault(candidate => candidate.Id == id);
         if (item is null) return null;
@@ -171,7 +183,7 @@ internal sealed partial class Catalog
         var now = UtcNowMs();
         var id = "grp-" + Guid.NewGuid().ToString("N");
         using var db = Open();
-        using var transaction = db.BeginTransaction();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
         EnsureSite(db, transaction, siteId);
         using (var insert = db.CreateCommand())
         {
@@ -192,10 +204,10 @@ internal sealed partial class Catalog
         var normalized = NormalizeDeviceInput(request, null);
         var now = UtcNowMs();
         using var db = Open();
-        using var transaction = db.BeginTransaction();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
         EnsureSite(db, transaction, normalized.SiteId);
         EnsureGroup(db, transaction, normalized.GroupId, normalized.SiteId);
-        EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId);
+        EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId, normalized.Id);
         EnsureUniqueManagementIp(db, transaction, normalized.SiteId, normalized.ManagementIp, normalized.Id);
         using (var insert = db.CreateCommand())
         {
@@ -206,7 +218,6 @@ internal sealed partial class Catalog
             AddDeviceParameters(insert, normalized, now, now);
             insert.ExecuteNonQuery();
         }
-        SyncTerminalProfileEnabled(db, transaction, normalized.TerminalProfileId, normalized.Enabled);
         InsertDeviceAudit(db, transaction, actor, "DEVICE_CREATE", normalized.Id!, new { normalized.Name, normalized.ManagementIp, normalized.SiteId, normalized.GroupId, normalized.Enabled, normalized.TerminalProfileId });
         transaction.Commit();
         return GetDeviceInventoryDetail(normalized.Id!) ?? throw new InvalidOperationException("Created device could not be reloaded.");
@@ -217,35 +228,39 @@ internal sealed partial class Catalog
         var normalized = NormalizeDeviceInput(request with { Id = id }, id);
         var now = UtcNowMs();
         using var db = Open();
-        using var transaction = db.BeginTransaction();
+        using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
         EnsureSite(db, transaction, normalized.SiteId);
         EnsureGroup(db, transaction, normalized.GroupId, normalized.SiteId);
-        EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId);
+        EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId, id);
         EnsureUniqueManagementIp(db, transaction, normalized.SiteId, normalized.ManagementIp, id);
         using (var update = db.CreateCommand())
         {
             update.Transaction = transaction;
             update.CommandText = @"UPDATE device_inventory SET name=$name,management_ip=$ip,vendor=$vendor,model=$model,
                 device_type=$type,site_id=$site,group_id=$group,description=$description,enabled=$enabled,
-                updated_ms=$updated,terminal_profile_id=$profile WHERE id=$id";
+                updated_ms=CASE WHEN $updated<=updated_ms THEN updated_ms+1 ELSE $updated END,terminal_profile_id=$profile WHERE id=$id";
             AddDeviceParameters(update, normalized, now, now);
             if (update.ExecuteNonQuery() != 1) throw new KeyNotFoundException("Device inventory record was not found.");
         }
-        SyncTerminalProfileEnabled(db, transaction, normalized.TerminalProfileId, normalized.Enabled);
         InsertDeviceAudit(db, transaction, actor, normalized.Enabled ? "DEVICE_UPDATE" : "DEVICE_DISABLE", id,
             new { normalized.Name, normalized.ManagementIp, normalized.SiteId, normalized.GroupId, normalized.Enabled, normalized.TerminalProfileId });
         transaction.Commit();
         return GetDeviceInventoryDetail(id) ?? throw new InvalidOperationException("Updated device could not be reloaded.");
     }
 
-    public DeviceImportPreviewResult PreviewDeviceImport(string csv)
+    public DeviceImportPreviewResult PreviewDeviceImport(string csv, string actor)
     {
         if (string.IsNullOrWhiteSpace(csv)) throw new ArgumentException("CSV content is required.", nameof(csv));
-        if (Encoding.UTF8.GetByteCount(csv) > 2 * 1024 * 1024) throw new ArgumentException("CSV content exceeds 2 MiB.", nameof(csv));
+        actor = RequiredText(actor, "actor", 128);
+        if (Encoding.UTF8.GetByteCount(csv) > MaximumDeviceImportBytes) throw new DeviceImportResourceLimitException("CSV content exceeds 2 MiB.");
         var parsed = ParseCsv(csv);
+        if (parsed.Rows.Count > MaximumDeviceImportRows)
+            throw new DeviceImportResourceLimitException($"CSV contains more than {MaximumDeviceImportRows} data rows.");
         var candidates = new List<DeviceImportCandidate>();
         var views = new List<DeviceImportRowView>();
         var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenProfiles = new HashSet<string>(StringComparer.Ordinal);
         using var db = Open();
         var existing = ReadInventoryImportState(db);
         foreach (var row in parsed.Rows)
@@ -256,18 +271,30 @@ internal sealed partial class Catalog
             var site = Text(row.Get("siteId"));
             if (site.Length == 0) site = "local";
             var normalizedIp = TryNormalizeIp(ipText, out var ip) ? ip : string.Empty;
-            if (name.Length is < 1 or > 120) errors.Add("NAME_REQUIRED_OR_TOO_LONG");
+            if (name.Length is < 1 or > 120 || name.Any(char.IsControl)) errors.Add("NAME_REQUIRED_OR_INVALID");
             if (normalizedIp.Length == 0) errors.Add("MANAGEMENT_IP_INVALID");
             if (!SiteExists(db, site)) errors.Add("SITE_NOT_FOUND");
             var id = Text(row.Get("deviceId"));
             if (id.Length > 0 && !IsValidDeviceId(id)) errors.Add("DEVICE_ID_INVALID");
+            if (id.Length > 0 && !seenIds.Add(id)) errors.Add("DUPLICATE_IMPORT_DEVICE_ID");
             var type = Text(row.Get("deviceType"));
             if (type.Length == 0) type = "NETWORK_DEVICE";
             if (!IsValidToken(type, 48)) errors.Add("DEVICE_TYPE_INVALID");
-            var groupId = ResolveGroupByName(db, site, Text(row.Get("groupName")), errors);
+            var groupName = Text(row.Get("groupName"));
+            if (groupName.Length > 100 || groupName.Any(char.IsControl)) errors.Add("GROUP_NAME_INVALID");
+            var groupId = ResolveGroupByName(db, site, groupName, errors);
             var profileId = Text(row.Get("terminalProfileId"));
             if (profileId.Length > 0 && !TerminalProfileExists(db, profileId)) errors.Add("TERMINAL_PROFILE_NOT_FOUND");
+            if (profileId.Length > 0 && !IsValidDeviceId(profileId)) errors.Add("TERMINAL_PROFILE_ID_INVALID");
+            if (profileId.Length > 0 && !seenProfiles.Add(profileId)) errors.Add("DUPLICATE_IMPORT_TERMINAL_PROFILE");
             if (!TryParseEnabled(Text(row.Get("enabled")), out var enabled)) errors.Add("ENABLED_INVALID");
+            var vendor = Text(row.Get("vendor"));
+            var model = Text(row.Get("model"));
+            var description = Text(row.Get("description"));
+            if (vendor.Length > 80 || vendor.Any(char.IsControl)) errors.Add("VENDOR_INVALID");
+            if (model.Length > 80 || model.Any(char.IsControl)) errors.Add("MODEL_INVALID");
+            if (description.Length > 500 || description.Any(char.IsControl)) errors.Add("DESCRIPTION_INVALID");
+            if (row.Values.Any(item => IsCsvFormulaValue(item.Value))) errors.Add("CSV_FORMULA_VALUE");
             if (normalizedIp.Length > 0)
             {
                 var key = site + "\n" + normalizedIp;
@@ -275,29 +302,33 @@ internal sealed partial class Catalog
             }
             var byId = id.Length == 0 ? null : existing.FirstOrDefault(item => item.Id == id);
             var byIp = normalizedIp.Length == 0 ? null : existing.FirstOrDefault(item => item.SiteId == site && item.ManagementIp == normalizedIp);
-            if (byId is not null && byIp is not null && byId.Id != byIp.Id) errors.Add("ID_IP_TARGET_CONFLICT");
+            if ((byId is not null && byIp is not null && byId.Id != byIp.Id) ||
+                (id.Length > 0 && byIp is not null && byIp.Id != id)) errors.Add("ID_IP_TARGET_CONFLICT");
             var target = byId ?? byIp;
             if (target is not null && profileId.Length > 0 && existing.Any(item => item.TerminalProfileId == profileId && item.Id != target.Id)) errors.Add("TERMINAL_PROFILE_ALREADY_LINKED");
             var action = target is null ? "CREATE" : "UPDATE";
             if (errors.Count == 0 && normalizedIp.Length > 0)
             {
                 candidates.Add(new DeviceImportCandidate(row.Line, action, target?.Id ?? (id.Length == 0 ? "dev-" + Guid.NewGuid().ToString("N") : id),
-                    name, normalizedIp, Text(row.Get("vendor")), Text(row.Get("model")), type, site, groupId,
-                    Text(row.Get("description")), enabled, profileId.Length == 0 ? null : profileId,
+                    name, normalizedIp, vendor, model, type, site, groupId,
+                    description, enabled, profileId.Length == 0 ? null : profileId, target?.UpdatedMs,
                     action == "CREATE" ? "New inventory record" : "Existing management IP will be updated"));
             }
             var detail = errors.Count == 0 ? (action == "CREATE" ? "New device" : "Existing device matched by ID/IP") : string.Join(",", errors);
             views.Add(new DeviceImportRowView(row.Line, errors.Count == 0 ? action : "CONFLICT", target?.Id ?? id, name, ipText, detail, errors.Count == 0));
         }
         var previewId = Guid.NewGuid().ToString("N");
-        var result = new DeviceImportPreviewResult(previewId, UtcNowMs() + 10 * 60 * 1000, views.Count,
+        var result = new DeviceImportPreviewResult(previewId, UtcNowMs() + (long)DeviceImportLifetime.TotalMilliseconds, views.Count,
             views.Count(item => item.Action == "CREATE"), views.Count(item => item.Action == "UPDATE"),
             views.Count(item => item.Action == "CONFLICT"), views.Count(item => !item.CanCommit), views);
         lock (_deviceImportGate)
         {
             var now = UtcNowMs();
-            foreach (var expired in _deviceImportPreviews.Where(item => item.Value.ExpiresAtMs <= now).Select(item => item.Key).ToArray()) _deviceImportPreviews.Remove(expired);
-            _deviceImportPreviews[previewId] = (new DeviceImportPreviewState(result, candidates), result.ExpiresAtMs);
+            CleanupImportStateLocked(now);
+            if (_deviceImportPreviews.Count >= MaximumDeviceImportPreviews ||
+                _deviceImportPreviews.Values.Count(item => item.State.Actor == actor) >= MaximumDeviceImportPreviewsPerActor)
+                throw new DeviceImportResourceLimitException("Too many active device import previews; commit or wait for an existing preview to expire.");
+            _deviceImportPreviews[previewId] = (new DeviceImportPreviewState(result, candidates, actor), result.ExpiresAtMs);
         }
         return result;
     }
@@ -305,28 +336,40 @@ internal sealed partial class Catalog
     public DeviceImportCommitResult CommitDeviceImport(string previewId, bool confirm, string actor)
     {
         if (!confirm) throw new InvalidOperationException("Import commit requires explicit confirmation.");
+        actor = RequiredText(actor, "actor", 128);
         DeviceImportPreviewState state;
         lock (_deviceImportGate)
         {
-            if (!_deviceImportPreviews.TryGetValue(previewId, out var stored) || stored.ExpiresAtMs < UtcNowMs())
+            var checkedAtMs = UtcNowMs();
+            CleanupImportStateLocked(checkedAtMs);
+            if (_deviceImportReceipts.TryGetValue(previewId, out var receipt))
+            {
+                if (!string.Equals(receipt.Actor, actor, StringComparison.Ordinal)) throw new UnauthorizedAccessException("Import preview belongs to another administrator.");
+                return receipt.Result;
+            }
+            if (!_deviceImportPreviews.TryGetValue(previewId, out var stored) || stored.ExpiresAtMs <= checkedAtMs)
                 throw new KeyNotFoundException("Import preview is missing or expired.");
             state = stored.State;
+            if (!string.Equals(state.Actor, actor, StringComparison.Ordinal)) throw new UnauthorizedAccessException("Import preview belongs to another administrator.");
+            if (state.Committing) throw new InvalidOperationException("Import preview is already being committed.");
             if (state.Result.ConflictCount > 0 || state.Result.ErrorCount > 0)
                 throw new InvalidOperationException("Resolve all import conflicts before committing.");
+            state.Committing = true;
         }
         var created = 0; var updated = 0; var now = UtcNowMs();
-        using var db = Open();
-        using var transaction = db.BeginTransaction();
         try
         {
+            using var db = Open();
+            using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
             foreach (var candidate in state.Candidates)
             {
                 EnsureSite(db, transaction, candidate.SiteId);
                 EnsureGroup(db, transaction, candidate.GroupId, candidate.SiteId);
-                EnsureTerminalProfile(db, transaction, candidate.TerminalProfileId);
+                EnsureTerminalProfile(db, transaction, candidate.TerminalProfileId, candidate.DeviceId);
                 EnsureUniqueManagementIp(db, transaction, candidate.SiteId, candidate.ManagementIp, candidate.Action == "UPDATE" ? candidate.DeviceId : null);
                 if (candidate.Action == "CREATE")
                 {
+                    EnsureDeviceIdAvailable(db, transaction, candidate.DeviceId);
                     InsertDeviceCandidate(db, transaction, candidate, now);
                     created++;
                 }
@@ -335,7 +378,6 @@ internal sealed partial class Catalog
                     UpdateDeviceCandidate(db, transaction, candidate, now);
                     updated++;
                 }
-                SyncTerminalProfileEnabled(db, transaction, candidate.TerminalProfileId, candidate.Enabled);
                 InsertDeviceAudit(db, transaction, actor, "DEVICE_IMPORT_" + candidate.Action, candidate.DeviceId,
                     new { candidate.Name, candidate.ManagementIp, candidate.SiteId, candidate.GroupId, candidate.Enabled, candidate.TerminalProfileId });
             }
@@ -344,11 +386,26 @@ internal sealed partial class Catalog
         }
         catch
         {
-            // The transaction is deliberately left uncommitted so SQLite rolls the batch back.
+            lock (_deviceImportGate)
+            {
+                if (_deviceImportPreviews.TryGetValue(previewId, out var stored) && ReferenceEquals(stored.State, state))
+                    state.Committing = false;
+            }
             throw;
         }
-        lock (_deviceImportGate) _deviceImportPreviews.Remove(previewId);
-        return new DeviceImportCommitResult(previewId, created, updated, now);
+        var result = new DeviceImportCommitResult(previewId, created, updated, now);
+        lock (_deviceImportGate)
+        {
+            _deviceImportPreviews.Remove(previewId);
+            CleanupImportStateLocked(now);
+            _deviceImportReceipts[previewId] = new DeviceImportCommitReceipt(actor, result, now + (long)DeviceImportLifetime.TotalMilliseconds);
+            while (_deviceImportReceipts.Count > MaximumDeviceImportReceipts)
+            {
+                var oldest = _deviceImportReceipts.OrderBy(item => item.Value.ExpiresAtMs).First().Key;
+                _deviceImportReceipts.Remove(oldest);
+            }
+        }
+        return result;
     }
 
     private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId)
@@ -409,22 +466,6 @@ internal sealed partial class Catalog
             reader.GetInt64(11), reader.GetInt64(12), profileId);
     }
 
-    private void EnsureInventoryBridgeRows()
-    {
-        using var db = Open();
-        using var transaction = db.BeginTransaction();
-        using var command = db.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = @"INSERT OR IGNORE INTO device_inventory
-            (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
-            SELECT p.id,p.id,p.host,'H3C','', 'H3C_TERMINAL',COALESCE(cs.site_id,'local'),'Legacy terminal profile bridge',
-                p.enabled,p.created_ms,p.updated_ms,p.id FROM h3c_device_profiles p
-                LEFT JOIN collection_sources cs ON cs.id=p.source_id
-                WHERE NOT EXISTS(SELECT 1 FROM device_inventory d WHERE d.terminal_profile_id=p.id OR d.id=p.id)";
-        command.ExecuteNonQuery();
-        transaction.Commit();
-    }
-
     private static void AddDeviceParameters(SqliteCommand command, DeviceInventoryWriteRequest request, long created, long updated)
     {
         command.Parameters.AddWithValue("$id", request.Id!); command.Parameters.AddWithValue("$name", request.Name);
@@ -463,11 +504,23 @@ internal sealed partial class Catalog
         if (command.ExecuteScalar() is null) throw new KeyNotFoundException("Device group was not found at the selected site.");
     }
 
-    private static void EnsureTerminalProfile(SqliteConnection db, SqliteTransaction transaction, string? profileId)
+    private static void EnsureTerminalProfile(SqliteConnection db, SqliteTransaction transaction, string? profileId, string? excludeDeviceId)
     {
         if (profileId is null) return;
         using var command = db.CreateCommand(); command.Transaction = transaction; command.CommandText = "SELECT 1 FROM h3c_device_profiles WHERE id=$id"; command.Parameters.AddWithValue("$id", profileId);
         if (command.ExecuteScalar() is null) throw new KeyNotFoundException("Terminal profile was not found.");
+        using var linked = db.CreateCommand(); linked.Transaction = transaction;
+        linked.CommandText = "SELECT id FROM device_inventory WHERE terminal_profile_id=$profile AND ($exclude IS NULL OR id<>$exclude) LIMIT 1";
+        linked.Parameters.AddWithValue("$profile", profileId); linked.Parameters.AddWithValue("$exclude", (object?)excludeDeviceId ?? DBNull.Value);
+        if (linked.ExecuteScalar() is string otherDevice)
+            throw new InvalidOperationException($"Terminal profile is already linked to device {otherDevice}.");
+    }
+
+    private static void EnsureDeviceIdAvailable(SqliteConnection db, SqliteTransaction transaction, string deviceId)
+    {
+        using var command = db.CreateCommand(); command.Transaction = transaction; command.CommandText = "SELECT 1 FROM device_inventory WHERE id=$id";
+        command.Parameters.AddWithValue("$id", deviceId);
+        if (command.ExecuteScalar() is not null) throw new InvalidOperationException($"Device id {deviceId} is already assigned.");
     }
 
     private static void EnsureUniqueManagementIp(SqliteConnection db, SqliteTransaction transaction, string siteId, string ip, string? excludeId)
@@ -476,15 +529,6 @@ internal sealed partial class Catalog
         command.CommandText = "SELECT id FROM device_inventory WHERE site_id=$site AND management_ip=$ip AND ($exclude IS NULL OR id<>$exclude) LIMIT 1";
         command.Parameters.AddWithValue("$site", siteId); command.Parameters.AddWithValue("$ip", ip); command.Parameters.AddWithValue("$exclude", (object?)excludeId ?? DBNull.Value);
         if (command.ExecuteScalar() is string conflict) throw new InvalidOperationException($"Management IP is already assigned to device {conflict}.");
-    }
-
-    private static void SyncTerminalProfileEnabled(SqliteConnection db, SqliteTransaction transaction, string? profileId, bool enabled)
-    {
-        if (profileId is null) return;
-        using var profile = db.CreateCommand(); profile.Transaction = transaction; profile.CommandText = "UPDATE h3c_device_profiles SET enabled=$enabled,updated_ms=$now WHERE id=$id";
-        profile.Parameters.AddWithValue("$enabled", enabled ? 1 : 0); profile.Parameters.AddWithValue("$now", UtcNowMs()); profile.Parameters.AddWithValue("$id", profileId); profile.ExecuteNonQuery();
-        using var source = db.CreateCommand(); source.Transaction = transaction; source.CommandText = "UPDATE collection_sources SET enabled=$enabled WHERE id=(SELECT source_id FROM h3c_device_profiles WHERE id=$id)";
-        source.Parameters.AddWithValue("$enabled", enabled ? 1 : 0); source.Parameters.AddWithValue("$id", profileId); source.ExecuteNonQuery();
     }
 
     private static void InsertDeviceCandidate(SqliteConnection db, SqliteTransaction transaction, DeviceImportCandidate candidate, long now)
@@ -503,12 +547,16 @@ internal sealed partial class Catalog
     {
         using var command = db.CreateCommand(); command.Transaction = transaction;
         command.CommandText = @"UPDATE device_inventory SET name=$name,management_ip=$ip,vendor=$vendor,model=$model,device_type=$type,
-            site_id=$site,group_id=$group,description=$description,enabled=$enabled,updated_ms=$updated,terminal_profile_id=$profile WHERE id=$id";
+            site_id=$site,group_id=$group,description=$description,enabled=$enabled,
+            updated_ms=CASE WHEN $updated<=updated_ms THEN updated_ms+1 ELSE $updated END,terminal_profile_id=$profile
+            WHERE id=$id AND updated_ms=$expectedUpdated";
         command.Parameters.AddWithValue("$id", candidate.DeviceId); command.Parameters.AddWithValue("$name", candidate.Name); command.Parameters.AddWithValue("$ip", candidate.ManagementIp);
         command.Parameters.AddWithValue("$vendor", candidate.Vendor); command.Parameters.AddWithValue("$model", candidate.Model); command.Parameters.AddWithValue("$type", candidate.DeviceType);
         command.Parameters.AddWithValue("$site", candidate.SiteId); command.Parameters.AddWithValue("$group", (object?)candidate.GroupId ?? DBNull.Value); command.Parameters.AddWithValue("$description", candidate.Description);
-        command.Parameters.AddWithValue("$enabled", candidate.Enabled ? 1 : 0); command.Parameters.AddWithValue("$updated", now); command.Parameters.AddWithValue("$profile", (object?)candidate.TerminalProfileId ?? DBNull.Value);
-        if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException("A device changed after preview; import was rolled back.");
+        command.Parameters.AddWithValue("$enabled", candidate.Enabled ? 1 : 0); command.Parameters.AddWithValue("$updated", now);
+        command.Parameters.AddWithValue("$expectedUpdated", candidate.ExpectedUpdatedMs ?? throw new InvalidOperationException("Import preview has no update version."));
+        command.Parameters.AddWithValue("$profile", (object?)candidate.TerminalProfileId ?? DBNull.Value);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("A device changed after preview; import was rolled back.");
     }
 
     private static void InsertDeviceAudit(SqliteConnection db, SqliteTransaction transaction, string actor, string action, string subjectId, object detail)
@@ -555,41 +603,86 @@ internal sealed partial class Catalog
 
     private static ParsedCsv ParseCsv(string csv)
     {
-        var rows = new List<List<string>>(); var current = new List<string>(); var cell = new StringBuilder(); var quoted = false;
+        var rows = new List<List<string>>();
+        var current = new List<string>();
+        var cell = new StringBuilder();
+        var inQuotes = false;
+        var afterQuote = false;
+        var fieldStarted = false;
+        var rowHasContent = false;
+
+        void Append(char value)
+        {
+            if (cell.Length >= MaximumDeviceImportCellCharacters)
+                throw new DeviceImportResourceLimitException($"CSV field exceeds {MaximumDeviceImportCellCharacters} characters.");
+            cell.Append(value);
+        }
+
+        void EndField()
+        {
+            current.Add(cell.ToString());
+            cell.Clear();
+            fieldStarted = false;
+            afterQuote = false;
+        }
+
+        void EndRow()
+        {
+            EndField();
+            if (rowHasContent || current.Count > 1) rows.Add(current);
+            current = new List<string>();
+            rowHasContent = false;
+        }
+
         for (var i = 0; i < csv.Length; i++)
         {
             var ch = csv[i];
-            if (quoted)
+            if (inQuotes)
             {
-                if (ch == '"' && i + 1 < csv.Length && csv[i + 1] == '"') { cell.Append('"'); i++; }
-                else if (ch == '"') quoted = false;
-                else cell.Append(ch);
+                if (ch == '"' && i + 1 < csv.Length && csv[i + 1] == '"') { Append('"'); i++; }
+                else if (ch == '"') { inQuotes = false; afterQuote = true; }
+                else { Append(ch); rowHasContent = true; }
+                continue;
             }
-            else if (ch == '"' && cell.Length == 0) quoted = true;
-            else if (ch == ',') { current.Add(cell.ToString()); cell.Clear(); }
-            else if (ch is '\r' or '\n')
+
+            if (afterQuote)
             {
-                if (ch == '\r' && i + 1 < csv.Length && csv[i + 1] == '\n') i++;
-                current.Add(cell.ToString()); cell.Clear();
-                if (current.Any(value => value.Length > 0)) rows.Add(current);
-                current = new List<string>();
+                if (ch == ',') EndField();
+                else if (ch is '\r' or '\n') { if (ch == '\r' && i + 1 < csv.Length && csv[i + 1] == '\n') i++; EndRow(); }
+                else throw new ArgumentException("CSV contains characters after a closing quote before the delimiter.");
+                continue;
             }
-            else cell.Append(ch);
+
+            if (ch == '"')
+            {
+                if (fieldStarted) throw new ArgumentException("CSV quotes must start a field or escape a quote inside a quoted field.");
+                inQuotes = true; fieldStarted = true; rowHasContent = true;
+            }
+            else if (ch == ',') { EndField(); rowHasContent = true; }
+            else if (ch is '\r' or '\n') { if (ch == '\r' && i + 1 < csv.Length && csv[i + 1] == '\n') i++; EndRow(); }
+            else { Append(ch); fieldStarted = true; rowHasContent = true; }
         }
-        if (quoted) throw new ArgumentException("CSV contains an unterminated quoted field.");
-        if (cell.Length > 0 || current.Count > 0) { current.Add(cell.ToString()); if (current.Any(value => value.Length > 0)) rows.Add(current); }
+        if (inQuotes) throw new ArgumentException("CSV contains an unterminated quoted field.");
+        if (fieldStarted || current.Count > 0 || rowHasContent) EndRow();
         if (rows.Count < 1) throw new ArgumentException("CSV must contain a header row.");
-        var headers = rows[0].Select((header, index) => (Name: header.Trim().TrimStart('\uFEFF'), Index: index)).ToArray();
+
+        var headers = rows[0].Select(header => header.Trim().TrimStart('\uFEFF')).ToArray();
+        if (headers.Any(header => header.Length == 0)) throw new ArgumentException("CSV header contains an empty column name.");
+        if (headers.GroupBy(header => header, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
+            throw new ArgumentException("CSV header contains duplicate column names.");
         var allowed = new HashSet<string>(new[] { "deviceId", "name", "managementIp", "vendor", "model", "deviceType", "siteId", "groupName", "description", "enabled", "terminalProfileId" }, StringComparer.OrdinalIgnoreCase);
-        var unknown = headers.Where(item => !allowed.Contains(item.Name)).Select(item => item.Name).Where(name => name.Length > 0).ToArray();
+        var unknown = headers.Where(header => !allowed.Contains(header)).ToArray();
         if (unknown.Length > 0) throw new ArgumentException("CSV contains unsupported columns: " + string.Join(",", unknown));
-        if (!headers.Any(header => header.Name.Equals("name", StringComparison.OrdinalIgnoreCase)) || !headers.Any(header => header.Name.Equals("managementIp", StringComparison.OrdinalIgnoreCase)))
+        if (!headers.Any(header => header.Equals("name", StringComparison.OrdinalIgnoreCase)) || !headers.Any(header => header.Equals("managementIp", StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("CSV must contain name and managementIp columns.");
+
         var result = new List<ParsedCsvRow>();
         for (var rowIndex = 1; rowIndex < rows.Count; rowIndex++)
         {
+            if (rows[rowIndex].Count != headers.Length)
+                throw new ArgumentException($"CSV row {rowIndex + 1} has {rows[rowIndex].Count} fields; expected {headers.Length}.");
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            for (var index = 0; index < headers.Length; index++) values[headers[index].Name] = index < rows[rowIndex].Count ? rows[rowIndex][index] : string.Empty;
+            for (var index = 0; index < headers.Length; index++) values.Add(headers[index], rows[rowIndex][index]);
             result.Add(new ParsedCsvRow(rowIndex + 1, values));
         }
         return new ParsedCsv(result);
@@ -602,12 +695,28 @@ internal sealed partial class Catalog
         enabled = true; return false;
     }
 
-    private sealed record ImportState(string Id, string SiteId, string ManagementIp, string? TerminalProfileId);
+    private static bool IsCsvFormulaValue(string value)
+    {
+        var trimmed = value.TrimStart();
+        if (trimmed.Length == 0) return false;
+        return trimmed[0] is '=' or '+' or '@' ||
+            (trimmed[0] == '-' && trimmed.Length > 1 && (char.IsDigit(trimmed[1]) || trimmed[1] == '='));
+    }
+
+    private void CleanupImportStateLocked(long now)
+    {
+        foreach (var expired in _deviceImportPreviews.Where(item => item.Value.ExpiresAtMs <= now).Select(item => item.Key).ToArray())
+            _deviceImportPreviews.Remove(expired);
+        foreach (var expired in _deviceImportReceipts.Where(item => item.Value.ExpiresAtMs <= now).Select(item => item.Key).ToArray())
+            _deviceImportReceipts.Remove(expired);
+    }
+
+    private sealed record ImportState(string Id, string SiteId, string ManagementIp, string? TerminalProfileId, long UpdatedMs);
     private static List<ImportState> ReadInventoryImportState(SqliteConnection db)
     {
-        using var command = db.CreateCommand(); command.CommandText = "SELECT id,site_id,management_ip,terminal_profile_id FROM device_inventory";
+        using var command = db.CreateCommand(); command.CommandText = "SELECT id,site_id,management_ip,terminal_profile_id,updated_ms FROM device_inventory";
         using var reader = command.ExecuteReader(); var result = new List<ImportState>();
-        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), NormalizeForCompare(reader.GetString(2)), reader.IsDBNull(3) ? null : reader.GetString(3)));
+        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), NormalizeForCompare(reader.GetString(2)), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4)));
         return result;
     }
 
