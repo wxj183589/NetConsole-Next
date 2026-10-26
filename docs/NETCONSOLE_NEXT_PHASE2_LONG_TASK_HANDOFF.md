@@ -9,8 +9,9 @@ Codex-Thread：`01a17424-2751-7d62-ba40-63fea5d133a9`
 - PR #27（P2B4 安全写入）仍为 Draft/open/unmerged；已审查，当前未发现 P0/P1。
 - 当前工作分支：`codex-A/next-device-management-p2b5-ui-20261027`。
 - P2B5 基于 PR #27 head `7c32804050d816836404acee93a129056bbfc64f`，未修改 main。
+- 当前提交：`078750f`（实现P2B5网络规划管理界面）。
 - P2B5 UI、v13-compatible-on-v14 read boundary、历史/操作 read endpoints 和浏览器验收脚本已完成本地实现。
-- Draft PR 与远端 CI 需要在本地 commit/push 后建立和核验；在此之前不宣称 Ready/Approved。
+- Draft PR 与远端 CI 仍需 push 后建立和核验；在此之前不宣称 Ready/Approved。
 
 ## 已完成证据
 
