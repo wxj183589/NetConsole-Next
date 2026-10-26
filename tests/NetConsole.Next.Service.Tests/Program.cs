@@ -12,6 +12,8 @@ if (args.Length > 0 && args[0] == "--ssh-wire")
     await SchedulerTests.RunSshWireAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b2-migrate")
     await P2B2MigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--p2b4-migrate")
+    await P2B4MigrationChild.RunAsync(args[1..]);
 else
     await SchedulerTests.RunAsync();
 

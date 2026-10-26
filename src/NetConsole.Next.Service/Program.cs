@@ -17,6 +17,7 @@ builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
+builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
@@ -145,6 +146,12 @@ RollingFileLoggerProvider? fileLoggerProvider = null;
 try
 {
     catalog.Initialize();
+    if (P2B4WriteFeatureGate.EnvironmentEnabled())
+    {
+        try { app.Services.GetRequiredService<P2B4WriteRepository>().RecoverInterruptedOperations(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException or P2B4WriteException)
+        { app.Logger.LogWarning(ex, "P2B4 operation recovery was skipped; the isolated write boundary remains unavailable."); }
+    }
     catalog.BeginRawRecovery();
     try { catalog.ProbeRawWritable(); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -414,6 +421,80 @@ app.MapGet("/api/system/devices/{id}/network-diff", (HttpContext context, HttpRe
     catch (P2B3SchemaUnavailableException ex) { return P2B3SchemaUnavailable(ex.Message); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
     { return P2B3SchemaUnavailable("P2B_SCHEMA_UNAVAILABLE"); }
+});
+app.MapPost("/api/system/devices/{id}/addresses", (HttpContext context, string id, P2B4AddressWriteRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Created($"/api/system/devices/{id}/addresses", repository.CreateAddress(CurrentIdentity(context).Username, id, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPut("/api/system/devices/{id}/addresses/{addressId}", (HttpContext context, string id, string addressId, P2B4AddressWriteRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.UpdateAddress(CurrentIdentity(context).Username, id, addressId, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/devices/{id}/network-memberships", (HttpContext context, string id, P2B4MembershipWriteRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Created($"/api/system/devices/{id}/network-memberships", repository.CreateMembership(CurrentIdentity(context).Username, id, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/vlan-plans", (HttpContext context, P2B4VlanPlanWriteRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Created("/api/system/vlan-plans", repository.CreateVlanPlan(CurrentIdentity(context).Username, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPut("/api/system/vlan-plans/{id}", (HttpContext context, string id, P2B4VlanPlanWriteRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.UpdateVlanPlan(CurrentIdentity(context).Username, id, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/network-reviews", (HttpContext context, P2B4ReviewRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Created("/api/system/network-reviews", repository.CreateReview(CurrentIdentity(context).Username, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/import-runs", (HttpContext context, P2B4ImportRequest request, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Created("/api/system/import-runs", repository.CreateImport(CurrentIdentity(context).Username, request)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+    catch (Exception exception) { app.Logger.LogError(exception, "P2B4 import preview failed unexpectedly."); return Results.Json(new { error = "P2B4_WRITE_FAILED", detail = "Unexpected isolated write failure." }, statusCode: 500); }
+});
+app.MapGet("/api/system/import-runs/{id}", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.GetImport(CurrentIdentity(context).Username, id)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/import-runs/{id}/dry-run", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.DryRunImport(CurrentIdentity(context).Username, id)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapPost("/api/system/import-runs/{id}/confirm", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.ConfirmImport(CurrentIdentity(context).Username, id)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+    catch (Exception exception) { app.Logger.LogError(exception, "P2B4 import confirm failed unexpectedly."); return Results.Json(new { error = "P2B4_WRITE_FAILED", detail = "Unexpected isolated write failure." }, statusCode: 500); }
+});
+app.MapPost("/api/system/import-runs/{id}/cancel", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return Results.Ok(repository.CancelImport(CurrentIdentity(context).Username, id)); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
+});
+app.MapGet("/api/system/p2b4-operations/{id}", (HttpContext context, string id, P2B4WriteRepository repository) =>
+{
+    if (P2B4WriteGuard(context, repository) is { } denied) return denied;
+    try { return repository.GetOperation(CurrentIdentity(context).Username, id) is { } operation ? Results.Ok(operation) : Results.NotFound(); }
+    catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
 });
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
@@ -798,6 +879,21 @@ static IResult? P2B3ReadGuard(HttpContext context)
         return Results.Json(new { error = "P2B_SITE_SCOPE_UNAVAILABLE", detail = "The current Auth identity has no reliable site scope for P2B3 reads." }, statusCode: StatusCodes.Status403Forbidden);
     return null;
 }
+static IResult? P2B4WriteGuard(HttpContext context, P2B4WriteRepository repository)
+{
+    var identity = CurrentIdentity(context);
+    if (!string.Equals(identity.Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase))
+        return Results.Json(new { error = "P2B4_ADMIN_WRITE_DENIED", detail = "The current Auth identity has no reliable site claims for P2B-4 writes." }, statusCode: StatusCodes.Status403Forbidden);
+    if (!P2BFeatureGate.FromEnvironment().Enabled)
+        return Results.Json(new { error = "P2B4_WRITE_UNAVAILABLE", reason = "READ_FEATURE_DISABLED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    if (!P2B4WriteFeatureGate.EnvironmentEnabled())
+        return Results.Json(new { error = "P2B4_WRITE_UNAVAILABLE", reason = "WRITE_GATE_DISABLED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    if (!repository.IsAuthorityAvailable())
+        return Results.Json(new { error = "P2B4_WRITE_UNAVAILABLE", reason = "ISOLATED_AUTHORITY_OR_V14_REQUIRED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    return null;
+}
+static IResult P2B4WriteError(P2B4WriteException exception) =>
+    Results.Json(new { error = exception.Code, detail = exception.Message, operationId = exception.OperationId }, statusCode: exception.StatusCode);
 static IResult P2B3SchemaUnavailable(string reason) =>
     Results.Json(new { error = "P2B_SCHEMA_UNAVAILABLE", reason }, statusCode: StatusCodes.Status503ServiceUnavailable);
 static IResult P2B3BadQuery(string detail) =>
