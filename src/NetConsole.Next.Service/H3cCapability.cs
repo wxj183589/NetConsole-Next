@@ -32,7 +32,11 @@ internal sealed class H3cCapabilityService
     public H3cCapabilityReading AnalyzeMockText(string output, string sourceReference, long? observedAtMs = null)
     {
         ValidateSourceReference(sourceReference);
-        return Analyze(output ?? string.Empty, sourceReference, observedAtMs ?? UtcNow());
+        var observed = observedAtMs ?? UtcNow();
+        var text = output ?? string.Empty;
+        if (Encoding.UTF8.GetByteCount(text) > MaximumInputBytes)
+            return Failure("OUTPUT_LIMIT", sourceReference, observed);
+        return Analyze(text, sourceReference, observed);
     }
 
     public H3cCapabilityReading AnalyzeMockBytes(ReadOnlySpan<byte> output, string? terminalEncoding,

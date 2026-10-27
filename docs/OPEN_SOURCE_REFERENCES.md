@@ -8,8 +8,8 @@ No source from the existing NetConsole GPL-3.0 repository was copied in this pha
 | --- | --- | --- | --- |
 | Microsoft.Data.Sqlite / Microsoft.Data.Sqlite.Core | SQLite access | 10.0.4 | MIT (NuGet package license metadata) |
 | Microsoft.Extensions.Hosting.WindowsServices | Windows SCM host adapter | 10.0.4 | MIT (NuGet package license metadata) |
-| SQLitePCLRaw core / bundle / provider | SQLite provider | 2.1.11 | Apache-2.0 (NuGet package license metadata) |
-| SQLitePCLRaw.lib.e_sqlite3 | Bundled SQLite native engine | 3.53.3 | SQLite public domain (`LICENSE.txt` in the restored NuGet package) |
+| SQLitePCLRaw core / bundle / provider | SQLite provider | 2.1.12 | Apache-2.0 (NuGet package license metadata) |
+| SQLitePCLRaw.lib.e_sqlite3 | Bundled SQLite native engine | 2.1.12 package carrying SQLite 3.53.3 | SQLite public domain (`LICENSE.txt` in the restored NuGet package) |
 | SSH.NET | H3C read-only SSH session, host-key pin and command lifecycle | 2026.0.0 | MIT (NuGet license metadata); active upstream release, but target firmware interoperability and maintenance/security update process must be reviewed for release |
 | BouncyCastle.Cryptography | SSH.NET cryptographic dependency | 2.7.0 | MIT (NuGet license metadata) |
 | System.Security.Cryptography.ProtectedData | Windows DPAPI machine-scope H3C credential vault | 10.0.4 | MIT (NuGet license metadata); Windows-only provider, Linux returns unavailable |
