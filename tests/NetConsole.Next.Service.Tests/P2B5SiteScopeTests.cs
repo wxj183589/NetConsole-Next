@@ -51,6 +51,19 @@ internal static class P2B5SiteScopeTests
             var authorized = store.Resolve(admin);
             Assert(authorized.IsAuthorized && authorized.AllowedSiteReferences.SetEquals(new[] { "site-a" }),
                 "an active exact user claim must authorize only its explicit Site");
+            InsertMembership(databasePath, adminId, "site-a", "REVOKED", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1_000,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, "direct-a", 2);
+            Assert(store.Resolve(admin).State == "DENIED",
+                "a newer REVOKED revision must not be overridden by an older ACTIVE revision from the same source");
+            InsertMembership(databasePath, adminId, "site-a", "ACTIVE", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1_000,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, "direct-a", 3);
+            Assert(store.Resolve(admin).IsAuthorized && store.Resolve(admin).AllowedSiteReferences.SetEquals(new[] { "site-a" }),
+                "a newer ACTIVE revision must become the effective revision for the same source");
+            InsertMembership(databasePath, adminId, "site-b", "ACTIVE", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1_000,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, "group-b", 1);
+            var multiSource = store.Resolve(admin);
+            Assert(multiSource.IsAuthorized && multiSource.AllowedSiteReferences.SetEquals(new[] { "site-a", "site-b" }),
+                "independent active sources must retain their own Site grants");
             using (var connection = Open(databasePath))
             using (var update = connection.CreateCommand())
             {
@@ -62,7 +75,7 @@ internal static class P2B5SiteScopeTests
             Assert(store.Resolve(admin).State == "DENIED", "expired Site claims must not authorize a user");
             InsertMembership(databasePath, adminId, "site-a", "CONFLICT", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1_000,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, "conflicting-source", 2);
-            Assert(store.Resolve(admin).State == "CONFLICT", "active conflicting Site claims must fail closed");
+            Assert(store.Resolve(admin).State == "CONFLICT", "an explicit conflict claim at the effective revision must fail closed");
             Assert(store.Resolve(new WebUserIdentity("root", "superadmin", "SUPERADMIN", "isolated-session")).IsGlobal,
                 "SUPERADMIN must retain the explicit global identity contract");
             Console.WriteLine("PASS: P2B5 Site Scope migration, stable web user subject, active/expired/conflict claims and SUPERADMIN global scope");

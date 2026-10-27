@@ -52,24 +52,59 @@ internal sealed class P2B5SiteScopeStore
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT site_reference,claim_state
+                SELECT site_reference,claim_state,source_kind,source_reference,revision,valid_from_ms,valid_to_ms,id
                 FROM web_user_site_memberships
                 WHERE user_id=$user AND lifecycle='ACTIVE'
-                  AND (valid_from_ms IS NULL OR valid_from_ms<=$now)
-                  AND (valid_to_ms IS NULL OR valid_to_ms>$now)
-                ORDER BY site_reference,revision DESC,id DESC
+                ORDER BY site_reference,source_kind,source_reference,revision DESC,id DESC
                 """;
             command.Parameters.AddWithValue("$user", identity.UserId);
-            command.Parameters.AddWithValue("$now", now);
-            var allowed = new HashSet<string>(StringComparer.Ordinal);
-            var conflict = false;
+            var claims = new List<SiteMembershipClaim>();
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                var site = reader.GetString(0).Trim();
-                var state = reader.GetString(1);
-                if (string.Equals(state, "CONFLICT", StringComparison.Ordinal)) conflict = true;
-                else if (string.Equals(state, "ACTIVE", StringComparison.Ordinal)) allowed.Add(site);
+                claims.Add(new SiteMembershipClaim(
+                    reader.GetString(0).Trim(),
+                    reader.GetString(1).Trim().ToUpperInvariant(),
+                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim(),
+                    reader.IsDBNull(3) ? string.Empty : reader.GetString(3).Trim(),
+                    reader.GetInt64(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                    reader.GetString(7)));
+            }
+
+            var allowed = new HashSet<string>(StringComparer.Ordinal);
+            var conflict = false;
+            foreach (var sourceClaims in claims.GroupBy(claim => new SiteMembershipSource(
+                         claim.SiteReference, claim.SourceKind, claim.SourceReference)))
+            {
+                if (sourceClaims.Key.SiteReference.Length == 0 ||
+                    sourceClaims.Key.SourceKind.Length == 0 ||
+                    sourceClaims.Key.SourceReference.Length == 0)
+                {
+                    conflict = true;
+                    continue;
+                }
+
+                // Revision is resolved before validity and claim state. A newer REVOKED
+                // revision therefore cannot be resurrected by an older ACTIVE row.
+                var effectiveRevision = sourceClaims.Max(claim => claim.Revision);
+                var effectiveClaims = sourceClaims.Where(claim => claim.Revision == effectiveRevision).ToArray();
+                var states = effectiveClaims.Select(claim => claim.State).Distinct(StringComparer.Ordinal).ToArray();
+                if (states.Length != 1 || states[0] is not ("ACTIVE" or "REVOKED" or "CONFLICT"))
+                {
+                    conflict = true;
+                    continue;
+                }
+
+                if (states[0] == "CONFLICT")
+                {
+                    conflict = true;
+                    continue;
+                }
+
+                if (states[0] == "ACTIVE" && effectiveClaims.Any(claim => claim.IsValidAt(now)))
+                    allowed.Add(sourceClaims.Key.SiteReference);
             }
 
             if (conflict)
@@ -128,6 +163,23 @@ internal sealed class P2B5SiteScopeStore
         command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='web_user_site_memberships'";
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 1;
     }
+
+    private sealed record SiteMembershipClaim(
+        string SiteReference,
+        string State,
+        string SourceKind,
+        string SourceReference,
+        long Revision,
+        long? ValidFromMs,
+        long? ValidToMs,
+        string Id)
+    {
+        public bool IsValidAt(long now) =>
+            (!ValidFromMs.HasValue || ValidFromMs.Value <= now) &&
+            (!ValidToMs.HasValue || ValidToMs.Value > now);
+    }
+
+    private sealed record SiteMembershipSource(string SiteReference, string SourceKind, string SourceReference);
 }
 
 internal static class P2B5SiteScopeSql
