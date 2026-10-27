@@ -20,6 +20,7 @@ builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
+builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
@@ -524,6 +525,28 @@ app.MapGet("/api/system/vlan-plans/{id}/history", (HttpContext context, string i
     try { return Results.Ok(repository.ReadVlanHistory(CurrentIdentity(context).Username, id)); }
     catch (P2B4WriteException exception) { return P2B4WriteError(exception); }
 });
+app.MapPost("/api/system/network-planning/exports", (HttpContext context, P2B5ExportRequest request, P2B5ExportService exports) =>
+{
+    if (P2B5ExportGuard(context, exports) is { } denied) return denied;
+    try { var status = exports.Create(CurrentIdentity(context), request); return Results.Created($"/api/system/network-planning/exports/{status.Id}", status); }
+    catch (P2B5ExportException exception) { return P2B5ExportError(exception); }
+});
+app.MapGet("/api/system/network-planning/exports/{id}", (HttpContext context, string id, P2B5ExportService exports) =>
+{
+    if (P2B5ExportGuard(context, exports) is { } denied) return denied;
+    try { return exports.Get(CurrentIdentity(context), id) is { } status ? Results.Ok(status) : Results.NotFound(); }
+    catch (P2B5ExportException exception) { return P2B5ExportError(exception); }
+});
+app.MapGet("/api/system/network-planning/exports/{id}/download", (HttpContext context, string id, P2B5ExportService exports) =>
+{
+    if (P2B5ExportGuard(context, exports) is { } denied) return denied;
+    try
+    {
+        var download = exports.OpenDownload(CurrentIdentity(context), id);
+        return download is null ? Results.NotFound() : Results.File(download.Stream, download.ContentType, download.Name);
+    }
+    catch (P2B5ExportException exception) { return P2B5ExportError(exception); }
+});
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
@@ -932,6 +955,19 @@ static IResult? P2B4WriteGuard(HttpContext context, P2B4WriteRepository reposito
         return Results.Json(new { error = "P2B4_WRITE_UNAVAILABLE", reason = "ISOLATED_AUTHORITY_OR_V14_REQUIRED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     return null;
 }
+static IResult? P2B5ExportGuard(HttpContext context, P2B5ExportService exports)
+{
+    var identity = CurrentIdentity(context);
+    if (!string.Equals(identity.Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase))
+        return Results.Json(new { error = "P2B5_EXPORT_SCOPE_DENIED", detail = "Local export requires an explicit isolated SUPERADMIN export scope." }, statusCode: StatusCodes.Status403Forbidden);
+    if (!P2BFeatureGate.FromEnvironment().Enabled || !P2B4WriteFeatureGate.EnvironmentEnabled())
+        return Results.Json(new { error = "P2B5_EXPORT_UNAVAILABLE", reason = "ISOLATED_EXPORT_GATE_DISABLED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    if (!exports.IsAuthorityAvailable())
+        return Results.Json(new { error = "P2B5_EXPORT_UNAVAILABLE", reason = "ISOLATED_V14_OR_EXPORT_SCHEMA_REQUIRED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    return null;
+}
+static IResult P2B5ExportError(P2B5ExportException exception) =>
+    Results.Json(new { error = exception.Code, detail = exception.Message }, statusCode: exception.StatusCode);
 static IResult P2B4WriteError(P2B4WriteException exception) =>
     Results.Json(new { error = exception.Code, detail = exception.Message, operationId = exception.OperationId }, statusCode: exception.StatusCode);
 static IResult P2B3SchemaUnavailable(string reason) =>

@@ -46,8 +46,8 @@ python tests/p2b5_network_planning_browser_e2e.py
 | P2B5 UI / Network Planning | `IMPLEMENTED_AND_VERIFIED` | browser E2E、isolated service E2E、Vue typecheck/build |
 | Site Scope membership / claims / auth | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_SITE_SCOPE_RUNTIME.md`、isolated .NET + HTTP E2E |
 | H3C V5/V7 mock capability | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_H3C_CAPABILITY_RUNTIME.md`、full .NET tests |
-| Export runtime | `DOCS_ONLY` | PR #32 boundary document |
+| Export runtime | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_EXPORT_RUNTIME.md`、isolated v14 HTTP E2E |
 | Rail Reference runtime | `DOCS_ONLY` | PR #33 boundary document |
 | Final Phase 2 gate | `DOCS_ONLY` | PR #34 gate plan |
 
-下一步状态：提交并 push H3C mock capability Draft PR，等待并核验 Windows/Ubuntu CI，更新 Issue #28；随后从该 head 继续 Export runtime、Rail Reference runtime 和最终 regression gate。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read 通过而自动开放。
+下一步状态：提交并 push Export runtime Draft PR，等待并核验 Windows/Ubuntu CI，更新 Issue #28；随后从该 head 继续 Rail Reference runtime 和最终 regression gate。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read 通过而自动开放。
