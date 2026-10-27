@@ -14,6 +14,8 @@ else if (args.Length > 0 && args[0] == "--p2b2-migrate")
     await P2B2MigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b4-migrate")
     await P2B4MigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--p2b5-site-scope-migrate")
+    await P2B5SiteScopeMigrationChild.RunAsync(args[1..]);
 else
     await SchedulerTests.RunAsync();
 
@@ -136,6 +138,7 @@ internal static class SchedulerTests
         await VerifiesDeviceManagementPhase2A();
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
+        P2B5SiteScopeTests.Run();
         P2B3DiffContractTests.Run();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();

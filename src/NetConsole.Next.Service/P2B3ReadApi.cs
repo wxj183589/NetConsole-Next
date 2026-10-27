@@ -225,20 +225,26 @@ internal sealed class P2B3ReadRepository
     }
 
     public P2B3ReadPage<P2B3AddressRead> ReadAddresses(string deviceId, P2B3PageOptions page,
-        string? domainId, string? sourceKind, string? addressFamily, string? lifecycle)
+        string? domainId, string? sourceKind, string? addressFamily, string? lifecycle,
+        P2B5SiteScopeDecision scope)
     {
         using var connection = OpenV13();
         var device = RequiredId(deviceId, "device id");
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForDomainId("a.network_domain_id", scope, scopeParameters, "address_scope_site_");
         var filters = "a.device_id=$device" +
                       " AND ($domain IS NULL OR a.network_domain_id=$domain)" +
                       " AND ($source IS NULL OR a.source_kind=$source)" +
                       " AND ($family IS NULL OR a.address_family=$family)" +
-                      " AND ($lifecycle IS NULL OR a.lifecycle=$lifecycle)";
+                      " AND ($lifecycle IS NULL OR a.lifecycle=$lifecycle)" +
+                      $" AND {scopeFilter}";
         var cursorFingerprint = CursorFingerprint("addresses", device, domainId, sourceKind, addressFamily, lifecycle);
         var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
-        var total = Count(connection, $"SELECT COUNT(*) FROM device_addresses a WHERE {filters}",
+        var totalParameters = new (string Name, object? Value)[] {
             ("$device", device), ("$domain", NullIfBlank(domainId)), ("$source", NullIfBlank(sourceKind)),
-            ("$family", NullIfBlank(addressFamily)), ("$lifecycle", NullIfBlank(lifecycle)));
+            ("$family", NullIfBlank(addressFamily)), ("$lifecycle", NullIfBlank(lifecycle))
+        }.Concat(scopeParameters).ToArray();
+        var total = Count(connection, $"SELECT COUNT(*) FROM device_addresses a WHERE {filters}", totalParameters);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             WITH projections AS (
@@ -274,6 +280,7 @@ internal sealed class P2B3ReadRepository
         AddParameters(command, ("$device", device), ("$domain", NullIfBlank(domainId)),
             ("$source", NullIfBlank(sourceKind)), ("$family", NullIfBlank(addressFamily)),
             ("$lifecycle", NullIfBlank(lifecycle)), ("$cursor", cursor), ("$take", page.Limit + 1));
+        AddParameters(command, scopeParameters.ToArray());
         var rows = new List<(string Id, P2B3AddressRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -291,18 +298,23 @@ internal sealed class P2B3ReadRepository
     }
 
     public P2B3ReadPage<P2B3MembershipRead> ReadMemberships(string deviceId, P2B3PageOptions page,
-        string? siteId, string? domainId, string? lifecycle)
+        string? siteId, string? domainId, string? lifecycle, P2B5SiteScopeDecision scope)
     {
         using var connection = OpenV13();
         var device = RequiredId(deviceId, "device id");
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForDomainId("m.network_domain_id", scope, scopeParameters, "membership_scope_site_");
         var filters = "m.device_id=$device" +
                       " AND ($domain IS NULL OR m.network_domain_id=$domain)" +
                       " AND ($lifecycle IS NULL OR m.lifecycle=$lifecycle)" +
-                      " AND ($site IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=m.network_domain_id AND s.scope_kind='SITE' AND s.scope_reference=$site))";
+                      " AND ($site IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=m.network_domain_id AND s.scope_kind='SITE' AND s.scope_reference=$site))" +
+                      $" AND {scopeFilter}";
         var cursorFingerprint = CursorFingerprint("memberships", device, siteId, domainId, lifecycle);
         var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
-        var total = Count(connection, $"SELECT COUNT(*) FROM device_domain_memberships m WHERE {filters}",
-            ("$device", device), ("$domain", NullIfBlank(domainId)), ("$lifecycle", NullIfBlank(lifecycle)), ("$site", NullIfBlank(siteId)));
+        var totalParameters = new (string Name, object? Value)[] {
+            ("$device", device), ("$domain", NullIfBlank(domainId)), ("$lifecycle", NullIfBlank(lifecycle)), ("$site", NullIfBlank(siteId))
+        }.Concat(scopeParameters).ToArray();
+        var total = Count(connection, $"SELECT COUNT(*) FROM device_domain_memberships m WHERE {filters}", totalParameters);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT m.id,m.device_id,m.network_domain_id,d.name,d.domain_kind,m.membership_role,
@@ -314,6 +326,7 @@ internal sealed class P2B3ReadRepository
         AddParameters(command, ("$device", device), ("$domain", NullIfBlank(domainId)),
             ("$lifecycle", NullIfBlank(lifecycle)), ("$site", NullIfBlank(siteId)),
             ("$cursor", cursor), ("$take", page.Limit + 1));
+        AddParameters(command, scopeParameters.ToArray());
         var rows = new List<(string Id, P2B3MembershipRead Value)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -331,9 +344,12 @@ internal sealed class P2B3ReadRepository
     }
 
     public P2B3ReadPage<P2B3DomainRead> ReadDomains(P2B3PageOptions page, string? siteId, string? stationId,
-        string? lineId, string? sectionId, string? domainKind, string? scopeResolution, string? lifecycle, string? search)
+        string? lineId, string? sectionId, string? domainKind, string? scopeResolution, string? lifecycle, string? search,
+        P2B5SiteScopeDecision scope)
     {
         using var connection = OpenV13();
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForDomain("d", scope, scopeParameters, "domain_scope_site_");
         var filters = "($site IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=d.id AND s.scope_kind='SITE' AND s.scope_reference=$site))" +
                       " AND ($station IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=d.id AND s.scope_kind='STATION' AND s.scope_reference=$station))" +
                       " AND ($line IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=d.id AND s.scope_kind='LINE' AND s.scope_reference=$line))" +
@@ -341,11 +357,12 @@ internal sealed class P2B3ReadRepository
                       " AND ($kind IS NULL OR d.domain_kind=$kind)" +
                       " AND ($resolution IS NULL OR d.scope_resolution=$resolution)" +
                       " AND ($lifecycle IS NULL OR d.lifecycle=$lifecycle)" +
-                      " AND ($search IS NULL OR d.id LIKE $search OR d.name LIKE $search)";
+                      " AND ($search IS NULL OR d.id LIKE $search OR d.name LIKE $search)" +
+                      $" AND {scopeFilter}";
         var cursorFingerprint = CursorFingerprint("domains", siteId, stationId, lineId, sectionId, domainKind, scopeResolution, lifecycle, search);
         var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
         var parameters = DomainParameters(siteId, stationId, lineId, sectionId, domainKind, scopeResolution, lifecycle, search);
-        var total = Count(connection, $"SELECT COUNT(*) FROM network_domains d WHERE {filters}", parameters);
+        var total = Count(connection, $"SELECT COUNT(*) FROM network_domains d WHERE {filters}", parameters.Concat(scopeParameters).ToArray());
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT d.id,d.name,d.domain_kind,d.parent_domain_id,d.vrf_name,d.source_kind,d.source_reference,
@@ -355,6 +372,7 @@ internal sealed class P2B3ReadRepository
             ORDER BY d.id ASC LIMIT $take
             """;
         AddParameters(command, parameters);
+        AddParameters(command, scopeParameters.ToArray());
         AddParameters(command, ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3DomainRead Value)>();
         using var reader = command.ExecuteReader();
@@ -372,16 +390,20 @@ internal sealed class P2B3ReadRepository
     }
 
     public P2B3ReadPage<P2B3VlanPlanRead> ReadVlanPlans(P2B3PageOptions page, string? domainId, string? siteId,
-        string? sourceKind, string? scopeResolution, string? lifecycle, int? vlanId, long? asOfMs)
+        string? sourceKind, string? scopeResolution, string? lifecycle, int? vlanId, long? asOfMs,
+        P2B5SiteScopeDecision scope)
     {
         using var connection = OpenV13();
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForDomainId("p.network_domain_id", scope, scopeParameters, "vlan_scope_site_");
         var filters = "($domain IS NULL OR p.network_domain_id=$domain)" +
                       " AND ($site IS NULL OR EXISTS (SELECT 1 FROM network_domain_scopes s WHERE s.network_domain_id=p.network_domain_id AND s.scope_kind='SITE' AND s.scope_reference=$site))" +
                       " AND ($source IS NULL OR p.source_kind=$source)" +
                       " AND ($resolution IS NULL OR p.scope_resolution=$resolution)" +
                       " AND ($lifecycle IS NULL OR p.lifecycle=$lifecycle)" +
                       " AND ($vlan IS NULL OR p.vlan_id=$vlan)" +
-                      " AND ($asOf IS NULL OR (p.valid_from_ms IS NULL OR p.valid_from_ms<=$asOf) AND (p.valid_to_ms IS NULL OR p.valid_to_ms>$asOf))";
+                      " AND ($asOf IS NULL OR (p.valid_from_ms IS NULL OR p.valid_from_ms<=$asOf) AND (p.valid_to_ms IS NULL OR p.valid_to_ms>$asOf))" +
+                      $" AND {scopeFilter}";
         var cursorFingerprint = CursorFingerprint("vlan-plans", domainId, siteId, sourceKind, scopeResolution, lifecycle,
             vlanId?.ToString(System.Globalization.CultureInfo.InvariantCulture), asOfMs?.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var cursor = P2B3PageOptions.CursorId(page.Cursor, cursorFingerprint);
@@ -390,7 +412,7 @@ internal sealed class P2B3ReadRepository
             ("$domain", NullIfBlank(domainId)), ("$site", NullIfBlank(siteId)), ("$source", NullIfBlank(sourceKind)),
             ("$resolution", NullIfBlank(scopeResolution)), ("$lifecycle", NullIfBlank(lifecycle)), ("$vlan", vlanId), ("$asOf", asOfMs)
         };
-        var total = Count(connection, $"SELECT COUNT(*) FROM vlan_plans p WHERE {filters}", parameters);
+        var total = Count(connection, $"SELECT COUNT(*) FROM vlan_plans p WHERE {filters}", parameters.Concat(scopeParameters).ToArray());
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT p.id,p.network_domain_id,p.vlan_id,p.name,p.purpose,p.tagging_mode,p.native_vlan_id,p.pvid,
@@ -411,6 +433,7 @@ internal sealed class P2B3ReadRepository
             ORDER BY p.id ASC LIMIT $take
             """;
         AddParameters(command, parameters);
+        AddParameters(command, scopeParameters.ToArray());
         AddParameters(command, ("$cursor", cursor), ("$take", page.Limit + 1));
         var rows = new List<(string Id, P2B3VlanPlanRead Value)>();
         using var reader = command.ExecuteReader();
@@ -428,13 +451,17 @@ internal sealed class P2B3ReadRepository
         return ToPage(rows, page, total, cursorFingerprint);
     }
 
-    public P2B3NetworkDiffRead ReadNetworkDiff(string deviceId, string? domainId, string? resolutionState, long? asOfMs)
+    public P2B3NetworkDiffRead ReadNetworkDiff(string deviceId, string? domainId, string? resolutionState, long? asOfMs,
+        P2B5SiteScopeDecision scope)
     {
         using var connection = OpenV13();
         var device = RequiredId(deviceId, "device id");
+        var addressScopeParameters = new List<(string Name, object? Value)>();
+        var addressScopeFilter = P2B5SiteScopeSql.ForDomainId("a.network_domain_id", scope, addressScopeParameters, "diff_address_scope_site_");
         var addressFilters = "a.device_id=$device AND ($domain IS NULL OR a.network_domain_id=$domain)" +
             " AND ($resolution IS NULL OR a.domain_resolution_state=$resolution)" +
-            " AND ($asOf IS NULL OR (a.valid_from_ms IS NULL OR a.valid_from_ms<=$asOf) AND (a.valid_to_ms IS NULL OR a.valid_to_ms>$asOf))";
+            " AND ($asOf IS NULL OR (a.valid_from_ms IS NULL OR a.valid_from_ms<=$asOf) AND (a.valid_to_ms IS NULL OR a.valid_to_ms>$asOf))" +
+            $" AND {addressScopeFilter}";
         using var address = connection.CreateCommand();
         address.CommandText = $"""
             WITH ranked AS (
@@ -452,11 +479,15 @@ internal sealed class P2B3ReadRepository
             """;
         AddParameters(address, ("$device", device), ("$domain", NullIfBlank(domainId)), ("$resolution", NullIfBlank(resolutionState)),
             ("$asOf", asOfMs), ("$groupTake", P2B3PageOptions.MaximumLimit));
+        AddParameters(address, addressScopeParameters.ToArray());
         var addressFacts = ReadDiffFacts(address);
 
         using var vlan = connection.CreateCommand();
+        var vlanScopeParameters = new List<(string Name, object? Value)>();
+        var vlanScopeFilter = P2B5SiteScopeSql.ForDomainId("v.network_domain_id", scope, vlanScopeParameters, "diff_vlan_scope_site_");
         var vlanFilters = "v.device_id=$device AND ($domain IS NULL OR v.network_domain_id=$domain)" +
-            " AND ($asOf IS NULL OR (v.valid_from_ms IS NULL OR v.valid_from_ms<=$asOf) AND (v.valid_to_ms IS NULL OR v.valid_to_ms>$asOf))";
+            " AND ($asOf IS NULL OR (v.valid_from_ms IS NULL OR v.valid_from_ms<=$asOf) AND (v.valid_to_ms IS NULL OR v.valid_to_ms>$asOf))" +
+            $" AND {vlanScopeFilter}";
         vlan.CommandText = $"""
             WITH ranked AS (
                 SELECT v.id,v.source_kind,v.source_reference,v.revision,v.network_domain_id,v.interface_reference,
@@ -476,6 +507,7 @@ internal sealed class P2B3ReadRepository
             """;
         AddParameters(vlan, ("$device", device), ("$domain", NullIfBlank(domainId)), ("$asOf", asOfMs),
             ("$groupTake", P2B3PageOptions.MaximumLimit));
+        AddParameters(vlan, vlanScopeParameters.ToArray());
         var vlanFacts = ReadDiffFacts(vlan);
         return new(device, asOfMs, addressFacts.Truncated || vlanFacts.Truncated,
             BuildDiffItems(addressFacts.Facts), BuildDiffItems(vlanFacts.Facts));
