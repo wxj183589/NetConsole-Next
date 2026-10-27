@@ -21,6 +21,7 @@ builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<P2B5ExportService>();
+builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
@@ -547,6 +548,30 @@ app.MapGet("/api/system/network-planning/exports/{id}/download", (HttpContext co
     }
     catch (P2B5ExportException exception) { return P2B5ExportError(exception); }
 });
+app.MapGet("/api/system/rail-reference/entities", (HttpContext context, HttpRequest request, P2B5RailReferenceService rail) =>
+{
+    if (P2B5RailReferenceGuard(context, rail) is { } denied) return denied;
+    try { return Results.Ok(rail.ListEntities(QueryValue(request, "scope"), QueryValue(request, "type"))); }
+    catch (P2B5RailReferenceException exception) { return P2B5RailReferenceError(exception); }
+});
+app.MapPost("/api/system/rail-reference/imports", (HttpContext context, P2B5RailReferenceImportRequest request, P2B5RailReferenceService rail) =>
+{
+    if (P2B5RailReferenceGuard(context, rail) is { } denied) return denied;
+    try { var status = rail.Preview(CurrentIdentity(context), request); return Results.Created($"/api/system/rail-reference/imports/{status.Id}", status); }
+    catch (P2B5RailReferenceException exception) { return P2B5RailReferenceError(exception); }
+});
+app.MapGet("/api/system/rail-reference/imports/{id}", (HttpContext context, string id, P2B5RailReferenceService rail) =>
+{
+    if (P2B5RailReferenceGuard(context, rail) is { } denied) return denied;
+    try { return rail.Get(CurrentIdentity(context), id) is { } status ? Results.Ok(status) : Results.NotFound(); }
+    catch (P2B5RailReferenceException exception) { return P2B5RailReferenceError(exception); }
+});
+app.MapPost("/api/system/rail-reference/imports/{id}/confirm", (HttpContext context, string id, P2B5RailReferenceService rail) =>
+{
+    if (P2B5RailReferenceGuard(context, rail) is { } denied) return denied;
+    try { return Results.Ok(rail.Confirm(CurrentIdentity(context), id)); }
+    catch (P2B5RailReferenceException exception) { return P2B5RailReferenceError(exception); }
+});
 app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
     Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
@@ -967,6 +992,18 @@ static IResult? P2B5ExportGuard(HttpContext context, P2B5ExportService exports)
     return null;
 }
 static IResult P2B5ExportError(P2B5ExportException exception) =>
+    Results.Json(new { error = exception.Code, detail = exception.Message }, statusCode: exception.StatusCode);
+static IResult? P2B5RailReferenceGuard(HttpContext context, P2B5RailReferenceService rail)
+{
+    if (!IsSuperAdmin(context))
+        return Results.Json(new { error = "RAIL_REFERENCE_SCOPE_DENIED", detail = "Rail reference import requires an explicit isolated SUPERADMIN scope." }, statusCode: StatusCodes.Status403Forbidden);
+    if (!P2B4WriteFeatureGate.EnvironmentEnabled())
+        return Results.Json(new { error = "RAIL_REFERENCE_UNAVAILABLE", reason = "ISOLATED_RAIL_GATE_DISABLED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    if (!rail.IsAuthorityAvailable())
+        return Results.Json(new { error = "RAIL_REFERENCE_UNAVAILABLE", reason = "ISOLATED_V14_OR_RAIL_SCHEMA_REQUIRED" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    return null;
+}
+static IResult P2B5RailReferenceError(P2B5RailReferenceException exception) =>
     Results.Json(new { error = exception.Code, detail = exception.Message }, statusCode: exception.StatusCode);
 static IResult P2B4WriteError(P2B4WriteException exception) =>
     Results.Json(new { error = exception.Code, detail = exception.Message, operationId = exception.OperationId }, statusCode: exception.StatusCode);

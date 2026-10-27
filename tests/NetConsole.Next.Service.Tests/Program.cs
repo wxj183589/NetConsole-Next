@@ -18,6 +18,8 @@ else if (args.Length > 0 && args[0] == "--p2b5-site-scope-migrate")
     await P2B5SiteScopeMigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b5-export-migrate")
     await P2B5ExportMigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--p2b5-rail-reference-migrate")
+    await P2B5RailReferenceMigrationChild.RunAsync(args[1..]);
 else
     await SchedulerTests.RunAsync();
 
@@ -142,6 +144,7 @@ internal static class SchedulerTests
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
         H3cCapabilityTests.Run();
+        P2B5RailReferenceTests.Run();
         P2B3DiffContractTests.Run();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
