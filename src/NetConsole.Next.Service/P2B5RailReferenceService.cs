@@ -32,7 +32,8 @@ internal sealed record P2B5RailPreviewSummary(
     int ConflictCount,
     int DeletionCandidateCount,
     IReadOnlyList<string> Conflicts,
-    IReadOnlyList<string> UnknownReferences);
+    IReadOnlyList<string> UnknownReferences,
+    string? DeletionCandidateHash = null);
 
 internal sealed record P2B5RailReferenceImportStatus(
     string Id,
@@ -164,7 +165,10 @@ internal sealed class P2B5RailReferenceService
             // A newer source/scope revision committed by another Confirm is therefore
             // visible to this check before any entity or relation write occurs.
             var analysis = Analyze(connection, request, transaction);
-            if (analysis.ConflictCount != 0 || analysis.NewCount != status.Preview.NewCount || analysis.UpdateCount != status.Preview.UpdateCount)
+            if (analysis.ConflictCount != 0 || analysis.NewCount != status.Preview.NewCount || analysis.UpdateCount != status.Preview.UpdateCount ||
+                analysis.DeletionCandidateCount != status.Preview.DeletionCandidateCount ||
+                string.IsNullOrWhiteSpace(status.Preview.DeletionCandidateHash) ||
+                !string.Equals(analysis.DeletionCandidateHash, status.Preview.DeletionCandidateHash, StringComparison.Ordinal))
                 throw new P2B5RailReferenceException("RAIL_IMPORT_STALE_PREVIEW", "The reference authority changed after preview; create a new preview.");
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -332,7 +336,7 @@ internal sealed class P2B5RailReferenceService
             else if (request.SourceRevision == oldRevision && oldName == entity.Name) unchangedCount++;
             else updateCount++;
         }
-        var deletionCandidates = 0;
+        var deletionCandidateIds = new List<string>();
         using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
@@ -340,11 +344,22 @@ internal sealed class P2B5RailReferenceService
             Add(command, "$source", request.SourceName); Add(command, "$scope", request.ScopeReference);
             using var reader = command.ExecuteReader();
             var incoming = request.Entities!.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
-            while (reader.Read()) if (!incoming.Contains(reader.GetString(0))) deletionCandidates++;
+            while (reader.Read())
+            {
+                var entityId = reader.GetString(0);
+                if (!incoming.Contains(entityId)) deletionCandidateIds.Add(entityId);
+            }
         }
         var uniqueConflicts = conflicts.Distinct(StringComparer.Ordinal).ToArray();
         return new(newCount, updateCount, unchangedCount, uniqueConflicts.Length + unknownReferences.Count,
-            deletionCandidates, uniqueConflicts, unknownReferences.Distinct(StringComparer.Ordinal).ToArray());
+            deletionCandidateIds.Count, uniqueConflicts, unknownReferences.Distinct(StringComparer.Ordinal).ToArray(),
+            ComputeDeletionCandidateHash(deletionCandidateIds));
+    }
+
+    private static string ComputeDeletionCandidateHash(IEnumerable<string> entityIds)
+    {
+        var canonical = JsonSerializer.Serialize(entityIds.OrderBy(entityId => entityId, StringComparer.Ordinal), JsonOptions);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
     private static (long? Revision, IReadOnlySet<string> Hashes) ReadSourceAuthority(

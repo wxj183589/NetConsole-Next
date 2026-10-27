@@ -76,7 +76,23 @@ def seed_scopes(root):
     with closing(sqlite3.connect(root / "catalog.db")) as db:
         db.execute("INSERT OR IGNORE INTO sites(id,name) VALUES('local','Local Site')")
         db.execute("INSERT OR IGNORE INTO sites(id,name) VALUES('site-b','Remote Site')")
+        db.execute("INSERT OR IGNORE INTO sites(id,name) VALUES('collision|site','Delimiter Site A')")
+        db.execute("INSERT OR IGNORE INTO sites(id,name) VALUES('collision','Delimiter Site B')")
+        for domain_id, name in [("collision-domain", "Delimiter Domain A"), ("site|domain", "Delimiter Domain B")]:
+            db.execute(
+                """INSERT OR IGNORE INTO network_domains
+                   (id,name,domain_kind,parent_domain_id,vrf_name,source_kind,source_reference,lifecycle,scope_resolution,revision,created_ms,updated_ms)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (domain_id, name, "MANAGEMENT", None, "", "PLANNED", f"export-{domain_id}", "ACTIVE", "RESOLVED", 1, now, now),
+            )
         for domain_id, site in [("p2b4-domain-a", "local"), ("p2b4-domain-b", "site-b")]:
+            db.execute(
+                """INSERT OR IGNORE INTO network_domain_scopes
+                   (id,network_domain_id,scope_kind,scope_reference,resolution,source_kind,source_reference,revision,created_ms,updated_ms)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (f"export-scope-{domain_id}", domain_id, "SITE", site, "RESOLVED", "PLANNED", f"export-{domain_id}", 1, now, now),
+            )
+        for domain_id, site in [("collision-domain", "collision|site"), ("site|domain", "collision")]:
             db.execute(
                 """INSERT OR IGNORE INTO network_domain_scopes
                    (id,network_domain_id,scope_kind,scope_reference,resolution,source_kind,source_reference,revision,created_ms,updated_ms)
@@ -186,6 +202,14 @@ def main():
             status, conflict = superadmin.request("/api/system/network-planning/exports", "POST",
                 {"idempotencyKey": "csv-1", "siteId": "site-b", "format": "CSV"}, True)
             assert status == 409 and conflict["error"] == "EXPORT_IDEMPOTENCY_CONFLICT", conflict
+            delimiter_key = "delimiter-collision"
+            status, delimiter_first = superadmin.request("/api/system/network-planning/exports", "POST",
+                {"idempotencyKey": delimiter_key, "siteId": "collision|site", "domainId": "collision-domain", "format": "JSON"}, True)
+            assert status == 201, delimiter_first
+            status, delimiter_conflict = superadmin.request("/api/system/network-planning/exports", "POST",
+                {"idempotencyKey": delimiter_key, "siteId": "collision", "domainId": "site|domain", "format": "JSON"}, True)
+            assert status == 409 and delimiter_conflict["error"] == "EXPORT_IDEMPOTENCY_CONFLICT", delimiter_conflict
+            print("EXPORT_FINGERPRINT_DELIMITER_COLLISION_REJECTED=PASS")
             status, cross = superadmin.request("/api/system/network-planning/exports", "POST",
                 {"idempotencyKey": "site-b-1", "siteId": "site-b", "format": "JSON"}, True)
             assert status == 201 and cross["manifest"]["rowCount"] == 1
