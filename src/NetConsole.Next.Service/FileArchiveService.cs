@@ -113,10 +113,17 @@ internal sealed class FileArchiveService : BackgroundService
 
     public bool Cancel(string id, WebUserIdentity owner)
     {
-        if (!_jobs.TryGetValue(id, out var job) || !job.IsOwner(owner)) return false;
-        var result = job.RequestCancel();
-        if (result == CancelResult.Queued) ReleaseAdmission(job);
-        return true;
+        lock (_admissionGate)
+        {
+            if (!_jobs.TryGetValue(id, out var job) || !job.IsOwner(owner)) return false;
+            var result = job.RequestCancel();
+            if (result == CancelResult.Queued)
+            {
+                ReleaseAdmissionLocked(job, releaseInput: true);
+                job.PublishCancelled();
+            }
+            return true;
+        }
     }
 
     public ArchiveDownload? OpenDownload(string id, WebUserIdentity owner)
@@ -167,6 +174,7 @@ internal sealed class FileArchiveService : BackgroundService
     {
         var partPath = Path.Combine(TempRoot, job.Id + ".zip.part");
         var finalPath = Path.Combine(TempRoot, job.Id + ".zip");
+        var completion = ArchiveCompletion.None;
         try
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, job.CancellationToken);
@@ -202,29 +210,60 @@ internal sealed class FileArchiveService : BackgroundService
             job.ThrowIfCancelled(token);
             EnsureAvailableDisk();
             File.Move(partPath, finalPath);
-            if (!job.TryComplete(finalPath, $"netconsole-next-{job.Id}.zip"))
+            partPath = string.Empty;
+            if (job.TryPrepareCompletion(finalPath, $"netconsole-next-{job.Id}.zip"))
+            {
+                completion = ArchiveCompletion.Completed;
+            }
+            else
             {
                 TryDelete(finalPath);
-                return;
+                completion = ArchiveCompletion.Cancelled;
             }
-            partPath = string.Empty;
         }
         catch (OperationCanceledException) when (job.CancellationToken.IsCancellationRequested || stoppingToken.IsCancellationRequested)
         {
-            job.CancelFromWorker();
+            completion = ArchiveCompletion.Cancelled;
         }
         catch (ArchiveRejectedException ex)
         {
-            job.Fail(ex.Code, ex.Message);
+            completion = ArchiveCompletion.Failed(ex.Code, ex.Message);
         }
         catch (Exception)
         {
-            job.Fail("ARCHIVE_FAILED", "Archive could not be completed safely.");
+            completion = ArchiveCompletion.Failed("ARCHIVE_FAILED", "Archive could not be completed safely.");
         }
         finally
         {
             TryDelete(partPath);
-            ReleaseAdmission(job);
+            lock (_admissionGate)
+            {
+                switch (completion.Kind)
+                {
+                    case ArchiveCompletionKind.Completed:
+                        // Keep the completed job's input reservation until retention cleanup, but
+                        // release the active/user slot before making COMPLETED observable.
+                        ReleaseAdmissionLocked(job, releaseInput: false);
+                        if (!job.PublishCompleted())
+                        {
+                            TryDelete(job.OutputPath);
+                            job.PublishCancelled();
+                        }
+                        break;
+                    case ArchiveCompletionKind.Cancelled:
+                        ReleaseAdmissionLocked(job, releaseInput: true);
+                        job.PublishCancelled();
+                        break;
+                    case ArchiveCompletionKind.Failed:
+                        ReleaseAdmissionLocked(job, releaseInput: true);
+                        job.PublishFailed(completion.ErrorCode!, completion.Error!);
+                        break;
+                    default:
+                        ReleaseAdmissionLocked(job, releaseInput: true);
+                        job.PublishFailed("ARCHIVE_FAILED", "Archive could not be completed safely.");
+                        break;
+                }
+            }
         }
     }
 
@@ -302,19 +341,21 @@ internal sealed class FileArchiveService : BackgroundService
 
     private void ReleaseAdmission(ArchiveJob job)
     {
-        lock (_admissionGate)
+        lock (_admissionGate) ReleaseAdmissionLocked(job, releaseInput: true);
+    }
+
+    private void ReleaseAdmissionLocked(ArchiveJob job, bool releaseInput)
+    {
+        var reservation = job.Reservation;
+        if (!reservation.ActiveReleased)
         {
-            var reservation = job.Reservation;
-            if (!reservation.ActiveReleased)
-            {
-                reservation.ActiveReleased = true;
-                if (reservation.Running) _runningJobs = Math.Max(0, _runningJobs - 1);
-                else if (reservation.Enqueued) _queuedJobs = Math.Max(0, _queuedJobs - 1);
-                _activeJobs = Math.Max(0, _activeJobs - 1);
-                ReleaseUserSlotLocked(reservation.UserId);
-            }
-            if (job.State != "COMPLETED") ReleaseInputLocked(reservation);
+            reservation.ActiveReleased = true;
+            if (reservation.Running) _runningJobs = Math.Max(0, _runningJobs - 1);
+            else if (reservation.Enqueued) _queuedJobs = Math.Max(0, _queuedJobs - 1);
+            _activeJobs = Math.Max(0, _activeJobs - 1);
+            ReleaseUserSlotLocked(reservation.UserId);
         }
+        if (releaseInput) ReleaseInputLocked(reservation);
     }
 
     private void ReleaseReservationLocked(AdmissionReservation reservation)
@@ -346,7 +387,14 @@ internal sealed class FileArchiveService : BackgroundService
     {
         foreach (var job in _jobs.Values.ToArray())
         {
-            if (job.RequestCancel() == CancelResult.Queued) ReleaseAdmission(job);
+            lock (_admissionGate)
+            {
+                if (job.RequestCancel() == CancelResult.Queued)
+                {
+                    ReleaseAdmissionLocked(job, releaseInput: true);
+                    job.PublishCancelled();
+                }
+            }
         }
     }
 
@@ -452,6 +500,16 @@ internal sealed class FileArchiveService : BackgroundService
 
     private enum CancelResult { Queued, Running, AlreadyTerminal }
 
+    private enum ArchiveCompletionKind { None, Completed, Cancelled, Failed }
+
+    private sealed record ArchiveCompletion(ArchiveCompletionKind Kind, string? ErrorCode = null, string? Error = null)
+    {
+        public static ArchiveCompletion None { get; } = new(ArchiveCompletionKind.None);
+        public static ArchiveCompletion Completed { get; } = new(ArchiveCompletionKind.Completed);
+        public static ArchiveCompletion Cancelled { get; } = new(ArchiveCompletionKind.Cancelled);
+        public static ArchiveCompletion Failed(string code, string error) => new(ArchiveCompletionKind.Failed, code, error);
+    }
+
     private sealed class ArchiveJob
     {
         private readonly object _gate = new();
@@ -506,15 +564,25 @@ internal sealed class FileArchiveService : BackgroundService
         public bool TryStart() { lock (_gate) { if (_state != "QUEUED") return false; _state = "RUNNING"; return true; } }
         public void SetCurrent(string value) { lock (_gate) _current = value; }
         public void Advance(long bytes) { lock (_gate) { _processed++; _bytes += bytes; } }
-        public bool TryComplete(string output, string name)
+        public bool TryPrepareCompletion(string output, string name)
         {
             lock (_gate)
             {
-                if (_state != "RUNNING") return false;
-                OutputPath = output; DownloadName = name; _state = "COMPLETED"; _completed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); return true;
+                if (_state != "RUNNING" || _cancel.IsCancellationRequested) return false;
+                OutputPath = output; DownloadName = name; return true;
             }
         }
-        public bool Fail(string code, string error)
+
+        public bool PublishCompleted()
+        {
+            lock (_gate)
+            {
+                if (_state != "RUNNING" || _cancel.IsCancellationRequested) return false;
+                _state = "COMPLETED"; _completed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); return true;
+            }
+        }
+
+        public bool PublishFailed(string code, string error)
         {
             lock (_gate)
             {
@@ -522,6 +590,17 @@ internal sealed class FileArchiveService : BackgroundService
                 _errorCode = code; _error = error; _state = "FAILED"; _completed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); return true;
             }
         }
+
+        public bool PublishCancelled()
+        {
+            lock (_gate)
+            {
+                if (_state is "COMPLETED" or "FAILED" or "CANCELLED" or "EXPIRED") return false;
+                _state = "CANCELLED"; _errorCode = "ARCHIVE_CANCELLED"; _error = "The archive task was cancelled.";
+                _completed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); return true;
+            }
+        }
+
         public CancelResult RequestCancel()
         {
             CancelResult result;
@@ -529,12 +608,10 @@ internal sealed class FileArchiveService : BackgroundService
             {
                 if (_state is "COMPLETED" or "FAILED" or "CANCELLED" or "EXPIRED") return CancelResult.AlreadyTerminal;
                 result = _state == "QUEUED" ? CancelResult.Queued : CancelResult.Running;
-                _state = "CANCELLED"; _errorCode = "ARCHIVE_CANCELLED"; _error = "The archive task was cancelled."; _completed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             }
             _cancel.Cancel();
             return result;
         }
-        public void CancelFromWorker() { if (State == "RUNNING") RequestCancel(); }
         public void ThrowIfCancelled(CancellationToken stoppingToken) { _cancel.Token.ThrowIfCancellationRequested(); stoppingToken.ThrowIfCancellationRequested(); }
 
         public ArchiveDownload? OpenDownload()
