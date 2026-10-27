@@ -26,8 +26,8 @@ Branch：`codex-A/next-device-management-phase2-final-gate-20261027`
 
 - PR #35 Site Scope runtime：OPEN/DRAFT/UNMERGED；当前已核验 Ubuntu、Windows 和 PowerShell syntax checks 均 `SUCCESS`。
 - PR #36 H3C capability runtime：OPEN/DRAFT/UNMERGED；当前已核验 Ubuntu、Windows 和 PowerShell syntax checks 均 `SUCCESS`。
-- PR #37 Export runtime：OPEN/DRAFT/UNMERGED；Ubuntu 和 syntax checks `SUCCESS`，Windows check 当时仍 `IN_PROGRESS`，需刷新后确认。
-- PR #38 Rail Reference runtime：OPEN/DRAFT/UNMERGED；Ubuntu 和 syntax checks `SUCCESS`，Windows check 当时仍 `IN_PROGRESS`，需刷新后确认。
+- PR #37 Export runtime：OPEN/DRAFT/UNMERGED；Ubuntu、Windows 和 PowerShell syntax checks 均 `SUCCESS`。
+- PR #38 Rail Reference runtime：OPEN/DRAFT/UNMERGED；Ubuntu、Windows 和 PowerShell syntax checks 均 `SUCCESS`。
 - 没有 approval、merge 或 main 修改；因此本 gate 保持 `APPROVAL_PENDING`，不宣称可发布。
 
 ## 数据与环境边界

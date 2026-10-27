@@ -50,4 +50,4 @@ python tests/p2b5_network_planning_browser_e2e.py
 | Rail Reference runtime | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_RAIL_REFERENCE_RUNTIME.md`、isolated v14 HTTP E2E |
 | Final Phase 2 gate | `APPROVAL_PENDING` | `docs/DEVICE_P2B5_PHASE2_FINAL_GATE_RESULT.md`、完整本地回归；PR #35–#38 仍 Draft/open/unmerged |
 
-下一步状态：推送 Final Gate Draft PR，刷新 PR #37/#38 Windows CI 并等待独立审批；不合并主分支。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read、Rail reference 或 Export 通过而自动开放。
+下一步状态：Final Gate Draft PR 已推送；PR #35–#38 的 Ubuntu、Windows 和 PowerShell syntax CI 已全部 SUCCESS，继续等待独立审批；不合并主分支。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read、Rail reference 或 Export 通过而自动开放。
