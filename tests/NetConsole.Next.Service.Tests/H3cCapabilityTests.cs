@@ -42,6 +42,21 @@ internal static class H3cCapabilityTests
         Assert(decoded.Status == "CAPABILITIES_RESOLVED" && decoded.VersionFamily == "V5",
             "explicit GB18030 mock output must resolve without changing the contract");
 
+        var gbEncoding = Encoding.GetEncoding(54936);
+        var gbExpansionText = BuildEncodedText(gbEncoding, H3cCapabilityService.MaximumInputBytes - 1, "中");
+        var gbExpansionBytes = gbEncoding.GetBytes(gbExpansionText);
+        Assert(gbExpansionBytes.Length == H3cCapabilityService.MaximumInputBytes - 1 &&
+               Encoding.UTF8.GetByteCount(gbExpansionText) > H3cCapabilityService.MaximumInputBytes,
+            "GB18030 expansion fixture must stay below the raw limit while exceeding the UTF-8 limit");
+        var gbExpansionFromBytes = service.AnalyzeMockBytes(gbExpansionBytes, "GB18030", "fixture:h3c:gb18030-expansion",
+            1_800_000_000_019);
+        var gbExpansionFromText = service.AnalyzeMockText(gbExpansionText, "fixture:h3c:gb18030-expansion",
+            1_800_000_000_019);
+        Assert(gbExpansionFromBytes.Status == "OUTPUT_LIMIT" && gbExpansionFromBytes.FailureCode == "OUTPUT_LIMIT" &&
+               gbExpansionFromText.Status == gbExpansionFromBytes.Status &&
+               gbExpansionFromText.FailureCode == gbExpansionFromBytes.FailureCode,
+            "GB18030 decoded UTF-8 expansion must be rejected identically by byte and text entry points");
+
         var invalidEncoding = service.AnalyzeMockBytes(new byte[] { 0xff, 0xfe, 0xfd }, "UTF-8", "fixture:h3c:invalid-encoding");
         Assert(invalidEncoding.Status == "INVALID_ENCODING" && invalidEncoding.Capabilities.Count == 0,
             "invalid terminal encoding must return a redacted failure category");
@@ -100,6 +115,28 @@ internal static class H3cCapabilityTests
         if (remaining < 0 || fillerBytes == 0) throw new InvalidOperationException("Invalid UTF-8 test fixture size.");
 
         var builder = new StringBuilder(prefix, targetBytes);
+        while (remaining >= fillerBytes)
+        {
+            builder.Append(filler);
+            remaining -= fillerBytes;
+        }
+        while (remaining > 0)
+        {
+            builder.Append('A');
+            remaining--;
+        }
+        return builder.ToString();
+    }
+
+    private static string BuildEncodedText(Encoding encoding, int targetBytes, string filler)
+    {
+        const string prefix = "H3C Comware Software, Version 7.1.070\n";
+        var prefixBytes = encoding.GetByteCount(prefix);
+        var fillerBytes = encoding.GetByteCount(filler);
+        var remaining = targetBytes - prefixBytes;
+        if (remaining < 0 || fillerBytes == 0) throw new InvalidOperationException("Invalid encoded test fixture size.");
+
+        var builder = new StringBuilder(prefix);
         while (remaining >= fillerBytes)
         {
             builder.Append(filler);
