@@ -11,7 +11,7 @@ Branch：`codex-A/next-device-management-h3c-capability-runtime-20261027`
 - 复用现有 Comware parser，识别 V5/V7 的 version/release，并返回稳定的 vendor、version、release、versionFamily、recognized、source、sourceReference、confidence、observedAt、capabilities 和 failureCode。
 - capability 只包含 `READONLY_DISPLAY_VERSION`、`READONLY_INTERFACE_BRIEF`、`PAGINATION_GUARD`；不映射写配置权限、采集调度权限或现场授权。
 - 未知版本返回 `UNRECOGNIZED` 和空 capability；分页提示、无效编码、超限输入分别返回脱敏失败类别，不回显原始输出。文本入口和字节入口统一按 UTF-8 编码后的字节数限制输入，最大值为 `1,048,576` bytes；文本入口在编码前完成 `GetByteCount` 检查，不先分配编码缓冲区。
-- 支持 UTF-8/GB18030 mock bytes，source reference 有长度和控制字符边界。
+- 支持 UTF-8/GB18030 mock bytes；字节入口同时限制原始输入和解码后 UTF-8 输入均不超过 1 MiB，source reference 有长度和控制字符边界。
 
 ## 验证
 
