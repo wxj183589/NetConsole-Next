@@ -9,9 +9,10 @@ Codex-Thread：`01a17424-2751-7d62-ba40-63fea5d133a9`
 - PR #27（P2B4 安全写入）仍为 Draft/open/unmerged；已审查，当前未发现 P0/P1。
 - 当前工作分支：`codex-A/next-device-management-p2b5-ui-20261027`。
 - P2B5 基于 PR #27 head `7c32804050d816836404acee93a129056bbfc64f`，未修改 main。
-- 当前提交：`078750f`（实现P2B5网络规划管理界面）。
+- 当前提交：`82b061334a8479876866028c09927259bb91a549`（P2B5 UI、安全读接口与最终远端 CI 状态）。
 - P2B5 UI、v13-compatible-on-v14 read boundary、历史/操作 read endpoints 和浏览器验收脚本已完成本地实现。
-- Draft PR 与远端 CI 仍需 push 后建立和核验；在此之前不宣称 Ready/Approved。
+- Draft PR：#29（base 为 PR #27 分支），仍 open/Draft/unmerged。
+- 远端 CI 已核验：PR29 G1 runs `40386878934`、`40386870348` 的 Ubuntu/Windows 均 SUCCESS；Windows syntax runs `40386878922`、`40386870242` 均 SUCCESS。未据此宣称 Ready/Approved。
 
 ## 已完成证据
 
@@ -38,4 +39,4 @@ dotnet build src/NetConsole.Next.Service/NetConsole.Next.Service.csproj -c Relea
 python tests/p2b5_network_planning_browser_e2e.py
 ```
 
-下一步顺序：提交并 push P2B5 Draft PR；等待并核验 Windows/Ubuntu CI；更新 Issue #28；再从该 head 创建独立的 Site Scope/Admin auth 安全边界分支。若没有可信 Site Claims 来源，只做 denied-by-default 设计和测试，不伪造授权。后续 H3C、导出、轨道基础数据和最终 regression gate 仍需分别建立小 Draft PR 与证据。
+下一步状态：Site Scope/Admin auth Draft PR #30、H3C mock-only Draft PR #31、Export boundary Draft PR #32、Rail base-data boundary Draft PR #33 和 Final gate Draft PR #34 均已建立并保持未合并；没有可信 Site Claims 或真实轨交数据源时继续保持 denied-by-default / `REAL_DEVICE_PENDING` / `EXPORT_PENDING` / `RAIL_BASE_DATA_PENDING`，不伪造授权或数据。
