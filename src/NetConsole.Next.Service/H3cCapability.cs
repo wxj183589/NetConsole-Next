@@ -49,6 +49,8 @@ internal sealed class H3cCapabilityService
         try
         {
             var decoded = TerminalTextEncoding.Decode(output, terminalEncoding);
+            if (Encoding.UTF8.GetByteCount(decoded) > MaximumInputBytes)
+                return Failure("OUTPUT_LIMIT", sourceReference, observed);
             return Analyze(decoded, sourceReference, observed);
         }
         catch (DecoderFallbackException)
