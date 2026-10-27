@@ -7,9 +7,9 @@ Codex-Thread：`01a17424-2751-7d62-ba40-63fea5d133a9`
 ## 当前状态
 
 - PR #27（P2B4 安全写入）仍为 Draft/open/unmerged；已审查，当前未发现 P0/P1。
-- 当前连续实施分支：`codex-A/next-device-management-site-scope-runtime-20261027`。
+- 当前连续实施分支：`codex-A/next-device-management-rail-reference-runtime-20261027`。
 - P2B5 UI 基于 PR #27 head `7c32804050d816836404acee93a129056bbfc64f`，Site Scope runtime 基于 PR #30 boundary，未修改 main。
-- 当前提交：本分支提交后补入 handoff；Site Scope runtime 已完成本地实现。
+- 当前提交：Rail Reference runtime 提交后补入 handoff；Site Scope、H3C capability、Export runtime 和 Rail Reference 均已完成隔离实现。
 - P2B5 UI、v13-compatible-on-v14 read boundary、历史/操作 read endpoints 和浏览器验收脚本已完成本地实现。
 - Draft PR：#29（base 为 PR #27 分支），仍 open/Draft/unmerged。
 - 远端 CI 已核验：PR29 G1 runs `40386878934`、`40386870348` 的 Ubuntu/Windows 均 SUCCESS；Windows syntax runs `40386878922`、`40386870242` 均 SUCCESS。未据此宣称 Ready/Approved。
@@ -47,7 +47,7 @@ python tests/p2b5_network_planning_browser_e2e.py
 | Site Scope membership / claims / auth | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_SITE_SCOPE_RUNTIME.md`、isolated .NET + HTTP E2E |
 | H3C V5/V7 mock capability | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_H3C_CAPABILITY_RUNTIME.md`、full .NET tests |
 | Export runtime | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_EXPORT_RUNTIME.md`、isolated v14 HTTP E2E |
-| Rail Reference runtime | `DOCS_ONLY` | PR #33 boundary document |
+| Rail Reference runtime | `IMPLEMENTED_AND_VERIFIED` | `docs/DEVICE_P2B5_RAIL_REFERENCE_RUNTIME.md`、isolated v14 HTTP E2E |
 | Final Phase 2 gate | `DOCS_ONLY` | PR #34 gate plan |
 
-下一步状态：提交并 push Export runtime Draft PR，等待并核验 Windows/Ubuntu CI，更新 Issue #28；随后从该 head 继续 Rail Reference runtime 和最终 regression gate。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read 通过而自动开放。
+下一步状态：提交并 push Rail Reference runtime Draft PR，更新 Issue #28；随后从该 head 建立最终 regression gate，核验 PR/CI/审批状态。P2B4 ADMIN 写权限仍需单独的更高审查，不因 Site Scope claim read、Rail reference 或 Export 通过而自动开放。
