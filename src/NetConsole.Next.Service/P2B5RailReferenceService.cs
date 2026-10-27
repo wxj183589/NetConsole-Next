@@ -137,32 +137,37 @@ internal sealed class P2B5RailReferenceService
     {
         EnsureAvailable();
         using var connection = Open();
-        using var read = connection.CreateCommand();
-        read.CommandText = "SELECT id,actor,idempotency_key,source_name,source_revision,source_hash,scope_reference,schema_version,state,request_json,preview_json,created_ms,updated_ms,expires_ms FROM p2b5_rail_reference_imports WHERE id=$id AND actor=$actor";
-        Add(read, "$id", Required(id, "import id")); Add(read, "$actor", actor.Username);
-        using var reader = read.ExecuteReader();
-        if (!reader.Read()) throw new P2B5RailReferenceException("RAIL_IMPORT_NOT_FOUND", "The rail reference import was not found.", 404);
-        var status = ReadStatus(reader, previewColumn: 10);
-        var request = JsonSerializer.Deserialize<P2B5RailReferenceImportRequest>(reader.GetString(9), JsonOptions)
-            ?? throw new InvalidDataException("The stored rail reference request is invalid.");
-        reader.Close();
-
-        if (status.State == "SUCCEEDED") return status;
-        if (status.State == "CONFLICT")
-            throw new P2B5RailReferenceException("RAIL_IMPORT_CONFLICT", "The preview contains conflicts and cannot be confirmed.");
-        if (status.State != "PREVIEWED")
-            throw new P2B5RailReferenceException("RAIL_IMPORT_STATE_INVALID", "Only a PREVIEWED import can be confirmed.");
-        if (status.ExpiresMs < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-            throw new P2B5RailReferenceException("RAIL_IMPORT_EXPIRED", "The rail reference preview has expired.");
-
-        var analysis = Analyze(connection, request);
-        if (analysis.ConflictCount != 0 || analysis.NewCount != status.Preview.NewCount || analysis.UpdateCount != status.Preview.UpdateCount)
-            throw new P2B5RailReferenceException("RAIL_IMPORT_STALE_PREVIEW", "The reference authority changed after preview; create a new preview.");
-
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        RailReferenceTestHooks.BeforeConfirmTransaction?.Invoke();
         using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable);
+        using var read = connection.CreateCommand();
         try
         {
+            read.Transaction = transaction;
+            read.CommandText = "SELECT id,actor,idempotency_key,source_name,source_revision,source_hash,scope_reference,schema_version,state,request_json,preview_json,created_ms,updated_ms,expires_ms FROM p2b5_rail_reference_imports WHERE id=$id AND actor=$actor";
+            Add(read, "$id", Required(id, "import id")); Add(read, "$actor", actor.Username);
+            using var reader = read.ExecuteReader();
+            if (!reader.Read()) throw new P2B5RailReferenceException("RAIL_IMPORT_NOT_FOUND", "The rail reference import was not found.", 404);
+            var status = ReadStatus(reader, previewColumn: 10);
+            var request = JsonSerializer.Deserialize<P2B5RailReferenceImportRequest>(reader.GetString(9), JsonOptions)
+                ?? throw new InvalidDataException("The stored rail reference request is invalid.");
+            reader.Close();
+
+            if (status.State == "SUCCEEDED") return status;
+            if (status.State == "CONFLICT")
+                throw new P2B5RailReferenceException("RAIL_IMPORT_CONFLICT", "The preview contains conflicts and cannot be confirmed.");
+            if (status.State != "PREVIEWED")
+                throw new P2B5RailReferenceException("RAIL_IMPORT_STATE_INVALID", "Only a PREVIEWED import can be confirmed.");
+            if (status.ExpiresMs < DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                throw new P2B5RailReferenceException("RAIL_IMPORT_EXPIRED", "The rail reference preview has expired.");
+
+            // Re-analyze while the serializable transaction owns the write boundary.
+            // A newer source/scope revision committed by another Confirm is therefore
+            // visible to this check before any entity or relation write occurs.
+            var analysis = Analyze(connection, request, transaction);
+            if (analysis.ConflictCount != 0 || analysis.NewCount != status.Preview.NewCount || analysis.UpdateCount != status.Preview.UpdateCount)
+                throw new P2B5RailReferenceException("RAIL_IMPORT_STALE_PREVIEW", "The reference authority changed after preview; create a new preview.");
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             foreach (var entity in request.Entities!)
             {
                 using var command = connection.CreateCommand();
@@ -182,6 +187,25 @@ internal sealed class P2B5RailReferenceService
                 Add(command, "$effective", request.EffectiveAt); Add(command, "$captured", request.CapturedAt);
                 Add(command, "$actor", actor.Username); Add(command, "$import", status.Id); Add(command, "$now", now);
                 command.ExecuteNonQuery();
+            }
+
+            using (var retire = connection.CreateCommand())
+            {
+                retire.Transaction = transaction;
+                var placeholders = request.Entities!.Select((_, index) => "$entity" + index).ToArray();
+                retire.CommandText = $"""
+                    UPDATE p2b5_rail_entities
+                    SET source_revision=$revision,source_hash=$hash,effective_at=$effective,captured_at=$captured,
+                        lifecycle='RETIRED',imported_by=$actor,import_id=$import,updated_ms=$now
+                    WHERE source_name=$source AND scope_reference=$scope AND lifecycle='ACTIVE'
+                      AND entity_id NOT IN ({string.Join(',', placeholders)})
+                    """;
+                Add(retire, "$source", request.SourceName); Add(retire, "$scope", request.ScopeReference);
+                Add(retire, "$revision", request.SourceRevision); Add(retire, "$hash", status.SourceHash);
+                Add(retire, "$effective", request.EffectiveAt); Add(retire, "$captured", request.CapturedAt);
+                Add(retire, "$actor", actor.Username); Add(retire, "$import", status.Id); Add(retire, "$now", now);
+                for (var index = 0; index < request.Entities.Count; index++) Add(retire, placeholders[index], request.Entities[index].Id);
+                retire.ExecuteNonQuery();
             }
 
             using (var delete = connection.CreateCommand())
@@ -211,13 +235,13 @@ internal sealed class P2B5RailReferenceService
                 Add(update, "$now", now); Add(update, "$id", status.Id); Add(update, "$actor", actor.Username); update.ExecuteNonQuery();
             }
             transaction.Commit();
+            return status with { State = "SUCCEEDED", UpdatedMs = now };
         }
         catch
         {
             try { transaction.Rollback(); } catch { }
             throw;
         }
-        return status with { State = "SUCCEEDED", UpdatedMs = now };
     }
 
     public IReadOnlyList<P2B5RailReferenceEntity> ListEntities(string? scopeReference, string? type)
@@ -242,10 +266,18 @@ internal sealed class P2B5RailReferenceService
         return result;
     }
 
-    private P2B5RailPreviewSummary Analyze(SqliteConnection connection, P2B5RailReferenceImportRequest request)
+    private P2B5RailPreviewSummary Analyze(SqliteConnection connection, P2B5RailReferenceImportRequest request, SqliteTransaction? transaction = null)
     {
         var conflicts = new List<string>();
         var unknownReferences = new List<string>();
+        var authority = ReadSourceAuthority(connection, transaction, request.SourceName, request.ScopeReference);
+        if (authority.Revision is { } currentRevision)
+        {
+            if (request.SourceRevision < currentRevision)
+                conflicts.Add($"STALE_SOURCE_REVISION:{request.SourceName}:{request.ScopeReference}");
+            else if (request.SourceRevision == currentRevision && authority.Hashes.Any(hash => !string.Equals(hash, request.SourceHash, StringComparison.OrdinalIgnoreCase)))
+                conflicts.Add($"REVISION_HASH_MISMATCH:{request.SourceName}:{request.ScopeReference}");
+        }
         var byId = request.Entities!.ToDictionary(item => item.Id, StringComparer.Ordinal);
         var relationKeys = new HashSet<string>(StringComparer.Ordinal);
         var inbound = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -284,6 +316,7 @@ internal sealed class P2B5RailReferenceService
         foreach (var entity in request.Entities!)
         {
             using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = "SELECT entity_type,name,scope_reference,source_name,source_revision,source_hash FROM p2b5_rail_entities WHERE entity_id=$id";
             Add(command, "$id", entity.Id);
             using var reader = command.ExecuteReader();
@@ -302,6 +335,7 @@ internal sealed class P2B5RailReferenceService
         var deletionCandidates = 0;
         using (var command = connection.CreateCommand())
         {
+            command.Transaction = transaction;
             command.CommandText = "SELECT entity_id FROM p2b5_rail_entities WHERE source_name=$source AND scope_reference=$scope AND lifecycle='ACTIVE'";
             Add(command, "$source", request.SourceName); Add(command, "$scope", request.ScopeReference);
             using var reader = command.ExecuteReader();
@@ -311,6 +345,37 @@ internal sealed class P2B5RailReferenceService
         var uniqueConflicts = conflicts.Distinct(StringComparer.Ordinal).ToArray();
         return new(newCount, updateCount, unchangedCount, uniqueConflicts.Length + unknownReferences.Count,
             deletionCandidates, uniqueConflicts, unknownReferences.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static (long? Revision, IReadOnlySet<string> Hashes) ReadSourceAuthority(
+        SqliteConnection connection, SqliteTransaction? transaction, string sourceName, string scopeReference)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT source_revision,source_hash
+            FROM p2b5_rail_entities
+            WHERE source_name=$source AND scope_reference=$scope AND lifecycle='ACTIVE'
+            UNION ALL
+            SELECT source_revision,source_hash
+            FROM p2b5_rail_relations
+            WHERE source_name=$source AND scope_reference=$scope
+            """;
+        Add(command, "$source", sourceName); Add(command, "$scope", scopeReference);
+        long? revision = null;
+        var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var candidate = reader.GetInt64(0);
+            if (!revision.HasValue || candidate > revision.Value)
+            {
+                revision = candidate;
+                hashes.Clear();
+            }
+            if (candidate == revision.Value) hashes.Add(reader.GetString(1));
+        }
+        return (revision, hashes);
     }
 
     private static P2B5RailReferenceImportRequest NormalizeAndValidate(P2B5RailReferenceImportRequest request)
@@ -383,7 +448,7 @@ internal sealed class P2B5RailReferenceService
 
     private static string ComputeHash(P2B5RailReferenceImportRequest request)
     {
-        var canonical = JsonSerializer.Serialize(request with { SourceHash = null }, JsonOptions);
+        var canonical = JsonSerializer.Serialize(request with { IdempotencyKey = null, SourceHash = null }, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
@@ -427,6 +492,11 @@ internal sealed class P2B5RailReferenceService
     private static string Fingerprint(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static bool IsReservedRoot(string root) => string.Equals(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath("D:\\NetConsoleData").TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase) || string.Equals(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath("D:\\NetConsoleData-dev").TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
     private static bool IsTemporaryRoot(string root) { var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; var full = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; return full.StartsWith(temp, StringComparison.OrdinalIgnoreCase); }
+}
+
+internal static class RailReferenceTestHooks
+{
+    public static Action? BeforeConfirmTransaction { get; set; }
 }
 
 internal sealed record P2B5RailReferenceMigrationContext(string DatabasePath, string DataRoot, bool IsolatedTest)
