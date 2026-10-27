@@ -206,6 +206,16 @@ def main():
             status, delimiter_first = superadmin.request("/api/system/network-planning/exports", "POST",
                 {"idempotencyKey": delimiter_key, "siteId": "collision|site", "domainId": "collision-domain", "format": "JSON"}, True)
             assert status == 201, delimiter_first
+            status, _, delimiter_json = superadmin.download(f"/api/system/network-planning/exports/{delimiter_first['id']}/download")
+            assert status == 200
+            delimiter_snapshot = json.loads(delimiter_json.decode("utf-8"))
+            assert delimiter_snapshot["domains"][0]["siteReferences"] == ["collision|site"], delimiter_snapshot
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                stored_snapshot = json.loads(db.execute(
+                    "SELECT snapshot_json FROM p2b5_exports WHERE id=?", (delimiter_first["id"],)
+                ).fetchone()[0])
+            assert stored_snapshot["domains"][0]["siteReferences"] == ["collision|site"], stored_snapshot
+            print("EXPORT_SNAPSHOT_SITE_REFERENCE_PRESERVED=PASS")
             status, delimiter_conflict = superadmin.request("/api/system/network-planning/exports", "POST",
                 {"idempotencyKey": delimiter_key, "siteId": "collision", "domainId": "site|domain", "format": "JSON"}, True)
             assert status == 409 and delimiter_conflict["error"] == "EXPORT_IDEMPOTENCY_CONFLICT", delimiter_conflict

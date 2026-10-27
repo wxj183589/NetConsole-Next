@@ -188,8 +188,11 @@ internal sealed class P2B5ExportService
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT d.id,d.name,d.domain_kind,d.source_kind,d.source_reference,d.revision,
-                   COALESCE((SELECT group_concat(scope_reference,'|') FROM network_domain_scopes s
-                     WHERE s.network_domain_id=d.id AND s.scope_kind='SITE' AND s.resolution='RESOLVED'),'')
+                   COALESCE((SELECT json_group_array(scope_reference) FROM (
+                     SELECT scope_reference FROM network_domain_scopes s
+                     WHERE s.network_domain_id=d.id AND s.scope_kind='SITE' AND s.resolution='RESOLVED'
+                     ORDER BY scope_reference
+                   )),'[]')
             FROM network_domains d WHERE {filters} ORDER BY d.id LIMIT $take
             """;
         Add(command, "$domain", NullIfBlank(domainId)); Add(command, "$take", MaximumRows + 1); AddParameters(command, parameters);
@@ -198,8 +201,10 @@ internal sealed class P2B5ExportService
         while (reader.Read())
         {
             if (rows.Count >= MaximumRows) throw new P2B5ExportException("EXPORT_ROW_LIMIT", "The export exceeds the isolated row limit.", 413);
+            var siteReferences = JsonSerializer.Deserialize<string[]>(reader.GetString(6), JsonOptions)
+                ?? throw new InvalidDataException("Export site references are invalid.");
             rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
-                reader.GetInt64(5), reader.GetString(6).Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)));
+                reader.GetInt64(5), siteReferences));
         }
         var maxRevision = rows.Count == 0 ? 0 : rows.Max(row => row.Revision);
         return new("14", DateTimeOffset.UtcNow.ToString("O"), "SITE", siteId, domainId, rows, maxRevision);
