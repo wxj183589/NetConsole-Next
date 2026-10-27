@@ -127,6 +127,16 @@ internal sealed class P2B5ExportService
             Add(command, "$manifest", manifestJson); Add(command, "$path", relativePath); Add(command, "$hash", hash);
             Add(command, "$rows", snapshot.Domains.Count); Add(command, "$now", now); command.ExecuteNonQuery();
         }
+        catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
+        {
+            // Another request won the actor/key unique race. Remove only this
+            // request's output, then resolve the committed operation through the
+            // same fingerprint check used by the normal idempotency path.
+            TryDelete(relativePath);
+            var concurrent = FindByIdempotency(connection, actor.Username, request.IdempotencyKey!, fingerprint);
+            if (concurrent is not null) return concurrent;
+            throw new P2B5ExportException("EXPORT_IDEMPOTENCY_RACE", "The export request could not be resolved safely.", 409);
+        }
         catch
         {
             TryDelete(relativePath);

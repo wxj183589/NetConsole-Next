@@ -244,9 +244,11 @@ internal sealed class FileArchiveService : BackgroundService
                         // Keep the completed job's input reservation until retention cleanup, but
                         // release the active/user slot before making COMPLETED observable.
                         ReleaseAdmissionLocked(job, releaseInput: false);
+                        ArchiveTestHooks.BeforePublishCompleted?.Invoke(() => job.RequestCancel());
                         if (!job.PublishCompleted())
                         {
                             TryDelete(job.OutputPath);
+                            ReleaseInputLocked(job.Reservation);
                             job.PublishCancelled();
                         }
                         break;
@@ -709,4 +711,9 @@ internal sealed class FileArchiveService : BackgroundService
         protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
         public override ValueTask DisposeAsync() => inner.DisposeAsync();
     }
+}
+
+internal static class ArchiveTestHooks
+{
+    public static Action<Action>? BeforePublishCompleted { get; set; }
 }

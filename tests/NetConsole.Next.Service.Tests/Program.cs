@@ -133,6 +133,7 @@ internal static class SchedulerTests
     {
         VerifiesArchiveResourceBoundariesAndAdmissionRollback();
         await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveCompletionCancellationReleasesInputAsync();
         await VerifiesArchiveTerminalAdmissionConsistencyAsync();
         await VerifiesArchiveLifecycleCleanupAsync();
         Console.WriteLine("PASS: archive lifecycle and admission tests");
@@ -181,6 +182,7 @@ internal static class SchedulerTests
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesArchiveResourceBoundariesAndAdmissionRollback();
         await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveCompletionCancellationReleasesInputAsync();
         await VerifiesArchiveTerminalAdmissionConsistencyAsync();
         await VerifiesArchiveLifecycleCleanupAsync();
         VerifiesRollingLogSizeAndRetention();
@@ -471,6 +473,58 @@ internal static class SchedulerTests
             finally { await running.StopAsync(CancellationToken.None); }
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesArchiveCompletionCancellationReleasesInputAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-completion-cancel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        FileArchiveService? service = null;
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18774, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = 1,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxQueuedJobs = 1,
+                ArchiveMaxAggregateReservedBytes = 1024 * 1024
+            };
+            var raw = Path.Combine(root, "raw");
+            Directory.CreateDirectory(raw);
+            File.WriteAllText(Path.Combine(raw, "completion-race.txt"), "completion-race");
+            service = new FileArchiveService(new FileManagerService(settings), settings,
+                new FakeArchiveDiskSpaceProvider(1024));
+            var identity = new WebUserIdentity("archive-race-user", "archive-race-user", "ADMIN", "archive-race");
+            ArchiveTestHooks.BeforePublishCompleted = cancel =>
+            {
+                entered.TrySetResult(true);
+                cancel();
+                release.Task.GetAwaiter().GetResult();
+            };
+
+            await service.StartAsync(CancellationToken.None);
+            var job = service.Create(new ArchiveRequest([new ArchiveSelection("raw", ["completion-race.txt"])]), identity);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult(true);
+            await WaitUntil(() => service.Get(job.Id, identity)?.State == "CANCELLED", TimeSpan.FromSeconds(5));
+            Assert(service.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0, ReservedInputBytes: 0 },
+                $"cancelled completion fallback must release aggregate input reservation: {service.AdmissionState}");
+            Assert(!File.Exists(Path.Combine(root, "archive-tmp", job.Id + ".zip")),
+                "cancelled completion fallback must not retain a published ZIP");
+            var retry = service.Create(new ArchiveRequest([new ArchiveSelection("raw", ["completion-race.txt"])]), identity);
+            Assert(retry.State is "QUEUED" or "RUNNING", "a cancelled completion must release the user's admission slot");
+            service.Cancel(retry.Id, identity);
+            Console.WriteLine("ARCHIVE_COMPLETION_CANCEL_RESERVATION_RACE=PASS");
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            ArchiveTestHooks.BeforePublishCompleted = null;
+            if (service is not null) await service.StopAsync(CancellationToken.None);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     private static async Task VerifiesArchiveLifecycleCleanupAsync()

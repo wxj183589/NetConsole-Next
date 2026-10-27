@@ -6,6 +6,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.request
 from contextlib import closing
@@ -133,6 +134,42 @@ def main():
                 {"idempotencyKey": "csv-1", "siteId": "local", "format": "CSV"}, True)
             assert status == 201 and same["id"] == export_id, same
             print("EXPORT_FIXED_SNAPSHOT_IDEMPOTENCY=PASS")
+
+            concurrent_clients = [Client(base), Client(base)]
+            for client in concurrent_clients:
+                client.login("superadmin", "superadmin")
+            for index in range(20):
+                key = f"concurrent-same-{index}"
+                payload = {"idempotencyKey": key, "siteId": "local", "format": "JSON"}
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(lambda client: client.request(
+                        "/api/system/network-planning/exports", "POST", payload, True), concurrent_clients))
+                assert all(status == 201 for status, _ in results), results
+                ids = {body["id"] for _, body in results}
+                assert len(ids) == 1, results
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                count = db.execute("SELECT COUNT(*) FROM p2b5_exports WHERE idempotency_key LIKE 'concurrent-same-%'").fetchone()[0]
+                assert count == 20, count
+            print("EXPORT_CONCURRENT_SAME_KEY_IDEMPOTENCY_20X=PASS")
+
+            for index in range(20):
+                key = f"concurrent-conflict-{index}"
+                payloads = [
+                    {"idempotencyKey": key, "siteId": "local", "format": "JSON"},
+                    {"idempotencyKey": key, "siteId": "site-b", "format": "JSON"},
+                ]
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(lambda item: concurrent_clients[item[0]].request(
+                        "/api/system/network-planning/exports", "POST", item[1], True), enumerate(payloads)))
+                assert sorted(status for status, _ in results) == [201, 409], results
+                conflict = next(body for status, body in results if status == 409)
+                assert conflict.get("error") == "EXPORT_IDEMPOTENCY_CONFLICT", conflict
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                count = db.execute("SELECT COUNT(*) FROM p2b5_exports WHERE idempotency_key LIKE 'concurrent-conflict-%'").fetchone()[0]
+                assert count == 20, count
+            orphan_parts = list((root / "exports" / "p2b5").glob("*.part"))
+            assert not orphan_parts, orphan_parts
+            print("EXPORT_CONCURRENT_DIFFERENT_PAYLOAD_CONFLICT_20X=PASS")
 
             status, headers, csv = superadmin.download(f"/api/system/network-planning/exports/{export_id}/download")
             assert status == 200 and b"domain_id,name" in csv and b"'=HYPERLINK" in csv, csv[:500]
