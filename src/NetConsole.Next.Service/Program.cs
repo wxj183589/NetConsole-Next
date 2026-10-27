@@ -19,6 +19,7 @@ builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
+builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
