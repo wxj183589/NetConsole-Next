@@ -20,6 +20,8 @@ else if (args.Length > 0 && args[0] == "--p2b5-site-scope-migrate")
     await P2B5SiteScopeMigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b5-export-migrate")
     await P2B5ExportMigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--archive-tests")
+    await SchedulerTests.RunArchiveTestsAsync();
 else
     await SchedulerTests.RunAsync();
 
@@ -127,6 +129,15 @@ internal static class SchedulerTests
             "SSH.NET protocol simulation must not leave an active session behind");
     }
 
+    public static async Task RunArchiveTestsAsync()
+    {
+        VerifiesArchiveResourceBoundariesAndAdmissionRollback();
+        await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveTerminalAdmissionConsistencyAsync();
+        await VerifiesArchiveLifecycleCleanupAsync();
+        Console.WriteLine("PASS: archive lifecycle and admission tests");
+    }
+
     public static async Task RunAsync()
     {
         await EnforcesQueueAndConcurrencyLimits();
@@ -170,6 +181,7 @@ internal static class SchedulerTests
         await MeasuresConcurrentSimulatedDeviceAndSyslogLoad();
         VerifiesArchiveResourceBoundariesAndAdmissionRollback();
         await VerifiesArchiveDiskAdmissionAndRuntimeFailure();
+        await VerifiesArchiveTerminalAdmissionConsistencyAsync();
         await VerifiesArchiveLifecycleCleanupAsync();
         VerifiesRollingLogSizeAndRetention();
         await TerminalCoreTests.RunAsync();
@@ -447,6 +459,8 @@ internal static class SchedulerTests
                 await WaitUntil(() => running.Get(runningJob.Id, identity)?.State == "FAILED", TimeSpan.FromSeconds(10));
                 var failed = running.Get(runningJob.Id, identity);
                 Assert(failed is not null && failed.ErrorCode == "ARCHIVE_DISK_SPACE_LOW", "a runtime disk drop must fail the ZIP safely");
+                Assert(running.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0, ReservedInputBytes: 0 },
+                    $"FAILED must not be externally visible before admission release: {running.AdmissionState}");
                 Assert(!File.Exists(Path.Combine(runRoot, "archive-tmp", runningJob.Id + ".zip.part")), "runtime disk failure must delete the partial ZIP");
                 Assert(!File.Exists(Path.Combine(runRoot, "archive-tmp", runningJob.Id + ".zip")), "runtime disk failure must not publish a partial ZIP");
                 runDisk.Available = minimum + 1;
@@ -516,6 +530,98 @@ internal static class SchedulerTests
             Console.WriteLine("RETAINED_JOB_LIMIT_EXHAUSTION=PASS");
             await service.StopAsync(CancellationToken.None);
             service = null;
+        }
+        finally
+        {
+            if (service is not null) await service.StopAsync(CancellationToken.None);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static async Task VerifiesArchiveTerminalAdmissionConsistencyAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-archive-terminal-order-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        FileArchiveService? service = null;
+        try
+        {
+            const long minimum = 1024;
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18774, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = minimum,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxQueuedJobs = 1,
+                ArchiveMaxAggregateReservedBytes = 32 * 1024 * 1024,
+                ArchiveTestCopyDelayMilliseconds = 1
+            };
+            var raw = Path.Combine(root, "raw");
+            Directory.CreateDirectory(raw);
+            File.WriteAllBytes(Path.Combine(raw, "terminal.bin"), new byte[8 * 1024 * 1024]);
+            var files = new FileManagerService(settings);
+            var disk = new FakeArchiveDiskSpaceProvider(minimum + 1);
+            service = new FileArchiveService(files, settings, disk);
+            var identity = new WebUserIdentity("archive-order-user", "archive-order-user", "ADMIN", "archive-order-session");
+            var request = new ArchiveRequest([new ArchiveSelection("raw", ["terminal.bin"])]);
+            await service.StartAsync(CancellationToken.None);
+
+            var failed = service.Create(request, identity);
+            await WaitUntil(() => service.Get(failed.Id, identity)?.State == "RUNNING", TimeSpan.FromSeconds(3));
+            disk.Available = minimum - 1;
+            await WaitUntil(() => service.Get(failed.Id, identity)?.State == "FAILED", TimeSpan.FromSeconds(10));
+            Assert(service.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0, ReservedInputBytes: 0 },
+                $"FAILED must be published only after admission release: {service.AdmissionState}");
+            disk.Available = minimum + 1;
+            var immediateRetry = service.Create(request, identity);
+            Assert(immediateRetry.State is "QUEUED" or "RUNNING", "FAILED must allow an immediate same-user retry");
+            service.Cancel(immediateRetry.Id, identity);
+            await WaitUntil(() => service.Get(immediateRetry.Id, identity)?.State == "CANCELLED");
+            Assert(service.AdmissionState.ActiveJobs == 0, $"queued cancellation must release admission: {service.AdmissionState}");
+
+            var completed = service.Create(request, identity);
+            await WaitUntil(() => service.Get(completed.Id, identity)?.State == "COMPLETED", TimeSpan.FromSeconds(10));
+            Assert(service.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0 },
+                $"COMPLETED must be published only after active admission release: {service.AdmissionState}");
+            Assert(service.AdmissionState.ReservedInputBytes == completed.TotalBytes,
+                $"COMPLETED may retain only its bounded retention reservation: {service.AdmissionState}");
+            var afterCompleted = service.Create(request, identity);
+            Assert(afterCompleted.State is "QUEUED" or "RUNNING", "COMPLETED must allow a subsequent same-user create");
+            service.Cancel(afterCompleted.Id, identity);
+            await WaitUntil(() => service.Get(afterCompleted.Id, identity)?.State == "CANCELLED");
+
+            var runningCancel = service.Create(request, identity);
+            await WaitUntil(() => service.Get(runningCancel.Id, identity)?.State == "RUNNING", TimeSpan.FromSeconds(3));
+            service.Cancel(runningCancel.Id, identity);
+            await WaitUntil(() => service.Get(runningCancel.Id, identity)?.State == "CANCELLED", TimeSpan.FromSeconds(5));
+            Assert(service.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0 } &&
+                   service.AdmissionState.ReservedInputBytes == completed.TotalBytes,
+                $"RUNNING cancellation must release admission before CANCELLED: {service.AdmissionState}");
+            Assert(!File.Exists(Path.Combine(root, "archive-tmp", runningCancel.Id + ".zip.part")),
+                "running cancellation must remove the partial archive");
+            await service.StopAsync(CancellationToken.None);
+            service = null;
+            Console.WriteLine("ARCHIVE_TERMINAL_ADMISSION_ORDER=PASS");
+
+            var stopRoot = Path.Combine(root, "stop-race");
+            Directory.CreateDirectory(Path.Combine(stopRoot, "raw"));
+            File.WriteAllBytes(Path.Combine(stopRoot, "raw", "terminal.bin"), new byte[8 * 1024 * 1024]);
+            var stopSettings = new RuntimeSettings
+            {
+                DataRoot = stopRoot, WebPort = 18775, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, ArchiveMinFreeDiskBytes = minimum,
+                ArchiveMaxActiveJobsPerUser = 1, ArchiveMaxQueuedJobs = 1,
+                ArchiveMaxAggregateReservedBytes = 32 * 1024 * 1024,
+                ArchiveTestCopyDelayMilliseconds = 1
+            };
+            var stopping = new FileArchiveService(new FileManagerService(stopSettings), stopSettings, new FakeArchiveDiskSpaceProvider(minimum + 1));
+            var stopIdentity = new WebUserIdentity("archive-stop-user", "archive-stop-user", "ADMIN", "archive-stop-session");
+            await stopping.StartAsync(CancellationToken.None);
+            var stopJob = stopping.Create(request, stopIdentity);
+            await WaitUntil(() => stopping.Get(stopJob.Id, stopIdentity)?.State == "RUNNING", TimeSpan.FromSeconds(3));
+            await stopping.StopAsync(CancellationToken.None);
+            Assert(stopping.Get(stopJob.Id, stopIdentity)?.State == "CANCELLED" &&
+                   stopping.AdmissionState is { ActiveJobs: 0, QueuedJobs: 0, RunningJobs: 0, ReservedInputBytes: 0 },
+                $"service stop must converge cancellation and admission release: {stopping.AdmissionState}");
+            Console.WriteLine("ARCHIVE_SERVICE_STOP_ADMISSION_ORDER=PASS");
         }
         finally
         {
