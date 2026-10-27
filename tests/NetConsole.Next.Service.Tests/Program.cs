@@ -10,6 +10,8 @@ using NetConsole.Next.Credentials;
 
 if (args.Length > 0 && args[0] == "--ssh-wire")
     await SchedulerTests.RunSshWireAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--sqlite-probe")
+    SqliteSecurityTests.Run();
 else if (args.Length > 0 && args[0] == "--p2b2-migrate")
     await P2B2MigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b4-migrate")
@@ -142,6 +144,7 @@ internal static class SchedulerTests
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
         H3cCapabilityTests.Run();
+        SqliteSecurityTests.Run();
         P2B3DiffContractTests.Run();
         await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
