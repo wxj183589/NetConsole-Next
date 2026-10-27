@@ -91,7 +91,7 @@ internal sealed class P2B5ExportService
         EnsureAvailable();
         ValidateRequest(request);
         var format = NormalizeFormat(request.Format);
-        var fingerprint = Fingerprint(request.SiteId + "|" + request.DomainId + "|" + format);
+        var fingerprint = RequestFingerprint(request, format);
         using var connection = Open();
         var existing = FindByIdempotency(connection, actor.Username, request.IdempotencyKey!, fingerprint);
         if (existing is not null) return existing;
@@ -304,6 +304,13 @@ internal sealed class P2B5ExportService
     private static bool IsTemporaryRoot(string root) => Path.GetFullPath(root).StartsWith(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     private static string Required(string value, string label) => string.IsNullOrWhiteSpace(value) || value.Length > 256 || value.Any(char.IsControl) ? throw new P2B5ExportException("EXPORT_ID_INVALID", $"The {label} is invalid.", 400) : value;
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string RequestFingerprint(P2B5ExportRequest request, string normalizedFormat) =>
+        Fingerprint(JsonSerializer.Serialize(new
+        {
+            request.SiteId,
+            request.DomainId,
+            Format = normalizedFormat
+        }, JsonOptions));
     private static string Fingerprint(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static void Add(SqliteCommand command, string name, object? value) => command.Parameters.AddWithValue(name, value ?? DBNull.Value);
     private static void AddParameters(SqliteCommand command, IEnumerable<(string Name, object? Value)> parameters) { foreach (var parameter in parameters) Add(command, parameter.Name, parameter.Value); }
