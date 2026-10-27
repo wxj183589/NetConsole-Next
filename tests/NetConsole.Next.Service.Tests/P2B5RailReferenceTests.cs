@@ -86,6 +86,41 @@ internal static class P2B5RailReferenceTests
             var concurrentEntities = service.ListEntities("concurrent-scope", null);
             Assert(concurrentEntities.Count == 5 && concurrentEntities.All(entity => entity.SourceRevision == 3 && entity.Id.StartsWith("c3-", StringComparison.Ordinal)),
                 "a rejected older concurrent confirm must not partially replace the newer entity graph");
+
+            var deletionBase = service.Preview(actor, FixtureWithPrefix("deletion-base", 1, "deletion-scope", "d1-"));
+            Assert(service.Confirm(actor, deletionBase.Id).State == "SUCCEEDED", "deletion candidate fixture must establish its base graph");
+            var deletionPreview = service.Preview(actor, FixtureWithPrefix("deletion-preview", 3, "deletion-scope", "d1-"));
+            Assert(deletionPreview.Preview.DeletionCandidateCount == 0 && !string.IsNullOrWhiteSpace(deletionPreview.Preview.DeletionCandidateHash),
+                "preview must record an explicit empty deletion candidate set hash");
+            var deletionInterleave = service.Preview(actor, FixtureWithPrefix("deletion-interleave", 2, "deletion-scope", "d2-"));
+            Assert(service.Confirm(actor, deletionInterleave.Id).State == "SUCCEEDED", "lower revision interleave must commit before the higher preview is confirmed");
+            P2B5RailReferenceException? deletionError = null;
+            try { service.Confirm(actor, deletionPreview.Id); }
+            catch (P2B5RailReferenceException exception) { deletionError = exception; }
+            Assert(deletionError?.Code == "RAIL_IMPORT_STALE_PREVIEW",
+                $"a changed deletion candidate set must reject the stale preview: {deletionError?.Code}");
+            Assert(service.ListEntities("deletion-scope", null).All(entity => entity.SourceRevision == 2 && entity.Id.StartsWith("d2-", StringComparison.Ordinal)),
+                "stale deletion preview must not partially replace the interleaved graph");
+            Console.WriteLine("RAIL_DELETION_CANDIDATE_BOUND=PASS");
+
+            var sameCountBase = service.Preview(actor, FixtureWithPrefix("same-count-base", 1, "same-count-scope", "sc-"));
+            Assert(service.Confirm(actor, sameCountBase.Id).State == "SUCCEEDED", "same-count fixture must establish its base graph");
+            var sameCountPreview = FixtureWithIds("same-count-preview", 3, "same-count-scope",
+                "sc-line-1", "sc-section-1", "sc-station-a", "sc-station-b", "sc-preview-site");
+            var sameCountPreviewStatus = service.Preview(actor, sameCountPreview);
+            Assert(sameCountPreviewStatus.Preview.DeletionCandidateCount == 1, "same-count preview must have one deletion candidate");
+            var sameCountInterleave = FixtureWithIds("same-count-interleave", 2, "same-count-scope",
+                "sc-line-1", "sc-section-1", "sc-station-a", "sc-station-b", "sc-interleave-site");
+            var sameCountInterleaveStatus = service.Preview(actor, sameCountInterleave);
+            Assert(service.Confirm(actor, sameCountInterleaveStatus.Id).State == "SUCCEEDED", "same-count interleave must commit");
+            P2B5RailReferenceException? sameCountError = null;
+            try { service.Confirm(actor, sameCountPreviewStatus.Id); }
+            catch (P2B5RailReferenceException exception) { sameCountError = exception; }
+            Assert(sameCountError?.Code == "RAIL_IMPORT_STALE_PREVIEW",
+                $"same-count but different deletion IDs must reject the stale preview: {sameCountError?.Code}");
+            Assert(service.ListEntities("same-count-scope", null).All(entity => entity.SourceRevision == 2 && entity.Id != "sc-preview-site"),
+                "same-count stale preview must preserve the committed deletion candidate graph");
+            Console.WriteLine("RAIL_DELETION_CANDIDATE_SAME_COUNT_HASH=PASS");
             var unknown = service.Preview(actor, Fixture("unit-unknown", 1, "line-1") with { Relations = request.Relations!.Append(new P2B5RailRelationInput("LINE_STATION", "line-1", "station-missing")).ToArray() });
             Assert(unknown.State == "CONFLICT" && unknown.Preview.UnknownReferences.Count == 1, "unknown stable references must be rejected as a preview conflict");
             Console.WriteLine("PASS: P2B5 rail reference isolated migration, explicit stable IDs, preview/confirm, hierarchy and conflict guard");
@@ -118,6 +153,12 @@ internal static class P2B5RailReferenceTests
             new[] { new P2B5RailEntityInput(line, "LINE", "Line 1"), new(section, "SECTION", "Section 1"), new(stationA, "STATION", "Station A"), new(stationB, "STATION", "Station B"), new(site, "SITE", "Site 1") },
             new[] { new P2B5RailRelationInput("LINE_SECTION", line, section), new("SECTION_STATION", section, stationA), new("SECTION_STATION", section, stationB), new("STATION_SITE", stationA, site), new("STATION_SITE", stationB, site), new("LINE_STATION", line, stationA), new("LINE_STATION", line, stationB) });
     }
+
+    private static P2B5RailReferenceImportRequest FixtureWithIds(string key, long revision, string scope,
+        string line, string section, string stationA, string stationB, string site) =>
+        new(key, "synthetic-rail", revision, null, scope, "1", "2026-10-27T00:00:00Z", "2026-10-27T00:00:01Z",
+            new[] { new P2B5RailEntityInput(line, "LINE", "Line 1"), new(section, "SECTION", "Section 1"), new(stationA, "STATION", "Station A"), new(stationB, "STATION", "Station B"), new(site, "SITE", "Site 1") },
+            new[] { new P2B5RailRelationInput("LINE_SECTION", line, section), new("SECTION_STATION", section, stationA), new("SECTION_STATION", section, stationB), new("STATION_SITE", stationA, site), new("STATION_SITE", stationB, site), new("LINE_STATION", line, stationA), new("LINE_STATION", line, stationB) });
 
     private static SqliteConnection Open(string path) { var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()); connection.Open(); return connection; }
     private static void Assert(bool condition, string detail) { if (!condition) throw new InvalidOperationException(detail); }
