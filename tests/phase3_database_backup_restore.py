@@ -4,13 +4,14 @@
 import shutil
 import sqlite3
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 from p2b3_read_api_e2e import Client, free_port, start_service, stop_service
 
 
 def inspect_database(root: Path) -> tuple[str, int]:
-    with sqlite3.connect(root / "catalog.db") as db:
+    with closing(sqlite3.connect(root / "catalog.db")) as db:
         integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
         version = db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_versions").fetchone()[0]
         journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
