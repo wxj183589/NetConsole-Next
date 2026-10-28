@@ -55,13 +55,14 @@ internal sealed class RuntimeSettings
             Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_ALLOW_REMOTE_SYSLOG") != "1")
             throw new InvalidOperationException("Remote UDP reception requires explicit opt-in.");
         var receiveBuffer = ParsePositiveInt("NETCONSOLE_NEXT_SYSLOG_RCVBUF_BYTES", 4 * 1024 * 1024, 64 * 1024 * 1024);
+        var webBindAddress = ParseWebBindAddress();
+        RejectRemoteWebOptIn(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_LAN"));
         return new RuntimeSettings
         {
             DataRoot = full,
             WebPort = ParsePort("NETCONSOLE_NEXT_WEB_PORT", 18771, false),
-            WebBindAddress = ParseWebBindAddress(),
-            WebLanEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_BIND") is "0.0.0.0" or "::" ||
-                Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_LAN") == "1",
+            WebBindAddress = webBindAddress,
+            WebLanEnabled = false,
             SyslogPort = ParsePort("NETCONSOLE_NEXT_SYSLOG_PORT", 0, true),
             SyslogBind = bind,
             SyslogReceiveBufferBytes = receiveBuffer,
@@ -106,13 +107,22 @@ internal sealed class RuntimeSettings
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"), "Development", StringComparison.OrdinalIgnoreCase);
 
-    private static string ParseWebBindAddress()
+    internal static string ValidateWebBindAddress(string? value)
     {
-        var value = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_BIND");
         if (string.IsNullOrWhiteSpace(value)) return "127.0.0.1";
-        if (value is not ("127.0.0.1" or "localhost" or "0.0.0.0" or "::"))
-            throw new InvalidOperationException("NETCONSOLE_NEXT_WEB_BIND must be 127.0.0.1, 0.0.0.0 or ::.");
-        return value == "localhost" ? "127.0.0.1" : value;
+        if (string.Equals(value, "localhost", StringComparison.OrdinalIgnoreCase)) return "127.0.0.1";
+        if (!IPAddress.TryParse(value, out var address) || !IPAddress.IsLoopback(address))
+            throw new InvalidOperationException("NETCONSOLE_NEXT_WEB_BIND must be a loopback address (127.0.0.1, ::1 or localhost); remote HTTP/TLS is not supported.");
+        return address.ToString();
+    }
+
+    private static string ParseWebBindAddress() =>
+        ValidateWebBindAddress(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_BIND"));
+
+    internal static void RejectRemoteWebOptIn(string? value)
+    {
+        if (string.Equals(value, "1", StringComparison.Ordinal))
+            throw new InvalidOperationException("NETCONSOLE_NEXT_WEB_LAN=1 is not supported; remote HTTP/TLS is not configured and the Web service remains loopback-only.");
     }
 
     private static int ParsePositiveInt(string key, int fallback, int maximum)

@@ -22,6 +22,8 @@ else if (args.Length > 0 && args[0] == "--p2b5-export-migrate")
     await P2B5ExportMigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b5-rail-reference-migrate")
     await P2B5RailReferenceMigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--runtime-settings-tests")
+    RuntimeSettingsTests.Run();
 else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
 else

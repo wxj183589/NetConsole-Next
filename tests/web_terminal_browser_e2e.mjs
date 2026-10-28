@@ -36,11 +36,11 @@ page.on('response', (response) => {
 page.on('request', (request) => {
   if (request.url().includes('cdn.jsdelivr.net')) throw new Error(`CDN request: ${request.url()}`)
 })
-
 const waitForTerminal = (value) => page.waitForFunction((text) => {
   const compact = (input) => input.replace(/\s+/g, '')
   return [...document.querySelectorAll('.xterm-rows')].some((rows) => compact(rows.innerText).includes(compact(text)))
 }, value, { timeout: 15000 })
+const waitForVisibleTerminal = (value) => page.locator('.terminal-pane:visible .xterm-rows').filter({ hasText: value }).last().waitFor({ timeout: 15000 })
 
 async function selectDevice(id, protocol) {
   await page.locator(`[data-testid="terminal-device-row"][data-device-id="${id}"]`).click()
@@ -86,6 +86,16 @@ try {
   await waitForTerminal('TELNET synthetic ready')
   await typeCommand('display interface brief')
   await waitForTerminal('simulated-telnet:')
+
+  if (await page.locator('.terminal-host').count() !== 2) throw new Error('terminal hosts must remain mounted when two tabs are open')
+  await page.locator('.terminal-tab').filter({ hasText: 'SSH' }).last().click()
+  await waitForVisibleTerminal('simulated-ssh:display interface brief')
+  await page.getByRole('button', { name: '重连', exact: true }).click()
+  await page.locator('.terminal-status').filter({ hasText: '受限只读' }).waitFor({ timeout: 15000 })
+  await typeCommand('display interface brief')
+  await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane')]
+    .filter((pane) => getComputedStyle(pane).display !== 'none')
+    .some((pane) => (pane.innerText.match(/simulated-ssh:display interface brief/g) || []).length >= 2), { timeout: 15000 })
 
   await page.getByRole('button', { name: '分屏', exact: true }).click()
   if (await page.locator('.terminal-panes.split .terminal-pane').count() !== 2) throw new Error('split view did not show two panes')

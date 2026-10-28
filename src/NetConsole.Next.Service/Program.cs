@@ -12,7 +12,7 @@ var settings = RuntimeSettings.FromEnvironment();
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "NetConsoleNext");
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
-var webBind = settings.WebBindAddress == "::" ? "[::]" : settings.WebBindAddress;
+var webBind = settings.WebBindAddress.IndexOf(':') >= 0 ? $"[{settings.WebBindAddress}]" : settings.WebBindAddress;
 builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<Catalog>();
@@ -81,7 +81,7 @@ app.Use(async (context, next) =>
     var remote = context.Connection.RemoteIpAddress;
     var requestHost = context.Request.Host;
     var validHost = IsAllowedWebHost(requestHost, settings);
-    var validRemote = remote is not null && (System.Net.IPAddress.IsLoopback(remote) || settings.WebLanEnabled);
+    var validRemote = remote is not null && System.Net.IPAddress.IsLoopback(remote);
     if (!validRemote || !validHost)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -807,9 +807,7 @@ if (settings.TerminalEnabled)
     {
         var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}", $"http://[::1]:{settings.WebPort}" };
         var origin = context.Request.Headers.Origin.ToString();
-        var lanOrigin = settings.WebLanEnabled && origin.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            Uri.TryCreate(origin, UriKind.Absolute, out var parsedOrigin) && parsedOrigin.Port == settings.WebPort;
-        if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) && !lanOrigin)
+        if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -940,7 +938,7 @@ static bool IsAllowedWebHost(HostString host, RuntimeSettings settings)
         string.Equals(host.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(host.Host, "[::1]", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(host.Host, "::1", StringComparison.OrdinalIgnoreCase)) return true;
-    return settings.WebLanEnabled && !string.IsNullOrWhiteSpace(host.Host);
+    return false;
 }
 
 static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;
