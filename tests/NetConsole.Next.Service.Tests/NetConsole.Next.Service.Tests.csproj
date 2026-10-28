@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/NetConsole.Next.Service/NetConsole.Next.Service.csproj" />
+    <EmbeddedResource Include="../../storage/schema_v1.sql" LogicalName="NetConsole.Next.Service.Tests.schema_v1.sql" />
+    <None Update="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

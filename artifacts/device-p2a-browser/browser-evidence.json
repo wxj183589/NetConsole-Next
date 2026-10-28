@@ -1,0 +1,95 @@
+{
+  "gitSha": "af1e56f314d83142eca808463f7f24052bb9e97d",
+  "base": "http://127.0.0.1:18774",
+  "viewports": [
+    {
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "width": 1366,
+      "height": 768
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "unexpectedHttpErrors": [],
+  "websocketErrors": [],
+  "unhandledRejections": [],
+  "expectedHttp": [
+    {
+      "method": "GET",
+      "pattern": "^/api/auth/me$",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "pattern": "^/api/system/terminal/devices$",
+      "status": 404
+    },
+    {
+      "method": "POST",
+      "pattern": "^/api/system/devices/batch/.+/confirm$",
+      "status": 409
+    },
+    {
+      "method": "GET",
+      "pattern": "^/api/auth/me$",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "pattern": "^/api/system/terminal/devices$",
+      "status": 404
+    },
+    {
+      "method": "POST",
+      "pattern": "^/api/system/devices$",
+      "status": 403
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "overview-light.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\overview-light.png",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "name": "overview-dark.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\overview-dark.png",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "name": "batch-preview.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\batch-preview.png",
+      "width": 1366,
+      "height": 768
+    },
+    {
+      "name": "batch-recovery.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\batch-recovery.png",
+      "width": 1366,
+      "height": 768
+    },
+    {
+      "name": "batch-cancel.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\batch-cancel.png",
+      "width": 1366,
+      "height": 768
+    },
+    {
+      "name": "batch-conflict.png",
+      "path": "D:\\NetConsoleNext-P2A\\artifacts\\device-p2a-browser\\batch-conflict.png",
+      "width": 1366,
+      "height": 768
+    }
+  ],
+  "passed": true
+}

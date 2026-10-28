@@ -1,0 +1,144 @@
+{
+  "environment": {
+    "os": "posix",
+    "python": "3.12.14",
+    "runtime": "net10.0",
+    "processorCount": 3,
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "queueCapacity": 2048,
+    "blockDeviceIops": null,
+    "blockDeviceIopsNote": "Not available from the isolated process; process IO syscalls and physical byte counters are recorded."
+  },
+  "idle": {
+    "durationSeconds": 3.0,
+    "healthCpuPercent": 100,
+    "workingSetBytes": 61960192,
+    "threads": 17,
+    "handles": 230,
+    "processReadBytes": 0,
+    "processWriteBytes": 0
+  },
+  "udpLoad": {
+    "attempted": 100000,
+    "sendSeconds": 20.167303943999286,
+    "received": 99975,
+    "accepted": 88515,
+    "applicationDropped": 11460,
+    "flushed": 88515,
+    "queueDepth": 0,
+    "queueCapacity": 2048,
+    "queueHighWatermark": 2048,
+    "queueBytesHighWatermark": 1048576,
+    "queueByteCapacity": 33554432,
+    "socketReceiveBufferRequestedBytes": 4194304,
+    "socketReceiveBufferEffectiveBytes": 8388608,
+    "rawFlushLatency": {
+      "samples": 363,
+      "windowSamples": 363,
+      "p50Ms": 0.2148,
+      "p95Ms": 5.2079,
+      "p99Ms": 124.8529,
+      "maxMs": 180.9637
+    },
+    "rawFileSyncLatency": {
+      "samples": 363,
+      "windowSamples": 363,
+      "p50Ms": 0.2148,
+      "p95Ms": 5.2079,
+      "p99Ms": 124.8529,
+      "maxMs": 180.9637
+    },
+    "rawSegmentSealLatency": {
+      "samples": 16,
+      "windowSamples": 16,
+      "p50Ms": 11.8709,
+      "p95Ms": 1185.532,
+      "p99Ms": 1185.532,
+      "maxMs": 1185.532
+    },
+    "sqliteSegmentRegistrationLatency": {
+      "samples": 16,
+      "windowSamples": 16,
+      "p50Ms": 2.246,
+      "p95Ms": 193.7709,
+      "p99Ms": 193.7709,
+      "maxMs": 193.7709
+    },
+    "hostGlobalKernelUdp": {
+      "before": {
+        "InDatagrams": 2567196,
+        "InErrors": 288071,
+        "RcvbufErrors": 288071,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterLoad": {
+        "InDatagrams": 2667171,
+        "InErrors": 288096,
+        "RcvbufErrors": 288096,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      },
+      "afterBurst": {
+        "InDatagrams": 2667171,
+        "InErrors": 288096,
+        "RcvbufErrors": 288096,
+        "SndbufErrors": 0,
+        "InCsumErrors": 0,
+        "MemErrors": 0
+      }
+    },
+    "physicalReadBytes": 0,
+    "physicalWriteBytes": 0,
+    "readSyscalls": 17006,
+    "writeSyscalls": 807,
+    "workingSetBytes": 127594496,
+    "threadCount": 23,
+    "fdCount": 231,
+    "cpuTicks": 1978,
+    "processCpuPercent": 29.51141345745471,
+    "durationSeconds": 20.167303943999286,
+    "dataBytesAfterLoad": 68869514,
+    "queueSaturationBurst": {
+      "attempted": 0,
+      "sendSeconds": 0.00024962400129879825,
+      "received": 0,
+      "accepted": 0,
+      "applicationDropped": 0,
+      "queueHighWatermark": 2048,
+      "queueCapacity": 2048,
+      "flushed": 0,
+      "queueDepth": 0,
+      "processPhysicalReadBytes": 0,
+      "processPhysicalWriteBytes": 0,
+      "processReadSyscalls": 116,
+      "processWriteSyscalls": 100,
+      "dataBytes": 4843
+    }
+  },
+  "sqliteWrites": {
+    "writes": 500,
+    "p50Ms": 0.006253,
+    "p95Ms": 0.010661,
+    "p99Ms": 0.106676,
+    "maxMs": 0.786002,
+    "meanMs": 0.011134746
+  },
+  "startupRecovery": {
+    "history": {
+      "files": 1000,
+      "bytes": 11016000,
+      "recordBytes": 11016
+    },
+    "wallMs": 638.2530920000136,
+    "reportedMs": 44,
+    "scannedFiles": 1017,
+    "trustedFilesSkipped": 1017,
+    "bytesRead": 0,
+    "bytesHashed": 0,
+    "dataBytes": 34746
+  },
+  "dataDirectoryBytesFinal": 82577133
+}

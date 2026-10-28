@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../NetConsole.Next.Credentials/NetConsole.Next.Credentials.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.4" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.0" />
+    <EmbeddedResource Include="../../storage/schema_v1.sql" LogicalName="schema_v1.sql" />
+    <EmbeddedResource Include="../../storage/schema_v2.sql" LogicalName="schema_v2.sql" />
+    <EmbeddedResource Include="../../storage/schema_v3.sql" LogicalName="schema_v3.sql" />
+    <EmbeddedResource Include="../../storage/schema_v4.sql" LogicalName="schema_v4.sql" />
+    <EmbeddedResource Include="../../storage/schema_v5.sql" LogicalName="schema_v5.sql" />
+    <EmbeddedResource Include="../../storage/schema_v6.sql" LogicalName="schema_v6.sql" />
+    <EmbeddedResource Include="../../storage/schema_v7.sql" LogicalName="schema_v7.sql" />
+    <EmbeddedResource Include="../../storage/schema_v8.sql" LogicalName="schema_v8.sql" />
+    <EmbeddedResource Include="../../storage/schema_v9.sql" LogicalName="schema_v9.sql" />
+    <EmbeddedResource Include="../../storage/schema_v10.sql" LogicalName="schema_v10.sql" />
+    <EmbeddedResource Include="../../storage/schema_v11.sql" LogicalName="schema_v11.sql" />
+    <EmbeddedResource Include="../../storage/schema_v12.sql" LogicalName="schema_v12.sql" />
+    <EmbeddedResource Include="../../storage/schema_v13.sql" LogicalName="schema_v13.sql" />
+    <EmbeddedResource Include="../../storage/schema_v14.sql" LogicalName="schema_v14.sql" />
+    <EmbeddedResource Include="../../storage/schema_p2b5_site_scope.sql" LogicalName="schema_p2b5_site_scope.sql" />
+    <EmbeddedResource Include="../../storage/schema_p2b5_export.sql" LogicalName="schema_p2b5_export.sql" />
+    <EmbeddedResource Include="../../storage/schema_p2b5_rail_reference.sql" LogicalName="schema_p2b5_rail_reference.sql" />
+    <Content Update="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
