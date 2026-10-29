@@ -1,0 +1,538 @@
+
+
+******************************************************************************
+
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+
+* Without the owner's prior written consent,                                 *
+
+* no decompiling or reverse-engineering shall be allowed.                    *
+
+******************************************************************************
+
+
+
+<AP-229-REDACTED>display interface
+
+GigabitEthernet1/0/1
+
+Current state: UP
+
+Line protocol state: UP
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+Description: GigabitEthernet1/0/1 Interface
+
+Bandwidth: 1000000 kbps
+
+Loopback is not set
+
+Media type is twisted pair, promiscuous mode set
+
+1000Mbps-speed mode, full-duplex mode
+
+Link speed type is autonegotiation, link duplex type is autonegotiation
+
+Flow-control is not enabled
+
+Maximum frame length: 1600
+
+Allow jumbo frames to pass
+
+Broadcast max-ratio: 100%
+
+Multicast max-ratio: 100%
+
+Unicast max-ratio: 100%
+
+PVID: 201
+
+Port link-type: Access
+
+ Tagged VLANs:   None
+
+ Untagged VLANs: 201
+
+Port priority: 0
+
+Last link flapping: 0 hours 40 minutes 49 seconds
+
+Last clearing of counters: Never
+
+Current system time:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Last time when physical state changed to up:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Last time when physical state changed to down:2026-01-01 00:00:00 BeiJing+08:00:00
+
+ Last 300 second input: 4 packets/sec 276 bytes/sec 0%
+
+ Last 300 second output: 7 packets/sec 512 bytes/sec 0%
+
+ Input (total):  10281 packets, 668246 bytes
+
+	 5002 unicasts, 268 broadcasts, 5011 multicasts, 0 pauses
+
+ Input (normal):  10281 packets, 668246 bytes
+
+	 5002 unicasts, 268 broadcasts, 5011 multicasts, 0 pauses
+
+ Input:  0 input errors, 0 runts, 0 giants, - throttles
+
+	 0 CRC, - frame, 0 overruns, 0 aborts
+
+	 - ignored, - parity errors
+
+ Output (total): 24193 packets, 1570268 bytes
+
+	 5067 unicasts, 12780 broadcasts, 6346 multicasts, 0 pauses
+
+ Output (normal): 24193 packets, 1570268 bytes
+
+	 5067 unicasts, 12780 broadcasts, 6346 multicasts, 0 pauses
+
+ Output: 0 output errors, 0 underruns, - buffer failures
+
+	 - aborts, 0 deferred, 0 collisions, 0 late collisions
+
+	 - lost carrier, - no carrier
+
+
+
+InLoopBack0
+
+Current state: UP
+
+Line protocol state: UP(spoofing)
+
+Description: InLoopBack0 Interface
+
+Maximum transmission unit: 1536
+
+Physical: InLoopBack
+
+Last 300 seconds input rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Last 300 seconds output rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Input: 0 packets, 0 bytes, 0 drops
+
+Output: 0 packets, 0 bytes, 0 drops
+
+
+
+NULL0
+
+Current state: UP
+
+Line protocol state: UP(spoofing)
+
+Description: NULL0 Interface
+
+Bandwidth: 1000000 kbps
+
+Maximum transmission unit: 1500
+
+Internet protocol processing: Disabled
+
+Physical: NULL DEV, baudrate: 1000000 kbps
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Last 300 seconds output rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Input: 0 packets, 0 bytes, 0 drops
+
+Output: 0 packets, 0 bytes, 0 drops
+
+
+
+Smartrate-Ethernet1/0/1
+
+Current state: DOWN
+
+Line protocol state: DOWN
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+Description: debug
+
+Loopback is not set
+
+Media type is twisted pair, promiscuous mode set
+
+Unknown-speed mode, unknown-duplex mode
+
+Link speed type is autonegotiation, link duplex type is autonegotiation
+
+Flow-control is not enabled
+
+Maximum frame length: 1600
+
+Allow jumbo frames to pass
+
+Broadcast max-ratio: 100%
+
+Multicast max-ratio: 100%
+
+Unicast max-ratio: 100%
+
+PVID: 201
+
+Port link-type: Access
+
+ Tagged VLANs:   None
+
+ Untagged VLANs: 201
+
+Port priority: 0
+
+Last link flapping: Never
+
+Last clearing of counters: Never
+
+Current system time:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Last time when physical state changed to up:-
+
+Last time when physical state changed to down:2026-01-01 00:00:00 BeiJing+08:00:00
+
+ Last 300 second input: 0 packets/sec 0 bytes/sec -%
+
+ Last 300 second output: 0 packets/sec 0 bytes/sec -%
+
+ Input (total):  0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Input (normal):  0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Input:  0 input errors, 0 runts, 0 giants, - throttles
+
+	 0 CRC, - frame, 0 overruns, 0 aborts
+
+	 - ignored, - parity errors
+
+ Output (total): 0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Output (normal): 0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Output: 0 output errors, 0 underruns, - buffer failures
+
+	 - aborts, 0 deferred, 0 collisions, 0 late collisions
+
+	 - lost carrier, - no carrier
+
+
+
+Ten-GigabitEthernet1/0/1
+
+Current state: DOWN
+
+Line protocol state: DOWN
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+Description: debug
+
+Loopback is not set
+
+Media type is optical fiber, Port hardware type is UNKNOWN_SFP_PLUS, promiscuous mode set
+
+Unknown-speed mode, unknown-duplex mode
+
+Link speed type is autonegotiation, link duplex type is autonegotiation
+
+Flow-control is not enabled
+
+Maximum frame length: 1600
+
+Allow jumbo frames to pass
+
+Broadcast max-ratio: 100%
+
+Multicast max-ratio: 100%
+
+Unicast max-ratio: 100%
+
+PVID: 201
+
+Port link-type: Access
+
+ Tagged VLANs:   None
+
+ Untagged VLANs: 201
+
+Port priority: 0
+
+Last link flapping: Never
+
+Last clearing of counters: Never
+
+Current system time:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Last time when physical state changed to up:-
+
+Last time when physical state changed to down:2026-01-01 00:00:00 BeiJing+08:00:00
+
+ Last 300 second input: 0 packets/sec 0 bytes/sec -%
+
+ Last 300 second output: 0 packets/sec 0 bytes/sec -%
+
+ Input (total):  0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Input (normal):  0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Input:  0 input errors, 0 runts, 0 giants, - throttles
+
+	 0 CRC, - frame, 0 overruns, 0 aborts
+
+	 - ignored, - parity errors
+
+ Output (total): 0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Output (normal): 0 packets, 0 bytes
+
+	 0 unicasts, 0 broadcasts, 0 multicasts, 0 pauses
+
+ Output: 0 output errors, 0 underruns, - buffer failures
+
+	 - aborts, 0 deferred, 0 collisions, 0 late collisions
+
+	 - lost carrier, - no carrier
+
+
+
+Vlan-interface1
+
+Current state: Administratively DOWN
+
+Line protocol state: DOWN
+
+Description: Vlan-interface1 Interface
+
+Bandwidth: 1000000 kbps
+
+Maximum transmission unit: 1500
+
+Internet protocol processing: Disabled
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+IPv6 packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Last 300 seconds output rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Input: 0 packets, 0 bytes, 0 drops
+
+Output: 0 packets, 0 bytes, 0 drops
+
+
+
+Vlan-interface201
+
+Current state: UP
+
+Line protocol state: UP
+
+Description: AP-manage
+
+Bandwidth: 1000000 kbps
+
+Maximum transmission unit: 1500
+
+Internet address: 10.0.0.229/24 (primary)
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+IPv6 packet frame type: Ethernet II, hardware address: 0011-2233-4455
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 594 bytes/sec, 4752 bits/sec, 8 packets/sec
+
+Last 300 seconds output rate: 99 bytes/sec, 792 bits/sec, 0 packets/sec
+
+Input: 24751 packets, 1587862 bytes, 0 drops
+
+Output: 621 packets, 76552 bytes, 0 drops
+
+
+
+WLAN-Mesh1
+
+Current state: DOWN
+
+IP packet frame type: Ethernet II, hardware address: 0000-0000-0000
+
+Description: WLAN-Mesh1 Interface
+
+PVID: 1
+
+Port link-type: Trunk
+
+ VLAN Passing:   201
+
+ VLAN permitted: 201
+
+ Trunk port encapsulation: IEEE 802.1q
+
+
+
+WLAN-MeshLink0
+
+Current state: Administratively DOWN
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4466
+
+Description: WLAN-MeshLink0 Interface
+
+PVID: 1
+
+Port link-type: Trunk
+
+ VLAN Passing:   201
+
+ VLAN permitted: 201
+
+ Trunk port encapsulation: IEEE 802.1q
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Last 300 seconds output rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Input: 8 packets, 848 bytes, 1 drops
+
+Output: 17 packets, 1496 bytes, 0 drops
+
+
+
+WLAN-MeshLink1
+
+Current state: UP
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4466
+
+Description: WLAN-MeshLink1 Interface
+
+PVID: 1
+
+Port link-type: Trunk
+
+ VLAN Passing:   201
+
+ VLAN permitted: 201
+
+ Trunk port encapsulation: IEEE 802.1q
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 959 bytes/sec, 7672 bits/sec, 8 packets/sec
+
+Last 300 seconds output rate: 572 bytes/sec, 4576 bits/sec, 4 packets/sec
+
+Input: 24573 packets, 2628840 bytes, 0 drops
+
+Output: 10823 packets, 1186616 bytes, 0 drops
+
+
+
+WLAN-MeshLink6
+
+Current state: Administratively DOWN
+
+IP packet frame type: Ethernet II, hardware address: 0011-2233-4466
+
+Description: WLAN-MeshLink6 Interface
+
+PVID: 1
+
+Port link-type: Trunk
+
+ VLAN Passing:   201
+
+ VLAN permitted: 201
+
+ Trunk port encapsulation: IEEE 802.1q
+
+Last clearing of counters: Never
+
+Last 300 seconds input rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Last 300 seconds output rate: 0 bytes/sec, 0 bits/sec, 0 packets/sec
+
+Input: 0 packets, 0 bytes, 0 drops
+
+Output: 0 packets, 0 bytes, 0 drops
+
+
+
+WLAN-Radio1/0/1
+
+Current state: UP
+
+Description: WLAN-Radio1/0/1 Interface
+
+IP Packet Frame Type: PKTFMT_IEEE_802.11, Hardware Address: 0011-2233-4455
+
+current mode: 802.11ax, current channel: 149
+
+Last link flapping: 0 hours 40 minutes 58 seconds
+
+Last clearing of counters: Never
+
+Current system time:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Last time when physical state changed to up:2026-01-01 16:55:08 BeiJing+08:00:00
+
+Last time when physical state changed to down:2026-01-01 00:00:00 BeiJing+08:00:00
+
+Input (total): 104788 packets, 14846924 bytes
+
+Input (normal): 87712 packets, 8341335 bytes
+
+                3746 management, 10842 control, 73124 data
+
+Input (error): 17076 total, 0 CRC, 0 decrypt errors
+
+               0 mic failures, 0 phy errors, 17076 other errors
+
+Output (total): 98474 packets, 20389105 bytes
+
+Output (normal): Q[0]:45454, Q[1]:0, Q[2]:0, Q[3]:53006 packets
+
+                 Q[0]:7050921, Q[1]:0, Q[2]:0, Q[3]:13336228 bytes
+
+                 76788 management, 10823 control, 10863 data
+
+Output (bcn&probe): 73040 packets, 17323972 bytes
+
+Output (error): 14 total, 14 discard, 0 buffer failures
+
+                14 ack failures, 10815 rts successes, 4 rts failures
+
+ 
+
+
+

@@ -155,6 +155,7 @@ internal static class SchedulerTests
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
+        VerifiesPhase11LiveApGoldenFixtures();
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
@@ -894,6 +895,29 @@ internal static class SchedulerTests
                 $"golden fixture metadata contract is incomplete: {relative}");
         }
         Console.WriteLine($"PHASE10_GOLDEN_MANIFEST=PASS ({entries.GetArrayLength()} fixtures)");
+    }
+
+    private static void VerifiesPhase11LiveApGoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_229");
+        var version = File.ReadAllText(Path.Combine(root, "display_version.txt"));
+        Assert(version.Contains("WA6510E-T", StringComparison.Ordinal) && version.Contains("7.1.064", StringComparison.Ordinal),
+            "Phase 11 live AP fixture must retain the verified model and Comware release");
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count >= 12 && interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP"),
+            "Phase 11 live AP interface brief must preserve the twelve-interface V7 shape and radio state");
+        var lldp = H3cComwareParser.ParseLldpList(File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt")));
+        Assert(lldp.Count == 1 && lldp[0].LocalInterface == "GE1/0/1" && lldp[0].NeighborInterface == "ge2",
+            "Phase 11 live AP LLDP fixture must retain local and remote ports");
+        var unsupported = H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            File.ReadAllText(Path.Combine(root, "display_wlan_ap_all.txt")));
+        Assert(unsupported.Status is "UNSUPPORTED" or "UNRECOGNIZED",
+            "Phase 11 live AP unsupported command must remain a structured non-success");
+        var mesh = H3cComwareParser.ParseMeshLink(File.ReadAllText(Path.Combine(root, "display_wlan_mesh_link.txt")));
+        Assert(mesh.Count == 3 && mesh.Count(item => item.LinkState == "Active(ax)") == 1 &&
+               mesh.Any(item => item.Rssi == 30 && item.InterfaceName == "WLAN-MeshLink6"),
+            "Phase 11 live AP mesh-link fixture must retain peer count, RSSI and active state");
+        Console.WriteLine("PHASE11_LIVE_AP_FIXTURES=PASS (V7 identity/interface/LLDP/unsupported command)");
     }
 
     private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()

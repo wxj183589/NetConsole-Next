@@ -133,6 +133,9 @@ internal sealed record H3cApAddressFact(string Name, string? IpAddress, string? 
 
 internal sealed record H3cRadioFact(string ApName, int? RadioId, int? Channel, string? Bandwidth, decimal? TxPower);
 
+internal sealed record H3cMeshLinkFact(string? PeerName, string? PeerMac, int? Rssi, string? Bssid,
+    string? InterfaceName, string? LinkState, string? OnlineTime);
+
 internal sealed record H3cLldpFact(string? LocalInterface, string? NeighborSysname, string? NeighborInterface,
     string? ManagementAddress, string? ChassisId = null);
 
@@ -185,13 +188,37 @@ internal static partial class H3cComwareParser
         return rows;
     }
 
+    public static IReadOnlyList<H3cMeshLinkFact> ParseMeshLink(string output)
+    {
+        var transcript = CliTranscriptParser.Parse(output, H3cCommandPolicy.DisplayWlanMeshLink);
+        var lines = transcript.Output.Split('\n');
+        var header = Array.FindIndex(lines, line => line.Contains("Peer Name", StringComparison.OrdinalIgnoreCase) &&
+            line.Contains("Link state", StringComparison.OrdinalIgnoreCase));
+        if (header >= 0) lines = lines[(header + 1)..];
+        var rows = new List<H3cMeshLinkFact>();
+        foreach (var line in lines)
+        {
+            var parts = line.Trim().Split((char[]?)null, 7, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 7 || !int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var rssi)) continue;
+            rows.Add(new(parts[0], parts[1], rssi, parts[3], parts[4], parts[5], parts[6]));
+        }
+        return rows;
+    }
+
     public static IReadOnlyList<H3cLldpFact> ParseLldpList(string output)
     {
         var transcript = CliTranscriptParser.Parse(output, H3cCommandPolicy.DisplayLldpNeighborInformationList);
-        return transcript.Output.Split('\n').Where(line => !line.Trim().StartsWith("Local Interface", StringComparison.OrdinalIgnoreCase))
+        var lines = transcript.Output.Split('\n');
+        var systemNameHeader = Array.FindIndex(lines, line => line.Trim().StartsWith("System Name", StringComparison.OrdinalIgnoreCase));
+        var systemNameFirst = systemNameHeader >= 0;
+        if (systemNameHeader >= 0) lines = lines[(systemNameHeader + 1)..];
+        return lines.Where(line => !line.Trim().StartsWith("Local Interface", StringComparison.OrdinalIgnoreCase) &&
+                !line.Trim().StartsWith("System Name", StringComparison.OrdinalIgnoreCase))
             .Select(line => line.Trim().Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries))
-            .Where(parts => parts.Length == 4 && IsInterfaceToken(parts[0]))
-            .Select(parts => new H3cLldpFact(parts[0], parts[1], parts[2], parts[3])).ToArray();
+            .Where(parts => parts.Length == 4 && IsInterfaceToken(systemNameFirst ? parts[1] : parts[0]))
+            .Select(parts => systemNameFirst
+                ? new H3cLldpFact(parts[1], parts[0], parts[3], null, parts[2])
+                : new H3cLldpFact(parts[0], parts[1], parts[2], parts[3])).ToArray();
     }
 
     public static IReadOnlyList<H3cLldpFact> ParseLldpVerbose(string output)

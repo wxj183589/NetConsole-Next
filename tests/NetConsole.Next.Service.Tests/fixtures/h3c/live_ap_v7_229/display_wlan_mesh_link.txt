@@ -1,0 +1,24 @@
+
+
+******************************************************************************
+
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+
+* Without the owner's prior written consent,                                 *
+
+* no decompiling or reverse-engineering shall be allowed.                    *
+
+******************************************************************************
+
+
+
+<AP-229-REDACTED>display wlan mesh-link
+
+ Peer Name              Peer MAC       RSSI BSSID          Interface         Link state       Online time
+
+ peer-a         peer-a-mac 30   0011-2233-4466 WLAN-MeshLink6    Standby(ax)      00h 57m 53s
+
+ peer-b         peer-b-mac 32   0011-2233-4466 WLAN-MeshLink0    Standby(ax)      00h 57m 56s
+
+ peer-c         peer-c-mac 51   0011-2233-4466 WLAN-MeshLink1    Active(ax)       00h 57m 56s
+

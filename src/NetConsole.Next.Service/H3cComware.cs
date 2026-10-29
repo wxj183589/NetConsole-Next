@@ -12,13 +12,14 @@ internal static class H3cCommandPolicy
     public const string DisplayWlanApAll = "display wlan ap all";
     public const string DisplayWlanApAllAddress = "display wlan ap all address";
     public const string DisplayWlanApAllRadio = "display wlan ap all radio";
+    public const string DisplayWlanMeshLink = "display wlan mesh-link";
     public const string DisplayLldpNeighborInformationList = "display lldp neighbor-information list";
     public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
     public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
 
     public static bool IsAllowed(string command) => command is
         DisplayVersion or DisplayInterfaceBrief or DisplayDevice or DisplayWlanApAll or
-        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayLldpNeighborInformationList or
+        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface;
 }
 
@@ -327,6 +328,12 @@ internal static partial class H3cComwareParser
             return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
         }
+        if (command == H3cCommandPolicy.DisplayWlanMeshLink)
+        {
+            var result = ParseMeshLink(output);
+            return new(result.Count > 0 ? "PARSED" : "EMPTY",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
         if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
         {
             var result = ParseLldpList(output);
@@ -373,6 +380,7 @@ internal static partial class H3cComwareParser
     {
         if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayWlanApAll or
             H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or
+            H3cCommandPolicy.DisplayWlanMeshLink or
             H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
             H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
             return null;
