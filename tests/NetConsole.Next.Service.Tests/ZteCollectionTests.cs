@@ -43,7 +43,23 @@ internal static class ZteCollectionTests
             var current = catalog.QueryZteFacts(profileId, "interfaces", false, 10);
             var history = catalog.QueryZteFacts(profileId, "interfaces", true, 10);
             Assert(current.Count == 1 && current[0].IsCurrent, "successful ZTE collection must publish one current fact");
-            Assert(history.Count == 1 && !history[0].IsCurrent, "successful ZTE collection must retain one history fact");
+            Assert(history.Count == 0, "the current fact must not be duplicated into history");
+
+            var repeatRun = Guid.NewGuid().ToString("N");
+            catalog.StartZteCollectionRun(repeatRun, profileId, 1500);
+            catalog.CommitZteCollection(repeatRun, profileId, "SUCCEEDED", null,
+                new Dictionary<string, string> { [ZteCommandPolicy.ShowInterfaceBrief] = "PARSED" },
+                new[] { ("interfaces", "PARSED", JsonSerializer.Serialize(parsed.Value)) });
+            Assert(catalog.QueryZteFacts(profileId, "interfaces", true, 10).Count == 1,
+                "repeated identical collection must retain one prior observation, not duplicate rows");
+
+            var partialRun = Guid.NewGuid().ToString("N");
+            catalog.StartZteCollectionRun(partialRun, profileId, 1750);
+            catalog.CommitZteCollection(partialRun, profileId, "FAILED", "PAGED",
+                new Dictionary<string, string> { [ZteCommandPolicy.ShowOpticalInfoBrief] = "PAGED" },
+                new[] { ("raw:" + ZteCommandPolicy.ShowOpticalInfoBrief, "PAGED", "{\"captureStatus\":\"PARTIAL\",\"raw\":\"fixture\"}") });
+            Assert(catalog.QueryZteFacts(profileId, "raw:" + ZteCommandPolicy.ShowOpticalInfoBrief, true, 10).Count == 1,
+                "partial command output must remain available as history evidence");
 
             var failedRun = Guid.NewGuid().ToString("N");
             catalog.StartZteCollectionRun(failedRun, profileId, 2000);
@@ -52,6 +68,12 @@ internal static class ZteCollectionTests
                 Array.Empty<(string, string, string)>());
             Assert(catalog.QueryZteFacts(profileId, "interfaces", false, 10).Count == 1,
                 "failed or empty ZTE collection must not clear the previous current fact");
+
+            var queuedRun = Guid.NewGuid().ToString("N");
+            catalog.StartZteCollectionRun(queuedRun, profileId, 2500, "RUNNING");
+            catalog.RecoverInterruptedZteCollectionRuns();
+            Assert(catalog.GetZteCollectionRun(queuedRun)?.State == "INTERRUPTED",
+                "startup recovery must reconcile orphaned ZTE collection runs");
 
             var liveRunId = service.Start(profileId);
             ZteCollectionRunSnapshot? liveRun = null;

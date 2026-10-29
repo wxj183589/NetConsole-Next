@@ -160,6 +160,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV11Migration(db);
         ApplyV12Migration(db);
         ZteCollectionSchema.Apply(db);
+        RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
 
         using (var foreignKeys = db.CreateCommand())

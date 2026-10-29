@@ -146,6 +146,8 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     try { app.Services.GetRequiredService<TerminalSessionManager>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     catch { }
+    try { app.Services.GetRequiredService<ZteCollectionService>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+    catch { }
 });
 RollingFileLoggerProvider? fileLoggerProvider = null;
 try
@@ -933,6 +935,7 @@ app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, strin
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_COLLECTION_PERMISSION_DENIED", id);
     try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id) }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ZteCollectionRejectedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
