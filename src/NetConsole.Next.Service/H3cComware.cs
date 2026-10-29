@@ -350,6 +350,8 @@ internal static partial class H3cComwareParser
             {
                 CliTranscriptStatus.Complete => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
                 CliTranscriptStatus.Empty => "EMPTY",
+                CliTranscriptStatus.Incomplete when transcript.Prompt.Length == 0 =>
+                    string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
                 CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
                 CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
                 _ => "UNCLASSIFIED"

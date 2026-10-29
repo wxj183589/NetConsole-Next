@@ -786,6 +786,11 @@ internal static class SchedulerTests
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
             "HZL10-AC#display device\nDevice summary\nHZL10-AC#").Status == "PARSED",
             "H3C device inventory command must preserve a complete raw transcript body");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice, "Device summary from completed Exec output").Status == "PARSED",
+            "H3C Exec output without an interactive prompt must remain a complete parse");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\npartial body").Status == "PARTIAL",
+            "an interactive transcript without a closing prompt must remain partial");
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
             "HZL10-AC#display device\n% Unrecognized command\nHZL10-AC#").Status == "UNRECOGNIZED",
             "H3C device inventory errors must not be persisted as parsed output");
