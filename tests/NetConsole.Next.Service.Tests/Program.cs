@@ -825,6 +825,15 @@ internal static class SchedulerTests
         Assert(optics.Value.Count == 3 && optics.Value.Single(x => x.InterfaceName == "gei-0/3/0/1").Status == "NO_MODULE" &&
                optics.Value.Single(x => x.InterfaceName == "xgeis-0/4/0/5").TxPowerDbm is null,
             "ZTE optical parser must keep no-module and missing TX distinct");
+        var pagedOptics = ZteZxr10Parser.ParseOpticalBrief(
+            "DEVICE-REDACTED#show opticalinfo brief\nInterface Type Wavelength RxPower(dBm) TxPower(dBm) Status Mode\n" +
+            "sci-0/1/0/1 1G 1310nm -7.2 -5.1 Normal SingleMode\n---- More ----\n");
+        Assert(pagedOptics.Status == "PAGED" && pagedOptics.Warnings.Count == 1,
+            "ZTE optical parser must preserve a paging failure instead of reporting parsed success");
+        var deniedLldp = ZteZxr10Parser.ParseLldpBrief(
+            "DEVICE-REDACTED#show lldp neighbor brief\n% Permission denied\nDEVICE-REDACTED#");
+        Assert(deniedLldp.Status == "PERMISSIONDENIED" && deniedLldp.Warnings.Count == 1,
+            "ZTE LLDP parser must preserve permission failures as structured warnings");
         var lldp = ZteZxr10Parser.ParseLldpBrief(File.ReadAllText(Path.Combine(zte, "phase9_hzdt10_lldp_brief.txt")));
         Assert(lldp.Status == "PARSED" && lldp.Value.Count == 2 && lldp.Value[0].NeighborInterface?.Contains("Ten-GigabitEthernet1/0/1", StringComparison.Ordinal) == true,
             "ZTE LLDP brief parser must unfold wrapped remote port names");

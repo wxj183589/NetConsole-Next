@@ -253,8 +253,8 @@ internal static class ZteZxr10Parser
     public static ZteParseResult<ZteIdentityFact?> ParseIdentity(string output)
     {
         var transcript = CliTranscriptParser.Parse(output, ZteCommandPolicy.ShowVersion);
-        if (transcript.Status is CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied or CliTranscriptStatus.Paged)
-            return new(transcript.Status.ToString().ToUpperInvariant(), null, new[] { transcript.Notice ?? transcript.Status.ToString() });
+        if (TranscriptFailureStatus(transcript) is { } failure)
+            return new(failure, null, new[] { transcript.Notice ?? failure });
         if (!Regex.IsMatch(transcript.Output, @"\bZTE\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(transcript.Output, @"\bZXR10\b", RegexOptions.IgnoreCase))
             return new("NOT_RECOGNIZED", null, new[] { "output is not recognized as ZTE ZXR10" });
         var model = Regex.Match(transcript.Output, @"(?im)^\s*(?:ZTE\s+)?ZXR10\s+(?<model>[A-Za-z0-9-]+)\s*$").Groups["model"].Value;
@@ -279,6 +279,8 @@ internal static class ZteZxr10Parser
             if (parts.Length < 7 || !Regex.IsMatch(parts[0], @"^(?:gei|xgei|xgeis|xxvgei|xlgei|cgei|sci)-[A-Za-z0-9/.:_-]+$", RegexOptions.IgnoreCase)) continue;
             rows.Add(new(parts[0], parts[1], parts[2], parts[3], parts[4].ToLowerInvariant(), parts[5].ToLowerInvariant(), parts[6].ToLowerInvariant(), parts.Length == 8 ? parts[7] : null));
         }
+        if (TranscriptFailureStatus(transcript) is { } failure)
+            return new(failure, rows, new[] { transcript.Notice ?? failure });
         return new(header ? rows.Count > 0 ? "PARSED" : "EMPTY" : "PARSE_FAILED", rows, header ? Array.Empty<string>() : new[] { "show interface brief header was not found" });
     }
 
@@ -295,6 +297,8 @@ internal static class ZteZxr10Parser
             var rx = ParsePower(parts[^4]); var tx = ParsePower(parts[^3]); var status = parts[^2].ToUpperInvariant();
             rows.Add(new(parts[0], true, rx, tx, status switch { "NORMAL" => "NORMAL", "UNKNOWN" => "NO_LIGHT", "ABNORMAL" => "ABNORMAL", _ => "UNVERIFIED" }, parts[^1]));
         }
+        if (TranscriptFailureStatus(transcript) is { } failure)
+            return new(failure, rows, new[] { transcript.Notice ?? failure });
         return new(rows.Count > 0 ? "PARSED" : "EMPTY", rows, Array.Empty<string>());
     }
 
@@ -331,6 +335,8 @@ internal static class ZteZxr10Parser
             }
         }
         Flush();
+        if (TranscriptFailureStatus(transcript) is { } failure)
+            return new(failure, rows, new[] { transcript.Notice ?? failure });
         return new(rows.Count > 0 ? "PARSED" : "EMPTY", rows, Array.Empty<string>());
     }
 
@@ -349,8 +355,18 @@ internal static class ZteZxr10Parser
             if (current is not null) current[key] = match.Groups[2].Value.Trim();
         }
         Flush();
+        if (TranscriptFailureStatus(transcript) is { } failure)
+            return new(failure, rows, new[] { transcript.Notice ?? failure });
         return new(rows.Count > 0 ? "PARSED" : "EMPTY", rows, Array.Empty<string>());
     }
+
+    private static string? TranscriptFailureStatus(CliCommandTranscript transcript) => transcript.Status switch
+    {
+        CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied or CliTranscriptStatus.Paged =>
+            transcript.Status.ToString().ToUpperInvariant(),
+        CliTranscriptStatus.Incomplete when transcript.Prompt.Length > 0 => "INCOMPLETE",
+        _ => null
+    };
 
     private static decimal? ParsePower(string value)
     {
