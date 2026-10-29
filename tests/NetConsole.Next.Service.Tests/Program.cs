@@ -812,6 +812,18 @@ internal static class SchedulerTests
         var paged = CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n---- More ----\n", H3cCommandPolicy.DisplayWlanApAll);
         Assert(paged.Status == CliTranscriptStatus.Paged && paged.PageMarkerCount == 1,
             "a remaining paging marker must be visible as incomplete rather than silently accepted");
+        var anglePrompt = CliTranscriptParser.Parse(
+            "<CLD-PIS1332>display wlan ap all\r\nrow\r\n<CLD-PIS1332>",
+            H3cCommandPolicy.DisplayWlanApAll);
+        Assert(anglePrompt.Status == CliTranscriptStatus.Complete && anglePrompt.Prompt == "<CLD-PIS1332>" &&
+               anglePrompt.Output == "row",
+            "Comware angle-bracket prompts must separate command echo, body and closing prompt");
+        var repeatedCommand = CliTranscriptParser.Parse(
+            "DEVICE#show version\nbody line\nshow version\nDEVICE#",
+            ZteCommandPolicy.ShowVersion);
+        Assert(repeatedCommand.Status == CliTranscriptStatus.Complete &&
+               repeatedCommand.Output.Contains("show version", StringComparison.Ordinal),
+            "an identical command string in the response body must not be discarded as an echo");
         Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n", H3cCommandPolicy.DisplayWlanApAll).Status == CliTranscriptStatus.Incomplete,
             "a transcript without a closing prompt must remain incomplete");
         Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,

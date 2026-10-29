@@ -27,7 +27,7 @@ internal sealed record CliCommandTranscript(
 
 internal static partial class CliTranscriptParser
 {
-    [GeneratedRegex(@"^\s*(?<prompt>[A-Za-z0-9_.:/()\-]{1,128}(?:\(config[^)]*\))?[>#])\s*(?<command>.*)$",
+    [GeneratedRegex(@"^\s*(?<prompt>(?:<[^>\r\n]{1,128}>|[A-Za-z0-9_.:/()\-]{1,128}(?:\(config[^)]*\))?[>#]))\s*(?<command>.*)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PromptLinePattern();
 
@@ -56,6 +56,7 @@ internal static partial class CliTranscriptParser
         var prompt = string.Empty;
         var pages = 0;
         var sawCommandEcho = false;
+        var bodyStarted = false;
         var sawClosingPrompt = false;
         foreach (var rawLine in normalized.Split('\n'))
         {
@@ -73,7 +74,7 @@ internal static partial class CliTranscriptParser
                     if (sawCommandEcho || output.Count > 0) sawClosingPrompt = true;
                     continue;
                 }
-                if (string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase))
+                if (!bodyStarted && string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase))
                 {
                     sawCommandEcho = true;
                     continue;
@@ -86,7 +87,14 @@ internal static partial class CliTranscriptParser
                 continue;
             }
 
-            if (string.Equals(trimmed, command, StringComparison.OrdinalIgnoreCase)) continue;
+            // Some SSH/Telnet servers echo the command on a separate line. Only
+            // remove that preamble echo; an identical line in the body is data.
+            if (!bodyStarted && string.Equals(trimmed, command, StringComparison.OrdinalIgnoreCase))
+            {
+                sawCommandEcho = true;
+                continue;
+            }
+            bodyStarted = true;
             output.Add(line);
         }
 
