@@ -100,6 +100,39 @@ export interface DeviceInventoryDetail {
   recentSessions: TerminalSession[]
   auditEvents: Array<{ id: string; atMs: number; action: string; outcome: string; detailJson: string }>
 }
+export interface ZteProfile {
+  id: string
+  host: string
+  port: number
+  username: string
+  credentialReference: string
+  hostKeySha256: string
+  enabled: boolean
+  createdMs: number
+  updatedMs: number
+  hostKeyUpdatePolicy: string
+  allowLegacyAlgorithms: boolean
+  terminalEncoding: string
+  siteId: string
+}
+export interface ZteCollectionRun {
+  id: string
+  profileId: string
+  state: string
+  startedMs: number
+  endedMs?: number | null
+  failureReason?: string | null
+  commandStatuses: Record<string, string>
+}
+export interface ZteFact {
+  profileId: string
+  kind: string
+  status: string
+  capturedMs: number
+  payloadJson: string
+  runId?: string | null
+  isCurrent: boolean
+}
 
 export interface DeviceImportPreview {
   previewId: string
@@ -498,6 +531,17 @@ export function getDeviceInventory(params: { page?: number; pageSize?: number; s
   return request('/api/system/devices?' + query.toString())
 }
 export function getDeviceInventoryDetail(id: string): Promise<DeviceInventoryDetail> { return request('/api/system/devices/' + encodeURIComponent(id)) }
+export function getZteProfiles(): Promise<ZteProfile[]> { return request('/api/system/zte/profiles') }
+export function createZteProfile(payload: Record<string, unknown>): Promise<ZteProfile> {
+  return request('/api/system/zte/profiles', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function startZteCollection(id: string): Promise<{ runId: string }> {
+  return request(`/api/system/zte/profiles/${encodeURIComponent(id)}/collect`, { method: 'POST', body: JSON.stringify({}) })
+}
+export function getZteRun(id: string): Promise<ZteCollectionRun> { return request(`/api/system/zte/runs/${encodeURIComponent(id)}`) }
+export function getZteFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<ZteFact[]> {
+  return request(queryPath(`/api/system/zte/profiles/${encodeURIComponent(id)}/facts`, params))
+}
 function queryPath(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== '') query.set(key, String(value)) })

@@ -155,6 +155,7 @@ internal static class SchedulerTests
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
+        await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();

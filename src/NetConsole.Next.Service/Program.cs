@@ -20,6 +20,7 @@ builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
+builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
@@ -907,6 +908,36 @@ if (settings.H3cEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 }
+app.MapGet("/api/system/zte/profiles", (ZteCollectionService zte) => Results.Ok(zte.Profiles()));
+app.MapPost("/api/system/zte/profiles", (ZteProfileRequest request, Catalog catalog) =>
+{
+    try
+    {
+        catalog.CreateZteDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
+            request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0, request.HostKeyUpdatePolicy,
+            request.AllowLegacyAlgorithms, request.TerminalEncoding, request.SiteId));
+        return Results.Created($"/api/system/zte/profiles/{request.Id}", catalog.GetZteDeviceProfile(request.Id));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    catch (Microsoft.Data.Sqlite.SqliteException ex) { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
+});
+app.MapPost("/api/system/zte/profiles/{id}/collect", (string id, ZteCollectionService zte) =>
+{
+    try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id) }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/zte/runs/{id}", (string id, ZteCollectionService zte) =>
+    zte.GetRun(id) is { } run ? Results.Ok(run) : Results.NotFound());
+app.MapGet("/api/system/zte/profiles/{id}/facts", (string id, HttpRequest request, Catalog catalog) =>
+{
+    var kind = request.Query["kind"].ToString();
+    var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+    var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+    return Results.Ok(catalog.QueryZteFacts(id, kind, history, limit));
+});
 app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
     (HttpContext context, string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
     {
@@ -1157,6 +1188,10 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STR
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
+internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
+    string CredentialReference, string HostKeySha256, bool Enabled = true,
+    string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO", string SiteId = "local");
 internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
     IReadOnlyList<string> SupportedProtocols, string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms,
     string TerminalEncoding, string TerminalProtocol, bool AllowTelnetFallback,

@@ -245,8 +245,8 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
     {
-        if (!H3cCommandPolicy.IsAllowed(command))
-            throw new ArgumentException("Only allowlisted H3C read-only commands are allowed.", nameof(command));
+        if (!H3cCommandPolicy.IsAllowed(command) && !ZteCommandPolicy.IsAllowed(command))
+            throw new ArgumentException("Only allowlisted vendor read-only commands are allowed.", nameof(command));
         if (!IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
 
         using var sshCommand = _client.CreateCommand(command);
