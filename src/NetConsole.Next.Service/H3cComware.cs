@@ -295,6 +295,8 @@ internal static partial class H3cComwareParser
     {
         if (string.IsNullOrWhiteSpace(output))
             return new("EMPTY", "{}");
+        if (GetTranscriptFailure(command, output) is { } transcriptFailure)
+            return transcriptFailure;
         if (command == H3cCommandPolicy.DisplayVersion)
         {
             var result = ParseVersion(output);
@@ -365,6 +367,32 @@ internal static partial class H3cComwareParser
                 }));
         }
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
+    }
+
+    private static H3cParseResult? GetTranscriptFailure(string command, string output)
+    {
+        if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayWlanApAll or
+            H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or
+            H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
+            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
+            return null;
+
+        var transcript = CliTranscriptParser.Parse(output, command);
+        var parseStatus = transcript.Status switch
+        {
+            CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+            CliTranscriptStatus.Paged => "PARTIAL",
+            CliTranscriptStatus.Incomplete when transcript.Prompt.Length > 0 => "PARTIAL",
+            _ => null
+        };
+        return parseStatus is null
+            ? null
+            : new(parseStatus, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = transcript.Status.ToString().ToUpperInvariant(),
+                output = transcript.Output,
+                notice = transcript.Notice
+            }));
     }
 
     public static bool ContainsPaginationPrompt(string output)

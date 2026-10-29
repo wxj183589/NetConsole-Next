@@ -791,6 +791,11 @@ internal static class SchedulerTests
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
             "HZL10-AC#display device\npartial body").Status == "PARTIAL",
             "an interactive transcript without a closing prompt must remain partial");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            "HZL10-AC#display wlan ap all\nrow").Status == "PARTIAL" &&
+               H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+                   "HZL10-AC#display wlan ap all\nrow\n---- More ----\n").Status == "PARTIAL",
+            "H3C table dispatch must preserve interactive truncation and paging failures");
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
             "HZL10-AC#display device\n% Unrecognized command\nHZL10-AC#").Status == "UNRECOGNIZED",
             "H3C device inventory errors must not be persisted as parsed output");
