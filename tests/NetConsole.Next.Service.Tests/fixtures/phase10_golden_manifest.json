@@ -1,0 +1,128 @@
+{
+  "manifest_version": 1,
+  "generated_at": "2026-10-29",
+  "redaction": "repository fixtures are sanitized; no credentials or private keys are retained; fixture addresses are sanitized/documentary values",
+  "entries": [
+    {
+      "fixture": "h3c/phase9_wlan_ap_all.txt",
+      "vendor": "H3C",
+      "model": "WX3540X-compatible fixture",
+      "software": "Comware V9 fixture",
+      "command": "display wlan ap all",
+      "source_level": "SANITIZED_REPLAY",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.ap.v1",
+      "bytes": 373,
+      "sha256": "41052d7dbdb5341db9935c37b62e4dc276d5798f7be4ec332840248d97611c99"
+    },
+    {
+      "fixture": "h3c/phase9_wlan_ap_all_address.txt",
+      "vendor": "H3C",
+      "model": "WX3540X-compatible fixture",
+      "software": "Comware V9 fixture",
+      "command": "display wlan ap all address",
+      "source_level": "SANITIZED_REPLAY",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.ap-address.v1",
+      "bytes": 178,
+      "sha256": "6a7e18bb490af2dd17fa20c12a5c99369ec4f33e79d2b6763be49c9506ec5f90"
+    },
+    {
+      "fixture": "h3c/phase9_wlan_ap_all_radio.txt",
+      "vendor": "H3C",
+      "model": "WX3540X-compatible fixture",
+      "software": "Comware V9 fixture",
+      "command": "display wlan ap all radio",
+      "source_level": "SANITIZED_REPLAY",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.radio.v1",
+      "bytes": 237,
+      "sha256": "fd93d87ee2c364ab55d4824ced3675a259fbd9c03e7b18eeb2d9f1b05c6563c4"
+    },
+    {
+      "fixture": "h3c/phase9_lldp_list.txt",
+      "vendor": "H3C",
+      "model": "Comware fixture",
+      "software": "Comware V7/V9 shape",
+      "command": "display lldp neighbor-information list",
+      "source_level": "SANITIZED_REPLAY",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.lldp.v1",
+      "bytes": 213,
+      "sha256": "bfe329b132585101f53d23ca64e5de58d18d07b000a1063145322397f02c4ea3"
+    },
+    {
+      "fixture": "h3c/phase9_transceiver.txt",
+      "vendor": "H3C",
+      "model": "Comware fixture",
+      "software": "Comware V7/V9 shape",
+      "command": "display transceiver diagnosis interface",
+      "source_level": "SANITIZED_REPLAY",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.optical.v1",
+      "bytes": 335,
+      "sha256": "21922ae550b29580f18d31d0c02e0525b472ed877f678a43838e480e553f338e"
+    },
+    {
+      "fixture": "zte/phase9_c89e4_show_version.txt",
+      "vendor": "ZTE",
+      "model": "C89E-4",
+      "software": "V1.9.0",
+      "command": "show version",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "zte.zxr10.identity.v1",
+      "bytes": 170,
+      "sha256": "3fc0c87a2cb4f47f332cbb24f050931be6103dd506e1366c4c6fe623977a0da5"
+    },
+    {
+      "fixture": "zte/phase9_c89e4_show_interface_brief.txt",
+      "vendor": "ZTE",
+      "model": "C89E-4",
+      "software": "V1.9.0",
+      "command": "show interface brief",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "zte.zxr10.interface.v1",
+      "bytes": 320,
+      "sha256": "7a67d67cfcef0d8972d16fad4f48a85ae8dd31a85f031a6476201e7ca237dfda"
+    },
+    {
+      "fixture": "zte/phase9_c89e4_show_opticalinfo_brief.txt",
+      "vendor": "ZTE",
+      "model": "C89E-4",
+      "software": "V1.9.0",
+      "command": "show opticalinfo brief",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "zte.zxr10.optical.v1",
+      "bytes": 316,
+      "sha256": "995e81b326c78792b307f14cb2b162f5c889461d906f9f42c543ea05aac25ed9"
+    },
+    {
+      "fixture": "zte/phase9_hzdt10_lldp_brief.txt",
+      "vendor": "ZTE",
+      "model": "ZXR10 fixture",
+      "software": "document sample",
+      "command": "show lldp neighbor brief",
+      "source_level": "DOCUMENT_SAMPLE_SANITIZED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "zte.zxr10.lldp.v1",
+      "bytes": 293,
+      "sha256": "763136dd1900706188a1081164578b101f05183bad181e6a51b2103bc7f089d5"
+    },
+    {
+      "fixture": "zte/phase9_hzdt10_lldp_entry.txt",
+      "vendor": "ZTE",
+      "model": "ZXR10 fixture",
+      "software": "document sample",
+      "command": "show lldp entry",
+      "source_level": "DOCUMENT_SAMPLE_SANITIZED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "zte.zxr10.lldp-entry.v1",
+      "bytes": 286,
+      "sha256": "38d02d17dec926e5c2642e0efa5ac682e5be1ae1e6697550f501b69ff169c812"
+    }
+  ]
+}
+

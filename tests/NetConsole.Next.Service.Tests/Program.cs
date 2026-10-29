@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using NetConsole.Next.Credentials;
 
 if (args.Length > 0 && args[0] == "--ssh-wire")
@@ -153,6 +154,7 @@ internal static class SchedulerTests
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
         VerifiesPhase9VendorParsersAndCliTranscript();
+        VerifiesPhase10GoldenFixtureManifest();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();
@@ -858,6 +860,38 @@ internal static class SchedulerTests
         Assert(entry.Value.Count == 1 && entry.Value[0].NeighborIp == "192.0.2.26" && entry.Value[0].Ttl == 228,
             "ZTE LLDP entry parser must retain management IP and TTL");
         Console.WriteLine("PHASE9_VENDOR_PARSER_REPLAY=PASS");
+    }
+
+    private static void VerifiesPhase10GoldenFixtureManifest()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures");
+        var manifestPath = Path.Combine(root, "phase10_golden_manifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath, Encoding.UTF8));
+        var entries = document.RootElement.GetProperty("entries");
+        Assert(entries.GetArrayLength() >= 10, "Phase 10 golden manifest must retain H3C and ZTE fixture coverage");
+        foreach (var entry in entries.EnumerateArray())
+        {
+            var relative = entry.GetProperty("fixture").GetString() ?? string.Empty;
+            var expectedSha = entry.GetProperty("sha256").GetString() ?? string.Empty;
+            var expectedBytes = entry.GetProperty("bytes").GetInt64();
+            var sourceLevel = entry.GetProperty("source_level").GetString() ?? string.Empty;
+            var vendor = entry.GetProperty("vendor").GetString() ?? string.Empty;
+            var command = entry.GetProperty("command").GetString() ?? string.Empty;
+            var parserContract = entry.GetProperty("parser_contract").GetString() ?? string.Empty;
+            var expectedStatus = entry.GetProperty("expected_status").GetString() ?? string.Empty;
+            var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert(File.Exists(path), $"golden fixture is missing: {relative}");
+            var bytes = File.ReadAllBytes(path);
+            Assert(bytes.LongLength == expectedBytes, $"golden fixture byte count drifted: {relative}");
+            Assert(Convert.ToHexString(SHA256.HashData(bytes)).Equals(expectedSha, StringComparison.OrdinalIgnoreCase),
+                $"golden fixture SHA-256 drifted: {relative}");
+            Assert(sourceLevel is "SANITIZED_REPLAY" or "REAL_CAPTURE_REDACTED" or "DOCUMENT_SAMPLE_SANITIZED",
+                $"golden fixture source level is not explicit: {relative}");
+            Assert(vendor is "H3C" or "ZTE" && !string.IsNullOrWhiteSpace(command) &&
+                   !string.IsNullOrWhiteSpace(parserContract) && expectedStatus is "COMPLETE" or "PARTIAL" or "EMPTY" or "UNSUPPORTED" or "PERMISSION_DENIED",
+                $"golden fixture metadata contract is incomplete: {relative}");
+        }
+        Console.WriteLine($"PHASE10_GOLDEN_MANIFEST=PASS ({entries.GetArrayLength()} fixtures)");
     }
 
     private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()
