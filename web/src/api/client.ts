@@ -105,13 +105,9 @@ export interface ZteProfile {
   host: string
   port: number
   username: string
-  credentialReference: string
-  hostKeySha256: string
   enabled: boolean
   createdMs: number
   updatedMs: number
-  hostKeyUpdatePolicy: string
-  allowLegacyAlgorithms: boolean
   terminalEncoding: string
   siteId: string
 }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "generated_at": "2026-10-29",
-  "redaction": "repository fixtures are sanitized; no credentials or private keys are retained; fixture addresses are sanitized/documentary values",
+  "redaction": "repository fixtures are sanitized; no credentials or private keys are retained; fixture addresses are sanitized/documentary values; byte counts and hashes use UTF-8 with LF line endings",
   "entries": [
     {
       "fixture": "h3c/phase9_wlan_ap_all.txt",
@@ -12,8 +12,8 @@
       "source_level": "SANITIZED_REPLAY",
       "expected_status": "COMPLETE",
       "parser_contract": "h3c.ap.v1",
-      "bytes": 373,
-      "sha256": "41052d7dbdb5341db9935c37b62e4dc276d5798f7be4ec332840248d97611c99"
+      "bytes": 367,
+      "sha256": "ad1650acc853237c7b877f494ac6be650cd6bcee78db51e45639d4e152eab964"
     },
     {
       "fixture": "h3c/phase9_wlan_ap_all_address.txt",
@@ -24,8 +24,8 @@
       "source_level": "SANITIZED_REPLAY",
       "expected_status": "COMPLETE",
       "parser_contract": "h3c.ap-address.v1",
-      "bytes": 178,
-      "sha256": "6a7e18bb490af2dd17fa20c12a5c99369ec4f33e79d2b6763be49c9506ec5f90"
+      "bytes": 173,
+      "sha256": "2f0209c2388f5bc7791dbffe9f947c8296c7203573bed5c6cb0b589e11d71ebf"
     },
     {
       "fixture": "h3c/phase9_wlan_ap_all_radio.txt",
@@ -36,8 +36,8 @@
       "source_level": "SANITIZED_REPLAY",
       "expected_status": "COMPLETE",
       "parser_contract": "h3c.radio.v1",
-      "bytes": 237,
-      "sha256": "fd93d87ee2c364ab55d4824ced3675a259fbd9c03e7b18eeb2d9f1b05c6563c4"
+      "bytes": 231,
+      "sha256": "e66ebffcaf3d6ba21d129df1aa4e7d60b89e685f2d032a08fe69bdd954d8952d"
     },
     {
       "fixture": "h3c/phase9_lldp_list.txt",
@@ -48,8 +48,8 @@
       "source_level": "SANITIZED_REPLAY",
       "expected_status": "COMPLETE",
       "parser_contract": "h3c.lldp.v1",
-      "bytes": 213,
-      "sha256": "bfe329b132585101f53d23ca64e5de58d18d07b000a1063145322397f02c4ea3"
+      "bytes": 209,
+      "sha256": "9b3eb7d7811b9da1719e0ee8b1ed57107868846b24d6965e5f55266ddea7bd44"
     },
     {
       "fixture": "h3c/phase9_transceiver.txt",
@@ -60,8 +60,8 @@
       "source_level": "SANITIZED_REPLAY",
       "expected_status": "COMPLETE",
       "parser_contract": "h3c.optical.v1",
-      "bytes": 335,
-      "sha256": "21922ae550b29580f18d31d0c02e0525b472ed877f678a43838e480e553f338e"
+      "bytes": 326,
+      "sha256": "c44986c45300138d35505a06396fe017bd01d0dafefe38a444bc28b34d5b0535"
     },
     {
       "fixture": "zte/phase9_c89e4_show_version.txt",
@@ -72,8 +72,8 @@
       "source_level": "REAL_CAPTURE_REDACTED",
       "expected_status": "COMPLETE",
       "parser_contract": "zte.zxr10.identity.v1",
-      "bytes": 170,
-      "sha256": "3fc0c87a2cb4f47f332cbb24f050931be6103dd506e1366c4c6fe623977a0da5"
+      "bytes": 165,
+      "sha256": "ab2d0737ba880187bb1b8421f64d269f1b0c7844bdeb0e8baf64d91ba0bb565b"
     },
     {
       "fixture": "zte/phase9_c89e4_show_interface_brief.txt",
@@ -84,8 +84,8 @@
       "source_level": "REAL_CAPTURE_REDACTED",
       "expected_status": "COMPLETE",
       "parser_contract": "zte.zxr10.interface.v1",
-      "bytes": 320,
-      "sha256": "7a67d67cfcef0d8972d16fad4f48a85ae8dd31a85f031a6476201e7ca237dfda"
+      "bytes": 313,
+      "sha256": "d5d57896edb38354693520d093a80993f02b61cf0fae16e8b50e4ec4508751de"
     },
     {
       "fixture": "zte/phase9_c89e4_show_opticalinfo_brief.txt",
@@ -96,8 +96,8 @@
       "source_level": "REAL_CAPTURE_REDACTED",
       "expected_status": "COMPLETE",
       "parser_contract": "zte.zxr10.optical.v1",
-      "bytes": 316,
-      "sha256": "995e81b326c78792b307f14cb2b162f5c889461d906f9f42c543ea05aac25ed9"
+      "bytes": 310,
+      "sha256": "596dfb7c0e167511f4b590d3a53ffd845ca8763ef449f1bc147f35b9107f7e47"
     },
     {
       "fixture": "zte/phase9_hzdt10_lldp_brief.txt",
@@ -108,8 +108,8 @@
       "source_level": "DOCUMENT_SAMPLE_SANITIZED",
       "expected_status": "COMPLETE",
       "parser_contract": "zte.zxr10.lldp.v1",
-      "bytes": 293,
-      "sha256": "763136dd1900706188a1081164578b101f05183bad181e6a51b2103bc7f089d5"
+      "bytes": 287,
+      "sha256": "318696fdf4d0995fa4dd1c825ea77c9bee77d8cca0198dc88145b6d13c5afca7"
     },
     {
       "fixture": "zte/phase9_hzdt10_lldp_entry.txt",
@@ -120,8 +120,8 @@
       "source_level": "DOCUMENT_SAMPLE_SANITIZED",
       "expected_status": "COMPLETE",
       "parser_contract": "zte.zxr10.lldp-entry.v1",
-      "bytes": 286,
-      "sha256": "38d02d17dec926e5c2642e0efa5ac682e5be1ae1e6697550f501b69ff169c812"
+      "bytes": 276,
+      "sha256": "819d76c03002fe62b535a1770bee4ee6ea9f5517fad645c444fa3bc7a0be868d"
     }
   ]
 }

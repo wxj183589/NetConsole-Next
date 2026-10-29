@@ -908,31 +908,42 @@ if (settings.H3cEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 }
-app.MapGet("/api/system/zte/profiles", (ZteCollectionService zte) => Results.Ok(zte.Profiles()));
-app.MapPost("/api/system/zte/profiles", (ZteProfileRequest request, Catalog catalog) =>
+app.MapGet("/api/system/zte/profiles", (HttpContext context, ZteCollectionService zte, P2B5SiteScopeStore scopes) =>
 {
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized) return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+    return Results.Ok(zte.Profiles(scope));
+});
+app.MapPost("/api/system/zte/profiles", (HttpContext context, ZteProfileRequest request, Catalog catalog, ZteCollectionService zte) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
     try
     {
         catalog.CreateZteDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
             request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0, request.HostKeyUpdatePolicy,
             request.AllowLegacyAlgorithms, request.TerminalEncoding, request.SiteId));
-        return Results.Created($"/api/system/zte/profiles/{request.Id}", catalog.GetZteDeviceProfile(request.Id));
+        return Results.Created($"/api/system/zte/profiles/{request.Id}", zte.Profile(request.Id));
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     catch (Microsoft.Data.Sqlite.SqliteException ex) { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
 });
-app.MapPost("/api/system/zte/profiles/{id}/collect", (string id, ZteCollectionService zte) =>
+app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
 {
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_COLLECTION_PERMISSION_DENIED", id);
     try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id) }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/zte/runs/{id}", (string id, ZteCollectionService zte) =>
+app.MapGet("/api/system/zte/runs/{id}", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
+    !IsSuperAdmin(context) ? DevicePermissionDenied(context, catalog, "ZTE_RUN_READ_PERMISSION_DENIED", id) :
     zte.GetRun(id) is { } run ? Results.Ok(run) : Results.NotFound());
-app.MapGet("/api/system/zte/profiles/{id}/facts", (string id, HttpRequest request, Catalog catalog) =>
+app.MapGet("/api/system/zte/profiles/{id}/facts", (HttpContext context, string id, HttpRequest request, Catalog catalog, P2B5SiteScopeStore scopes, ZteCollectionService zte) =>
 {
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized) return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+    if (!zte.ProfileIsInScope(id, scope)) return Results.NotFound();
     var kind = request.Query["kind"].ToString();
     var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
     var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;

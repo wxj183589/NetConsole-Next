@@ -882,7 +882,8 @@ internal static class SchedulerTests
             var expectedStatus = entry.GetProperty("expected_status").GetString() ?? string.Empty;
             var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
             Assert(File.Exists(path), $"golden fixture is missing: {relative}");
-            var bytes = File.ReadAllBytes(path);
+            var text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
+            var bytes = Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'));
             Assert(bytes.LongLength == expectedBytes, $"golden fixture byte count drifted: {relative}");
             Assert(Convert.ToHexString(SHA256.HashData(bytes)).Equals(expectedSha, StringComparison.OrdinalIgnoreCase),
                 $"golden fixture SHA-256 drifted: {relative}");

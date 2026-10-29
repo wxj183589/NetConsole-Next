@@ -23,6 +23,9 @@ internal sealed record ZteProfileRequest(string Id, string Host, int Port, strin
     string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string SiteId = "local");
 
+internal sealed record ZteProfileView(string Id, string Host, int Port, string Username, bool Enabled,
+    long CreatedMs, long UpdatedMs, string TerminalEncoding, string SiteId);
+
 internal sealed record ZteCollectRequest(string? ProfileId = null);
 
 internal static class ZteCollectionSchema
@@ -113,7 +116,21 @@ internal sealed class ZteCollectionService
         _transportFactory = transportFactory ?? new SshNetH3cSshTransportFactory();
     }
 
-    public IReadOnlyList<ZteDeviceProfileSnapshot> Profiles(int limit = 100) => _catalog.RecentZteDeviceProfiles(limit);
+    public IReadOnlyList<ZteProfileView> Profiles(P2B5SiteScopeDecision scope, int limit = 100) =>
+        _catalog.RecentZteDeviceProfiles(limit)
+            .Where(profile => scope.IsGlobal || scope.AllowedSiteReferences.Contains(profile.SiteId))
+            .Select(ToView)
+            .ToArray();
+
+    public ZteProfileView? Profile(string id) => _catalog.GetZteDeviceProfile(id) is { } profile ? ToView(profile) : null;
+
+    public bool ProfileIsInScope(string id, P2B5SiteScopeDecision scope) =>
+        _catalog.GetZteDeviceProfile(id) is { } profile &&
+        (scope.IsGlobal || scope.AllowedSiteReferences.Contains(profile.SiteId));
+
+    private static ZteProfileView ToView(ZteDeviceProfileSnapshot profile) => new(profile.Id, profile.Host,
+        profile.Port, profile.Username, profile.Enabled, profile.CreatedMs, profile.UpdatedMs,
+        profile.TerminalEncoding, profile.SiteId);
     public ZteCollectionRunSnapshot? GetRun(string id) => _runs.TryGetValue(id, out var run) ? run : _catalog.GetZteCollectionRun(id);
 
     public string Start(string profileId)

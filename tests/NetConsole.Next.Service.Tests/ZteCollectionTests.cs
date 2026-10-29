@@ -22,6 +22,15 @@ internal static class ZteCollectionTests
             catalog.CreateZteDeviceProfile(new ZteDeviceProfileSnapshot(profileId, "192.0.2.22", 22,
                 "reader", "TEST_CREDENTIAL", "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", true, 0, 0));
             Assert(catalog.GetZteDeviceProfile(profileId)?.Host == "192.0.2.22", "ZTE profile must round-trip through SQLite");
+            var service = new ZteCollectionService(catalog, new FixedCredentials(), new FixtureTransportFactory());
+            var visibleProfile = service.Profiles(P2B5SiteScopeDecision.Global).Single();
+            var visibleJson = JsonSerializer.Serialize(visibleProfile);
+            Assert(!visibleJson.Contains("credential", StringComparison.OrdinalIgnoreCase) &&
+                   !visibleJson.Contains("hostKey", StringComparison.OrdinalIgnoreCase),
+                "ZTE profile API view must not expose credential references or host-key pins");
+            Assert(service.Profiles(new P2B5SiteScopeDecision("AUTHORIZED", false,
+                       new HashSet<string>(["other-site"], StringComparer.Ordinal), "test scope")).Count == 0,
+                "ZTE profile reads must exclude sites outside the authenticated scope");
 
             var interfaces = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "zte", "phase9_c89e4_show_interface_brief.txt"));
             var parsed = ZteZxr10Parser.ParseInterfaces(interfaces);
@@ -44,7 +53,6 @@ internal static class ZteCollectionTests
             Assert(catalog.QueryZteFacts(profileId, "interfaces", false, 10).Count == 1,
                 "failed or empty ZTE collection must not clear the previous current fact");
 
-            var service = new ZteCollectionService(catalog, new FixedCredentials(), new FixtureTransportFactory());
             var liveRunId = service.Start(profileId);
             ZteCollectionRunSnapshot? liveRun = null;
             for (var attempt = 0; attempt < 40; attempt++)
