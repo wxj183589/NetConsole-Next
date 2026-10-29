@@ -71,6 +71,7 @@ internal static class SqliteSecurityTests
             var text = version.ExecuteScalar()?.ToString() ?? throw new InvalidOperationException("SQLite version query returned no value");
             var parsed = Version.Parse(text);
             Assert(parsed >= MinimumSqliteVersion, $"SQLite runtime {parsed} is below the security baseline {MinimumSqliteVersion}");
+            Console.WriteLine($"SQLITE_RUNTIME_VERSION={text}");
         }
 
         using var transaction = connection.BeginTransaction();
