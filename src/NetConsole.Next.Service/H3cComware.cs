@@ -8,8 +8,18 @@ internal static class H3cCommandPolicy
 {
     public const string DisplayVersion = "display version";
     public const string DisplayInterfaceBrief = "display interface brief";
+    public const string DisplayDevice = "display device";
+    public const string DisplayWlanApAll = "display wlan ap all";
+    public const string DisplayWlanApAllAddress = "display wlan ap all address";
+    public const string DisplayWlanApAllRadio = "display wlan ap all radio";
+    public const string DisplayLldpNeighborInformationList = "display lldp neighbor-information list";
+    public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
+    public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
 
-    public static bool IsAllowed(string command) => command is DisplayVersion or DisplayInterfaceBrief;
+    public static bool IsAllowed(string command) => command is
+        DisplayVersion or DisplayInterfaceBrief or DisplayDevice or DisplayWlanApAll or
+        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayLldpNeighborInformationList or
+        DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface;
 }
 
 internal static class TerminalTextEncoding
@@ -296,6 +306,48 @@ internal static partial class H3cComwareParser
             var result = ParseInterfaceBrief(output);
             return new(result.Recognized ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAll)
+        {
+            var result = ParseWlanApAll(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAllAddress)
+        {
+            var result = ParseWlanApAllAddress(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAllRadio)
+        {
+            var result = ParseWlanApAllRadio(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
+        {
+            var result = ParseLldpList(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayLldpNeighborInformationVerbose)
+        {
+            var result = ParseLldpVerbose(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayTransceiverDiagnosisInterface)
+        {
+            var result = ParseTransceiverDiagnosis(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayDevice)
+        {
+            var outputText = CliTranscriptParser.Parse(output, command).Output;
+            return new(string.IsNullOrWhiteSpace(outputText) ? "UNRECOGNIZED" : "PARSED",
+                System.Text.Json.JsonSerializer.Serialize(new { output = outputText }));
         }
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
     }

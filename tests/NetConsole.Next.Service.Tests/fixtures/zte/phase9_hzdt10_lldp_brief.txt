@@ -1,0 +1,6 @@
+HZDT-TEST#show lldp neighbor brief
+Local Interface Scope Chassis ID Port ID Holdtime System Name
+gei-0/3/0/1 NB 02aa.bbcc.0001 Ten-GigabitEthern
+                                      et1/0/1 228 HZDT-TEST-01
+gei-0/3/0/2 NB 02aa.bbcc.0002 GigabitEthernet1/0/2 120 HZDT-TEST-02
+HZDT-TEST#

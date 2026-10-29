@@ -1293,7 +1293,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (taskType == "H3C_SSH_READONLY")
         {
             if (!H3cCommandPolicy.IsAllowed(command))
-                throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+                throw new ArgumentException("Only allowlisted H3C read-only commands are allowed.", nameof(command));
             var profile = GetH3cDeviceProfile(target);
             if (profile is null || !profile.Enabled) throw new ArgumentException("Enabled H3C device profile was not found.", nameof(target));
         }

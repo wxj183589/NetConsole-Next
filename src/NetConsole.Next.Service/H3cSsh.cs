@@ -246,7 +246,7 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
     {
         if (!H3cCommandPolicy.IsAllowed(command))
-            throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+            throw new ArgumentException("Only allowlisted H3C read-only commands are allowed.", nameof(command));
         if (!IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
 
         using var sshCommand = _client.CreateCommand(command);
@@ -474,7 +474,7 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
     {
         if (!H3cCommandPolicy.IsAllowed(command))
-            throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+            throw new ArgumentException("Only allowlisted H3C read-only commands are allowed.", nameof(command));
         var transport = _transport;
         if (transport is null || !transport.IsConnected)
             throw new InvalidOperationException("H3C SSH session is not connected.");

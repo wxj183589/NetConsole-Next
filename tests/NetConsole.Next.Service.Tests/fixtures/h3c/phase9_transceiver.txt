@@ -1,0 +1,9 @@
+HZL10-AC#display transceiver diagnosis interface
+GigabitEthernet1/0/1 transceiver diagnostic information:
+  Temperature            : 38.5 C
+  Voltage                : 3.31 V
+  Bias Current           : 6.2 mA
+  RX Power               : -3.21 dBm
+  TX Power               : -2.85 dBm
+  Status                 : normal
+HZL10-AC#

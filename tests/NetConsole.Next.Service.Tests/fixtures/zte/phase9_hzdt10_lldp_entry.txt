@@ -1,0 +1,10 @@
+HZDT-TEST#show lldp entry
+Local port :gei-0/3/0/2
+Chassis type :MAC address
+Chassis ID :02aa.bbcc.0002
+Port ID type :Interface name
+Port ID :Ten-GigabitEthernet1/0/1
+Time to live :228
+System name :HZDT-TEST-AP
+Management address :IPv4-192.0.2.26, IfIndex-10, OID-0
+HZDT-TEST#

@@ -1,0 +1,6 @@
+HZL10-AC#display wlan ap all radio
+AP name         RID  Channel  Bandwidth  TxPower
+------------------------------------------------
+4c6f-d608-0400  1    1        20         15
+4c6f-d608-0400  2    149      80         17
+HZL10-AC#

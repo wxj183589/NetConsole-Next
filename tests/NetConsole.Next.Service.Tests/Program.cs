@@ -152,6 +152,7 @@ internal static class SchedulerTests
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
+        VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();
@@ -754,6 +755,71 @@ internal static class SchedulerTests
             "ANSI decorated Comware paging prompt should be detected");
         Assert(!H3cComwareParser.ContainsPaginationPrompt("---- More ----\b\b\b\b\b\b\b\bREADY"),
             "terminal backspaces must be applied before paging prompt detection");
+    }
+
+    private static void VerifiesPhase9VendorParsersAndCliTranscript()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures");
+        var h3c = Path.Combine(root, "h3c");
+        var zte = Path.Combine(root, "zte");
+
+        Assert(H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayWlanApAll) &&
+               H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayTransceiverDiagnosisInterface) &&
+               !H3cCommandPolicy.IsAllowed("display current-configuration"),
+            "H3C policy must expose only the Phase 9 read-only allowlist");
+        Assert(ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowVersion) &&
+               ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowLldpEntry) &&
+               !ZteCommandPolicy.IsAllowed("show running-config"),
+            "ZTE policy must expose only the Phase 9 read-only allowlist");
+
+        var transcript = CliTranscriptParser.Parse(
+            File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all.txt")), H3cCommandPolicy.DisplayWlanApAll);
+        Assert(transcript.Status == CliTranscriptStatus.Complete && transcript.Prompt == "HZL10-AC#" &&
+               !transcript.Output.Contains("display wlan ap all", StringComparison.OrdinalIgnoreCase) &&
+               !transcript.Output.Contains("HZL10-AC#", StringComparison.Ordinal),
+            "CLI transcript must remove only the command echo and terminal prompts while retaining body output");
+        Assert(H3cComwareParser.ParseWlanApAll(transcript.Output).Count == 2,
+            "H3C AP table should parse two rows after transcript normalization");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all.txt"))).Status == "PARSED",
+            "H3C command dispatch must route the AP table through the shared parser");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\nDevice summary\nHZL10-AC#").Status == "PARSED",
+            "H3C device inventory command must preserve a complete raw transcript body");
+        Assert(H3cComwareParser.ParseWlanApAllAddress(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_address.txt"))).Single().MacAddress == "4c6f-d608-0400",
+            "H3C AP address parser must preserve the stable MAC field");
+        var radios = H3cComwareParser.ParseWlanApAllRadio(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_radio.txt")));
+        Assert(radios.Count == 2 && radios[1].Channel == 149 && radios[1].TxPower == 17,
+            "H3C radio parser must retain channel and transmit power without unit loss");
+        Assert(H3cComwareParser.ParseLldpList(File.ReadAllText(Path.Combine(h3c, "phase9_lldp_list.txt"))).Single().NeighborSysname == "AC-DEMO",
+            "H3C LLDP list parser must keep local and remote port identity");
+        Assert(H3cComwareParser.ParseTransceiverDiagnosis(File.ReadAllText(Path.Combine(h3c, "phase9_transceiver.txt"))).Single().RxPower == -3.21m,
+            "H3C transceiver parser must keep nullable optical power values");
+
+        var paged = CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n---- More ----\n", H3cCommandPolicy.DisplayWlanApAll);
+        Assert(paged.Status == CliTranscriptStatus.Paged && paged.PageMarkerCount == 1,
+            "a remaining paging marker must be visible as incomplete rather than silently accepted");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,
+            "unsupported command output must remain a structured non-success");
+
+        var identity = ZteZxr10Parser.ParseIdentity(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_version.txt")));
+        Assert(identity.Status == "PARSED" && identity.Value?.Model == "C89E-4" && identity.Value.SoftwareVersion == "V1.9.0",
+            "ZTE C89E identity fixture should parse model and software version");
+        var zteInterfaces = ZteZxr10Parser.ParseInterfaces(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_interface_brief.txt")));
+        Assert(zteInterfaces.Status == "PARSED" && zteInterfaces.Value.Count == 4 &&
+               zteInterfaces.Value.Single(x => x.Name == "gei-0/3/0/1").PhysicalStatus == "down",
+            "ZTE interface parser must distinguish admin, physical and protocol state");
+        var optics = ZteZxr10Parser.ParseOpticalBrief(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_opticalinfo_brief.txt")));
+        Assert(optics.Value.Count == 3 && optics.Value.Single(x => x.InterfaceName == "gei-0/3/0/1").Status == "NO_MODULE" &&
+               optics.Value.Single(x => x.InterfaceName == "xgeis-0/4/0/5").TxPowerDbm is null,
+            "ZTE optical parser must keep no-module and missing TX distinct");
+        var lldp = ZteZxr10Parser.ParseLldpBrief(File.ReadAllText(Path.Combine(zte, "phase9_hzdt10_lldp_brief.txt")));
+        Assert(lldp.Status == "PARSED" && lldp.Value.Count == 2 && lldp.Value[0].NeighborInterface?.Contains("Ten-GigabitEthernet1/0/1", StringComparison.Ordinal) == true,
+            "ZTE LLDP brief parser must unfold wrapped remote port names");
+        var entry = ZteZxr10Parser.ParseLldpEntries(File.ReadAllText(Path.Combine(zte, "phase9_hzdt10_lldp_entry.txt")));
+        Assert(entry.Value.Count == 1 && entry.Value[0].NeighborIp == "192.0.2.26" && entry.Value[0].Ttl == 228,
+            "ZTE LLDP entry parser must retain management IP and TTL");
+        Console.WriteLine("PHASE9_VENDOR_PARSER_REPLAY=PASS");
     }
 
     private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()
