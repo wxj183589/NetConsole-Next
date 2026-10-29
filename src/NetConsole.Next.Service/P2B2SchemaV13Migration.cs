@@ -331,7 +331,7 @@ internal static class P2B2SchemaV13Migration
     }
 
     private static int ReadSchemaVersion(SqliteConnection connection) =>
-        ReadInt(connection, "SELECT COALESCE(MAX(version),0) FROM schema_versions");
+        ReadInt(connection, "SELECT CASE WHEN EXISTS(SELECT 1 FROM schema_versions WHERE version=13) THEN 13 ELSE COALESCE(MAX(CASE WHEN version <= 12 THEN version END),0) END FROM schema_versions");
 
     private static int ReadInt(SqliteConnection connection, string sql)
     {

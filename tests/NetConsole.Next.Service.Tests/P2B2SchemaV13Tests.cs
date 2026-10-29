@@ -182,7 +182,7 @@ internal static class P2B2SchemaV13Tests
                         $"fault point {point} must abort the isolated transaction");
                 }
                 using var after = Open(root);
-                Assert(ReadInt(after, "SELECT COALESCE(MAX(version),0) FROM schema_versions") == 12 &&
+                Assert(ReadInt(after, "SELECT COALESCE(MAX(CASE WHEN version <= 12 THEN version END),0) FROM schema_versions") == 12 &&
                        ReadInt(after, "SELECT COUNT(*) FROM sqlite_master WHERE name='network_domains'") == 0,
                     $"fault point {point} must leave the database at v12 without partial v13 tables");
             }
@@ -221,7 +221,7 @@ internal static class P2B2SchemaV13Tests
                     "feature gating or normal Catalog startup must not authorize v13 migration");
             }
             finally { Environment.SetEnvironmentVariable(P2B2MigrationContext.ExplicitMigrationEnvironmentVariable, previous); }
-            Assert(ReadInt(connection, "SELECT COALESCE(MAX(version),0) FROM schema_versions") == 12,
+            Assert(ReadInt(connection, "SELECT COALESCE(MAX(CASE WHEN version <= 12 THEN version END),0) FROM schema_versions") == 12,
                 "an unauthorized migration attempt must not mutate v12");
         }
         finally { DeleteDirectory(root); }

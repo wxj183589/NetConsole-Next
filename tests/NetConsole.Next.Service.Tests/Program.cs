@@ -2015,7 +2015,11 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 12, "v12 device batch operation migration should be present after repeated initialization");
+                var latestVersion = Convert.ToInt32(version.ExecuteScalar());
+                using var v12 = db.CreateCommand();
+                v12.CommandText = "SELECT COUNT(*) FROM schema_versions WHERE version=12";
+                Assert(latestVersion >= 12 && Convert.ToInt32(v12.ExecuteScalar()) == 1,
+                    "v12 device batch operation migration should remain present after later migrations and repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }

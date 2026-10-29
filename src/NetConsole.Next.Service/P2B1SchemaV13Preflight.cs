@@ -33,7 +33,11 @@ internal static class P2B1SchemaV13Preflight
         if (connection.State != System.Data.ConnectionState.Open)
             throw new InvalidOperationException("The preflight connection must already be open.");
 
-        var schemaVersion = checked((int)ReadInt(connection, "SELECT COALESCE(MAX(version),0) FROM schema_versions"));
+        // Later additive migrations may be present in the same catalog. This
+        // preflight reports the v12 baseline it is designed to inspect rather
+        // than treating a newer facts projection as a v12 contract failure.
+        var schemaVersion = checked((int)ReadInt(connection,
+            "SELECT COALESCE(MAX(CASE WHEN version <= 12 THEN version END),0) FROM schema_versions"));
         var journalMode = ReadText(connection, "PRAGMA journal_mode") ?? "unknown";
         var quickCheck = ReadText(connection, "PRAGMA quick_check(1)") ?? "unknown";
         var foreignKeyErrors = ReadForeignKeyErrors(connection);

@@ -308,7 +308,7 @@ internal static class P2B5SiteScopeMigration
     private static int ReadSchemaVersion(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COALESCE(MAX(version),0) FROM schema_versions";
+        command.CommandText = "SELECT COALESCE(MAX(CASE WHEN version <= 14 THEN version END),0) FROM schema_versions";
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 }
