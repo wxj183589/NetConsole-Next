@@ -170,6 +170,7 @@ internal sealed class ZteCollectionService
         {
             if (_tasks.TryGetValue(runId, out var registered) && ReferenceEquals(registered, completed))
                 _tasks.TryRemove(runId, out _);
+            _runs.TryRemove(runId, out _);
         }, CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return runId;
