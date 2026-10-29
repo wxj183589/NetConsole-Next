@@ -704,6 +704,27 @@ internal static class SchedulerTests
         Assert(bridgePort.LinkStatus == "DOWN" && bridgePort.Speed == "auto" && bridgePort.Vlan == "20",
             bridgePort.ToString()!);
 
+        var v9InterfaceBrief = string.Join(Environment.NewLine, new[]
+        {
+            "Brief information on interfaces in route mode:",
+            "Link: ADM - administratively down; Stby - standby",
+            "Protocol: (s) - spoofing",
+            "Interface                         Link Protocol Primary IP        Description",
+            "Vlan250                           UP   UP       10.92.250.251      AC",
+            "Brief information on interfaces in bridge mode:",
+            "Link: ADM - administratively down; Stby - standby",
+            "Speed: (a) - auto",
+            "Duplex: (a)/A - auto; H - half; F - full",
+            "Type: A - access; T - trunk; H - hybrid",
+            "Interface                         Link Speed     Duplex Type PVID Description",
+            "GE1/0/1                           UP   1000M     F      T    1    uplink"
+        });
+        var v9Interfaces = H3cComwareParser.ParseInterfaceBrief(v9InterfaceBrief);
+        Assert(v9Interfaces.Recognized && v9Interfaces.Interfaces.Count == 2,
+            "Comware V9 explanation rows must not become interfaces: " + v9Interfaces);
+        Assert(v9Interfaces.Interfaces.All(x => x.InterfaceName is not ("Protocol:" or "Speed:" or "Duplex:" or "Type:")),
+            "Comware V9 explanation labels must be excluded from interface results");
+
         var fingerprint = Convert.ToBase64String(Enumerable.Range(0, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
         Assert(H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, fingerprint), "SHA256 pin should match SSH.NET fingerprint form");
         Assert(!H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, new string('A', 43)), "wrong host key must not match");

@@ -250,7 +250,11 @@ internal static partial class H3cComwareParser
             if (section == BriefSection.None || line.StartsWith("-", StringComparison.Ordinal) ||
                 line.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase) ||
                 line.StartsWith("Link:", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Speed or duplex:", StringComparison.OrdinalIgnoreCase))
+                line.StartsWith("Speed or duplex:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Protocol:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Speed:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Duplex:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Type:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var parts = line.Split((char[]?)null, section == BriefSection.Route ? 5 : 7,
