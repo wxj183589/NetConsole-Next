@@ -842,16 +842,20 @@ if (settings.TerminalEnabled)
 }
 if (settings.H3cEnabled)
 {
-    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentH3cDeviceProfiles()));
-    app.MapPost("/api/system/h3c/profiles", (H3cProfileRequest request, Catalog rawCatalog) =>
+    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.RecentH3cDeviceProfiles().Select(profile => profile.ToView())));
+    app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
         try
         {
             rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
                 request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0,
                 request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms, request.TerminalEncoding,
                 request.TerminalProtocol, request.AllowTelnetFallback));
-            return Results.Created($"/api/system/h3c/profiles/{request.Id}", rawCatalog.GetH3cDeviceProfile(request.Id));
+            return rawCatalog.GetH3cDeviceProfile(request.Id) is { } profile
+                ? Results.Created($"/api/system/h3c/profiles/{request.Id}", profile.ToView())
+                : Results.NotFound();
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
@@ -860,20 +864,25 @@ if (settings.H3cEnabled)
             return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." });
         }
     });
-    app.MapPut("/api/system/h3c/profiles/{id}/compatibility", (string id, H3cCompatibilityRequest request,
+    app.MapPut("/api/system/h3c/profiles/{id}/compatibility", (HttpContext context, string id, H3cCompatibilityRequest request,
         Catalog rawCatalog) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_COMPATIBILITY_PERMISSION_DENIED", id);
         try
         {
             rawCatalog.SetH3cCompatibility(id, request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms,
                 request.TerminalEncoding, request.TerminalProtocol, request.AllowTelnetFallback);
-            return Results.Ok(rawCatalog.GetH3cDeviceProfile(id));
+            return rawCatalog.GetH3cDeviceProfile(id) is { } profile
+                ? Results.Ok(profile.ToView())
+                : Results.NotFound();
         }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (string id, Catalog rawCatalog, int? limit) =>
-        Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
+    app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (HttpContext context, string id, Catalog rawCatalog, int? limit) =>
+        !IsSuperAdmin(context)
+            ? DevicePermissionDenied(context, rawCatalog, "H3C_HOST_KEY_HISTORY_PERMISSION_DENIED", id)
+            : Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
     app.MapGet("/api/system/h3c/profiles/{id}/facts", (string id, HttpRequest request, Catalog rawCatalog) =>
     {
         var kind = request.Query["kind"].ToString();
@@ -904,8 +913,9 @@ if (settings.H3cEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/h3c/task-definitions", (H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_DEFINITION_PERMISSION_DENIED", request.Id);
         if (request.TimeoutMs is < 100 or > 600000)
             return Results.BadRequest(new { error = "timeoutMs must be between 100 and 600000." });
         try
@@ -922,9 +932,10 @@ if (settings.H3cEnabled)
             return Results.Conflict(new { error = $"Task definition could not be saved ({ex.GetType().Name})." });
         }
     });
-    app.MapPost("/api/system/tasks/{definitionId}/runs", (string definitionId, Catalog rawCatalog,
+    app.MapPost("/api/system/tasks/{definitionId}/runs", (HttpContext context, string definitionId, Catalog rawCatalog,
         RuntimeStatus status, BoundedCollectionScheduler scheduler) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_COLLECTION_PERMISSION_DENIED", definitionId);
         if (!rawCatalog.Available || !rawCatalog.RawWriteAvailable || !status.CollectionAllowed)
             return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         try

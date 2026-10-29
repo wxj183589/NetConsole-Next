@@ -201,7 +201,17 @@ internal sealed record H3cDeviceProfileSnapshot(
     bool AllowTelnetFallback = false)
 {
     public string SourceId => "h3c-" + Id;
+
+    public H3cProfileView ToView() => new(Id, Host, Port, Username, Enabled, CreatedMs, UpdatedMs,
+        HostKeyUpdatePolicy, AllowLegacyAlgorithms, TerminalEncoding, TerminalProtocol, AllowTelnetFallback);
 }
+
+// Credential references and host-key fingerprints are internal connection facts;
+// keep them out of the authenticated read DTO returned by the HTTP API.
+internal sealed record H3cProfileView(
+    string Id, string Host, int Port, string Username, bool Enabled, long CreatedMs, long UpdatedMs,
+    string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms, string TerminalEncoding,
+    string TerminalProtocol, bool AllowTelnetFallback);
 
 internal sealed record H3cVersionInfo(string Vendor, string Version, string? Release, bool Recognized);
 
