@@ -786,6 +786,9 @@ internal static class SchedulerTests
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
             "HZL10-AC#display device\nDevice summary\nHZL10-AC#").Status == "PARSED",
             "H3C device inventory command must preserve a complete raw transcript body");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\n% Unrecognized command\nHZL10-AC#").Status == "UNRECOGNIZED",
+            "H3C device inventory errors must not be persisted as parsed output");
         Assert(H3cComwareParser.ParseWlanApAllAddress(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_address.txt"))).Single().MacAddress == "4c6f-d608-0400",
             "H3C AP address parser must preserve the stable MAC field");
         var radios = H3cComwareParser.ParseWlanApAllRadio(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_radio.txt")));
@@ -799,6 +802,8 @@ internal static class SchedulerTests
         var paged = CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n---- More ----\n", H3cCommandPolicy.DisplayWlanApAll);
         Assert(paged.Status == CliTranscriptStatus.Paged && paged.PageMarkerCount == 1,
             "a remaining paging marker must be visible as incomplete rather than silently accepted");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n", H3cCommandPolicy.DisplayWlanApAll).Status == CliTranscriptStatus.Incomplete,
+            "a transcript without a closing prompt must remain incomplete");
         Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,
             "unsupported command output must remain a structured non-success");
 
@@ -807,8 +812,10 @@ internal static class SchedulerTests
             "ZTE C89E identity fixture should parse model and software version");
         var zteInterfaces = ZteZxr10Parser.ParseInterfaces(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_interface_brief.txt")));
         Assert(zteInterfaces.Status == "PARSED" && zteInterfaces.Value.Count == 4 &&
-               zteInterfaces.Value.Single(x => x.Name == "gei-0/3/0/1").PhysicalStatus == "down",
-            "ZTE interface parser must distinguish admin, physical and protocol state");
+               zteInterfaces.Value.Single(x => x.Name == "gei-0/3/0/1").PhysicalStatus == "down" &&
+               zteInterfaces.Value.Single(x => x.Name == "xgeis-0/4/0/5").ProtocolStatus == "up" &&
+               zteInterfaces.Value.Single(x => x.Name == "xgeis-0/4/0/5").Description == "DESCRIPTION-REDACTED",
+            "ZTE interface parser must distinguish state columns and preserve descriptions");
         var optics = ZteZxr10Parser.ParseOpticalBrief(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_opticalinfo_brief.txt")));
         Assert(optics.Value.Count == 3 && optics.Value.Single(x => x.InterfaceName == "gei-0/3/0/1").Status == "NO_MODULE" &&
                optics.Value.Single(x => x.InterfaceName == "xgeis-0/4/0/5").TxPowerDbm is null,

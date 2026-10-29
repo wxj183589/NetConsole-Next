@@ -345,9 +345,22 @@ internal static partial class H3cComwareParser
         }
         if (command == H3cCommandPolicy.DisplayDevice)
         {
-            var outputText = CliTranscriptParser.Parse(output, command).Output;
-            return new(string.IsNullOrWhiteSpace(outputText) ? "UNRECOGNIZED" : "PARSED",
-                System.Text.Json.JsonSerializer.Serialize(new { output = outputText }));
+            var transcript = CliTranscriptParser.Parse(output, command);
+            var parseStatus = transcript.Status switch
+            {
+                CliTranscriptStatus.Complete => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
+                CliTranscriptStatus.Empty => "EMPTY",
+                CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
+                CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+                _ => "UNCLASSIFIED"
+            };
+            return new(parseStatus,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    status = transcript.Status.ToString().ToUpperInvariant(),
+                    output = transcript.Output,
+                    notice = transcript.Notice
+                }));
         }
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
     }

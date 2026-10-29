@@ -55,6 +55,8 @@ internal static partial class CliTranscriptParser
         var output = new List<string>();
         var prompt = string.Empty;
         var pages = 0;
+        var sawCommandEcho = false;
+        var sawClosingPrompt = false;
         foreach (var rawLine in normalized.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
@@ -66,8 +68,16 @@ internal static partial class CliTranscriptParser
             {
                 prompt = promptMatch.Groups["prompt"].Value;
                 var echoed = promptMatch.Groups["command"].Value.Trim();
-                if (echoed.Length == 0 || string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase))
+                if (echoed.Length == 0)
+                {
+                    if (sawCommandEcho || output.Count > 0) sawClosingPrompt = true;
                     continue;
+                }
+                if (string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase))
+                {
+                    sawCommandEcho = true;
+                    continue;
+                }
             }
 
             if (PagerPattern().IsMatch(trimmed))
@@ -87,8 +97,8 @@ internal static partial class CliTranscriptParser
             return new(command, prompt, body, CliTranscriptStatus.Unsupported, pages, "unsupported command");
         if (pages > 0)
             return new(command, prompt, body, CliTranscriptStatus.Paged, pages, "paging marker remains in transcript");
-        if (prompt.Length == 0)
-            return new(command, prompt, body, CliTranscriptStatus.Incomplete, pages, "terminal prompt was not observed");
+        if (!sawClosingPrompt)
+            return new(command, prompt, body, CliTranscriptStatus.Incomplete, pages, "closing terminal prompt was not observed");
         return new(command, prompt, body, body.Length == 0 ? CliTranscriptStatus.Empty : CliTranscriptStatus.Complete, pages, null);
     }
 
@@ -265,9 +275,9 @@ internal static class ZteZxr10Parser
         {
             var trimmed = line.Trim();
             if (Regex.IsMatch(trimmed, @"^Interface\s+Attribute\s+Mode\s+BW\s+Admin\s+Phy\s+Prot", RegexOptions.IgnoreCase)) { header = true; continue; }
-            var parts = trimmed.Split((char[]?)null, 7, StringSplitOptions.RemoveEmptyEntries);
+            var parts = trimmed.Split((char[]?)null, 8, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 7 || !Regex.IsMatch(parts[0], @"^(?:gei|xgei|xgeis|xxvgei|xlgei|cgei|sci)-[A-Za-z0-9/.:_-]+$", RegexOptions.IgnoreCase)) continue;
-            rows.Add(new(parts[0], parts[1], parts[2], parts[3], parts[4].ToLowerInvariant(), parts[5].ToLowerInvariant(), parts[6].ToLowerInvariant(), null));
+            rows.Add(new(parts[0], parts[1], parts[2], parts[3], parts[4].ToLowerInvariant(), parts[5].ToLowerInvariant(), parts[6].ToLowerInvariant(), parts.Length == 8 ? parts[7] : null));
         }
         return new(header ? rows.Count > 0 ? "PARSED" : "EMPTY" : "PARSE_FAILED", rows, header ? Array.Empty<string>() : new[] { "show interface brief header was not found" });
     }
