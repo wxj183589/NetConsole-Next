@@ -166,7 +166,11 @@ internal sealed class ZteCollectionService
         }
         var task = CollectAsync(runId, profile);
         _tasks[runId] = task;
-        _ = task.ContinueWith(completed => { _tasks.TryRemove(runId, out var ignored); }, CancellationToken.None,
+        _ = task.ContinueWith(completed =>
+        {
+            if (_tasks.TryGetValue(runId, out var registered) && ReferenceEquals(registered, completed))
+                _tasks.TryRemove(runId, out _);
+        }, CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return runId;
     }
