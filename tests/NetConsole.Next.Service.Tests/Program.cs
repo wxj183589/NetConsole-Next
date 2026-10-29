@@ -27,6 +27,8 @@ else if (args.Length > 0 && args[0] == "--runtime-settings-tests")
     RuntimeSettingsTests.Run();
 else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
+else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
+    SchedulerTests.RunPhase11H3cFactReplay();
 else
     await SchedulerTests.RunAsync();
 
@@ -156,6 +158,7 @@ internal static class SchedulerTests
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
+        VerifiesPhase11OfflineH3cFactReplay();
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
@@ -918,6 +921,60 @@ internal static class SchedulerTests
                mesh.Any(item => item.Rssi == 30 && item.InterfaceName == "WLAN-MeshLink6"),
             "Phase 11 live AP mesh-link fixture must retain peer count, RSSI and active state");
         Console.WriteLine("PHASE11_LIVE_AP_FIXTURES=PASS (V7 identity/interface/LLDP/unsupported command)");
+    }
+
+    internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();
+
+    private static void VerifiesPhase11OfflineH3cFactReplay()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-phase11-h3c-facts-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.229", 22, "reader", "PHASE11_FIXTURE", fingerprint, true, 0, 0));
+            var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_229");
+            var outputs = new Dictionary<string, string>
+            {
+                [H3cCommandPolicy.DisplayVersion] = File.ReadAllText(Path.Combine(fixtureRoot, "display_version.txt")),
+                [H3cCommandPolicy.DisplayInterfaceBrief] = File.ReadAllText(Path.Combine(fixtureRoot, "display_interface_brief.txt")),
+                [H3cCommandPolicy.DisplayInterface] = File.ReadAllText(Path.Combine(fixtureRoot, "display_interface.txt")),
+                [H3cCommandPolicy.DisplayWlanMeshProfile] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_mesh_profile.txt")),
+                [H3cCommandPolicy.DisplayWlanMeshLink] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_mesh_link.txt")),
+                [H3cCommandPolicy.DisplayLldpNeighborInformationList] = File.ReadAllText(Path.Combine(fixtureRoot, "display_lldp_neighbor_information_list.txt")),
+                [H3cCommandPolicy.DisplayWlanApAll] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_ap_all.txt")),
+                [H3cCommandPolicy.DisplayWlanServiceTemplateAll] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_service_template_all.txt")),
+                [H3cCommandPolicy.DisplayWlanClient] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_client.txt"))
+            };
+            const long capturedMs = 1_767_220_800_000;
+            var first = catalog.ImportH3cOfflineReplay(profileId, outputs, capturedMs);
+            Assert(first.FactCount >= 20 && first.CurrentCount >= 20 && first.Source == Catalog.H3cOfflineFixtureSource,
+                $"offline H3C replay should persist all real fixture facts: {first}");
+            var peers = catalog.QueryH3cFacts(profileId, "mesh.peer", false, 10);
+            Assert(peers.Count == 3 && peers.Select(item => item.IdentityKey).Distinct(StringComparer.Ordinal).Count() == 3 &&
+                   peers.All(item => item.DataState == Catalog.H3cOfflineFixtureSource && item.Freshness == "EXPIRED_DEVICE_OFFLINE"),
+                "Mesh peers must use stable keys and remain explicitly expired offline evidence");
+            var currentFacts = catalog.QueryH3cFacts(profileId, null, false, 1000);
+            Assert(currentFacts.Any(item => item.Status is "UNSUPPORTED" or "PARTIAL") &&
+                   currentFacts.Any(item => item.Kind == "command.display.wlan.service-template.all") &&
+                   currentFacts.Any(item => item.Kind == "command.display.wlan.client"),
+                "unsupported, partial and empty command outputs must remain visible as structured states");
+            var second = catalog.ImportH3cOfflineReplay(profileId, outputs, capturedMs);
+            Assert(second.CurrentCount == first.CurrentCount && catalog.QueryH3cFacts(profileId, "mesh.peer", false, 10).Count == 3,
+                "replaying one golden capture must be idempotent and must not duplicate Mesh peers");
+            var restarted = new Catalog(TestSettings(root));
+            restarted.Initialize();
+            var current = restarted.QueryH3cFacts(profileId, null, false, 1000);
+            var history = restarted.QueryH3cFacts(profileId, null, true, 1000);
+            Assert(current.Count == first.CurrentCount && history.Count == current.Count &&
+                   current.Any(item => item.Kind == "interface" && item.IdentityKey == "WLAN-Radio1/0/1"),
+                "SQLite/service restart must preserve Current and history without duplicate rows");
+            Console.WriteLine($"PHASE11_OFFLINE_H3C_FACT_REPLAY=PASS (facts={current.Count}, peers=3, source={Catalog.H3cOfflineFixtureSource})");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()

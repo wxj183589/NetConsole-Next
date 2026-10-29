@@ -13,6 +13,7 @@ const router = createRouter({
         { path: '', component: () => import('./views/DashboardView.vue'), name: 'dashboard', meta: { label: '运行总览' } },
         { path: 'devices', component: () => import('./views/DevicesView.vue'), name: 'devices', meta: { label: '设备管理' } },
         { path: 'zte', component: () => import('./views/ZteView.vue'), name: 'zte', meta: { label: 'ZTE 采集' } },
+        { path: 'h3c', component: () => import('./views/H3cView.vue'), name: 'h3c', meta: { label: 'H3C 事实回放' } },
         { path: 'network-planning', component: () => import('./views/NetworkPlanningView.vue'), name: 'network-planning', meta: { label: '网络规划' } },
         { path: 'terminal', component: () => import('./views/TerminalView.vue'), name: 'terminal', meta: { label: '终端控制台' } },
         { path: 'tasks', component: () => import('./views/TasksView.vue'), name: 'tasks', meta: { label: '任务中心' } },

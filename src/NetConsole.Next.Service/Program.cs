@@ -874,6 +874,36 @@ if (settings.H3cEnabled)
     });
     app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (string id, Catalog rawCatalog, int? limit) =>
         Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
+    app.MapGet("/api/system/h3c/profiles/{id}/facts", (string id, HttpRequest request, Catalog rawCatalog) =>
+    {
+        var kind = request.Query["kind"].ToString();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit));
+    });
+    app.MapPost("/api/system/h3c/profiles/{id}/offline-replay", (HttpContext context, string id,
+        H3cOfflineReplayRequest request, Catalog rawCatalog) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_OFFLINE_REPLAY_PERMISSION_DENIED", id);
+        if (request.CommandOutputs is null || request.CommandOutputs.Count == 0 || request.CommandOutputs.Count > 32)
+            return Results.BadRequest(new { error = "At least one command output is required." });
+        if (request.CommandOutputs.Keys.Any(command => !H3cCommandPolicy.IsAllowed(command)))
+            return Results.BadRequest(new { error = "Offline replay contains a command outside the read-only allowlist." });
+        if (request.CommandOutputs.Any(item => item.Key.Length > 128 || item.Value is null || item.Value.Length > 262144) ||
+            request.CommandOutputs.Sum(item => (long)item.Value.Length) > 2_097_152)
+            return Results.BadRequest(new { error = "Offline replay output exceeds the bounded fixture size." });
+        if (request.CapturedMs <= 0)
+            return Results.BadRequest(new { error = "capturedMs must be a positive Unix millisecond timestamp." });
+        try
+        {
+            var result = rawCatalog.ImportH3cOfflineReplay(id, request.CommandOutputs, request.CapturedMs,
+                Catalog.H3cOfflineFixtureSource);
+            return Results.Ok(result);
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
+    });
     app.MapPost("/api/system/h3c/task-definitions", (H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
     {
         if (request.TimeoutMs is < 100 or > 600000)
@@ -1202,6 +1232,7 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STR
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
+  internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,
     string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,

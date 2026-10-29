@@ -403,6 +403,20 @@ export interface TaskRun {
   parseStatus?: string | null
 }
 
+export interface H3cFact {
+  id: string
+  profileId: string
+  kind: string
+  identityKey: string
+  status: string
+  source: string
+  capturedMs: number
+  isCurrent: boolean
+  payloadJson: string
+  dataState?: string
+  freshness?: string
+}
+
 export interface HostTool {
   id: string
   displayName: string
@@ -537,6 +551,9 @@ export function startZteCollection(id: string): Promise<{ runId: string }> {
 export function getZteRun(id: string): Promise<ZteCollectionRun> { return request(`/api/system/zte/runs/${encodeURIComponent(id)}`) }
 export function getZteFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<ZteFact[]> {
   return request(queryPath(`/api/system/zte/profiles/${encodeURIComponent(id)}/facts`, params))
+}
+export function getH3cFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<H3cFact[]> {
+  return request(queryPath(`/api/system/h3c/profiles/${encodeURIComponent(id)}/facts`, params))
 }
 function queryPath(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams()

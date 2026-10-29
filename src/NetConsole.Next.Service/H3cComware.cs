@@ -8,18 +8,23 @@ internal static class H3cCommandPolicy
 {
     public const string DisplayVersion = "display version";
     public const string DisplayInterfaceBrief = "display interface brief";
+    public const string DisplayInterface = "display interface";
     public const string DisplayDevice = "display device";
     public const string DisplayWlanApAll = "display wlan ap all";
     public const string DisplayWlanApAllAddress = "display wlan ap all address";
     public const string DisplayWlanApAllRadio = "display wlan ap all radio";
     public const string DisplayWlanMeshLink = "display wlan mesh-link";
+    public const string DisplayWlanMeshProfile = "display wlan mesh-profile";
+    public const string DisplayWlanServiceTemplateAll = "display wlan service-template all";
+    public const string DisplayWlanClient = "display wlan client";
     public const string DisplayLldpNeighborInformationList = "display lldp neighbor-information list";
     public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
     public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
 
     public static bool IsAllowed(string command) => command is
-        DisplayVersion or DisplayInterfaceBrief or DisplayDevice or DisplayWlanApAll or
-        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayLldpNeighborInformationList or
+        DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayWlanApAll or
+        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
+        DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface;
 }
 
@@ -216,6 +221,22 @@ internal sealed record H3cInterfaceBriefResult(
     bool Recognized,
     string? Notice);
 
+internal sealed record H3cInterfaceDetailFact(
+    string InterfaceName,
+    string? LinkStatus,
+    string? Description,
+    string? RadioMode,
+    int? Channel,
+    long? InputBytes,
+    long? OutputBytes);
+
+internal sealed record H3cMeshProfileFact(
+    int? Number,
+    string? MeshId,
+    string? Status,
+    string? ForwardingLocation,
+    string? AkmMode);
+
 internal sealed record H3cParseResult(string Status, string Json);
 
 internal static partial class H3cComwareParser
@@ -310,6 +331,12 @@ internal static partial class H3cComwareParser
             return new(result.Recognized ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
         }
+        if (command == H3cCommandPolicy.DisplayInterface)
+        {
+            var result = ParseInterfaceDetails(output);
+            return new(result.Count > 0 ? "PARSED" : "EMPTY",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
         if (command == H3cCommandPolicy.DisplayWlanApAll)
         {
             var result = ParseWlanApAll(output);
@@ -333,6 +360,28 @@ internal static partial class H3cComwareParser
             var result = ParseMeshLink(output);
             return new(result.Count > 0 ? "PARSED" : "EMPTY",
                 System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanMeshProfile)
+        {
+            var result = ParseMeshProfile(output);
+            return new(result.MeshId is null ? "EMPTY" : "PARSED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command is H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient)
+        {
+            var transcript = CliTranscriptParser.Parse(output, command);
+            return new(transcript.Status switch
+            {
+                CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+                CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
+                CliTranscriptStatus.Empty => "EMPTY",
+                _ => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED"
+            }, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = transcript.Status.ToString().ToUpperInvariant(),
+                output = transcript.Output,
+                notice = transcript.Notice
+            }));
         }
         if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
         {
@@ -378,9 +427,10 @@ internal static partial class H3cComwareParser
 
     private static H3cParseResult? GetTranscriptFailure(string command, string output)
     {
-        if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayWlanApAll or
+        if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayInterface or H3cCommandPolicy.DisplayWlanApAll or
             H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or
-            H3cCommandPolicy.DisplayWlanMeshLink or
+            H3cCommandPolicy.DisplayWlanMeshLink or H3cCommandPolicy.DisplayWlanMeshProfile or
+            H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient or
             H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
             H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
             return null;

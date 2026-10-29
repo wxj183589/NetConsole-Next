@@ -205,6 +205,87 @@ internal static partial class H3cComwareParser
         return rows;
     }
 
+    public static IReadOnlyList<H3cInterfaceDetailFact> ParseInterfaceDetails(string output)
+    {
+        var lines = LooseCommandBody(output, H3cCommandPolicy.DisplayInterface);
+        var rows = new List<H3cInterfaceDetailFact>();
+        string? name = null, state = null, description = null, mode = null;
+        int? channel = null;
+        long? inputBytes = null, outputBytes = null;
+
+        void Flush()
+        {
+            if (name is not null)
+                rows.Add(new(name, state, description, mode, channel, inputBytes, outputBytes));
+            name = state = description = mode = null;
+            channel = null;
+            inputBytes = outputBytes = null;
+        }
+
+        foreach (var rawLine in lines)
+        {
+            var text = rawLine.Trim();
+            if (text.Length == 0) continue;
+            if (IsInterfaceToken(text) && !text.Contains(' '))
+            {
+                Flush();
+                name = text;
+                continue;
+            }
+            if (name is null) continue;
+            if (text.StartsWith("Current state:", StringComparison.OrdinalIgnoreCase))
+                state = text["Current state:".Length..].Trim();
+            else if (text.StartsWith("Description:", StringComparison.OrdinalIgnoreCase))
+                description = text["Description:".Length..].Trim();
+            else if (text.StartsWith("current mode:", StringComparison.OrdinalIgnoreCase))
+            {
+                var match = Regex.Match(text, @"current mode:\s*(?<mode>[^,]+),\s*current channel:\s*(?<channel>\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                if (match.Success)
+                {
+                    mode = match.Groups["mode"].Value.Trim();
+                    if (int.TryParse(match.Groups["channel"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                        channel = parsed;
+                }
+            }
+            else if (text.StartsWith("Input (total):", StringComparison.OrdinalIgnoreCase))
+                inputBytes = ParseBytes(text);
+            else if (text.StartsWith("Output (total):", StringComparison.OrdinalIgnoreCase))
+                outputBytes = ParseBytes(text);
+        }
+        Flush();
+        return rows;
+
+        static long? ParseBytes(string text)
+        {
+            var match = Regex.Match(text, @"(?<packets>[\d,]+)\s+packets,\s*(?<bytes>[\d,]+)\s+bytes", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return match.Success && long.TryParse(match.Groups["bytes"].Value.Replace(",", string.Empty, StringComparison.Ordinal),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+        }
+    }
+
+    public static H3cMeshProfileFact ParseMeshProfile(string output)
+    {
+        var text = string.Join('\n', LooseCommandBody(output, H3cCommandPolicy.DisplayWlanMeshProfile));
+        return new(
+            ParseIntField(text, "Mesh profile number"),
+            ParseTextField(text, "Mesh ID"),
+            ParseTextField(text, "Mesh profile status"),
+            ParseTextField(text, "Mesh forwarding-location"),
+            ParseTextField(text, "AKM mode"));
+
+        static int? ParseIntField(string value, string key)
+        {
+            var parsed = ParseTextField(value, key);
+            return int.TryParse(parsed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : null;
+        }
+
+        static string? ParseTextField(string value, string key)
+        {
+            var match = Regex.Match(value, $@"(?im)^\s*{Regex.Escape(key)}\s*:\s*(?<value>[^\r\n]+)");
+            return match.Success ? match.Groups["value"].Value.Trim() : null;
+        }
+    }
+
     public static IReadOnlyList<H3cLldpFact> ParseLldpList(string output)
     {
         var transcript = CliTranscriptParser.Parse(output, H3cCommandPolicy.DisplayLldpNeighborInformationList);
@@ -264,6 +345,16 @@ internal static partial class H3cComwareParser
     }
 
     private static bool IsInterfaceToken(string value) => Regex.IsMatch(value, @"^[A-Za-z][A-Za-z0-9/._:-]{1,63}$", RegexOptions.CultureInvariant);
+
+    private static IReadOnlyList<string> LooseCommandBody(string output, string command)
+    {
+        var lines = CliTranscriptParser.Normalize(output).Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+        var commandLine = Array.FindIndex(lines, line => line.TrimEnd().EndsWith(command, StringComparison.OrdinalIgnoreCase));
+        if (commandLine >= 0) lines = lines[(commandLine + 1)..];
+        return lines.Where(line => !line.Contains("Copyright", StringComparison.OrdinalIgnoreCase) &&
+                !line.Contains("Without the owner's", StringComparison.OrdinalIgnoreCase) &&
+                !line.TrimStart().StartsWith('*') && line.Trim().Length > 0).ToArray();
+    }
 }
 
 internal static class ZteCommandPolicy
