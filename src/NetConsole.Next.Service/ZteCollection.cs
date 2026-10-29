@@ -292,7 +292,23 @@ internal sealed partial class Catalog
         var fingerprint = string.IsNullOrWhiteSpace(profile.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
         if (profile.HostKeyUpdatePolicy == "STRICT" && fingerprint.Length == 0) throw new ArgumentException("STRICT ZTE profile requires a host-key fingerprint.", nameof(profile));
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        using var db = Open(); using var tx = db.BeginTransaction();
+        using var db = Open();
+        using (var existing = db.CreateCommand())
+        {
+            existing.CommandText = "SELECT host,port,username,credential_reference,host_key_sha256,site_id FROM zte_device_profiles WHERE id=$id";
+            existing.Parameters.AddWithValue("$id", profile.Id);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                var same = string.Equals(reader.GetString(0), profile.Host, StringComparison.OrdinalIgnoreCase) &&
+                    reader.GetInt32(1) == profile.Port && string.Equals(reader.GetString(2), profile.Username, StringComparison.Ordinal) &&
+                    string.Equals(reader.GetString(3), profile.CredentialReference, StringComparison.Ordinal) &&
+                    string.Equals(reader.GetString(4), fingerprint, StringComparison.Ordinal) &&
+                    string.Equals(reader.GetString(5), profile.SiteId, StringComparison.Ordinal);
+                if (!same) throw new InvalidOperationException("ZTE profile identity is immutable; create a new profile ID for a different target or credential.");
+            }
+        }
+        using var tx = db.BeginTransaction();
         using (var source = db.CreateCommand()) { source.Transaction = tx; source.CommandText = "INSERT INTO collection_sources(id,site_id,kind,label,enabled) VALUES($id,$site,'ZTE_SSH',$label,$enabled) ON CONFLICT(id) DO UPDATE SET label=excluded.label,enabled=excluded.enabled"; source.Parameters.AddWithValue("$id", "zte-" + profile.Id); source.Parameters.AddWithValue("$site", profile.SiteId); source.Parameters.AddWithValue("$label", $"ZTE {profile.Host}:{profile.Port}"); source.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0); source.ExecuteNonQuery(); }
         using var insert = db.CreateCommand(); insert.Transaction = tx; insert.CommandText = @"INSERT INTO zte_device_profiles(id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,site_id) VALUES($id,$source,$host,$port,$user,$credential,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$site) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,updated_ms=excluded.updated_ms,host_key_update_policy=excluded.host_key_update_policy,allow_legacy_algorithms=excluded.allow_legacy_algorithms,terminal_encoding=excluded.terminal_encoding";
         insert.Parameters.AddWithValue("$id", profile.Id); insert.Parameters.AddWithValue("$source", "zte-" + profile.Id); insert.Parameters.AddWithValue("$host", profile.Host); insert.Parameters.AddWithValue("$port", profile.Port); insert.Parameters.AddWithValue("$user", profile.Username); insert.Parameters.AddWithValue("$credential", profile.CredentialReference); insert.Parameters.AddWithValue("$fingerprint", fingerprint); insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0); insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now); insert.Parameters.AddWithValue("$updated", now); insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy); insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0); insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding); insert.Parameters.AddWithValue("$site", profile.SiteId); insert.ExecuteNonQuery(); tx.Commit();

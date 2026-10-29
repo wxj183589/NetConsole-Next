@@ -9,6 +9,7 @@ const selected = ref<ZteProfile | null>(null)
 const run = ref<ZteCollectionRun | null>(null)
 const facts = ref<ZteFact[]>([])
 const loading = ref(false)
+let selectionGeneration = 0
 const payload = (fact: ZteFact): unknown => { try { return JSON.parse(fact.payloadJson) } catch { return fact.payloadJson } }
 const formatTime = (value?: number | null): string => value ? new Date(value).toLocaleString() : '—'
 async function refresh(): Promise<void> {
@@ -18,22 +19,31 @@ async function refresh(): Promise<void> {
   if (selected.value) facts.value = await getZteFacts(selected.value.id, { history: false, limit: 50 })
 }
 async function selectProfile(profile: ZteProfile): Promise<void> {
+  selectionGeneration += 1
+  const generation = selectionGeneration
   selected.value = profile
   run.value = null
-  facts.value = await getZteFacts(profile.id, { history: false, limit: 50 })
+  const nextFacts = await getZteFacts(profile.id, { history: false, limit: 50 })
+  if (generation === selectionGeneration) facts.value = nextFacts
 }
 async function collect(profile: ZteProfile): Promise<void> {
   loading.value = true
   try {
     await selectProfile(profile)
+    const generation = selectionGeneration
     const result = await startZteCollection(profile.id)
-    run.value = await getZteRun(result.runId)
-    for (let i = 0; i < 30 && run.value && ['QUEUED', 'RUNNING'].includes(run.value.state); i++) {
+    let currentRun = await getZteRun(result.runId)
+    if (generation === selectionGeneration) run.value = currentRun
+    for (let i = 0; i < 1200 && currentRun && ['QUEUED', 'RUNNING'].includes(currentRun.state); i++) {
       await new Promise(resolve => setTimeout(resolve, 500))
-      run.value = await getZteRun(result.runId)
+      currentRun = await getZteRun(result.runId)
+      if (generation === selectionGeneration) run.value = currentRun
+      if (generation !== selectionGeneration) break
     }
-    facts.value = await getZteFacts(profile.id, { limit: 50 })
-    ElMessage.success(run.value?.state === 'SUCCEEDED' ? 'ZTE 采集完成' : `ZTE 采集状态：${run.value?.state || 'UNKNOWN'}`)
+    if (generation === selectionGeneration) {
+      facts.value = await getZteFacts(profile.id, { limit: 50 })
+      ElMessage.success(currentRun?.state === 'SUCCEEDED' ? 'ZTE 采集完成' : `ZTE 采集状态：${currentRun?.state || 'UNKNOWN'}`)
+    }
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : 'ZTE 采集失败') }
   finally { loading.value = false }
 }

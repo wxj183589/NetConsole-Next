@@ -22,6 +22,13 @@ internal static class ZteCollectionTests
             catalog.CreateZteDeviceProfile(new ZteDeviceProfileSnapshot(profileId, "192.0.2.22", 22,
                 "reader", "TEST_CREDENTIAL", "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", true, 0, 0));
             Assert(catalog.GetZteDeviceProfile(profileId)?.Host == "192.0.2.22", "ZTE profile must round-trip through SQLite");
+            try
+            {
+                catalog.CreateZteDeviceProfile(new ZteDeviceProfileSnapshot(profileId, "192.0.2.23", 22,
+                    "reader", "TEST_CREDENTIAL", "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", true, 0, 0));
+                throw new InvalidOperationException("ZTE profile identity changes must be rejected");
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("identity is immutable", StringComparison.Ordinal)) { }
             var service = new ZteCollectionService(catalog, new FixedCredentials(), new FixtureTransportFactory());
             var visibleProfile = service.Profiles(P2B5SiteScopeDecision.Global).Single();
             var visibleJson = JsonSerializer.Serialize(visibleProfile);
