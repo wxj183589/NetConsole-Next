@@ -175,7 +175,6 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     private bool _hostKeySeen;
     private bool _hostKeyAccepted;
     private bool _disposed;
-    private int _commandStarted;
     private long _hostKeyAcceptedTimestamp;
 
     public SshNetH3cSshTransport(H3cDeviceProfileSnapshot profile, string password)
@@ -252,9 +251,6 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         if (!H3cCommandPolicy.IsAllowed(command) && !ZteCommandPolicy.IsAllowed(command))
             throw new ArgumentException("Only allowlisted vendor read-only commands are allowed.", nameof(command));
         if (!IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
-        if (Interlocked.Exchange(ref _commandStarted, 1) != 0)
-            throw new InvalidOperationException("An SSH transport accepts exactly one read-only Exec command; create a new session for the next command.");
-
         using var sshCommand = _client.CreateCommand(command);
         // The persisted scheduler imposes the stricter per-run deadline (maximum ten minutes).
         sshCommand.CommandTimeout = TimeSpan.FromMinutes(11);
@@ -454,6 +450,7 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
 {
     private IH3cSshTransport? _transport;
     private bool _sessionCounted;
+    private int _commandStarted;
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
@@ -495,6 +492,8 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
         if (transport is null || !transport.IsConnected)
             throw new InvalidOperationException("H3C SSH session is not connected.");
         cancellationToken.ThrowIfCancellationRequested();
+        if (Interlocked.Exchange(ref _commandStarted, 1) != 0)
+            throw new InvalidOperationException("An H3C SSH session accepts exactly one read-only Exec command; create a new session for the next command.");
         var started = Stopwatch.GetTimestamp();
         try { return await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false); }
         finally { H3cCollectionMetrics.RecordCommand(Stopwatch.GetElapsedTime(started)); }

@@ -36,8 +36,8 @@ internal static class SchedulerTests
 {
     public static async Task RunSshWireAsync(string[] arguments)
     {
-        if (arguments.Length != 3 || arguments[0] is not ("success" or "host-key" or "auth" or "timeout" or "disconnect" or "concurrent"))
-            throw new ArgumentException("Expected: --ssh-wire <success|host-key|auth|timeout|disconnect|concurrent> <port> <sha256-pin>.");
+        if (arguments.Length != 3 || arguments[0] is not ("success" or "host-key" or "auth" or "timeout" or "disconnect" or "concurrent" or "zte-multi"))
+            throw new ArgumentException("Expected: --ssh-wire <success|host-key|auth|timeout|disconnect|concurrent|zte-multi> <port> <sha256-pin>.");
         var mode = arguments[0];
         var port = int.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture);
         var pin = arguments[2];
@@ -110,6 +110,22 @@ internal static class SchedulerTests
                     }
                     Console.WriteLine("PASS: SSH.NET wire reset preserved only the bounded partial command output");
                     break;
+                case "zte-multi":
+                {
+                    var zteProfile = new ZteDeviceProfileSnapshot(Guid.NewGuid().ToString("N"),
+                        "127.0.0.1", port, "reader", "TEST_CREDENTIAL", pin, true, 0, 0);
+                    await using var zte = new ZteSshDeviceSession(zteProfile,
+                        new FixedH3cCredentialProvider(password), new SshNetH3cSshTransportFactory());
+                    await zte.ConnectAsync(CancellationToken.None);
+                    Assert(await zte.ExecuteAsync(ZteCommandPolicy.ShowVersion, CancellationToken.None)
+                        == "ZTE version synthetic response\n",
+                        "ZTE first Exec must complete through the shared SSH transport");
+                    Assert(await zte.ExecuteAsync(ZteCommandPolicy.ShowInterfaceBrief, CancellationToken.None)
+                        == "ZTE interface synthetic response\n",
+                        "ZTE second Exec must reuse the connected transport without being rejected");
+                    Console.WriteLine("PASS: ZTE two sequential SSH.NET Exec channels shared one transport");
+                    break;
+                }
                 case "concurrent":
                     var second = new H3cSshDeviceSession(profile, new FixedH3cCredentialProvider(password),
                         new SshNetH3cSshTransportFactory());
@@ -1996,6 +2012,14 @@ internal static class SchedulerTests
             "authenticated SSH session should be reflected in the active-session gauge");
         Assert(await good.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None) == "simulated Comware output",
             "read-only Exec command should return its simulated response");
+        var secondH3cCommandRejected = false;
+        try { await good.ExecuteAsync(H3cCommandPolicy.DisplayInterfaceBrief, CancellationToken.None); }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("An H3C SSH session accepts", StringComparison.Ordinal))
+        {
+            secondH3cCommandRejected = true;
+        }
+        Assert(secondH3cCommandRejected && goodFactory.LastTransport!.ExecuteCount == 1,
+            "H3C must preserve one read-only Exec command per session without forwarding a second command");
         await good.DisposeAsync();
         Assert(goodFactory.LastTransport!.DisposeCount == 1 &&
                H3cCollectionMetrics.Snapshot().ActiveSshSessions == activeBefore,
@@ -3136,6 +3160,7 @@ internal static class SchedulerTests
         public bool IsConnected { get; private set; }
         public int DisposeCount { get; private set; }
         public int AbortCount { get; private set; }
+        public int ExecuteCount { get; private set; }
 
         public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
         {
@@ -3152,6 +3177,7 @@ internal static class SchedulerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsConnected) throw new IOException("simulated peer disconnect");
+            ExecuteCount++;
             if (resetOnCommand)
             {
                 IsConnected = false;

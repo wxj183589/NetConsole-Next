@@ -20,6 +20,8 @@ PASSWORD = "synthetic-test-password"
 OUTPUT = b"H3C Comware synthetic response\n"
 PARTIAL = b"partial Comware response\n"
 ALLOWED_COMMAND = b"display version"
+ZTE_COMMANDS = (b"show version", b"show interface brief")
+ZTE_OUTPUTS = (b"ZTE version synthetic response\n", b"ZTE interface synthetic response\n")
 
 
 class ReadOnlyServer(paramiko.ServerInterface):
@@ -43,7 +45,8 @@ class ReadOnlyServer(paramiko.ServerInterface):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def check_channel_exec_request(self, channel, command):
-        if command != ALLOWED_COMMAND:
+        allowed = ZTE_COMMANDS if self.mode == "zte-multi" else (ALLOWED_COMMAND,)
+        if command not in allowed:
             return False
         self.command = command
         self.command_seen.set()
@@ -67,6 +70,20 @@ def serve_connection(connection, mode, private_key, server_error):
             return
         if channel is None or not server.command_seen.wait(5):
             raise RuntimeError("SSH client did not request the allowlisted exec command")
+        if mode == "zte-multi":
+            for index, expected in enumerate(ZTE_COMMANDS):
+                if index:
+                    server.command_seen.clear()
+                    channel = transport.accept(timeout=5)
+                    if channel is None or not server.command_seen.wait(5):
+                        raise RuntimeError("ZTE client did not request the next Exec channel")
+                if server.command != expected:
+                    raise RuntimeError("ZTE client sent commands in an unexpected order")
+                channel.sendall(ZTE_OUTPUTS[index])
+                channel.send_exit_status(0)
+                channel.shutdown_write()
+                channel.close()
+            return
         if mode == "disconnect":
             channel.sendall(PARTIAL)
             time.sleep(0.2)
@@ -157,7 +174,7 @@ def main():
     dll = Path(sys.argv[1]).resolve()
     if not dll.is_file():
         raise SystemExit("C# test harness DLL was not built")
-    for mode in ("success", "host-key", "auth", "timeout", "disconnect", "concurrent"):
+    for mode in ("success", "host-key", "auth", "timeout", "disconnect", "concurrent", "zte-multi"):
         run_case(dll, mode)
 
 
