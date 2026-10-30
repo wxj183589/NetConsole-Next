@@ -535,7 +535,7 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
             H3cCollectionMetrics.RecordRawCommit(writer.LastSyncDurationMs, writer.LastSealDurationMs);
             var parse = captureStatus == "PARTIAL"
                 ? new H3cParseResult("PARTIAL", "{}")
-                : H3cComwareParser.Parse(definition.Command, output);
+                : H3cComwareParser.Parse(definition.Command, output, completedExec: true);
             return new H3cRawOutputManifest(writer.RelativePath, definition.Command, outputByteCount,
                 Convert.ToHexString(outputSha).ToLowerInvariant(), writer.Sha256!, captureStatus,
                 parse.Status, parse.Json, capturedMs);

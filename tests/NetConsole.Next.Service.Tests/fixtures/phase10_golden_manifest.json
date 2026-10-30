@@ -242,6 +242,54 @@
       "parser_contract": "h3c.v7.live-ap.v1",
       "bytes": 532,
       "sha256": "9b6006f3401717347b0ea3387b1b8b6f02c9e710a79559742cdd2368e575d2f2"
+    },
+    {
+      "fixture": "h3c/live_ap_v7_220/display_version.txt",
+      "vendor": "H3C",
+      "model": "WA6510E-T",
+      "software": "Comware 7.1.064 Release 2493P05",
+      "command": "display version",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.v7.live-ap.v1",
+      "bytes": 1460,
+      "sha256": "d42bacbbd36b2fb0925927e055c2428d065ee146ff0b00f8199d784b1a122985"
+    },
+    {
+      "fixture": "h3c/live_ap_v7_220/display_interface_brief.txt",
+      "vendor": "H3C",
+      "model": "WA6510E-T",
+      "software": "Comware 7.1.064 Release 2493P05",
+      "command": "display interface brief",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.v7.live-ap.v1",
+      "bytes": 1323,
+      "sha256": "9c7bb0d4110d4696d173f70bfd4b6ba18923d701f92ba79dd838da6b713c2316"
+    },
+    {
+      "fixture": "h3c/live_ap_v7_220/display_lldp_neighbor_information_list.txt",
+      "vendor": "H3C",
+      "model": "WA6510E-T",
+      "software": "Comware 7.1.064 Release 2493P05",
+      "command": "display lldp neighbor-information list",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.v7.live-ap.v1",
+      "bytes": 570,
+      "sha256": "56069ba9050f3272149894c610449930530f565a206d40c96aefd5b60e94c5c4"
+    },
+    {
+      "fixture": "h3c/live_ap_v7_220/display_lldp_neighbor_information_verbose.txt",
+      "vendor": "H3C",
+      "model": "WA6510E-T",
+      "software": "Comware 7.1.064 Release 2493P05",
+      "command": "display lldp neighbor-information verbose",
+      "source_level": "REAL_CAPTURE_REDACTED",
+      "expected_status": "COMPLETE",
+      "parser_contract": "h3c.v7.live-ap.v1",
+      "bytes": 1517,
+      "sha256": "d563b7cef81c844424dac112a341980e5458470036db289f6de1608f6f9084be"
     }
   ]
 }

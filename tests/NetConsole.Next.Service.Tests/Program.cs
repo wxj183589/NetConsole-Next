@@ -158,6 +158,7 @@ internal static class SchedulerTests
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
+        VerifiesPhase12LiveAp220GoldenFixtures();
         VerifiesPhase11OfflineH3cFactReplay();
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
@@ -833,6 +834,9 @@ internal static class SchedulerTests
             "an identical command string in the response body must not be discarded as an echo");
         Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n", H3cCommandPolicy.DisplayWlanApAll).Status == CliTranscriptStatus.Incomplete,
             "a transcript without a closing prompt must remain incomplete");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n",
+            H3cCommandPolicy.DisplayWlanApAll, completedExec: true).Status == CliTranscriptStatus.Complete,
+            "a completed SSH Exec response with one opening prompt must be accepted without an interactive closing prompt");
         Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,
             "unsupported command output must remain a structured non-success");
 
@@ -921,6 +925,37 @@ internal static class SchedulerTests
                mesh.Any(item => item.Rssi == 30 && item.InterfaceName == "WLAN-MeshLink6"),
             "Phase 11 live AP mesh-link fixture must retain peer count, RSSI and active state");
         Console.WriteLine("PHASE11_LIVE_AP_FIXTURES=PASS (V7 identity/interface/LLDP/unsupported command)");
+    }
+
+    private static void VerifiesPhase12LiveAp220GoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_220");
+        var versionOutput = File.ReadAllText(Path.Combine(root, "display_version.txt"));
+        var version = H3cComwareParser.ParseVersion(versionOutput);
+        Assert(version.Recognized && version.Version == "7.1.064" && version.Release == "2493P05",
+            "Phase 12 AP version fixture must retain the observed Comware release");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayVersion, versionOutput, completedExec: true).Status == "PARSED",
+            "Phase 12 prompt-bearing completed Exec version output must parse successfully");
+
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(
+            File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count == 12 &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP") &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "Vlan201" && item.IpAddress == "192.0.2.220"),
+            "Phase 12 AP interface fixture must retain route/bridge rows and the radio state");
+
+        var lldpListOutput = File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt"));
+        var lldpList = H3cComwareParser.ParseLldpList(lldpListOutput);
+        Assert(lldpList.Count == 1 && lldpList[0].LocalInterface == "GE1/0/1" &&
+               lldpList[0].NeighborInterface == "ge2" && lldpList[0].ChassisId == "0000-0000-0001",
+            "Phase 12 AP LLDP list fixture must preserve local/remote interface and chassis identity");
+
+        var lldpVerbose = H3cComwareParser.ParseLldpVerbose(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_verbose.txt")));
+        Assert(lldpVerbose.Count == 1 && lldpVerbose[0].LocalInterface == "GigabitEthernet1/0/1" &&
+               lldpVerbose[0].ManagementAddress == "192.0.2.170",
+            "Phase 12 AP LLDP verbose fixture must preserve management and local interface fields");
+        Console.WriteLine($"PHASE12_LIVE_AP_220_FIXTURES=PASS (identity=1, interfaces={interfaces.Interfaces.Count}, lldp={lldpList.Count})");
     }
 
     internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();
