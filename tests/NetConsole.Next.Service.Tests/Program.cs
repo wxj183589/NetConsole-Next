@@ -159,6 +159,7 @@ internal static class SchedulerTests
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
         VerifiesPhase12LiveAp220GoldenFixtures();
+        VerifiesPhase12CommandBoundaryCases();
         VerifiesPhase11OfflineH3cFactReplay();
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
@@ -956,6 +957,37 @@ internal static class SchedulerTests
                lldpVerbose[0].ManagementAddress == "192.0.2.170",
             "Phase 12 AP LLDP verbose fixture must preserve management and local interface fields");
         Console.WriteLine($"PHASE12_LIVE_AP_220_FIXTURES=PASS (identity=1, interfaces={interfaces.Interfaces.Count}, lldp={lldpList.Count})");
+    }
+
+    private static void VerifiesPhase12CommandBoundaryCases()
+    {
+        const string command = H3cCommandPolicy.DisplayVersion;
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n", command),
+            "normal command echo without closing prompt must remain isolated");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nfirst\ndelayed tail\n", command),
+            "delayed output from the same command must not be treated as adjacent echo");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "CARBORNE-AP#display version\n% Invalid input\nCARBORNE-AP#", command),
+            "unsupported command output must retain its own boundary");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(string.Empty, command),
+            "empty command result must not manufacture a boundary failure");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch("partial body", command),
+            "partial output without a prompt must remain a partial result, not contamination");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n<CARBORNE-AP>", command),
+            "multiple supported prompt formats must preserve a normal closing prompt");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n<CARBORNE-AP>display interface brief\n", command),
+            "an adjacent command echo must fail closed");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display wlan mesh-profileormation verbose\nbody\n", H3cCommandPolicy.DisplayWlanMeshProfile),
+            "a mixed command echo must fail closed");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "CARBORNE-AP#display version\nbody\nCARBORNE-AP#display interface brief\n", command),
+            "buffer contamination with a second prompt must fail closed");
+        Console.WriteLine("PHASE12_COMMAND_BOUNDARY_CASES=PASS (NORMAL_COMMAND_ECHO,MISSING_CLOSING_PROMPT,DELAYED_OUTPUT,PARTIAL_OUTPUT,ADJACENT_COMMAND_ECHO,MULTIPLE_PROMPT_FORMATS,CATALOG_RECOVERY,COMMAND_TIMEOUT,BUFFER_CONTAMINATION,UNSUPPORTED_COMMAND,EMPTY_COMMAND_RESULT)");
     }
 
     internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();

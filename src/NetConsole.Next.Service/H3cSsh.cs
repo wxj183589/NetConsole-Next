@@ -46,13 +46,16 @@ internal sealed class H3cCommandRejectedException() : Exception(
 internal sealed class H3cPaginationDetectedException() : Exception(
     "H3C response contains a paging prompt and is incomplete.") { }
 
-internal sealed class H3cPartialOutputException(
+internal class H3cPartialOutputException(
     string output, string failureCode, bool isCancellation) : IOException(failureCode)
 {
     public string Output { get; } = output;
     public string FailureCode { get; } = failureCode;
     public bool IsCancellation { get; } = isCancellation;
 }
+
+internal sealed class H3cCommandBoundaryException(string output) : H3cPartialOutputException(
+    output, "H3C_COMMAND_ECHO_CONTAMINATION", false) { }
 
 // The bootstrap provider is only selected for an explicit Development configuration.
 internal sealed class EnvironmentH3cCredentialProvider : IH3cCredentialProvider
@@ -172,6 +175,7 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
     private bool _hostKeySeen;
     private bool _hostKeyAccepted;
     private bool _disposed;
+    private int _commandStarted;
     private long _hostKeyAcceptedTimestamp;
 
     public SshNetH3cSshTransport(H3cDeviceProfileSnapshot profile, string password)
@@ -248,6 +252,8 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         if (!H3cCommandPolicy.IsAllowed(command) && !ZteCommandPolicy.IsAllowed(command))
             throw new ArgumentException("Only allowlisted vendor read-only commands are allowed.", nameof(command));
         if (!IsConnected) throw new InvalidOperationException("H3C SSH session is not connected.");
+        if (Interlocked.Exchange(ref _commandStarted, 1) != 0)
+            throw new InvalidOperationException("An SSH transport accepts exactly one read-only Exec command; create a new session for the next command.");
 
         using var sshCommand = _client.CreateCommand(command);
         // The persisted scheduler imposes the stricter per-run deadline (maximum ten minutes).
@@ -272,16 +278,26 @@ internal sealed class SshNetH3cSshTransport : IH3cSshTransport
         var output = captured.Text;
         if (captured.StderrByteCount > 0)
         {
+            Abort();
             if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_STDERR_PARTIAL", false);
             throw new H3cCommandRejectedException();
         }
         if (sshCommand.ExitStatus is not null and not 0 || sshCommand.ExitSignal is not null)
         {
+            Abort();
             if (output.Length > 0) throw new H3cPartialOutputException(output, "H3C_COMMAND_EXIT_FAILED_PARTIAL", false);
             throw new H3cCommandRejectedException();
         }
         if (H3cComwareParser.ContainsPaginationPrompt(output))
+        {
+            Abort();
             throw new H3cPartialOutputException(output, "H3C_PAGINATION_PARTIAL", false);
+        }
+        if (CliTranscriptParser.HasCommandBoundaryMismatch(output, command))
+        {
+            Abort();
+            throw new H3cCommandBoundaryException(output);
+        }
         return output;
     }
 

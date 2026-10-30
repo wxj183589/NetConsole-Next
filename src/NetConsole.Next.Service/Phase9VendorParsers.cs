@@ -112,6 +112,35 @@ internal static partial class CliTranscriptParser
         return new(command, prompt, body, body.Length == 0 ? CliTranscriptStatus.Empty : CliTranscriptStatus.Complete, pages, null);
     }
 
+    public static bool HasCommandBoundaryMismatch(string? raw, string command)
+    {
+        var normalized = Normalize(raw);
+        if (normalized.Length == 0) return false;
+        var sawPrompt = false;
+        var sawPromptCommand = false;
+        foreach (var rawLine in normalized.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var match = PromptLinePattern().Match(line);
+            if (!match.Success) continue;
+            var echoed = match.Groups["command"].Value.Trim();
+            if (echoed.Length == 0)
+            {
+                sawPrompt = true;
+                continue;
+            }
+            if (!sawPrompt)
+            {
+                sawPrompt = true;
+                sawPromptCommand = true;
+                if (!string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase)) return true;
+                continue;
+            }
+            if (sawPromptCommand || echoed.Length > 0) return true;
+        }
+        return false;
+    }
+
     public static string Normalize(string? raw)
     {
         var value = AnsiPattern().Replace((raw ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n'), string.Empty);
