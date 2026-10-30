@@ -188,7 +188,7 @@ def main():
     if configured_parent:
         data_parent = Path(configured_parent)
     elif os.name == "nt":
-        data_parent = Path(r"D:\NetConsoleNextLabData")
+        data_parent = Path(r"D:\study\test-data\NetConsole-Next\LabData")
     else:
         data_parent = Path(tempfile.gettempdir()) / "netconsole-next-lab"
     data_parent.mkdir(parents=True, exist_ok=True)

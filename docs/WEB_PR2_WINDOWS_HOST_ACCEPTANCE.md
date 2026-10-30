@@ -6,7 +6,7 @@
 
 1. 使用管理员 PowerShell 登录目标 Windows 交互桌面。
 2. 确认服务已由正式安装流程部署，Desktop Helper 由同一已登录用户在交互 Session 启动。Windows Service 不得在 Session 0 直接启动 GUI。
-3. 创建专用隔离数据目录，例如 `D:\NetConsoleNext-acceptance-data`，不要指向正式 Raw、SQLite、录制或凭据目录。
+3. 创建专用隔离数据目录，例如 `D:\study\test-data\NetConsole-Next\acceptance-data`，不要指向正式 Raw、SQLite、录制或凭据目录。
 4. 确认目标主机没有使用生产设备凭据。外部工具测试只使用合成设备档案或不带连接参数的进程启动。
 
 ## 2. 只读检查
@@ -51,7 +51,7 @@
 ```powershell
 .\tools\acceptance\Test-WebPR2-Host.ps1 `
   -Mode EXTERNAL_TOOL_TEST -Tool Explorer `
-  -DataRoot D:\NetConsoleNext-acceptance-data `
+  -DataRoot D:\study\test-data\NetConsole-Next\acceptance-data `
   -AllowGuiLaunch -ConfirmOperator `
   -ReportPath .\explorer-launch.json
 ```
@@ -71,9 +71,9 @@ REAL_DEVICE_LOGIN_VERIFIED
 
 ```powershell
 .\tools\acceptance\Test-WebPR2-Host.ps1 `
-  -Mode FILE_MANAGER_TEST -DataRoot D:\NetConsoleNext-acceptance-data
+  -Mode FILE_MANAGER_TEST -DataRoot D:\study\test-data\NetConsole-Next\acceptance-data
 .\tools\acceptance\Test-WebPR2-Host.ps1 `
-  -Mode ARCHIVE_TEST -DataRoot D:\NetConsoleNext-acceptance-data
+  -Mode ARCHIVE_TEST -DataRoot D:\study\test-data\NetConsole-Next\acceptance-data
 ```
 
 脚本只确认隔离根存在，不伪造 API 成功结果。自动化文件/归档测试应运行仓库中的服务测试和 `tests/web_pr2_e2e.py`，覆盖逻辑根、分页、中文名、Range、ZIP CRC、取消、队列/用户配额、路径穿越、Reparse Point、SQLite/凭据/`.open` 保护，以及刷新后任务状态。正式 Raw 数据不得用于压力测试。
