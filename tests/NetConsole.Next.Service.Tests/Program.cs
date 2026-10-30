@@ -159,6 +159,7 @@ internal static class SchedulerTests
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
         VerifiesPhase12LiveAp220GoldenFixtures();
+        VerifiesPhase12LiveAp232GoldenFixtures();
         VerifiesPhase12CommandBoundaryCases();
         VerifiesPhase11OfflineH3cFactReplay();
         await ZteCollectionTests.Run();
@@ -988,6 +989,54 @@ internal static class SchedulerTests
                 "CARBORNE-AP#display version\nbody\nCARBORNE-AP#display interface brief\n", command),
             "buffer contamination with a second prompt must fail closed");
         Console.WriteLine("PHASE12_COMMAND_BOUNDARY_CASES=PASS (NORMAL_COMMAND_ECHO,MISSING_CLOSING_PROMPT,DELAYED_OUTPUT,PARTIAL_OUTPUT,ADJACENT_COMMAND_ECHO,MULTIPLE_PROMPT_FORMATS,CATALOG_RECOVERY,COMMAND_TIMEOUT,BUFFER_CONTAMINATION,UNSUPPORTED_COMMAND,EMPTY_COMMAND_RESULT)");
+    }
+
+    private static void VerifiesPhase12LiveAp232GoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_232");
+        var version = H3cComwareParser.ParseVersion(File.ReadAllText(Path.Combine(root, "display_version.txt")));
+        Assert(version.Recognized && version.Version == "7.1.064" && version.Release == "2493P05",
+            "Phase 12 AP-232 fixture must retain the observed Comware release");
+
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(
+            File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count == 12 &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP") &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "Vlan201" && item.IpAddress == "192.0.2.232"),
+            "Phase 12 AP-232 fixture must retain the twelve-interface shape and sanitized management address");
+
+        var profile = H3cComwareParser.ParseMeshProfile(
+            File.ReadAllText(Path.Combine(root, "display_wlan_mesh_profile.txt")));
+        Assert(profile.Number == 1 && profile.MeshId == "pis" && profile.Status == "Enabled" && profile.AkmMode == "SAE",
+            "Phase 12 AP-232 Mesh profile must retain ID, state and AKM");
+
+        var links = H3cComwareParser.ParseMeshLink(
+            File.ReadAllText(Path.Combine(root, "display_wlan_mesh_link.txt")));
+        Assert(links.Count == 3 && links.Count(item => item.LinkState == "Active(ax)") == 1 &&
+               links.Any(item => item.Rssi == 42 && item.InterfaceName == "WLAN-MeshLink0"),
+            "Phase 12 AP-232 Mesh link must retain peer count, RSSI and active state");
+
+        var lldp = H3cComwareParser.ParseLldpList(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt")));
+        Assert(lldp.Count == 1 && lldp[0].LocalInterface == "GE1/0/1" && lldp[0].NeighborInterface == "ge2",
+            "Phase 12 AP-232 LLDP list must retain local and remote ports");
+        var verbose = H3cComwareParser.ParseLldpVerbose(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_verbose.txt")));
+        Assert(verbose.Count == 1 && verbose[0].LocalInterface == "GigabitEthernet1/0/1" &&
+               verbose[0].ManagementAddress == "192.0.2.182",
+            "Phase 12 AP-232 LLDP verbose must retain local interface and management address");
+
+        foreach (var command in new[] { H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress,
+                     H3cCommandPolicy.DisplayWlanApAllRadio })
+        {
+            var file = command.Replace(' ', '_') + ".txt";
+            var output = File.ReadAllText(Path.Combine(root, file));
+            Assert(output.Contains("command", StringComparison.OrdinalIgnoreCase) ||
+                   output.Contains("Incomplete", StringComparison.OrdinalIgnoreCase) ||
+                   output.Contains("Unrecognized", StringComparison.OrdinalIgnoreCase),
+                $"Phase 12 AP-232 unsupported command must retain its device response: {command}");
+        }
+        Console.WriteLine($"PHASE12_LIVE_AP_232_FIXTURES=PASS (identity=1, interfaces={interfaces.Interfaces.Count}, mesh={links.Count}, lldp={lldp.Count})");
     }
 
     internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();

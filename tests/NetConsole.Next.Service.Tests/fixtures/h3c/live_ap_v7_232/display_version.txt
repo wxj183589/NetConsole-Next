@@ -1,0 +1,36 @@
+******************************************************************************
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+* Without the owner's prior written consent,                                 *
+* no decompiling or reverse-engineering shall be allowed.                    *
+******************************************************************************
+
+<CARBORNE-AP-232>display version
+H3C Comware Software, Version 7.1.064, Release 2493P05
+Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.
+H3C WA6510E-T uptime is 0 weeks, 0 days, 0 hours, 39 minutes
+Last reboot reason : Power on
+
+Boot image: flash:/wa6500b-boot.bin
+Boot image version: 7.1.064, Release 2493P05
+  Compiled Jul 08 2026 16:00:00
+System image: flash:/wa6500b-system.bin
+System image version: 7.1.064, Release 2493P05
+  Compiled Jul 08 2026 16:00:00
+Feature image(s) list:
+  flash:/wa6500b-freeradius.bin, version: 7.1.064
+    Compiled Jul 08 2026 16:00:00
+
+with 1 ARM 2000MHz Processor
+1024M bytes DDR3
+256M bytes NandFlash Memory
+
+Current running mode: Cloud AP
+Next startup mode: Cloud AP
+Hardware Version is Ver.A
+Basic Bootrom Version is 7.06
+Extend Bootrom Version is 7.07
+[Subslot 0]H3C WA6510E-T Hardware Version is Ver.A
+[SLOT 1]GE1/0/1     (Hardware)Ver.A, (Driver)1.0
+[SLOT 1]SGE1/0/1    (Hardware)Ver.A, (Driver)1.0
+[SLOT 1]XGE1/0/1    (Hardware)Ver.A, (Driver)1.0
+[SLOT 1]RADIO1/0/1  (Hardware)Ver.A, (Driver)1.0
