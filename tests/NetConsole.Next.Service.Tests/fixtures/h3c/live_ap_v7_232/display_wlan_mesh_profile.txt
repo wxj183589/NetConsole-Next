@@ -1,0 +1,14 @@
+******************************************************************************
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+* Without the owner's prior written consent,                                 *
+* no decompiling or reverse-engineering shall be allowed.                    *
+******************************************************************************
+
+<CARBORNE-AP-232>display wlan mesh-profile
+Mesh profile number          : 1
+Mesh ID                      : pis
+Link keepalive interval      : 2 s
+Mesh profile status          : Enabled
+Mesh forwarding-location     : AP
+AKM mode                     : SAE
+PSK status                   : Enabled

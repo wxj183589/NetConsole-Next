@@ -1,0 +1,10 @@
+******************************************************************************
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+******************************************************************************
+
+<CARBORNE-AP-220>display lldp neighbor-information list
+Chassis ID : * -- -- Nearest nontpmr bridge neighbor
+             # -- -- Nearest customer bridge neighbor
+             Default -- -- Nearest bridge neighbor
+System Name          Local Interface Chassis ID      Port ID
+Switch               GE1/0/1         0000-0000-0001  ge2

@@ -855,7 +855,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             var output = new System.Text.UTF8Encoding(false, true).GetString(outputBytes);
             var parse = captureStatus == "PARTIAL"
                 ? new H3cParseResult("PARTIAL", "{}")
-                : H3cComwareParser.Parse(commandText, output);
+                : H3cComwareParser.Parse(commandText, output, completedExec: true);
             var parsedAt = record.GetProperty("captured_ms").GetInt64();
             verified.Add((candidate.RunId, candidate.RelativePath, segmentSha, commandText, profileId,
                 deviceHost ?? string.Empty, sourceId, outputBytes.Length,

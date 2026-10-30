@@ -323,11 +323,11 @@ internal static partial class H3cComwareParser
         return Parse(command, output).Json;
     }
 
-    public static H3cParseResult Parse(string command, string output)
+    public static H3cParseResult Parse(string command, string output, bool completedExec = false)
     {
         if (string.IsNullOrWhiteSpace(output))
             return new("EMPTY", "{}");
-        if (GetTranscriptFailure(command, output) is { } transcriptFailure)
+        if (GetTranscriptFailure(command, output, completedExec) is { } transcriptFailure)
             return transcriptFailure;
         if (command == H3cCommandPolicy.DisplayVersion)
         {
@@ -379,7 +379,7 @@ internal static partial class H3cComwareParser
         }
         if (command is H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient)
         {
-            var transcript = CliTranscriptParser.Parse(output, command);
+            var transcript = CliTranscriptParser.Parse(output, command, completedExec);
             return new(transcript.Status switch
             {
                 CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
@@ -413,7 +413,7 @@ internal static partial class H3cComwareParser
         }
         if (command == H3cCommandPolicy.DisplayDevice)
         {
-            var transcript = CliTranscriptParser.Parse(output, command);
+            var transcript = CliTranscriptParser.Parse(output, command, completedExec);
             var parseStatus = transcript.Status switch
             {
                 CliTranscriptStatus.Complete => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
@@ -435,7 +435,7 @@ internal static partial class H3cComwareParser
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
     }
 
-    private static H3cParseResult? GetTranscriptFailure(string command, string output)
+    private static H3cParseResult? GetTranscriptFailure(string command, string output, bool completedExec)
     {
         if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayInterface or H3cCommandPolicy.DisplayWlanApAll or
             H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or
@@ -445,7 +445,7 @@ internal static partial class H3cComwareParser
             H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
             return null;
 
-        var transcript = CliTranscriptParser.Parse(output, command);
+        var transcript = CliTranscriptParser.Parse(output, command, completedExec);
         var parseStatus = transcript.Status switch
         {
             CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",

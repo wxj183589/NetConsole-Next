@@ -1,0 +1,7 @@
+******************************************************************************
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+* Without the owner's prior written consent,                                 *
+* no decompiling or reverse-engineering shall be allowed.                    *
+******************************************************************************
+
+<CARBORNE-AP-232>display wlan client

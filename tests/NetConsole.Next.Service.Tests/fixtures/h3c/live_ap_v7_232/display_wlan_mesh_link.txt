@@ -1,0 +1,11 @@
+******************************************************************************
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+* Without the owner's prior written consent,                                 *
+* no decompiling or reverse-engineering shall be allowed.                    *
+******************************************************************************
+
+<CARBORNE-AP-232>display wlan mesh-link
+ Peer Name              Peer MAC       RSSI BSSID          Interface         Link state       Online time
+ peer-a         peer-a-mac 25   0011-2233-0023 WLAN-MeshLink1    Standby(ax)      00h 39m 34s
+ peer-b         peer-b-mac 32   0011-2233-0023 WLAN-MeshLink2    Standby(ax)      00h 39m 34s
+ peer-c         peer-c-mac 42   0011-2233-0023 WLAN-MeshLink0    Active(ax)       00h 39m 34s

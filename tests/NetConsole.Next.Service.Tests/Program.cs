@@ -36,8 +36,8 @@ internal static class SchedulerTests
 {
     public static async Task RunSshWireAsync(string[] arguments)
     {
-        if (arguments.Length != 3 || arguments[0] is not ("success" or "host-key" or "auth" or "timeout" or "disconnect" or "concurrent"))
-            throw new ArgumentException("Expected: --ssh-wire <success|host-key|auth|timeout|disconnect|concurrent> <port> <sha256-pin>.");
+        if (arguments.Length != 3 || arguments[0] is not ("success" or "host-key" or "auth" or "timeout" or "disconnect" or "concurrent" or "zte-multi"))
+            throw new ArgumentException("Expected: --ssh-wire <success|host-key|auth|timeout|disconnect|concurrent|zte-multi> <port> <sha256-pin>.");
         var mode = arguments[0];
         var port = int.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture);
         var pin = arguments[2];
@@ -110,6 +110,22 @@ internal static class SchedulerTests
                     }
                     Console.WriteLine("PASS: SSH.NET wire reset preserved only the bounded partial command output");
                     break;
+                case "zte-multi":
+                {
+                    var zteProfile = new ZteDeviceProfileSnapshot(Guid.NewGuid().ToString("N"),
+                        "127.0.0.1", port, "reader", "TEST_CREDENTIAL", pin, true, 0, 0);
+                    await using var zte = new ZteSshDeviceSession(zteProfile,
+                        new FixedH3cCredentialProvider(password), new SshNetH3cSshTransportFactory());
+                    await zte.ConnectAsync(CancellationToken.None);
+                    Assert(await zte.ExecuteAsync(ZteCommandPolicy.ShowVersion, CancellationToken.None)
+                        == "ZTE version synthetic response\n",
+                        "ZTE first Exec must complete through the shared SSH transport");
+                    Assert(await zte.ExecuteAsync(ZteCommandPolicy.ShowInterfaceBrief, CancellationToken.None)
+                        == "ZTE interface synthetic response\n",
+                        "ZTE second Exec must reuse the connected transport without being rejected");
+                    Console.WriteLine("PASS: ZTE two sequential SSH.NET Exec channels shared one transport");
+                    break;
+                }
                 case "concurrent":
                     var second = new H3cSshDeviceSession(profile, new FixedH3cCredentialProvider(password),
                         new SshNetH3cSshTransportFactory());
@@ -158,6 +174,9 @@ internal static class SchedulerTests
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
+        VerifiesPhase12LiveAp220GoldenFixtures();
+        VerifiesPhase12LiveAp232GoldenFixtures();
+        VerifiesPhase12CommandBoundaryCases();
         VerifiesPhase11OfflineH3cFactReplay();
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
@@ -833,6 +852,9 @@ internal static class SchedulerTests
             "an identical command string in the response body must not be discarded as an echo");
         Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n", H3cCommandPolicy.DisplayWlanApAll).Status == CliTranscriptStatus.Incomplete,
             "a transcript without a closing prompt must remain incomplete");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n",
+            H3cCommandPolicy.DisplayWlanApAll, completedExec: true).Status == CliTranscriptStatus.Complete,
+            "a completed SSH Exec response with one opening prompt must be accepted without an interactive closing prompt");
         Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,
             "unsupported command output must remain a structured non-success");
 
@@ -921,6 +943,116 @@ internal static class SchedulerTests
                mesh.Any(item => item.Rssi == 30 && item.InterfaceName == "WLAN-MeshLink6"),
             "Phase 11 live AP mesh-link fixture must retain peer count, RSSI and active state");
         Console.WriteLine("PHASE11_LIVE_AP_FIXTURES=PASS (V7 identity/interface/LLDP/unsupported command)");
+    }
+
+    private static void VerifiesPhase12LiveAp220GoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_220");
+        var versionOutput = File.ReadAllText(Path.Combine(root, "display_version.txt"));
+        var version = H3cComwareParser.ParseVersion(versionOutput);
+        Assert(version.Recognized && version.Version == "7.1.064" && version.Release == "2493P05",
+            "Phase 12 AP version fixture must retain the observed Comware release");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayVersion, versionOutput, completedExec: true).Status == "PARSED",
+            "Phase 12 prompt-bearing completed Exec version output must parse successfully");
+
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(
+            File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count == 12 &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP") &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "Vlan201" && item.IpAddress == "192.0.2.220"),
+            "Phase 12 AP interface fixture must retain route/bridge rows and the radio state");
+
+        var lldpListOutput = File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt"));
+        var lldpList = H3cComwareParser.ParseLldpList(lldpListOutput);
+        Assert(lldpList.Count == 1 && lldpList[0].LocalInterface == "GE1/0/1" &&
+               lldpList[0].NeighborInterface == "ge2" && lldpList[0].ChassisId == "0000-0000-0001",
+            "Phase 12 AP LLDP list fixture must preserve local/remote interface and chassis identity");
+
+        var lldpVerbose = H3cComwareParser.ParseLldpVerbose(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_verbose.txt")));
+        Assert(lldpVerbose.Count == 1 && lldpVerbose[0].LocalInterface == "GigabitEthernet1/0/1" &&
+               lldpVerbose[0].ManagementAddress == "192.0.2.170",
+            "Phase 12 AP LLDP verbose fixture must preserve management and local interface fields");
+        Console.WriteLine($"PHASE12_LIVE_AP_220_FIXTURES=PASS (identity=1, interfaces={interfaces.Interfaces.Count}, lldp={lldpList.Count})");
+    }
+
+    private static void VerifiesPhase12CommandBoundaryCases()
+    {
+        const string command = H3cCommandPolicy.DisplayVersion;
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n", command),
+            "normal command echo without closing prompt must remain isolated");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nfirst\ndelayed tail\n", command),
+            "delayed output from the same command must not be treated as adjacent echo");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "CARBORNE-AP#display version\n% Invalid input\nCARBORNE-AP#", command),
+            "unsupported command output must retain its own boundary");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(string.Empty, command),
+            "empty command result must not manufacture a boundary failure");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch("partial body", command),
+            "partial output without a prompt must remain a partial result, not contamination");
+        Assert(!CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n<CARBORNE-AP>", command),
+            "multiple supported prompt formats must preserve a normal closing prompt");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display version\nbody\n<CARBORNE-AP>display interface brief\n", command),
+            "an adjacent command echo must fail closed");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "<CARBORNE-AP>display wlan mesh-profileormation verbose\nbody\n", H3cCommandPolicy.DisplayWlanMeshProfile),
+            "a mixed command echo must fail closed");
+        Assert(CliTranscriptParser.HasCommandBoundaryMismatch(
+                "CARBORNE-AP#display version\nbody\nCARBORNE-AP#display interface brief\n", command),
+            "buffer contamination with a second prompt must fail closed");
+        Console.WriteLine("PHASE12_COMMAND_BOUNDARY_CASES=PASS (NORMAL_COMMAND_ECHO,MISSING_CLOSING_PROMPT,DELAYED_OUTPUT,PARTIAL_OUTPUT,ADJACENT_COMMAND_ECHO,MULTIPLE_PROMPT_FORMATS,CATALOG_RECOVERY,COMMAND_TIMEOUT,BUFFER_CONTAMINATION,UNSUPPORTED_COMMAND,EMPTY_COMMAND_RESULT)");
+    }
+
+    private static void VerifiesPhase12LiveAp232GoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_232");
+        var version = H3cComwareParser.ParseVersion(File.ReadAllText(Path.Combine(root, "display_version.txt")));
+        Assert(version.Recognized && version.Version == "7.1.064" && version.Release == "2493P05",
+            "Phase 12 AP-232 fixture must retain the observed Comware release");
+
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(
+            File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count == 12 &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP") &&
+               interfaces.Interfaces.Any(item => item.InterfaceName == "Vlan201" && item.IpAddress == "192.0.2.232"),
+            "Phase 12 AP-232 fixture must retain the twelve-interface shape and sanitized management address");
+
+        var profile = H3cComwareParser.ParseMeshProfile(
+            File.ReadAllText(Path.Combine(root, "display_wlan_mesh_profile.txt")));
+        Assert(profile.Number == 1 && profile.MeshId == "pis" && profile.Status == "Enabled" && profile.AkmMode == "SAE",
+            "Phase 12 AP-232 Mesh profile must retain ID, state and AKM");
+
+        var links = H3cComwareParser.ParseMeshLink(
+            File.ReadAllText(Path.Combine(root, "display_wlan_mesh_link.txt")));
+        Assert(links.Count == 3 && links.Count(item => item.LinkState == "Active(ax)") == 1 &&
+               links.Any(item => item.Rssi == 42 && item.InterfaceName == "WLAN-MeshLink0"),
+            "Phase 12 AP-232 Mesh link must retain peer count, RSSI and active state");
+
+        var lldp = H3cComwareParser.ParseLldpList(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt")));
+        Assert(lldp.Count == 1 && lldp[0].LocalInterface == "GE1/0/1" && lldp[0].NeighborInterface == "ge2",
+            "Phase 12 AP-232 LLDP list must retain local and remote ports");
+        var verbose = H3cComwareParser.ParseLldpVerbose(
+            File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_verbose.txt")));
+        Assert(verbose.Count == 1 && verbose[0].LocalInterface == "GigabitEthernet1/0/1" &&
+               verbose[0].ManagementAddress == "192.0.2.182",
+            "Phase 12 AP-232 LLDP verbose must retain local interface and management address");
+
+        foreach (var command in new[] { H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress,
+                     H3cCommandPolicy.DisplayWlanApAllRadio })
+        {
+            var file = command.Replace(' ', '_') + ".txt";
+            var output = File.ReadAllText(Path.Combine(root, file));
+            Assert(output.Contains("command", StringComparison.OrdinalIgnoreCase) ||
+                   output.Contains("Incomplete", StringComparison.OrdinalIgnoreCase) ||
+                   output.Contains("Unrecognized", StringComparison.OrdinalIgnoreCase),
+                $"Phase 12 AP-232 unsupported command must retain its device response: {command}");
+        }
+        Console.WriteLine($"PHASE12_LIVE_AP_232_FIXTURES=PASS (identity=1, interfaces={interfaces.Interfaces.Count}, mesh={links.Count}, lldp={lldp.Count})");
     }
 
     internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();
@@ -1880,6 +2012,14 @@ internal static class SchedulerTests
             "authenticated SSH session should be reflected in the active-session gauge");
         Assert(await good.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None) == "simulated Comware output",
             "read-only Exec command should return its simulated response");
+        var secondH3cCommandRejected = false;
+        try { await good.ExecuteAsync(H3cCommandPolicy.DisplayInterfaceBrief, CancellationToken.None); }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("An H3C SSH session accepts", StringComparison.Ordinal))
+        {
+            secondH3cCommandRejected = true;
+        }
+        Assert(secondH3cCommandRejected && goodFactory.LastTransport!.ExecuteCount == 1,
+            "H3C must preserve one read-only Exec command per session without forwarding a second command");
         await good.DisposeAsync();
         Assert(goodFactory.LastTransport!.DisposeCount == 1 &&
                H3cCollectionMetrics.Snapshot().ActiveSshSessions == activeBefore,
@@ -3020,6 +3160,7 @@ internal static class SchedulerTests
         public bool IsConnected { get; private set; }
         public int DisposeCount { get; private set; }
         public int AbortCount { get; private set; }
+        public int ExecuteCount { get; private set; }
 
         public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
         {
@@ -3036,6 +3177,7 @@ internal static class SchedulerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsConnected) throw new IOException("simulated peer disconnect");
+            ExecuteCount++;
             if (resetOnCommand)
             {
                 IsConnected = false;

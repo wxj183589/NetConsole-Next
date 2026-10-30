@@ -46,7 +46,7 @@ internal static partial class CliTranscriptParser
     [GeneratedRegex(@"\x1b\[[0-?]*[ -/]*[@-~]", RegexOptions.CultureInvariant)]
     private static partial Regex AnsiPattern();
 
-    public static CliCommandTranscript Parse(string? raw, string command)
+    public static CliCommandTranscript Parse(string? raw, string command, bool completedExec = false)
     {
         var normalized = Normalize(raw);
         if (normalized.Length == 0)
@@ -105,9 +105,40 @@ internal static partial class CliTranscriptParser
             return new(command, prompt, body, CliTranscriptStatus.Unsupported, pages, "unsupported command");
         if (pages > 0)
             return new(command, prompt, body, CliTranscriptStatus.Paged, pages, "paging marker remains in transcript");
+        if (!sawClosingPrompt && completedExec && sawCommandEcho && prompt.Length > 0)
+            return new(command, prompt, body, body.Length == 0 ? CliTranscriptStatus.Empty : CliTranscriptStatus.Complete, pages, null);
         if (!sawClosingPrompt)
             return new(command, prompt, body, CliTranscriptStatus.Incomplete, pages, "closing terminal prompt was not observed");
         return new(command, prompt, body, body.Length == 0 ? CliTranscriptStatus.Empty : CliTranscriptStatus.Complete, pages, null);
+    }
+
+    public static bool HasCommandBoundaryMismatch(string? raw, string command)
+    {
+        var normalized = Normalize(raw);
+        if (normalized.Length == 0) return false;
+        var sawPrompt = false;
+        var sawPromptCommand = false;
+        foreach (var rawLine in normalized.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var match = PromptLinePattern().Match(line);
+            if (!match.Success) continue;
+            var echoed = match.Groups["command"].Value.Trim();
+            if (echoed.Length == 0)
+            {
+                sawPrompt = true;
+                continue;
+            }
+            if (!sawPrompt)
+            {
+                sawPrompt = true;
+                sawPromptCommand = true;
+                if (!string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase)) return true;
+                continue;
+            }
+            if (sawPromptCommand || echoed.Length > 0) return true;
+        }
+        return false;
     }
 
     public static string Normalize(string? raw)
@@ -144,9 +175,9 @@ internal sealed record H3cTransceiverFact(string? InterfaceName, decimal? Temper
 
 internal static partial class H3cComwareParser
 {
-    public static string ToParsedJsonWithTranscript(string command, string output)
+    public static string ToParsedJsonWithTranscript(string command, string output, bool completedExec = false)
     {
-        var transcript = CliTranscriptParser.Parse(output, command);
+        var transcript = CliTranscriptParser.Parse(output, command, completedExec);
         if (transcript.Status is CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied or CliTranscriptStatus.Paged)
             return JsonSerializer.Serialize(new { status = transcript.Status.ToString().ToUpperInvariant(), notice = transcript.Notice });
         return ToParsedJson(command, transcript.Output);
@@ -311,7 +342,16 @@ internal static partial class H3cComwareParser
         foreach (var line in transcript.Output.Split('\n'))
         {
             var text = line.Trim();
-            if (text.StartsWith("LLDP neighbor-information of port ", StringComparison.OrdinalIgnoreCase)) { Flush(); local = text[34..].Trim(); continue; }
+            if (text.StartsWith("LLDP neighbor-information of port ", StringComparison.OrdinalIgnoreCase))
+            {
+                Flush();
+                var bracketStart = text.IndexOf('[', StringComparison.Ordinal);
+                var bracketEnd = text.IndexOf(']', bracketStart + 1);
+                local = bracketStart >= 0 && bracketEnd > bracketStart
+                    ? text[(bracketStart + 1)..bracketEnd].Trim()
+                    : text[34..].Trim();
+                continue;
+            }
             var colon = text.IndexOf(':');
             if (colon < 0) continue;
             var key = text[..colon].Trim(); var value = text[(colon + 1)..].Trim();
