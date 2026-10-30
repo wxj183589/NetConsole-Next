@@ -3,12 +3,16 @@
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from contextlib import closing
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
 from p2b3_read_api_e2e import free_port, migrate_v13, start_service, stop_service
 from p2b4_write_api_e2e import migrate_v14, populate_fixture
+from workspace_paths import workspace_path
 
 
 def enrich_fixture(root: Path) -> None:
@@ -51,7 +55,7 @@ def main() -> None:
     test_dll = repo / "tests" / "NetConsole.Next.Service.Tests" / "bin" / "Release" / "net10.0" / "NetConsole.Next.Service.Tests.dll"
     browser = repo / "tests" / "p2b5_network_planning_browser_e2e.mjs"
     assert dll.is_file() and test_dll.is_file() and browser.is_file(), "Run Release builds first"
-    artifact_dir = repo / "web" / "artifacts" / "p2b5-network-planning-browser"
+    artifact_dir = workspace_path("build", "p2b5-network-planning-browser")
     with tempfile.TemporaryDirectory(prefix="netconsole-next-p2b5-") as temp:
         root = Path(temp) / "data"
         os.environ.update(

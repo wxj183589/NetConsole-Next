@@ -21,7 +21,7 @@ The production/API path therefore has no pause or crash behavior by default. The
 Run after a Release build from the P2-A worktree:
 
 ```text
-python tests/device_batch_crash_recovery/device_batch_crash_recovery.py --repo D:\study\worktrees\NetConsole-Next\NetConsoleNext-P2A --evidence D:\study\diagnostic\NetConsole-Next\netconsole-next-p2a-crash-evidence.json
+python tests/device_batch_crash_recovery/device_batch_crash_recovery.py --repo D:\study\NetConsole-Next-Workspace\worktrees\NetConsoleNext-P2A --evidence D:\study\NetConsole-Next-Workspace\diagnostic\netconsole-next-p2a-crash-evidence.json
 ```
 
 The evidence file is temporary diagnostic output and is not a data Authority. The harness removes each temporary data root after the scenario finishes.

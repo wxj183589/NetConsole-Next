@@ -55,6 +55,8 @@ python3 tests/g1_recovery.py
 
 Linux smoke 验证健康端点、UDP 二进制保真、Raw 封段和 SQLite catalog。G1 集成测试模拟强制退出、`.open` 损坏尾部、未索引有效/损坏段、缺失文件、单实例和任务状态。Windows CI 编译 Service 与 Local Manager；Windows 服务真实安装/启动、旧系统兼容和现场长周期测试仍待目标环境验证。
 
+开发产物统一写入 `D:\study\NetConsole-Next-Workspace`。路径生成规则、Worktree 管理和测试数据边界见 [`docs/WORKSPACE_LAYOUT.md`](docs/WORKSPACE_LAYOUT.md)；脚本应复用 `tools/workspace_paths.py`，不要重新硬编码公共 `D:\study` 子目录。
+
 ### Windows Service 与 Local Manager 基础用法
 
 在 Windows x64 上发布并安装 Service（安装需要提升权限）：

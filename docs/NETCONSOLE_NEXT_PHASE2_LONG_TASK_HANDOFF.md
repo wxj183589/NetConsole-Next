@@ -31,7 +31,7 @@ Codex-Thread：`01a17424-2751-7d62-ba40-63fea5d133a9`
 ## 恢复与继续
 
 ```powershell
-Set-Location D:\study\NetConsole-Workspace\worktrees\codex-A-next-device-management-p2b5-ui-20261027
+Set-Location D:\study\NetConsole-Next-Workspace\worktrees\codex-A-next-device-management-p2b5-ui-20261027
 npm --prefix web run typecheck
 npm --prefix web run test -- --run
 npm --prefix web run build

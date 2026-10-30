@@ -1,9 +1,10 @@
 import { chromium } from '../web/node_modules/@playwright/test/index.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
+import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const baseUrl = process.env.NETCONSOLE_NEXT_UI_URL || 'http://127.0.0.1:18772'
-const outputDir = process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || path.resolve('artifacts/ui-acceptance')
+const outputDir = process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || workspacePath('build', 'ui-acceptance')
 const chromePath = process.env.NETCONSOLE_CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 fs.mkdirSync(outputDir, { recursive: true })
 

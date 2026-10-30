@@ -6,14 +6,14 @@
 
 ```text
 $env:NETCONSOLE_E2E_BASE_URL='http://127.0.0.1:18774'
-$env:NETCONSOLE_E2E_DATA_ROOT='D:\study\diagnostic\NetConsole-Next\p2a-browser-data'
-$env:NETCONSOLE_P2A_BROWSER_OUTPUT='D:\study\build\NetConsole-Next\device-p2a-browser'
+$env:NETCONSOLE_E2E_DATA_ROOT='D:\study\NetConsole-Next-Workspace\diagnostic\p2a-browser-data'
+$env:NETCONSOLE_P2A_BROWSER_OUTPUT='D:\study\NetConsole-Next-Workspace\build\device-p2a-browser'
 $env:CHROME_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'
 $env:NETCONSOLE_P2A_GIT_SHA=(git rev-parse HEAD)
 node tests/device_p2a_browser_diagnostics.mjs
 ```
 
-The temporary data root and service logs are retired after the run. The screenshots and `browser-evidence.json` are small, reviewable acceptance artifacts kept under `D:\study\build\NetConsole-Next\device-p2a-browser`.
+The temporary data root and service logs are retired after the run. The screenshots and `browser-evidence.json` are small, reviewable acceptance artifacts kept under `D:\study\NetConsole-Next-Workspace\build\device-p2a-browser`.
 
 ## Diagnostics policy
 
