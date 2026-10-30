@@ -9,6 +9,8 @@ const selected = ref<TerminalDevice | null>(null)
 const facts = ref<H3cFact[]>([])
 const history = ref(false)
 const loading = ref(false)
+let selectionGeneration = 0
+let factsRequestGeneration = 0
 const selectedFacts = computed(() => facts.value)
 const decode = (fact: H3cFact): Record<string, any> => {
   try { return JSON.parse(fact.payloadJson) as Record<string, any> } catch { return { output: fact.payloadJson } }
@@ -21,22 +23,38 @@ const statusLabel = (fact: H3cFact): string => ({
   STALE: '历史有效（设备离线）', LIVE_VERIFIED: '实时采集成功',
 } as Record<string, string>)[fact.dataState || fact.status] || fact.status
 
-async function loadFacts(): Promise<void> {
-  if (!selected.value) return
+async function loadFacts(profileId = selected.value?.id, generation = selectionGeneration): Promise<void> {
+  if (!profileId) { facts.value = []; return }
+  const requestGeneration = ++factsRequestGeneration
   loading.value = true
-  try { facts.value = await getH3cFacts(selected.value.id, { history: history.value, limit: history.value ? 500 : 100 }) }
-  catch (error) { ElMessage.error(error instanceof Error ? error.message : 'H3C 事实读取失败') }
-  finally { loading.value = false }
+  try {
+    const nextFacts = await getH3cFacts(profileId, { history: history.value, limit: history.value ? 500 : 100 })
+    if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
+      facts.value = nextFacts
+  } catch (error) {
+    if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
+      ElMessage.error(error instanceof Error ? error.message : 'H3C 事实读取失败')
+  } finally {
+    if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
+      loading.value = false
+  }
 }
-async function selectProfile(profile: TerminalDevice): Promise<void> { selected.value = profile; await loadFacts() }
+async function selectProfile(profile: TerminalDevice): Promise<void> {
+  const generation = ++selectionGeneration
+  selected.value = profile
+  facts.value = []
+  await loadFacts(profile.id, generation)
+}
 async function refresh(): Promise<void> {
+  const generation = ++selectionGeneration
   profiles.value = await getH3cProfiles()
+  if (generation !== selectionGeneration) return
   if (selected.value) {
     const next = profiles.value.find(profile => profile.id === selected.value?.id)
     selected.value = next || null
   }
   if (!selected.value && profiles.value.length) selected.value = profiles.value[0]
-  await loadFacts()
+  await loadFacts(selected.value?.id, generation)
 }
 onMounted(() => { void refresh().catch(() => ElMessage.error('H3C profile 读取失败')) })
 </script>

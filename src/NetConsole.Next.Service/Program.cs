@@ -883,8 +883,13 @@ if (settings.H3cEnabled)
         !IsSuperAdmin(context)
             ? DevicePermissionDenied(context, rawCatalog, "H3C_HOST_KEY_HISTORY_PERMISSION_DENIED", id)
             : Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
-    app.MapGet("/api/system/h3c/profiles/{id}/facts", (string id, HttpRequest request, Catalog rawCatalog) =>
+    app.MapGet("/api/system/h3c/profiles/{id}/facts", (HttpContext context, string id, HttpRequest request,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
     {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
         var kind = request.Query["kind"].ToString();
         var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
         var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;

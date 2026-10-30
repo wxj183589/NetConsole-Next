@@ -128,6 +128,9 @@ def main():
             assert admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/compatibility", "PUT",
                                    {"hostKeyUpdatePolicy": "AUTO_UPDATE"})[0] == 403
             assert admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/host-key-history")[0] == 403
+            facts_status, facts_denied = admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/facts")
+            assert facts_status == 403 and "P2B_SITE_SCOPE_DENIED" in facts_denied, facts_denied
+            assert superadmin.request("/api/system/h3c/profiles/00000000000000000000000000000011/facts")[0] == 200
             task = {"id": "web-auth-h3c-task", "profileId": "00000000000000000000000000000011",
                     "command": "display version", "timeoutMs": 1000, "enabled": True}
             assert admin_a.request("/api/system/h3c/task-definitions", "POST", task)[0] == 403
