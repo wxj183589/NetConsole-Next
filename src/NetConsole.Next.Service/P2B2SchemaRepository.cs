@@ -65,7 +65,7 @@ internal sealed class P2B2SchemaRepository
     public P2B2SchemaV13Snapshot ReadSnapshot()
     {
         return new(
-            checked((int)ReadInt("SELECT COALESCE(MAX(version),0) FROM schema_versions")),
+            checked((int)ReadInt("SELECT COALESCE(MAX(CASE WHEN version <= 13 THEN version END),0) FROM schema_versions")),
             ReadInt("SELECT COUNT(*) FROM network_domains"),
             ReadInt("SELECT COUNT(*) FROM network_domain_scopes"),
             ReadInt("SELECT COUNT(*) FROM device_domain_memberships"),

@@ -114,11 +114,27 @@ def main():
             assert admin_b.refresh_csrf() == admin_b_token
             assert admin_b.csrf != admin_a.csrf
 
-            # A real cookie-authenticated write remains valid after browser refresh.
+            # Device profile writes are SUPERADMIN-only even when a caller has a
+            # valid cookie session; UI button restrictions must not be the ACL.
             profile = {"id": "00000000000000000000000000000011", "host": "192.0.2.11", "port": 22,
                        "username": "reader", "credentialReference": "E2E", "hostKeySha256": "",
                        "enabled": True, "hostKeyUpdatePolicy": "AUTO_UPDATE"}
-            assert admin_a.request("/api/system/h3c/profiles", "POST", profile)[0] == 201
+            assert admin_a.request("/api/system/h3c/profiles", "POST", profile)[0] == 403
+            assert superadmin.request("/api/system/h3c/profiles", "POST", profile)[0] == 201
+            profiles_status, profiles = admin_a.request("/api/system/h3c/profiles")
+            assert profiles_status == 200 and profiles and all(
+                "credentialReference" not in item and "hostKeySha256" not in item for item in profiles
+            )
+            assert admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/compatibility", "PUT",
+                                   {"hostKeyUpdatePolicy": "AUTO_UPDATE"})[0] == 403
+            assert admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/host-key-history")[0] == 403
+            facts_status, facts_denied = admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/facts")
+            assert facts_status == 403 and "P2B_SITE_SCOPE_DENIED" in facts_denied, facts_denied
+            assert superadmin.request("/api/system/h3c/profiles/00000000000000000000000000000011/facts")[0] == 200
+            task = {"id": "web-auth-h3c-task", "profileId": "00000000000000000000000000000011",
+                    "command": "display version", "timeoutMs": 1000, "enabled": True}
+            assert admin_a.request("/api/system/h3c/task-definitions", "POST", task)[0] == 403
+            assert admin_a.request("/api/system/tasks/web-auth-h3c-task/runs", "POST", {})[0] == 403
 
             # Cookie writes require both Origin and CSRF.
             assert admin_b.request("/api/auth/password", "POST", {"currentPassword": "admin", "newPassword": "admin-temp-123"}, csrf=False)[0] == 403

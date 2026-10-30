@@ -557,6 +557,6 @@ internal static class P2B5RailReferenceMigration
         catch { try { transaction.Rollback(); } catch { } throw; }
     }
 
-    private static int ReadVersion(SqliteConnection connection) { using var command = connection.CreateCommand(); command.CommandText = "SELECT COALESCE(MAX(version),0) FROM schema_versions"; return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture); }
+    private static int ReadVersion(SqliteConnection connection) { using var command = connection.CreateCommand(); command.CommandText = "SELECT COALESCE(MAX(CASE WHEN version <= 14 THEN version END),0) FROM schema_versions"; return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture); }
     private static void Validate(SqliteConnection connection) { foreach (var table in new[] { "p2b5_rail_reference_imports", "p2b5_rail_entities", "p2b5_rail_relations" }) { using var command = connection.CreateCommand(); command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=$name"; command.Parameters.AddWithValue("$name", table); if (Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) != 1) throw new InvalidDataException("Rail reference schema is missing: " + table); } }
 }

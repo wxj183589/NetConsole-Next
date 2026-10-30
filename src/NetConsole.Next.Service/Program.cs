@@ -20,6 +20,7 @@ builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
+builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
@@ -144,6 +145,8 @@ var runtimeStatus = app.Services.GetRequiredService<RuntimeStatus>();
 app.Lifetime.ApplicationStopping.Register(() =>
 {
     try { app.Services.GetRequiredService<TerminalSessionManager>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+    catch { }
+    try { app.Services.GetRequiredService<ZteCollectionService>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     catch { }
 });
 RollingFileLoggerProvider? fileLoggerProvider = null;
@@ -839,16 +842,20 @@ if (settings.TerminalEnabled)
 }
 if (settings.H3cEnabled)
 {
-    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentH3cDeviceProfiles()));
-    app.MapPost("/api/system/h3c/profiles", (H3cProfileRequest request, Catalog rawCatalog) =>
+    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.RecentH3cDeviceProfiles().Select(profile => profile.ToView())));
+    app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
         try
         {
             rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
                 request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0,
                 request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms, request.TerminalEncoding,
                 request.TerminalProtocol, request.AllowTelnetFallback));
-            return Results.Created($"/api/system/h3c/profiles/{request.Id}", rawCatalog.GetH3cDeviceProfile(request.Id));
+            return rawCatalog.GetH3cDeviceProfile(request.Id) is { } profile
+                ? Results.Created($"/api/system/h3c/profiles/{request.Id}", profile.ToView())
+                : Results.NotFound();
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
@@ -857,22 +864,63 @@ if (settings.H3cEnabled)
             return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." });
         }
     });
-    app.MapPut("/api/system/h3c/profiles/{id}/compatibility", (string id, H3cCompatibilityRequest request,
+    app.MapPut("/api/system/h3c/profiles/{id}/compatibility", (HttpContext context, string id, H3cCompatibilityRequest request,
         Catalog rawCatalog) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_COMPATIBILITY_PERMISSION_DENIED", id);
         try
         {
             rawCatalog.SetH3cCompatibility(id, request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms,
                 request.TerminalEncoding, request.TerminalProtocol, request.AllowTelnetFallback);
-            return Results.Ok(rawCatalog.GetH3cDeviceProfile(id));
+            return rawCatalog.GetH3cDeviceProfile(id) is { } profile
+                ? Results.Ok(profile.ToView())
+                : Results.NotFound();
         }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (string id, Catalog rawCatalog, int? limit) =>
-        Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
-    app.MapPost("/api/system/h3c/task-definitions", (H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (HttpContext context, string id, Catalog rawCatalog, int? limit) =>
+        !IsSuperAdmin(context)
+            ? DevicePermissionDenied(context, rawCatalog, "H3C_HOST_KEY_HISTORY_PERMISSION_DENIED", id)
+            : Results.Ok(rawCatalog.SshHostKeyHistory(id, Math.Clamp(limit ?? 100, 1, 500))));
+    app.MapGet("/api/system/h3c/profiles/{id}/facts", (HttpContext context, string id, HttpRequest request,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
     {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        var kind = request.Query["kind"].ToString();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit));
+    });
+    app.MapPost("/api/system/h3c/profiles/{id}/offline-replay", (HttpContext context, string id,
+        H3cOfflineReplayRequest request, Catalog rawCatalog) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_OFFLINE_REPLAY_PERMISSION_DENIED", id);
+        if (request.CommandOutputs is null || request.CommandOutputs.Count == 0 || request.CommandOutputs.Count > 32)
+            return Results.BadRequest(new { error = "At least one command output is required." });
+        if (request.CommandOutputs.Keys.Any(command => !H3cCommandPolicy.IsAllowed(command)))
+            return Results.BadRequest(new { error = "Offline replay contains a command outside the read-only allowlist." });
+        if (request.CommandOutputs.Any(item => item.Key.Length > 128 || item.Value is null || item.Value.Length > 262144) ||
+            request.CommandOutputs.Sum(item => (long)item.Value.Length) > 2_097_152)
+            return Results.BadRequest(new { error = "Offline replay output exceeds the bounded fixture size." });
+        if (request.CapturedMs <= 0)
+            return Results.BadRequest(new { error = "capturedMs must be a positive Unix millisecond timestamp." });
+        try
+        {
+            var result = rawCatalog.ImportH3cOfflineReplay(id, request.CommandOutputs, request.CapturedMs,
+                Catalog.H3cOfflineFixtureSource);
+            return Results.Ok(result);
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
+    });
+    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_DEFINITION_PERMISSION_DENIED", request.Id);
         if (request.TimeoutMs is < 100 or > 600000)
             return Results.BadRequest(new { error = "timeoutMs must be between 100 and 600000." });
         try
@@ -889,9 +937,10 @@ if (settings.H3cEnabled)
             return Results.Conflict(new { error = $"Task definition could not be saved ({ex.GetType().Name})." });
         }
     });
-    app.MapPost("/api/system/tasks/{definitionId}/runs", (string definitionId, Catalog rawCatalog,
+    app.MapPost("/api/system/tasks/{definitionId}/runs", (HttpContext context, string definitionId, Catalog rawCatalog,
         RuntimeStatus status, BoundedCollectionScheduler scheduler) =>
     {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_COLLECTION_PERMISSION_DENIED", definitionId);
         if (!rawCatalog.Available || !rawCatalog.RawWriteAvailable || !status.CollectionAllowed)
             return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         try
@@ -907,6 +956,48 @@ if (settings.H3cEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 }
+app.MapGet("/api/system/zte/profiles", (HttpContext context, ZteCollectionService zte, P2B5SiteScopeStore scopes) =>
+{
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized) return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+    return Results.Ok(zte.Profiles(scope));
+});
+app.MapPost("/api/system/zte/profiles", (HttpContext context, ZteProfileRequest request, Catalog catalog, ZteCollectionService zte) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
+    try
+    {
+        catalog.CreateZteDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
+            request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0, request.HostKeyUpdatePolicy,
+            request.AllowLegacyAlgorithms, request.TerminalEncoding, request.SiteId));
+        return Results.Created($"/api/system/zte/profiles/{request.Id}", zte.Profile(request.Id));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    catch (Microsoft.Data.Sqlite.SqliteException ex) { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
+});
+app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_COLLECTION_PERMISSION_DENIED", id);
+    try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id) }); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ZteCollectionRejectedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/zte/runs/{id}", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
+    !IsSuperAdmin(context) ? DevicePermissionDenied(context, catalog, "ZTE_RUN_READ_PERMISSION_DENIED", id) :
+    zte.GetRun(id) is { } run ? Results.Ok(run) : Results.NotFound());
+app.MapGet("/api/system/zte/profiles/{id}/facts", (HttpContext context, string id, HttpRequest request, Catalog catalog, P2B5SiteScopeStore scopes, ZteCollectionService zte) =>
+{
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized) return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail }, statusCode: StatusCodes.Status403Forbidden);
+    if (!zte.ProfileIsInScope(id, scope)) return Results.NotFound();
+    var kind = request.Query["kind"].ToString();
+    var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+    var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+    return Results.Ok(catalog.QueryZteFacts(id, kind, history, limit));
+});
 app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
     (HttpContext context, string auditId, RawIssueQuarantineRequest request, Catalog rawCatalog, RuntimeStatus status) =>
     {
@@ -1157,6 +1248,11 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STR
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
+  internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
+internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
+    string CredentialReference, string HostKeySha256, bool Enabled = true,
+    string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO", string SiteId = "local");
 internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
     IReadOnlyList<string> SupportedProtocols, string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms,
     string TerminalEncoding, string TerminalProtocol, bool AllowTelnetFallback,

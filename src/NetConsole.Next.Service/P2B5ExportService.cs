@@ -341,7 +341,7 @@ internal static class P2B5ExportMigration
 {
     public static void Apply(SqliteConnection connection, P2B5ExportMigrationContext context)
     {
-        context.Validate(connection); using var version = connection.CreateCommand(); version.CommandText = "SELECT COALESCE(MAX(version),0) FROM schema_versions"; var schemaVersion = Convert.ToInt32(version.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture); if (schemaVersion != 14) throw new InvalidDataException($"P2B5 export migration requires Schema v14, found {schemaVersion}.");
+         context.Validate(connection); using var version = connection.CreateCommand(); version.CommandText = "SELECT COALESCE(MAX(CASE WHEN version <= 14 THEN version END),0) FROM schema_versions"; var schemaVersion = Convert.ToInt32(version.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture); if (schemaVersion != 14) throw new InvalidDataException($"P2B5 export migration requires Schema v14, found {schemaVersion}.");
         using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable); using var resource = typeof(P2B5ExportMigration).Assembly.GetManifestResourceStream("schema_p2b5_export.sql") ?? throw new InvalidOperationException("Embedded schema_p2b5_export.sql was not found."); using var reader = new StreamReader(resource); using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = reader.ReadToEnd(); command.ExecuteNonQuery(); transaction.Commit();
     }
 }

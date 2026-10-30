@@ -159,6 +159,9 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV10Migration(db);
         ApplyV11Migration(db);
         ApplyV12Migration(db);
+        ApplyV15Migration(db);
+        ZteCollectionSchema.Apply(db);
+        RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
 
         using (var foreignKeys = db.CreateCommand())
@@ -387,6 +390,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v12.sql")
             ?? throw new InvalidOperationException("Embedded schema_v12.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV15Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v15.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v15.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -1124,6 +1140,25 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             : null;
     }
 
+    public bool H3cProfileIsInScope(string id, P2B5SiteScopeDecision scope)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        var siteParameters = string.Join(',', scope.AllowedSiteReferences.Select((_, index) => "$site" + index));
+        command.CommandText = scope.IsGlobal
+            ? "SELECT 1 FROM h3c_device_profiles WHERE id=$id"
+            : $"SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id " +
+              $"WHERE profile.id=$id AND source.site_id IN ({siteParameters})";
+        command.Parameters.AddWithValue("$id", id);
+        if (!scope.IsGlobal)
+        {
+            var index = 0;
+            foreach (var site in scope.AllowedSiteReferences.Order(StringComparer.Ordinal))
+                command.Parameters.AddWithValue("$site" + index++, site);
+        }
+        return command.ExecuteScalar() is not null;
+    }
+
     public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25)
     {
         using var db = Open();
@@ -1293,7 +1328,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (taskType == "H3C_SSH_READONLY")
         {
             if (!H3cCommandPolicy.IsAllowed(command))
-                throw new ArgumentException("Only the H3C read-only version and interface-brief commands are allowed.", nameof(command));
+                throw new ArgumentException("Only allowlisted H3C read-only commands are allowed.", nameof(command));
             var profile = GetH3cDeviceProfile(target);
             if (profile is null || !profile.Enabled) throw new ArgumentException("Enabled H3C device profile was not found.", nameof(target));
         }

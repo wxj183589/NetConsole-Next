@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using NetConsole.Next.Credentials;
 
 if (args.Length > 0 && args[0] == "--ssh-wire")
@@ -26,6 +27,8 @@ else if (args.Length > 0 && args[0] == "--runtime-settings-tests")
     RuntimeSettingsTests.Run();
 else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
+else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
+    SchedulerTests.RunPhase11H3cFactReplay();
 else
     await SchedulerTests.RunAsync();
 
@@ -152,6 +155,11 @@ internal static class SchedulerTests
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
+        VerifiesPhase9VendorParsersAndCliTranscript();
+        VerifiesPhase10GoldenFixtureManifest();
+        VerifiesPhase11LiveApGoldenFixtures();
+        VerifiesPhase11OfflineH3cFactReplay();
+        await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();
@@ -704,6 +712,27 @@ internal static class SchedulerTests
         Assert(bridgePort.LinkStatus == "DOWN" && bridgePort.Speed == "auto" && bridgePort.Vlan == "20",
             bridgePort.ToString()!);
 
+        var v9InterfaceBrief = string.Join(Environment.NewLine, new[]
+        {
+            "Brief information on interfaces in route mode:",
+            "Link: ADM - administratively down; Stby - standby",
+            "Protocol: (s) - spoofing",
+            "Interface                         Link Protocol Primary IP        Description",
+            "Vlan250                           UP   UP       10.92.250.251      AC",
+            "Brief information on interfaces in bridge mode:",
+            "Link: ADM - administratively down; Stby - standby",
+            "Speed: (a) - auto",
+            "Duplex: (a)/A - auto; H - half; F - full",
+            "Type: A - access; T - trunk; H - hybrid",
+            "Interface                         Link Speed     Duplex Type PVID Description",
+            "GE1/0/1                           UP   1000M     F      T    1    uplink"
+        });
+        var v9Interfaces = H3cComwareParser.ParseInterfaceBrief(v9InterfaceBrief);
+        Assert(v9Interfaces.Recognized && v9Interfaces.Interfaces.Count == 2,
+            "Comware V9 explanation rows must not become interfaces: " + v9Interfaces);
+        Assert(v9Interfaces.Interfaces.All(x => x.InterfaceName is not ("Protocol:" or "Speed:" or "Duplex:" or "Type:")),
+            "Comware V9 explanation labels must be excluded from interface results");
+
         var fingerprint = Convert.ToBase64String(Enumerable.Range(0, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
         Assert(H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, fingerprint), "SHA256 pin should match SSH.NET fingerprint form");
         Assert(!H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, new string('A', 43)), "wrong host key must not match");
@@ -733,6 +762,219 @@ internal static class SchedulerTests
             "ANSI decorated Comware paging prompt should be detected");
         Assert(!H3cComwareParser.ContainsPaginationPrompt("---- More ----\b\b\b\b\b\b\b\bREADY"),
             "terminal backspaces must be applied before paging prompt detection");
+    }
+
+    private static void VerifiesPhase9VendorParsersAndCliTranscript()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures");
+        var h3c = Path.Combine(root, "h3c");
+        var zte = Path.Combine(root, "zte");
+
+        Assert(H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayWlanApAll) &&
+               H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayTransceiverDiagnosisInterface) &&
+               !H3cCommandPolicy.IsAllowed("display current-configuration"),
+            "H3C policy must expose only the Phase 9 read-only allowlist");
+        Assert(ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowVersion) &&
+               ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowLldpEntry) &&
+               !ZteCommandPolicy.IsAllowed("show running-config"),
+            "ZTE policy must expose only the Phase 9 read-only allowlist");
+
+        var transcript = CliTranscriptParser.Parse(
+            File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all.txt")), H3cCommandPolicy.DisplayWlanApAll);
+        Assert(transcript.Status == CliTranscriptStatus.Complete && transcript.Prompt == "HZL10-AC#" &&
+               !transcript.Output.Contains("display wlan ap all", StringComparison.OrdinalIgnoreCase) &&
+               !transcript.Output.Contains("HZL10-AC#", StringComparison.Ordinal),
+            "CLI transcript must remove only the command echo and terminal prompts while retaining body output");
+        Assert(H3cComwareParser.ParseWlanApAll(transcript.Output).Count == 2,
+            "H3C AP table should parse two rows after transcript normalization");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all.txt"))).Status == "PARSED",
+            "H3C command dispatch must route the AP table through the shared parser");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\nDevice summary\nHZL10-AC#").Status == "PARSED",
+            "H3C device inventory command must preserve a complete raw transcript body");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice, "Device summary from completed Exec output").Status == "PARSED",
+            "H3C Exec output without an interactive prompt must remain a complete parse");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\npartial body").Status == "PARTIAL",
+            "an interactive transcript without a closing prompt must remain partial");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            "HZL10-AC#display wlan ap all\nrow").Status == "PARTIAL" &&
+               H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+                   "HZL10-AC#display wlan ap all\nrow\n---- More ----\n").Status == "PARTIAL",
+            "H3C table dispatch must preserve interactive truncation and paging failures");
+        Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayDevice,
+            "HZL10-AC#display device\n% Unrecognized command\nHZL10-AC#").Status == "UNRECOGNIZED",
+            "H3C device inventory errors must not be persisted as parsed output");
+        Assert(H3cComwareParser.ParseWlanApAllAddress(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_address.txt"))).Single().MacAddress == "4c6f-d608-0400",
+            "H3C AP address parser must preserve the stable MAC field");
+        var radios = H3cComwareParser.ParseWlanApAllRadio(File.ReadAllText(Path.Combine(h3c, "phase9_wlan_ap_all_radio.txt")));
+        Assert(radios.Count == 2 && radios[1].Channel == 149 && radios[1].TxPower == 17,
+            "H3C radio parser must retain channel and transmit power without unit loss");
+        Assert(H3cComwareParser.ParseLldpList(File.ReadAllText(Path.Combine(h3c, "phase9_lldp_list.txt"))).Single().NeighborSysname == "AC-DEMO",
+            "H3C LLDP list parser must keep local and remote port identity");
+        Assert(H3cComwareParser.ParseTransceiverDiagnosis(File.ReadAllText(Path.Combine(h3c, "phase9_transceiver.txt"))).Single().RxPower == -3.21m,
+            "H3C transceiver parser must keep nullable optical power values");
+
+        var paged = CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n---- More ----\n", H3cCommandPolicy.DisplayWlanApAll);
+        Assert(paged.Status == CliTranscriptStatus.Paged && paged.PageMarkerCount == 1,
+            "a remaining paging marker must be visible as incomplete rather than silently accepted");
+        var anglePrompt = CliTranscriptParser.Parse(
+            "<CLD-PIS1332>display wlan ap all\r\nrow\r\n<CLD-PIS1332>",
+            H3cCommandPolicy.DisplayWlanApAll);
+        Assert(anglePrompt.Status == CliTranscriptStatus.Complete && anglePrompt.Prompt == "<CLD-PIS1332>" &&
+               anglePrompt.Output == "row",
+            "Comware angle-bracket prompts must separate command echo, body and closing prompt");
+        var repeatedCommand = CliTranscriptParser.Parse(
+            "DEVICE#show version\nbody line\nshow version\nDEVICE#",
+            ZteCommandPolicy.ShowVersion);
+        Assert(repeatedCommand.Status == CliTranscriptStatus.Complete &&
+               repeatedCommand.Output.Contains("show version", StringComparison.Ordinal),
+            "an identical command string in the response body must not be discarded as an echo");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#display wlan ap all\nrow\n", H3cCommandPolicy.DisplayWlanApAll).Status == CliTranscriptStatus.Incomplete,
+            "a transcript without a closing prompt must remain incomplete");
+        Assert(CliTranscriptParser.Parse("HZL10-AC#show version\n% Invalid input\nHZL10-AC#", "show version").Status == CliTranscriptStatus.Unsupported,
+            "unsupported command output must remain a structured non-success");
+
+        var identity = ZteZxr10Parser.ParseIdentity(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_version.txt")));
+        Assert(identity.Status == "PARSED" && identity.Value?.Model == "C89E-4" && identity.Value.SoftwareVersion == "V1.9.0",
+            "ZTE C89E identity fixture should parse model and software version");
+        var zteInterfaces = ZteZxr10Parser.ParseInterfaces(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_interface_brief.txt")));
+        Assert(zteInterfaces.Status == "PARSED" && zteInterfaces.Value.Count == 4 &&
+               zteInterfaces.Value.Single(x => x.Name == "gei-0/3/0/1").PhysicalStatus == "down" &&
+               zteInterfaces.Value.Single(x => x.Name == "xgeis-0/4/0/5").ProtocolStatus == "up" &&
+               zteInterfaces.Value.Single(x => x.Name == "xgeis-0/4/0/5").Description == "DESCRIPTION-REDACTED",
+            "ZTE interface parser must distinguish state columns and preserve descriptions");
+        var optics = ZteZxr10Parser.ParseOpticalBrief(File.ReadAllText(Path.Combine(zte, "phase9_c89e4_show_opticalinfo_brief.txt")));
+        Assert(optics.Value.Count == 3 && optics.Value.Single(x => x.InterfaceName == "gei-0/3/0/1").Status == "NO_MODULE" &&
+               optics.Value.Single(x => x.InterfaceName == "xgeis-0/4/0/5").TxPowerDbm is null,
+            "ZTE optical parser must keep no-module and missing TX distinct");
+        var pagedOptics = ZteZxr10Parser.ParseOpticalBrief(
+            "DEVICE-REDACTED#show opticalinfo brief\nInterface Type Wavelength RxPower(dBm) TxPower(dBm) Status Mode\n" +
+            "sci-0/1/0/1 1G 1310nm -7.2 -5.1 Normal SingleMode\n---- More ----\n");
+        Assert(pagedOptics.Status == "PAGED" && pagedOptics.Warnings.Count == 1,
+            "ZTE optical parser must preserve a paging failure instead of reporting parsed success");
+        var deniedLldp = ZteZxr10Parser.ParseLldpBrief(
+            "DEVICE-REDACTED#show lldp neighbor brief\n% Permission denied\nDEVICE-REDACTED#");
+        Assert(deniedLldp.Status == "PERMISSIONDENIED" && deniedLldp.Warnings.Count == 1,
+            "ZTE LLDP parser must preserve permission failures as structured warnings");
+        var lldp = ZteZxr10Parser.ParseLldpBrief(File.ReadAllText(Path.Combine(zte, "phase9_hzdt10_lldp_brief.txt")));
+        Assert(lldp.Status == "PARSED" && lldp.Value.Count == 2 && lldp.Value[0].NeighborInterface?.Contains("Ten-GigabitEthernet1/0/1", StringComparison.Ordinal) == true,
+            "ZTE LLDP brief parser must unfold wrapped remote port names");
+        var entry = ZteZxr10Parser.ParseLldpEntries(File.ReadAllText(Path.Combine(zte, "phase9_hzdt10_lldp_entry.txt")));
+        Assert(entry.Value.Count == 1 && entry.Value[0].NeighborIp == "192.0.2.26" && entry.Value[0].Ttl == 228,
+            "ZTE LLDP entry parser must retain management IP and TTL");
+        Console.WriteLine("PHASE9_VENDOR_PARSER_REPLAY=PASS");
+    }
+
+    private static void VerifiesPhase10GoldenFixtureManifest()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures");
+        var manifestPath = Path.Combine(root, "phase10_golden_manifest.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath, Encoding.UTF8));
+        var entries = document.RootElement.GetProperty("entries");
+        Assert(entries.GetArrayLength() >= 10, "Phase 10 golden manifest must retain H3C and ZTE fixture coverage");
+        foreach (var entry in entries.EnumerateArray())
+        {
+            var relative = entry.GetProperty("fixture").GetString() ?? string.Empty;
+            var expectedSha = entry.GetProperty("sha256").GetString() ?? string.Empty;
+            var expectedBytes = entry.GetProperty("bytes").GetInt64();
+            var sourceLevel = entry.GetProperty("source_level").GetString() ?? string.Empty;
+            var vendor = entry.GetProperty("vendor").GetString() ?? string.Empty;
+            var command = entry.GetProperty("command").GetString() ?? string.Empty;
+            var parserContract = entry.GetProperty("parser_contract").GetString() ?? string.Empty;
+            var expectedStatus = entry.GetProperty("expected_status").GetString() ?? string.Empty;
+            var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert(File.Exists(path), $"golden fixture is missing: {relative}");
+            var text = new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
+            var bytes = Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'));
+            Assert(bytes.LongLength == expectedBytes, $"golden fixture byte count drifted: {relative}");
+            Assert(Convert.ToHexString(SHA256.HashData(bytes)).Equals(expectedSha, StringComparison.OrdinalIgnoreCase),
+                $"golden fixture SHA-256 drifted: {relative}");
+            Assert(sourceLevel is "SANITIZED_REPLAY" or "REAL_CAPTURE_REDACTED" or "DOCUMENT_SAMPLE_SANITIZED",
+                $"golden fixture source level is not explicit: {relative}");
+            Assert(vendor is "H3C" or "ZTE" && !string.IsNullOrWhiteSpace(command) &&
+                   !string.IsNullOrWhiteSpace(parserContract) && expectedStatus is "COMPLETE" or "PARTIAL" or "EMPTY" or "UNSUPPORTED" or "PERMISSION_DENIED",
+                $"golden fixture metadata contract is incomplete: {relative}");
+        }
+        Console.WriteLine($"PHASE10_GOLDEN_MANIFEST=PASS ({entries.GetArrayLength()} fixtures)");
+    }
+
+    private static void VerifiesPhase11LiveApGoldenFixtures()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_229");
+        var version = File.ReadAllText(Path.Combine(root, "display_version.txt"));
+        Assert(version.Contains("WA6510E-T", StringComparison.Ordinal) && version.Contains("7.1.064", StringComparison.Ordinal),
+            "Phase 11 live AP fixture must retain the verified model and Comware release");
+        var interfaces = H3cComwareParser.ParseInterfaceBrief(File.ReadAllText(Path.Combine(root, "display_interface_brief.txt")));
+        Assert(interfaces.Recognized && interfaces.Interfaces.Count >= 12 && interfaces.Interfaces.Any(item => item.InterfaceName == "WLAN-Radio1/0/1" && item.LinkStatus == "UP"),
+            "Phase 11 live AP interface brief must preserve the twelve-interface V7 shape and radio state");
+        var lldp = H3cComwareParser.ParseLldpList(File.ReadAllText(Path.Combine(root, "display_lldp_neighbor_information_list.txt")));
+        Assert(lldp.Count == 1 && lldp[0].LocalInterface == "GE1/0/1" && lldp[0].NeighborInterface == "ge2",
+            "Phase 11 live AP LLDP fixture must retain local and remote ports");
+        var unsupported = H3cComwareParser.Parse(H3cCommandPolicy.DisplayWlanApAll,
+            File.ReadAllText(Path.Combine(root, "display_wlan_ap_all.txt")));
+        Assert(unsupported.Status is "UNSUPPORTED" or "UNRECOGNIZED",
+            "Phase 11 live AP unsupported command must remain a structured non-success");
+        var mesh = H3cComwareParser.ParseMeshLink(File.ReadAllText(Path.Combine(root, "display_wlan_mesh_link.txt")));
+        Assert(mesh.Count == 3 && mesh.Count(item => item.LinkState == "Active(ax)") == 1 &&
+               mesh.Any(item => item.Rssi == 30 && item.InterfaceName == "WLAN-MeshLink6"),
+            "Phase 11 live AP mesh-link fixture must retain peer count, RSSI and active state");
+        Console.WriteLine("PHASE11_LIVE_AP_FIXTURES=PASS (V7 identity/interface/LLDP/unsupported command)");
+    }
+
+    internal static void RunPhase11H3cFactReplay() => VerifiesPhase11OfflineH3cFactReplay();
+
+    private static void VerifiesPhase11OfflineH3cFactReplay()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-phase11-h3c-facts-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var profileId = Guid.NewGuid().ToString("N");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.229", 22, "reader", "PHASE11_FIXTURE", fingerprint, true, 0, 0));
+            var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_229");
+            var outputs = new Dictionary<string, string>
+            {
+                [H3cCommandPolicy.DisplayVersion] = File.ReadAllText(Path.Combine(fixtureRoot, "display_version.txt")),
+                [H3cCommandPolicy.DisplayInterfaceBrief] = File.ReadAllText(Path.Combine(fixtureRoot, "display_interface_brief.txt")),
+                [H3cCommandPolicy.DisplayInterface] = File.ReadAllText(Path.Combine(fixtureRoot, "display_interface.txt")),
+                [H3cCommandPolicy.DisplayWlanMeshProfile] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_mesh_profile.txt")),
+                [H3cCommandPolicy.DisplayWlanMeshLink] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_mesh_link.txt")),
+                [H3cCommandPolicy.DisplayLldpNeighborInformationList] = File.ReadAllText(Path.Combine(fixtureRoot, "display_lldp_neighbor_information_list.txt")),
+                [H3cCommandPolicy.DisplayWlanApAll] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_ap_all.txt")),
+                [H3cCommandPolicy.DisplayWlanServiceTemplateAll] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_service_template_all.txt")),
+                [H3cCommandPolicy.DisplayWlanClient] = File.ReadAllText(Path.Combine(fixtureRoot, "display_wlan_client.txt"))
+            };
+            const long capturedMs = 1_767_220_800_000;
+            var first = catalog.ImportH3cOfflineReplay(profileId, outputs, capturedMs);
+            Assert(first.FactCount >= 20 && first.CurrentCount >= 20 && first.Source == Catalog.H3cOfflineFixtureSource,
+                $"offline H3C replay should persist all real fixture facts: {first}");
+            var peers = catalog.QueryH3cFacts(profileId, "mesh.peer", false, 10);
+            Assert(peers.Count == 3 && peers.Select(item => item.IdentityKey).Distinct(StringComparer.Ordinal).Count() == 3 &&
+                   peers.All(item => item.DataState == Catalog.H3cOfflineFixtureSource && item.Freshness == "EXPIRED_DEVICE_OFFLINE"),
+                "Mesh peers must use stable keys and remain explicitly expired offline evidence");
+            var currentFacts = catalog.QueryH3cFacts(profileId, null, false, 1000);
+            Assert(currentFacts.Any(item => item.Status is "UNSUPPORTED" or "PARTIAL") &&
+                   currentFacts.Any(item => item.Kind == "command.display.wlan.service-template.all") &&
+                   currentFacts.Any(item => item.Kind == "command.display.wlan.client"),
+                "unsupported, partial and empty command outputs must remain visible as structured states");
+            var second = catalog.ImportH3cOfflineReplay(profileId, outputs, capturedMs);
+            Assert(second.CurrentCount == first.CurrentCount && catalog.QueryH3cFacts(profileId, "mesh.peer", false, 10).Count == 3,
+                "replaying one golden capture must be idempotent and must not duplicate Mesh peers");
+            var restarted = new Catalog(TestSettings(root));
+            restarted.Initialize();
+            var current = restarted.QueryH3cFacts(profileId, null, false, 1000);
+            var history = restarted.QueryH3cFacts(profileId, null, true, 1000);
+            Assert(current.Count == first.CurrentCount && history.Count == current.Count &&
+                   current.Any(item => item.Kind == "interface" && item.IdentityKey == "WLAN-Radio1/0/1"),
+                "SQLite/service restart must preserve Current and history without duplicate rows");
+            Console.WriteLine($"PHASE11_OFFLINE_H3C_FACT_REPLAY=PASS (facts={current.Count}, peers=3, source={Catalog.H3cOfflineFixtureSource})");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()
@@ -1773,7 +2015,11 @@ internal static class SchedulerTests
                 db.Open();
                 using var version = db.CreateCommand();
                 version.CommandText = "SELECT MAX(version) FROM schema_versions";
-                Assert(Convert.ToInt32(version.ExecuteScalar()) == 12, "v12 device batch operation migration should be present after repeated initialization");
+                var latestVersion = Convert.ToInt32(version.ExecuteScalar());
+                using var v12 = db.CreateCommand();
+                v12.CommandText = "SELECT COUNT(*) FROM schema_versions WHERE version=12";
+                Assert(latestVersion >= 12 && Convert.ToInt32(v12.ExecuteScalar()) == 1,
+                    "v12 device batch operation migration should remain present after later migrations and repeated initialization");
             }
         }
         finally { Directory.Delete(root, true); }

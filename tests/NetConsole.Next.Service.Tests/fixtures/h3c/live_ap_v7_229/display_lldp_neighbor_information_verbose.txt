@@ -1,0 +1,84 @@
+
+
+******************************************************************************
+
+* Copyright (c) 2004-2026 New H3C Technologies Co., Ltd. All rights reserved.*
+
+* Without the owner's prior written consent,                                 *
+
+* no decompiling or reverse-engineering shall be allowed.                    *
+
+******************************************************************************
+
+
+
+<AP-229-REDACTED>display lldp neighbor-information verbose
+
+LLDP neighbor-information of port 1[GigabitEthernet1/0/1]:
+
+LLDP agent nearest-bridge:
+
+ LLDP neighbor index : 1
+
+ Update time         : 0 days, 0 hours, 0 minutes, 26 seconds
+
+ Chassis type        : MAC address
+
+ Chassis ID          : 00aa-bbcc-ddee
+
+ Port ID type        : Locally assigned
+
+ Port ID             : ge2
+
+ Time to live        : 120
+
+ Port description    : ge2
+
+ System name         : Switch
+
+ System description  : 
+
+   Switch
+
+ System capabilities supported : Bridge, Router
+
+ System capabilities enabled   : Router
+
+ Management address type           : IPv4
+
+ Management address                : 192.0.2.179
+
+ Management address interface type : IfIndex
+
+ Management address interface ID   : 5005
+
+ Management address OID            : 0
+
+ Port VLAN ID(PVID)  : 101
+
+ Port and protocol VLAN ID(PPVID)  : 0
+
+ Port and protocol VLAN supported  : Yes
+
+ Port and protocol VLAN enabled    : No
+
+ VLAN name of VLAN 101      : VLAN0101
+
+ Link aggregation supported : Yes
+
+ Link aggregation enabled   : No
+
+ Aggregation port ID        : 0
+
+ Protocol ID         : 0x0000424203000003
+
+ Auto-negotiation supported : Yes
+
+ Auto-negotiation enabled   : No
+
+ OperMau                    : Speed(1000)/Duplex(Full)
+
+ Maximum frame size         : 10240
+
+
+

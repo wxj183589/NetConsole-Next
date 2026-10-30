@@ -8,8 +8,24 @@ internal static class H3cCommandPolicy
 {
     public const string DisplayVersion = "display version";
     public const string DisplayInterfaceBrief = "display interface brief";
+    public const string DisplayInterface = "display interface";
+    public const string DisplayDevice = "display device";
+    public const string DisplayWlanApAll = "display wlan ap all";
+    public const string DisplayWlanApAllAddress = "display wlan ap all address";
+    public const string DisplayWlanApAllRadio = "display wlan ap all radio";
+    public const string DisplayWlanMeshLink = "display wlan mesh-link";
+    public const string DisplayWlanMeshProfile = "display wlan mesh-profile";
+    public const string DisplayWlanServiceTemplateAll = "display wlan service-template all";
+    public const string DisplayWlanClient = "display wlan client";
+    public const string DisplayLldpNeighborInformationList = "display lldp neighbor-information list";
+    public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
+    public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
 
-    public static bool IsAllowed(string command) => command is DisplayVersion or DisplayInterfaceBrief;
+    public static bool IsAllowed(string command) => command is
+        DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayWlanApAll or
+        DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
+        DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
+        DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface;
 }
 
 internal static class TerminalTextEncoding
@@ -185,7 +201,17 @@ internal sealed record H3cDeviceProfileSnapshot(
     bool AllowTelnetFallback = false)
 {
     public string SourceId => "h3c-" + Id;
+
+    public H3cProfileView ToView() => new(Id, Host, Port, Username, Enabled, CreatedMs, UpdatedMs,
+        HostKeyUpdatePolicy, AllowLegacyAlgorithms, TerminalEncoding, TerminalProtocol, AllowTelnetFallback);
 }
+
+// Credential references and host-key fingerprints are internal connection facts;
+// keep them out of the authenticated read DTO returned by the HTTP API.
+internal sealed record H3cProfileView(
+    string Id, string Host, int Port, string Username, bool Enabled, long CreatedMs, long UpdatedMs,
+    string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms, string TerminalEncoding,
+    string TerminalProtocol, bool AllowTelnetFallback);
 
 internal sealed record H3cVersionInfo(string Vendor, string Version, string? Release, bool Recognized);
 
@@ -204,6 +230,22 @@ internal sealed record H3cInterfaceBriefResult(
     IReadOnlyList<H3cInterfaceStatus> Interfaces,
     bool Recognized,
     string? Notice);
+
+internal sealed record H3cInterfaceDetailFact(
+    string InterfaceName,
+    string? LinkStatus,
+    string? Description,
+    string? RadioMode,
+    int? Channel,
+    long? InputBytes,
+    long? OutputBytes);
+
+internal sealed record H3cMeshProfileFact(
+    int? Number,
+    string? MeshId,
+    string? Status,
+    string? ForwardingLocation,
+    string? AkmMode);
 
 internal sealed record H3cParseResult(string Status, string Json);
 
@@ -250,7 +292,11 @@ internal static partial class H3cComwareParser
             if (section == BriefSection.None || line.StartsWith("-", StringComparison.Ordinal) ||
                 line.StartsWith("Interface ", StringComparison.OrdinalIgnoreCase) ||
                 line.StartsWith("Link:", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Speed or duplex:", StringComparison.OrdinalIgnoreCase))
+                line.StartsWith("Speed or duplex:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Protocol:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Speed:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Duplex:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Type:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             var parts = line.Split((char[]?)null, section == BriefSection.Route ? 5 : 7,
@@ -281,6 +327,8 @@ internal static partial class H3cComwareParser
     {
         if (string.IsNullOrWhiteSpace(output))
             return new("EMPTY", "{}");
+        if (GetTranscriptFailure(command, output) is { } transcriptFailure)
+            return transcriptFailure;
         if (command == H3cCommandPolicy.DisplayVersion)
         {
             var result = ParseVersion(output);
@@ -293,7 +341,126 @@ internal static partial class H3cComwareParser
             return new(result.Recognized ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
         }
+        if (command == H3cCommandPolicy.DisplayInterface)
+        {
+            var result = ParseInterfaceDetails(output);
+            return new(result.Count > 0 ? "PARSED" : "EMPTY",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAll)
+        {
+            var result = ParseWlanApAll(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAllAddress)
+        {
+            var result = ParseWlanApAllAddress(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanApAllRadio)
+        {
+            var result = ParseWlanApAllRadio(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanMeshLink)
+        {
+            var result = ParseMeshLink(output);
+            return new(result.Count > 0 ? "PARSED" : "EMPTY",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayWlanMeshProfile)
+        {
+            var result = ParseMeshProfile(output);
+            return new(result.MeshId is null ? "EMPTY" : "PARSED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command is H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient)
+        {
+            var transcript = CliTranscriptParser.Parse(output, command);
+            return new(transcript.Status switch
+            {
+                CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+                CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
+                CliTranscriptStatus.Empty => "EMPTY",
+                _ => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED"
+            }, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = transcript.Status.ToString().ToUpperInvariant(),
+                output = transcript.Output,
+                notice = transcript.Notice
+            }));
+        }
+        if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
+        {
+            var result = ParseLldpList(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayLldpNeighborInformationVerbose)
+        {
+            var result = ParseLldpVerbose(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayTransceiverDiagnosisInterface)
+        {
+            var result = ParseTransceiverDiagnosis(output);
+            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
+                System.Text.Json.JsonSerializer.Serialize(result));
+        }
+        if (command == H3cCommandPolicy.DisplayDevice)
+        {
+            var transcript = CliTranscriptParser.Parse(output, command);
+            var parseStatus = transcript.Status switch
+            {
+                CliTranscriptStatus.Complete => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
+                CliTranscriptStatus.Empty => "EMPTY",
+                CliTranscriptStatus.Incomplete when transcript.Prompt.Length == 0 =>
+                    string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED",
+                CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
+                CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+                _ => "UNCLASSIFIED"
+            };
+            return new(parseStatus,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    status = transcript.Status.ToString().ToUpperInvariant(),
+                    output = transcript.Output,
+                    notice = transcript.Notice
+                }));
+        }
         throw new ArgumentException("Only allowlisted H3C read-only commands have a parser.", nameof(command));
+    }
+
+    private static H3cParseResult? GetTranscriptFailure(string command, string output)
+    {
+        if (command is not (H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayInterface or H3cCommandPolicy.DisplayWlanApAll or
+            H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or
+            H3cCommandPolicy.DisplayWlanMeshLink or H3cCommandPolicy.DisplayWlanMeshProfile or
+            H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient or
+            H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
+            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
+            return null;
+
+        var transcript = CliTranscriptParser.Parse(output, command);
+        var parseStatus = transcript.Status switch
+        {
+            CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+            CliTranscriptStatus.Paged => "PARTIAL",
+            CliTranscriptStatus.Incomplete when transcript.Prompt.Length > 0 => "PARTIAL",
+            _ => null
+        };
+        return parseStatus is null
+            ? null
+            : new(parseStatus, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = transcript.Status.ToString().ToUpperInvariant(),
+                output = transcript.Output,
+                notice = transcript.Notice
+            }));
     }
 
     public static bool ContainsPaginationPrompt(string output)
