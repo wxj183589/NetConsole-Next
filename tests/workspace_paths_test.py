@@ -46,6 +46,17 @@ class WorkspacePathTests(unittest.TestCase):
             self.assertEqual(workspace_path("diagnostic", "run.json", root=root), root / "diagnostic" / "run.json")
             self.assertEqual(workspace_layout(root=root)["build"], root / "build")
 
+    def test_absolute_test_data_override_outside_workspace_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            outside = Path(temporary) / "outside"
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                workspace_path("test-data", str(outside), root=root)
+            self.assertEqual(
+                workspace_path("test-data", "LabData", root=root),
+                root / "test-data" / "LabData",
+            )
+
     def test_path_traversal_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "NetConsole-Next-Workspace"

@@ -46,7 +46,7 @@ jobs:
       - run: python tests/terminal_ui_contract.py
       - run: python tests/terminal_e2e.py
         env:
-          NETCONSOLE_NEXT_E2E_DATA_PARENT: ${{ runner.temp }}
+          NETCONSOLE_NEXT_WORKSPACE_ROOT: ${{ runner.temp }}/netconsole-next-workspace
       - run: python3 tests/udp_trace_benchmark_tests.py
       - run: python3 tests/perf_baseline.py --packets 10000 --queue-burst 0 --history-files 100 --sqlite-writes 100 --idle-seconds 1 --rate 5000
       - run: python3 tests/udp_trace_benchmark.py --pps 500 --payload-bytes 128 --duration-seconds 1 --require-lossless --output /tmp/netconsole-next-ci-udp-trace.json
@@ -89,7 +89,7 @@ jobs:
       - run: python3 tests/p2b4_write_api_e2e.py
       - run: python tests/terminal_e2e.py
         env:
-          NETCONSOLE_NEXT_E2E_DATA_PARENT: ${{ runner.temp }}
+          NETCONSOLE_NEXT_WORKSPACE_ROOT: ${{ runner.temp }}/netconsole-next-workspace
       - name: Publish, install, and exercise Windows Service through SCM
         shell: pwsh
         run: ./tests/windows_service_lifecycle.ps1
