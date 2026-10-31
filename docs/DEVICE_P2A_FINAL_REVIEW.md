@@ -31,5 +31,5 @@ Schema v12 remains the implemented boundary. Batch operation/device-item tables 
 ## Evidence pointers
 
 - Crash/restart procedure: `docs/DEVICE_BATCH_CRASH_RECOVERY.md`.
-- Browser diagnostics and screenshots: `docs/DEVICE_P2A_BROWSER_DIAGNOSTICS.md` and `artifacts/device-p2a-browser/`.
+- Browser diagnostics and screenshots: `docs/DEVICE_P2A_BROWSER_DIAGNOSTICS.md`. The current rerun output is `D:\study\NetConsole-Next-Workspace\build\device-p2a-browser\`; `artifacts/device-p2a-browser/` is the historical evidence location, retained only for provenance.
 - Existing operation state and concurrency contracts: `docs/DEVICE_BATCH_OPERATION_STATE_MACHINE.md`, `docs/DEVICE_BATCH_CONCURRENCY.md`, and `docs/DEVICE_CSV_CONCURRENCY_AND_LIMITS.md`.
