@@ -73,11 +73,14 @@ internal sealed partial class Catalog
     private readonly Dictionary<string, DeviceImportCommitReceipt> _deviceImportReceipts = new(StringComparer.Ordinal);
 
     public DeviceInventoryPage QueryManagedDeviceInventory(int page = 1, int pageSize = 20,
-        string? search = null, string? status = null, string? siteId = null, string? groupId = null)
+        string? search = null, string? status = null, string? siteId = null, string? groupId = null,
+        P2B5SiteScopeDecision? siteScope = null)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var filters = InventoryFilters(search, status, siteId, groupId);
+        siteScope ??= P2B5SiteScopeDecision.Global;
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var filters = InventoryFilters(search, status, siteId, groupId, siteScope, scopeParameters);
         var where = filters.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", filters);
         using var db = Open();
 
@@ -100,7 +103,7 @@ internal sealed partial class Catalog
             LEFT JOIN h3c_device_profiles p ON p.id=d.terminal_profile_id
             LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
             {where}";
-        AddInventoryParameters(summary, search, status, siteId, groupId);
+        AddInventoryParameters(summary, search, status, siteId, groupId, scopeParameters);
         using var summaryReader = summary.ExecuteReader();
         summaryReader.Read();
         var total = summaryReader.GetInt64(0);
@@ -126,7 +129,7 @@ internal sealed partial class Catalog
             {where}
             ORDER BY d.updated_ms DESC,d.id ASC
             LIMIT $limit OFFSET $offset";
-        AddInventoryParameters(command, search, status, siteId, groupId);
+        AddInventoryParameters(command, search, status, siteId, groupId, scopeParameters);
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * pageSize);
         using var reader = command.ExecuteReader();
@@ -135,9 +138,9 @@ internal sealed partial class Catalog
         return new DeviceInventoryPage(page, pageSize, total, (long)page * pageSize < total, counts, items);
     }
 
-    public DeviceInventoryDetail? GetDeviceInventoryDetail(string id)
+    public DeviceInventoryDetail? GetDeviceInventoryDetail(string id, P2B5SiteScopeDecision? siteScope = null)
     {
-        var page = QueryManagedDeviceInventory(1, 100, id, null, null, null);
+        var page = QueryManagedDeviceInventory(1, 100, id, null, null, null, siteScope);
         var item = page.Items.FirstOrDefault(candidate => candidate.Id == id);
         if (item is null) return null;
         using var db = Open();
@@ -157,16 +160,20 @@ internal sealed partial class Catalog
         return new DeviceInventoryDetail(item, description, created, updated, profileId, profile, sessions, audits);
     }
 
-    public IReadOnlyList<DeviceGroupView> QueryDeviceGroups(string? siteId = null)
+    public IReadOnlyList<DeviceGroupView> QueryDeviceGroups(string? siteId = null, P2B5SiteScopeDecision? siteScope = null)
     {
+        siteScope ??= P2B5SiteScopeDecision.Global;
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForSite("g.site_id", siteScope, scopeParameters, "group_scope");
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms,COUNT(d.id)
+        command.CommandText = $@"SELECT g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms,COUNT(d.id)
             FROM device_groups g LEFT JOIN device_inventory d ON d.group_id=g.id
-            WHERE ($site IS NULL OR g.site_id=$site)
+            WHERE ($site IS NULL OR g.site_id=$site) AND {scopeFilter}
             GROUP BY g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms
             ORDER BY g.site_id,g.name";
         command.Parameters.AddWithValue("$site", (object?)NullIfBlank(siteId) ?? DBNull.Value);
+        foreach (var (name, value) in scopeParameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var result = new List<DeviceGroupView>();
         while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
@@ -408,9 +415,11 @@ internal sealed partial class Catalog
         return result;
     }
 
-    private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId)
+    private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId,
+        P2B5SiteScopeDecision siteScope, List<(string Name, object? Value)> scopeParameters)
     {
         var filters = new List<string>();
+        filters.Add(P2B5SiteScopeSql.ForSite("d.site_id", siteScope, scopeParameters, "inventory_scope"));
         if (!string.IsNullOrWhiteSpace(search)) filters.Add("(d.id LIKE $search OR d.name LIKE $search OR d.management_ip LIKE $search OR d.vendor LIKE $search OR d.model LIKE $search OR st.name LIKE $search)");
         if (!string.IsNullOrWhiteSpace(siteId)) filters.Add("d.site_id=$site");
         if (!string.IsNullOrWhiteSpace(groupId)) filters.Add("d.group_id=$group");
@@ -425,11 +434,13 @@ internal sealed partial class Catalog
         return filters;
     }
 
-    private static void AddInventoryParameters(SqliteCommand command, string? search, string? status, string? siteId, string? groupId)
+    private static void AddInventoryParameters(SqliteCommand command, string? search, string? status, string? siteId, string? groupId,
+        IEnumerable<(string Name, object? Value)> scopeParameters)
     {
         if (!string.IsNullOrWhiteSpace(search)) command.Parameters.AddWithValue("$search", $"%{search.Trim()}%");
         if (!string.IsNullOrWhiteSpace(siteId)) command.Parameters.AddWithValue("$site", siteId.Trim());
         if (!string.IsNullOrWhiteSpace(groupId)) command.Parameters.AddWithValue("$group", groupId.Trim());
+        foreach (var (name, value) in scopeParameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
     }
 
     private static DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader)
@@ -492,8 +503,10 @@ internal sealed partial class Catalog
 
     private static void EnsureSite(SqliteConnection db, SqliteTransaction transaction, string siteId)
     {
-        using var command = db.CreateCommand(); command.Transaction = transaction; command.CommandText = "SELECT 1 FROM sites WHERE id=$id"; command.Parameters.AddWithValue("$id", siteId);
-        if (command.ExecuteScalar() is null) throw new KeyNotFoundException("Site was not found.");
+        using var command = db.CreateCommand(); command.Transaction = transaction; command.CommandText = "SELECT status FROM sites WHERE id=$id"; command.Parameters.AddWithValue("$id", siteId);
+        var status = command.ExecuteScalar()?.ToString();
+        if (status is null) throw new KeyNotFoundException("Site was not found.");
+        if (!string.Equals(status, "ACTIVE", StringComparison.Ordinal)) throw new InvalidOperationException("The selected Site is disabled or archived.");
     }
 
     private static void EnsureGroup(SqliteConnection db, SqliteTransaction transaction, string? groupId, string siteId)
@@ -722,7 +735,7 @@ internal sealed partial class Catalog
     }
 
     private static string NormalizeForCompare(string value) => TryNormalizeIp(value, out var ip) ? ip : value.Trim().ToLowerInvariant();
-    private static bool SiteExists(SqliteConnection db, string siteId) { using var command = db.CreateCommand(); command.CommandText = "SELECT 1 FROM sites WHERE id=$id"; command.Parameters.AddWithValue("$id", siteId); return command.ExecuteScalar() is not null; }
+    private static bool SiteExists(SqliteConnection db, string siteId) { using var command = db.CreateCommand(); command.CommandText = "SELECT 1 FROM sites WHERE id=$id AND status='ACTIVE'"; command.Parameters.AddWithValue("$id", siteId); return command.ExecuteScalar() is not null; }
     private static bool TerminalProfileExists(SqliteConnection db, string id) { using var command = db.CreateCommand(); command.CommandText = "SELECT 1 FROM h3c_device_profiles WHERE id=$id"; command.Parameters.AddWithValue("$id", id); return command.ExecuteScalar() is not null; }
     private static string? ResolveGroupByName(SqliteConnection db, string siteId, string name, List<string> errors)
     {

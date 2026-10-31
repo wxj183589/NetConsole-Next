@@ -183,6 +183,7 @@ internal static class SchedulerTests
         VerifiesDeviceManagementPhase1();
         await VerifiesDeviceManagementSafetyBoundaries();
         await VerifiesDeviceManagementPhase2A();
+        await VerifiesSiteManagementAndScopeAsync();
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
@@ -1371,6 +1372,39 @@ internal static class SchedulerTests
                 "device mutations must leave audit_events evidence without credential fields");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesSiteManagementAndScopeAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-site-management-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var siteA = catalog.CreateSite(new("site-a", "Site A", "first site"), "site-test");
+            var siteB = catalog.CreateSite(new("site-b", "Site B", "second site"), "site-test");
+            var groupA = catalog.CreateDeviceGroup(siteA.Id, "Group A", null, "site-test");
+            var groupB = catalog.CreateDeviceGroup(siteB.Id, "Group B", null, "site-test");
+            catalog.CreateDeviceInventory(new(null, "Device A", "192.0.2.151", "H3C", "S", "AP", siteA.Id, groupA.Id, null, true, null), "site-test");
+            catalog.CreateDeviceInventory(new(null, "Device B", "192.0.2.152", "H3C", "S", "AP", siteB.Id, groupB.Id, null, true, null), "site-test");
+
+            var authorizedA = new P2B5SiteScopeDecision("AUTHORIZED", false,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { siteA.Id }, "site-a fixture scope");
+            Assert(catalog.QuerySites(authorizedA).Select(site => site.Id).SequenceEqual(new[] { siteA.Id }),
+                "Site listing must be limited to the authorized Site Scope");
+            Assert(catalog.QueryManagedDeviceInventory(siteScope: authorizedA).Total == 1,
+                "Device inventory must be limited to the authorized Site Scope");
+            Assert(catalog.QueryDeviceGroups(siteScope: authorizedA).Single().SiteId == siteA.Id,
+                "Device groups must be limited to the authorized Site Scope");
+
+            AssertThrows<ArgumentException>(() => catalog.UpdateSite(siteA.Id,
+                new("site-renamed", "Site A", "changed", siteA.UpdatedMs), "site-test"));
+            var disabled = catalog.SetSiteStatus(siteB.Id, new("DISABLED", siteB.UpdatedMs), "site-test");
+            Assert(disabled.Status == "DISABLED", "Site status transition must be persisted");
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceGroup(siteB.Id, "Rejected", null, "site-test"));
+            Console.WriteLine("PASS: global Site lifecycle, stable IDs and Site Scope projections");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
     }
 
     private static async Task VerifiesDeviceManagementPhase2A()

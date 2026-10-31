@@ -184,6 +184,22 @@ internal sealed class P2B5SiteScopeStore
 
 internal static class P2B5SiteScopeSql
 {
+    public static string ForSite(string siteExpression, P2B5SiteScopeDecision decision,
+        List<(string Name, object? Value)> parameters, string parameterPrefix)
+    {
+        if (decision.IsGlobal) return "1=1";
+        if (!decision.IsAuthorized || decision.AllowedSiteReferences.Count == 0) return "1=0";
+        var placeholders = new List<string>();
+        var index = 0;
+        foreach (var site in decision.AllowedSiteReferences.Order(StringComparer.Ordinal))
+        {
+            var name = $"${parameterPrefix}{index++}";
+            placeholders.Add(name);
+            parameters.Add((name, site));
+        }
+        return $"{siteExpression} IN ({string.Join(',', placeholders)})";
+    }
+
     public static string ForDomain(string domainAlias, P2B5SiteScopeDecision decision,
         List<(string Name, object? Value)> parameters, string parameterPrefix)
     {

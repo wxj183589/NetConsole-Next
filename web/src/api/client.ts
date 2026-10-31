@@ -29,6 +29,22 @@ export interface HealthSnapshot {
   instanceId?: string
 }
 
+export type SiteStatus = 'ACTIVE' | 'DISABLED' | 'ARCHIVED'
+export interface Site {
+  id: string
+  name: string
+  description: string
+  status: SiteStatus
+  createdMs: number
+  updatedMs: number
+  archivedMs?: number | null
+  deviceCount: number
+  groupCount: number
+  collectionSourceCount: number
+  terminalProfileCount: number
+  canWrite: boolean
+}
+
 export interface DeviceInventorySummary {
   totalRecords: number
   validDevices: number
@@ -535,6 +551,16 @@ export function changePassword(payload: { currentPassword?: string; newPassword:
 }
 
 export function getHealth(): Promise<HealthSnapshot> { return request('/api/system/health') }
+export function getSites(): Promise<Site[]> { return request('/api/system/sites') }
+export function createSite(payload: { id: string; name: string; description?: string }): Promise<Site> {
+  return request('/api/system/sites', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateSite(id: string, payload: { id: string; name: string; description?: string; expectedUpdatedMs?: number }): Promise<Site> {
+  return request(`/api/system/sites/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function updateSiteStatus(id: string, status: SiteStatus, expectedUpdatedMs?: number): Promise<Site> {
+  return request(`/api/system/sites/${encodeURIComponent(id)}/status`, { method: 'POST', body: JSON.stringify({ status, expectedUpdatedMs }) })
+}
 export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string; siteId?: string; groupId?: string } = {}): Promise<DeviceInventoryPage> {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })
@@ -637,7 +663,9 @@ export function confirmDeviceBatch(id: string): Promise<DeviceBatchOperation> {
 export function cancelDeviceBatch(id: string): Promise<DeviceBatchOperation> {
   return request('/api/system/devices/batch/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })
 }
-export function getTerminalDevices(): Promise<TerminalDevice[]> { return request('/api/system/terminal/devices') }
+export function getTerminalDevices(siteId?: string): Promise<TerminalDevice[]> {
+  return request(queryPath('/api/system/terminal/devices', { siteId }))
+}
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }

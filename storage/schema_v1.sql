@@ -38,6 +38,6 @@ CREATE TABLE IF NOT EXISTS audit_events(
  action TEXT NOT NULL, outcome TEXT NOT NULL,
  detail_json TEXT NOT NULL DEFAULT '{}'
 );
-INSERT OR IGNORE INTO sites VALUES ('local','Local P0');
+INSERT OR IGNORE INTO sites(id,name) VALUES ('local','Local P0');
 INSERT OR IGNORE INTO collection_sources(id,site_id,kind,label)
  VALUES ('syslog-local','local','SYSLOG_UDP','Local P0 Syslog');
