@@ -26,7 +26,7 @@ P2B5_UI_ISOLATED_SERVICE=PASS
 
 ## 诊断
 
-证据 JSON：`web/artifacts/p2b5-network-planning-browser/browser-evidence.json`。浏览器证据包含 console/page error、failed request、unexpected HTTP 统计和预期的未登录 401、Admin scope 403。最终统计为：
+当前脚本重新运行的证据 JSON：`D:\study\NetConsole-Next-Workspace\build\p2b5-network-planning-browser\browser-evidence.json`（或者配置的 `NETCONSOLE_NEXT_WORKSPACE_ROOT\build\p2b5-network-planning-browser`）。2026-10-27 历史验收记录中的原始路径是 `web/artifacts/p2b5-network-planning-browser/browser-evidence.json`，此处保留为历史溯源。浏览器证据包含 console/page error、failed request、unexpected HTTP 统计和预期的未登录 401、Admin scope 403。最终统计为：
 
 ```text
 consoleErrorCount=0
@@ -39,4 +39,4 @@ unexpectedHttpCount=0
 
 ## 截图
 
-截图位于 `web/artifacts/p2b5-network-planning-browser/`，包括地址、Domain、VLAN、差异、操作历史、深色响应式和 Admin 无 scope 状态。目录可由上述脚本重新生成，不复制任何真实数据。
+当前重新运行脚本生成的截图位于 `D:\study\NetConsole-Next-Workspace\build\p2b5-network-planning-browser\`，包括地址、Domain、VLAN、差异、操作历史、深色响应式和 Admin 无 scope 状态。目录可由上述脚本重新生成，不复制任何真实数据。

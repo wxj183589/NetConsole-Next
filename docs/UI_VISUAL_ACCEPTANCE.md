@@ -15,11 +15,11 @@
 | Device simulation | 未启用；无现场设备连接 |
 | Required viewports | `1920x1080`、`1440x900`、`1366x768` |
 
-`tests/ui_reference_browser_e2e.mjs` 启动真实 Chrome，登录真实 .NET Service，逐页访问并保存截图，同时捕获登录后的 console error、page error、失败请求、HTTP 500+ 和 401/404。最近一次证据文件为 `web/artifacts/ui-acceptance/browser-evidence.json`。
+`tests/ui_reference_browser_e2e.mjs` 启动真实 Chrome，登录真实 .NET Service，逐页访问并保存截图，同时捕获登录后的 console error、page error、失败请求、HTTP 500+ 和 401/404。这次历史验收的原证据路径为 `web/artifacts/ui-acceptance/browser-evidence.json`；当前脚本重新运行时改为 `D:\study\NetConsole-Next-Workspace\build\ui-acceptance\browser-evidence.json`（或配置的工作区根目录下 `build\ui-acceptance\`）。若设置 `NETCONSOLE_NEXT_UI_ARTIFACTS`，只接受工作区 `build` 内的覆盖路径。
 
 ## 截图交付
 
-截图均来自真实 Service，不是静态 Mock HTML 或生成效果图：
+截图均来自真实 Service，不是静态 Mock HTML 或生成效果图。下列是历史验收的原始相对路径，用于追溯旧证据；当前重新运行的同名截图统一输出到 `D:\study\NetConsole-Next-Workspace\build\ui-acceptance\`：
 
 - `web/artifacts/ui-acceptance/overview-light.png`
 - `web/artifacts/ui-acceptance/overview-dark.png`
