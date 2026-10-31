@@ -3,6 +3,7 @@
 
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -39,6 +40,36 @@ class WorkspacePathTests(unittest.TestCase):
             root = Path(temporary) / "NetConsole-Next-Workspace"
             with self.assertRaises(ValueError):
                 workspace_path("build", "..", "outside.txt", root=root)
+
+    def test_nested_symlink_or_junction_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            category = root / "build"
+            category.mkdir(parents=True)
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            link = category / "browser"
+            if os.name == "nt":
+                created = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                    check=False, capture_output=True, text=True,
+                )
+                if created.returncode != 0:
+                    self.skipTest("Windows junction creation is unavailable")
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_path("build", "browser", "capture.png", root=root)
+
+    @unittest.skipIf(os.name == "nt", "dangling symlink creation requires Windows privileges")
+    def test_dangling_nested_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            category = root / "build"
+            category.mkdir(parents=True)
+            (category / "dangling").symlink_to(Path(temporary) / "missing", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_path("build", "dangling", "capture.png", root=root)
 
     def test_legacy_root_is_rejected(self):
         with self.assertRaises(ValueError):

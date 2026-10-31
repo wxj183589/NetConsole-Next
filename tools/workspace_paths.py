@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 import tempfile
 from typing import Mapping
@@ -48,12 +49,15 @@ def _is_within(path: Path, parent: Path) -> bool:
 
 
 def _is_reparse_point(path: Path) -> bool:
-    if not path.exists():
+    """Detect links and Windows reparse points, including dangling links."""
+    try:
+        info = path.lstat()
+    except (FileNotFoundError, NotADirectoryError):
         return False
-    if path.is_symlink():
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction and is_junction())
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
 
 
 def workspace_root(
@@ -93,12 +97,22 @@ def workspace_path(category: str, *parts: str, root: Path | None = None) -> Path
         raise ValueError(f"Unknown NetConsole-Next workspace category: {category}")
     root = workspace_root() if root is None else _absolute(root)
     base = _absolute(root / WORKSPACE_LAYOUT[category])
-    if _is_reparse_point(root) or _is_reparse_point(base):
-        raise ValueError("NetConsole-Next workspace paths may not traverse reparse points")
-
     candidate = _absolute(base.joinpath(*parts))
     if not _is_within(candidate, base):
         raise ValueError(f"NetConsole-Next workspace path escapes {base}: {candidate}")
+
+    # A link at any existing descendant can redirect later artifact writes.
+    # Inspect each component, not only the workspace root and category base.
+    probe = candidate
+    while True:
+        if _is_reparse_point(probe):
+            raise ValueError(f"NetConsole-Next workspace path traverses a reparse point: {probe}")
+        if probe == root:
+            break
+        parent = probe.parent
+        if parent == probe:
+            raise ValueError(f"NetConsole-Next workspace path has no workspace ancestor: {candidate}")
+        probe = parent
     return candidate
 
 
