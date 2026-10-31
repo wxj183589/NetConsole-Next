@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -18,7 +19,40 @@ internal sealed record DeviceInventoryWriteRequest(
     string? GroupId,
     string? Description,
     bool Enabled,
-    string? TerminalProfileId);
+    string? TerminalProfileId,
+    string? Protocol = null,
+    int? Port = null,
+    string? Username = null,
+    string? CredentialReference = null,
+    string? HostKeySha256 = null,
+    string HostKeyUpdatePolicy = "STRICT",
+    bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO",
+    bool AllowTelnetFallback = false,
+    string? IdempotencyKey = null);
+
+internal sealed record DeviceConnectivityTestRequest(
+    string ManagementAddress,
+    string Protocol,
+    int Port,
+    string Username,
+    string CredentialReference,
+    string? HostKeySha256,
+    string HostKeyUpdatePolicy = "STRICT",
+    bool AllowLegacyAlgorithms = false,
+    string TerminalEncoding = "AUTO",
+    int TimeoutMs = 10000);
+
+internal sealed record DeviceConnectivityTestResult(
+    string Outcome,
+    string Stage,
+    bool AddressReachable,
+    bool ProtocolHandshake,
+    bool Authentication,
+    bool IdentityVerified,
+    string Detail,
+    string? DeviceIdentity,
+    long ElapsedMs);
 
 internal sealed record DeviceGroupView(string Id, string SiteId, string Name, string Description,
     long CreatedMs, long UpdatedMs, long DeviceCount);
@@ -209,11 +243,36 @@ internal sealed partial class Catalog
     public DeviceInventoryDetail CreateDeviceInventory(DeviceInventoryWriteRequest request, string actor)
     {
         var normalized = NormalizeDeviceInput(request, null);
+        var profile = CreateProfileForDevice(normalized);
+        if (profile is not null) normalized = normalized with { TerminalProfileId = profile.Id };
+        var idempotencyKey = NormalizeIdempotencyKey(normalized.IdempotencyKey);
+        var requestHash = ComputeCreateRequestHash(normalized, profile);
         var now = UtcNowMs();
         using var db = Open();
         using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+        if (idempotencyKey is not null)
+        {
+            using var existing = db.CreateCommand();
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT actor,device_id,request_sha256 FROM device_create_idempotency WHERE idempotency_key=$key";
+            existing.Parameters.AddWithValue("$key", idempotencyKey);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                var previousActor = reader.GetString(0);
+                var previousDevice = reader.GetString(1);
+                var previousHash = reader.GetString(2);
+                if (!string.Equals(previousActor, actor, StringComparison.Ordinal) ||
+                    !string.Equals(previousHash, requestHash, StringComparison.Ordinal))
+                    throw new InvalidOperationException("The idempotency key is already bound to a different device request.");
+                transaction.Commit();
+                return GetDeviceInventoryDetail(previousDevice) ?? throw new InvalidOperationException("The idempotent device result could not be reloaded.");
+            }
+        }
         EnsureSite(db, transaction, normalized.SiteId);
         EnsureGroup(db, transaction, normalized.GroupId, normalized.SiteId);
+        EnsureDeviceIdAvailable(db, transaction, normalized.Id!);
+        if (profile is not null) InsertH3cProfileForDevice(db, transaction, profile, normalized.SiteId);
         EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId, normalized.Id);
         EnsureUniqueManagementIp(db, transaction, normalized.SiteId, normalized.ManagementIp, normalized.Id);
         using (var insert = db.CreateCommand())
@@ -225,6 +284,18 @@ internal sealed partial class Catalog
             AddDeviceParameters(insert, normalized, now, now);
             insert.ExecuteNonQuery();
         }
+        if (idempotencyKey is not null)
+        {
+            using var idempotency = db.CreateCommand();
+            idempotency.Transaction = transaction;
+            idempotency.CommandText = "INSERT INTO device_create_idempotency(idempotency_key,actor,device_id,request_sha256,created_ms) VALUES($key,$actor,$device,$hash,$created)";
+            idempotency.Parameters.AddWithValue("$key", idempotencyKey);
+            idempotency.Parameters.AddWithValue("$actor", actor);
+            idempotency.Parameters.AddWithValue("$device", normalized.Id!);
+            idempotency.Parameters.AddWithValue("$hash", requestHash);
+            idempotency.Parameters.AddWithValue("$created", now);
+            idempotency.ExecuteNonQuery();
+        }
         InsertDeviceAudit(db, transaction, actor, "DEVICE_CREATE", normalized.Id!, new { normalized.Name, normalized.ManagementIp, normalized.SiteId, normalized.GroupId, normalized.Enabled, normalized.TerminalProfileId });
         transaction.Commit();
         return GetDeviceInventoryDetail(normalized.Id!) ?? throw new InvalidOperationException("Created device could not be reloaded.");
@@ -232,6 +303,8 @@ internal sealed partial class Catalog
 
     public DeviceInventoryDetail UpdateDeviceInventory(string id, DeviceInventoryWriteRequest request, string actor)
     {
+        if (HasConnectionMutation(request))
+            throw new ArgumentException("Connection profile changes must create a new terminal profile and are not supported by inventory edit.", nameof(request));
         var normalized = NormalizeDeviceInput(request with { Id = id }, id);
         var now = UtcNowMs();
         using var db = Open();
@@ -488,17 +561,121 @@ internal sealed partial class Catalog
         command.Parameters.AddWithValue("$profile", (object?)request.TerminalProfileId ?? DBNull.Value);
     }
 
+    private static bool HasConnectionMutation(DeviceInventoryWriteRequest request) =>
+        !string.IsNullOrWhiteSpace(request.Protocol) || request.Port is not null ||
+        !string.IsNullOrWhiteSpace(request.Username) || !string.IsNullOrWhiteSpace(request.CredentialReference) ||
+        !string.IsNullOrWhiteSpace(request.HostKeySha256) || !string.IsNullOrWhiteSpace(request.IdempotencyKey);
+
+    private static string? NormalizeIdempotencyKey(string? value)
+    {
+        var key = value?.Trim();
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        if (key.Length > 128 || !IsValidToken(key, 128))
+            throw new ArgumentException("idempotencyKey contains unsupported characters.", nameof(value));
+        return key;
+    }
+
+    private static string ComputeCreateRequestHash(DeviceInventoryWriteRequest request, H3cDeviceProfileSnapshot? profile)
+    {
+        var canonical = string.Join("\u001f", request.Id, request.Name, request.ManagementIp, request.Vendor,
+            request.Model, request.DeviceType, request.SiteId, request.GroupId, request.Description, request.Enabled,
+            profile is null ? request.TerminalProfileId : null, profile?.Host, profile?.Port, profile?.Username, profile?.CredentialReference,
+            profile?.HostKeySha256, profile?.HostKeyUpdatePolicy, profile?.AllowLegacyAlgorithms, profile?.TerminalEncoding,
+            profile?.TerminalProtocol);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static H3cDeviceProfileSnapshot? CreateProfileForDevice(DeviceInventoryWriteRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Protocol)) return null;
+        if (!string.IsNullOrWhiteSpace(request.TerminalProfileId))
+            throw new ArgumentException("A new connection profile cannot be combined with an existing terminalProfileId.", nameof(request));
+        if (!string.Equals(request.Vendor, "H3C", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only H3C connection profiles are supported by this device creation workflow.", nameof(request));
+        var protocol = request.Protocol.Trim().ToUpperInvariant();
+        if (protocol is not ("SSH" or "TELNET"))
+            throw new ArgumentException("Protocol must be SSH or TELNET for a network device profile.", nameof(request));
+        var port = request.Port ?? (protocol == "SSH" ? 22 : 23);
+        if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(request.Port), "Port must be between 1 and 65535.");
+        var username = RequiredText(request.Username, "username", 64);
+        if (username.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
+            throw new ArgumentException("username contains unsupported characters.", nameof(request));
+        var credential = RequiredText(request.CredentialReference, "credentialReference", 64).ToUpperInvariant();
+        if (!H3cCredentialReference.IsValid(credential))
+            throw new ArgumentException("credentialReference must match [A-Z][A-Z0-9_]{0,63}.", nameof(request));
+        if (request.HostKeyUpdatePolicy.Trim().ToUpperInvariant() != "STRICT")
+            throw new ArgumentException("New device profiles require STRICT SSH host-key verification.", nameof(request));
+        var fingerprint = string.IsNullOrWhiteSpace(request.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(request.HostKeySha256);
+        if (protocol == "SSH" && fingerprint.Length == 0)
+            throw new ArgumentException("SSH device creation requires a SHA256 host-key fingerprint; unknown host keys are never accepted automatically.", nameof(request));
+        var encoding = request.TerminalEncoding.Trim().ToUpperInvariant();
+        if (!TerminalTextEncoding.IsSupported(encoding))
+            throw new ArgumentException("terminalEncoding must be AUTO, UTF-8 or GB18030.", nameof(request));
+        return new(Guid.NewGuid().ToString("N"), request.ManagementIp, port, username, credential, fingerprint,
+            request.Enabled, 0, 0, "STRICT", request.AllowLegacyAlgorithms, encoding, protocol, false);
+    }
+
+    private static void InsertH3cProfileForDevice(SqliteConnection db, SqliteTransaction transaction,
+        H3cDeviceProfileSnapshot profile, string siteId)
+    {
+        var now = UtcNowMs();
+        var sourceId = "h3c-" + profile.Id;
+        using (var source = db.CreateCommand())
+        {
+            source.Transaction = transaction;
+            source.CommandText = @"INSERT INTO collection_sources(id,site_id,kind,label,enabled)
+                VALUES($source,$site,'H3C_SSH',$label,$enabled)";
+            source.Parameters.AddWithValue("$source", sourceId); source.Parameters.AddWithValue("$site", siteId);
+            source.Parameters.AddWithValue("$label", $"H3C {profile.Host}:{profile.Port}"); source.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
+            source.ExecuteNonQuery();
+        }
+        using (var insert = db.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = @"INSERT INTO h3c_device_profiles
+                (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback)
+                VALUES($id,$source,$host,$port,$username,$credential,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$protocol,0)";
+            insert.Parameters.AddWithValue("$id", profile.Id); insert.Parameters.AddWithValue("$source", sourceId);
+            insert.Parameters.AddWithValue("$host", profile.Host); insert.Parameters.AddWithValue("$port", profile.Port);
+            insert.Parameters.AddWithValue("$username", profile.Username); insert.Parameters.AddWithValue("$credential", profile.CredentialReference);
+            insert.Parameters.AddWithValue("$fingerprint", profile.HostKeySha256); insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
+            insert.Parameters.AddWithValue("$created", now); insert.Parameters.AddWithValue("$updated", now);
+            insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy); insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0);
+            insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding); insert.Parameters.AddWithValue("$protocol", profile.TerminalProtocol);
+            insert.ExecuteNonQuery();
+        }
+        using var binding = db.CreateCommand();
+        binding.Transaction = transaction;
+        binding.CommandText = @"INSERT INTO ssh_host_keys(device_id,host,port,update_policy,current_key_type,current_sha256)
+            VALUES($device,$host,$port,$policy,CASE WHEN $fingerprint='' THEN NULL ELSE 'UNKNOWN' END,NULLIF($fingerprint,''))";
+        binding.Parameters.AddWithValue("$device", profile.Id); binding.Parameters.AddWithValue("$host", profile.Host);
+        binding.Parameters.AddWithValue("$port", profile.Port); binding.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
+        binding.Parameters.AddWithValue("$fingerprint", profile.HostKeySha256); binding.ExecuteNonQuery();
+    }
+
     private static DeviceInventoryWriteRequest NormalizeDeviceInput(DeviceInventoryWriteRequest request, string? existingId)
     {
-        var id = string.IsNullOrWhiteSpace(request.Id) ? "dev-" + Guid.NewGuid().ToString("N") : request.Id.Trim();
+        var id = string.IsNullOrWhiteSpace(request.Id)
+            ? !string.IsNullOrWhiteSpace(request.IdempotencyKey)
+                ? "dev-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.IdempotencyKey.Trim())))[..24].ToLowerInvariant()
+                : "dev-" + Guid.NewGuid().ToString("N")
+            : request.Id.Trim();
         if (!IsValidDeviceId(id)) throw new ArgumentException("Device id must contain only letters, numbers, dot, underscore or hyphen.", nameof(request));
         var name = RequiredText(request.Name, "name", 120);
-        if (!TryNormalizeIp(request.ManagementIp, out var ip)) throw new ArgumentException("managementIp must be a valid IP address.", nameof(request));
+        if (!TryNormalizeManagementAddress(request.ManagementIp, out var ip)) throw new ArgumentException("managementIp must be a valid IP address or DNS hostname.", nameof(request));
         var type = string.IsNullOrWhiteSpace(request.DeviceType) ? "NETWORK_DEVICE" : request.DeviceType.Trim().ToUpperInvariant();
         if (!IsValidToken(type, 48)) throw new ArgumentException("deviceType contains unsupported characters.", nameof(request));
         var site = RequiredText(request.SiteId, "siteId", 80);
-        return new DeviceInventoryWriteRequest(id, name, ip, Clean(request.Vendor, 80), Clean(request.Model, 80), type, site,
-            CleanNullable(request.GroupId, 80), Clean(request.Description, 500), request.Enabled, CleanNullable(request.TerminalProfileId, 80));
+        return request with
+        {
+            Id = id, Name = name, ManagementIp = ip, Vendor = Clean(request.Vendor, 80), Model = Clean(request.Model, 80),
+            DeviceType = type, SiteId = site, GroupId = CleanNullable(request.GroupId, 80), Description = Clean(request.Description, 500),
+            TerminalProfileId = CleanNullable(request.TerminalProfileId, 80), Protocol = CleanNullable(request.Protocol, 16)?.ToUpperInvariant(),
+            Username = CleanNullable(request.Username, 64), CredentialReference = CleanNullable(request.CredentialReference, 64),
+            HostKeySha256 = CleanNullable(request.HostKeySha256, 128), HostKeyUpdatePolicy = string.IsNullOrWhiteSpace(request.HostKeyUpdatePolicy) ? "STRICT" : request.HostKeyUpdatePolicy.Trim().ToUpperInvariant(),
+            TerminalEncoding = string.IsNullOrWhiteSpace(request.TerminalEncoding) ? "AUTO" : request.TerminalEncoding.Trim().ToUpperInvariant(),
+            IdempotencyKey = CleanNullable(request.IdempotencyKey, 128)
+        };
     }
 
     private static void EnsureSite(SqliteConnection db, SqliteTransaction transaction, string siteId)
@@ -607,6 +784,20 @@ internal sealed partial class Catalog
     {
         if (IPAddress.TryParse(value.Trim(), out var address)) { normalized = address.ToString(); return true; }
         normalized = string.Empty; return false;
+    }
+
+    private static bool TryNormalizeManagementAddress(string value, out string normalized)
+    {
+        if (TryNormalizeIp(value, out normalized)) return true;
+        var host = value.Trim();
+        if (host.Length is < 1 or > 253 || host.Any(char.IsControl) || host.Any(char.IsWhiteSpace) ||
+            Uri.CheckHostName(host) != UriHostNameType.Dns || host.EndsWith(".", StringComparison.Ordinal))
+        {
+            normalized = string.Empty;
+            return false;
+        }
+        normalized = host.ToLowerInvariant();
+        return true;
     }
 
     private sealed record ParsedCsvRow(int Line, IReadOnlyDictionary<string, string> Values)

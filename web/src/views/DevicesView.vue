@@ -5,25 +5,24 @@ import { ElMessage } from 'element-plus'
 import { CircleCheck, Document, Filter, Monitor, Search, Upload, Warning } from '@element-plus/icons-vue'
 import NcLayout from '../components/NcLayout.vue'
 import {
-  ApiRequestError, cancelDeviceBatch, commitDeviceImport, confirmDeviceBatch, createDevice, createDeviceBatch, createDeviceGroup,
-  getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, getTerminalDevices, previewDeviceImport, updateDevice,
+  ApiRequestError, cancelDeviceBatch, commitDeviceImport, confirmDeviceBatch, createDeviceBatch, createDeviceGroup,
+  getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, previewDeviceImport, updateDevice,
   type DeviceBatchKind, type DeviceBatchOperation, type DeviceBatchRequest, type DeviceGroup, type DeviceImportPreview, type DeviceInventoryDetail,
-  type DeviceInventoryItem, type DeviceInventoryPage, type TerminalDevice,
+  type DeviceInventoryItem, type DeviceInventoryPage,
 } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useSiteContextStore } from '../stores/siteContext'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const siteContext = useSiteContextStore()
-const result = ref<DeviceInventoryPage | null>(null); const groups = ref<DeviceGroup[]>([]); const profiles = ref<TerminalDevice[]>([])
+const result = ref<DeviceInventoryPage | null>(null); const groups = ref<DeviceGroup[]>([])
 const loading = ref(false); const unsupported = ref(false); const page = ref(1); const pageSize = ref(20)
 const search = ref(String(route.query.q || '')); const status = ref(''); const siteId = computed(() => siteContext.currentSiteId); const groupId = ref('')
-const showEditor = ref(false); const showDetail = ref(false); const showGroup = ref(false); const showImport = ref(false)
+const showDetail = ref(false); const showGroup = ref(false); const showImport = ref(false)
 const selected = ref<DeviceInventoryDetail | null>(null); const importPreview = ref<DeviceImportPreview | null>(null); const importCsv = ref('')
 const selectedIds = ref<string[]>([]); const showBatchDialog = ref(false); const showBatchPreview = ref(false)
 const batchOperation = ref<DeviceBatchOperation | null>(null); const batchLoading = ref(false); const operationId = ref('')
 const batchKind = ref<DeviceBatchKind>('BATCH_ENABLE'); const batchSite = ref(''); const batchGroup = ref('')
 const batchMetadata = reactive({ name: '', vendor: '', model: '', deviceType: '', description: '' })
-const form = reactive({ id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: '', groupId: '', description: '', enabled: true, terminalProfileId: '' })
 const groupForm = reactive({ siteId: '', name: '', description: '' })
 const canWrite = computed(() => auth.user?.role === 'SUPERADMIN')
 const rows = computed(() => result.value?.items || [])
@@ -42,7 +41,6 @@ async function refresh(): Promise<void> {
   finally { loading.value = false }
 }
 async function refreshGroups(): Promise<void> { try { groups.value = await getDeviceGroups(siteId.value || undefined) } catch { ElMessage.error('设备分组读取失败') } }
-async function refreshProfiles(): Promise<void> { try { profiles.value = await getTerminalDevices(siteId.value || undefined) } catch { profiles.value = [] } }
 function applyFilters(): void { page.value = 1; void refresh() }
 function clearFilters(): void { search.value = ''; status.value = ''; groupId.value = ''; applyFilters() }
 function onSelectionChange(id: string, event: Event): void { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? Array.from(new Set([...selectedIds.value, id])) : selectedIds.value.filter(item => item !== id) }
@@ -64,18 +62,9 @@ async function cancelBatch(): Promise<void> { if (!batchOperation.value?.canCanc
 function formatTime(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function statusLabel(value: string): string { return ({ CONNECTED: '最近在线', DISCONNECTED: '最近离线', FAILED: '会话失败', CLOSED: '会话关闭', DISABLED: '已禁用', UNKNOWN: '状态未知' } as Record<string, string>)[value] || '未知' }
 function statusClass(value: string): string { return value === 'CONNECTED' ? 'good' : value === 'DISABLED' || value === 'FAILED' ? 'bad' : value === 'UNKNOWN' ? 'neutral' : 'warn' }
-function resetForm(): void { Object.assign(form, { id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: siteId.value, groupId: '', description: '', enabled: true, terminalProfileId: '' }) }
-function openCreate(): void { resetForm(); showEditor.value = true }
-async function openEdit(row: DeviceInventoryItem): Promise<void> {
-  try { selected.value = await getDeviceInventoryDetail(row.id); const item = selected.value.item; Object.assign(form, { id: item.id, name: item.name, managementIp: item.managementIp || item.managementAddress, vendor: item.vendor === '—' ? '' : item.vendor, model: item.model === '—' ? '' : item.model, deviceType: item.deviceType, siteId: item.siteId || siteId.value, groupId: item.groupId || '', description: selected.value.description, enabled: item.enabled, terminalProfileId: item.terminalProfileId || '' }); showEditor.value = true } catch { ElMessage.error('设备详情读取失败') }
-}
+function openCreate(): void { void router.push('/devices/new') }
+function openEdit(row: DeviceInventoryItem): void { void router.push(`/devices/${encodeURIComponent(row.id)}/edit`) }
 async function openDetails(row: DeviceInventoryItem): Promise<void> { try { selected.value = await getDeviceInventoryDetail(row.id); showDetail.value = true } catch { ElMessage.error('设备详情读取失败') } }
-function payload(): Record<string, unknown> { return { id: form.id || undefined, name: form.name, managementIp: form.managementIp, vendor: form.vendor, model: form.model, deviceType: form.deviceType, siteId: form.siteId, groupId: form.groupId || null, description: form.description, enabled: form.enabled, terminalProfileId: form.terminalProfileId || null } }
-async function save(): Promise<void> {
-  if (!canWrite.value) return
-  try { if (form.id) await updateDevice(form.id, payload()); else await createDevice(payload()); ElMessage.success(form.id ? '设备已更新' : '设备已创建'); showEditor.value = false; await refresh() }
-  catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '设备保存失败') }
-}
 async function toggle(row: DeviceInventoryItem): Promise<void> {
   if (!canWrite.value) return
   try { const detail = await getDeviceInventoryDetail(row.id); const item = detail.item; await updateDevice(row.id, { id: row.id, name: item.name, managementIp: item.managementIp || item.managementAddress, vendor: item.vendor, model: item.model, deviceType: item.deviceType, siteId: item.siteId || siteId.value, groupId: item.groupId || null, description: detail.description, enabled: !item.enabled, terminalProfileId: item.terminalProfileId || null }); ElMessage.success(item.enabled ? '设备已禁用' : '设备已启用'); await refresh() }
@@ -87,8 +76,8 @@ function onFile(event: Event): void { const file = (event.target as HTMLInputEle
 async function previewImport(): Promise<void> { try { importPreview.value = await previewDeviceImport(importCsv.value); showImport.value = true } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : 'CSV 预览失败') } }
 async function commitImport(): Promise<void> { if (!importPreview.value || importPreview.value.conflictCount || importPreview.value.errorCount) return; try { const output = await commitDeviceImport(importPreview.value.previewId); ElMessage.success(`导入完成：新增 ${output.created}，更新 ${output.updated}`); showImport.value = false; importPreview.value = null; await refresh() } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '导入提交失败') } }
 function importFile(): void { document.getElementById('device-import-file')?.click() }
-watch(() => siteContext.currentSiteId, async (value, previous) => { if (!value || value === previous) return; selectedIds.value = []; groupId.value = ''; groupForm.siteId = value; await Promise.all([refresh(), refreshGroups(), refreshProfiles()]) })
-onMounted(async () => { groupForm.siteId = siteId.value; const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await Promise.all([refresh(), refreshGroups(), refreshProfiles()]) })
+watch(() => siteContext.currentSiteId, async (value, previous) => { if (!value || value === previous) return; selectedIds.value = []; groupId.value = ''; groupForm.siteId = value; await Promise.all([refresh(), refreshGroups()]) })
+onMounted(async () => { groupForm.siteId = siteId.value; const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await Promise.all([refresh(), refreshGroups()]) })
 </script>
 
 <template>
@@ -108,7 +97,6 @@ onMounted(async () => { groupForm.siteId = siteId.value; const saved = sessionSt
       </section>
     </template>
     <div class="section-label">数据与安全口径</div><div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>设备库存与 h3c_device_profiles 分离，终端历史按原 profile ID 保留</span><span><el-icon><CircleCheck /></el-icon>启用状态由服务端同步到已关联终端档案</span><span><el-icon><Warning /></el-icon>CSV 不接受密码、凭据或私钥列，导入先预览再原子提交</span></div></div>
-    <el-dialog v-model="showEditor" :title="form.id ? '编辑设备' : '新增设备'" width="660px"><div class="form-grid"><label class="form-field"><span>设备 ID</span><input v-model="form.id" :disabled="!!form.id" placeholder="留空自动生成" /></label><label class="form-field"><span>设备名称</span><input v-model="form.name" required /></label><label class="form-field"><span>管理 IP</span><input v-model="form.managementIp" placeholder="192.0.2.10" /></label><label class="form-field"><span>厂商</span><input v-model="form.vendor" /></label><label class="form-field"><span>型号</span><input v-model="form.model" /></label><label class="form-field"><span>设备类型</span><input v-model="form.deviceType" /></label><label class="form-field"><span>局点</span><input v-model="form.siteId" disabled /></label><label class="form-field"><span>分组</span><select v-model="form.groupId"><option value="">未分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label><label class="form-field"><span>终端档案</span><select v-model="form.terminalProfileId"><option value="">不关联</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }} · {{ profile.username }}</option></select></label><label class="form-field"><span>描述</span><input v-model="form.description" /></label><label class="form-field" style="align-items:center"><span>启用</span><input v-model="form.enabled" type="checkbox" /></label></div><template #footer><el-button @click="showEditor = false">取消</el-button><el-button type="primary" :loading="loading" @click="save">保存</el-button></template></el-dialog>
     <el-dialog v-model="showDetail" title="设备详情 / 审计" width="760px"><template v-if="selected"><div class="detail-grid"><div><span>设备名称</span><b>{{ selected.item.name }}</b></div><div><span>设备 ID</span><b class="mono">{{ selected.item.id }}</b></div><div><span>管理 IP</span><b class="mono">{{ selected.item.managementIp || selected.item.managementAddress }}</b></div><div><span>厂商 / 型号</span><b>{{ selected.item.vendor }} / {{ selected.item.model }}</b></div><div><span>局点 / 分组</span><b>{{ selected.item.site }} / {{ selected.item.group }}</b></div><div><span>终端档案</span><b>{{ selected.terminalProfileId || '未关联' }}</b></div><div><span>创建时间</span><b>{{ formatTime(selected.createdMs) }}</b></div><div><span>更新时间</span><b>{{ formatTime(selected.updatedMs) }}</b></div></div><p class="muted">{{ selected.description || '无描述' }}</p><div v-if="selected.item.qualityIssues.length" class="data-quality-note"><el-icon><Warning /></el-icon>{{ selected.item.qualityIssues.join(' / ') }}</div><h3>最近终端会话</h3><div v-if="!selected.recentSessions.length" class="muted">暂无持久化终端历史</div><div v-for="session in selected.recentSessions" :key="session.id" class="overview-footer"><span>{{ formatTime(session.startedMs) }} · {{ session.protocol }}</span><span>{{ session.state }} · {{ session.recordingStatus }}</span></div><h3>审计记录</h3><div v-for="audit in selected.auditEvents" :key="audit.id" class="overview-footer"><span>{{ formatTime(audit.atMs) }} · {{ audit.action }}</span><span>{{ audit.outcome }}</span></div></template></el-dialog>
     <el-dialog v-model="showGroup" title="设备分组管理" width="520px"><div class="form-grid"><label class="form-field"><span>当前局点</span><input v-model="groupForm.siteId" disabled /></label><label class="form-field"><span>分组名称</span><input v-model="groupForm.name" /></label><label class="form-field"><span>描述</span><input v-model="groupForm.description" /></label></div><div class="overview-footer" style="margin-top:16px"><span v-for="group in groups" :key="group.id">{{ group.name }} · {{ group.deviceCount }} 台</span></div><template #footer><el-button @click="showGroup = false">关闭</el-button><el-button v-if="canWrite" type="primary" @click="createGroup">新增分组</el-button></template></el-dialog>
     <el-dialog v-model="showImport" title="CSV 导入预览" width="820px"><p class="muted">预览不会写入数据库；只有无冲突、明确确认后才会执行单事务提交。支持 create / update，任何错误都会阻止整批写入。</p><div v-if="importPreview" class="inventory-summary"><span class="summary-chip"><b>{{ importPreview.totalRows }}</b> 行</span><span class="summary-chip summary-chip--success"><b>{{ importPreview.createCount }}</b> 新增</span><span class="summary-chip summary-chip--info"><b>{{ importPreview.updateCount }}</b> 更新</span><span class="summary-chip summary-chip--danger"><b>{{ importPreview.conflictCount + importPreview.errorCount }}</b> 冲突/错误</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>行</th><th>动作</th><th>名称</th><th>管理 IP</th><th>说明</th></tr></thead><tbody><tr v-for="row in importPreview?.rows || []" :key="row.line"><td>{{ row.line }}</td><td>{{ row.action }}</td><td>{{ row.name }}</td><td>{{ row.managementIp }}</td><td>{{ row.detail }}</td></tr></tbody></table></div><template #footer><el-button @click="showImport = false">取消</el-button><el-button type="primary" :disabled="!importPreview || !!(importPreview.conflictCount || importPreview.errorCount)" @click="commitImport">确认原子导入</el-button></template></el-dialog>

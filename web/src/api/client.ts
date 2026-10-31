@@ -116,6 +116,29 @@ export interface DeviceInventoryDetail {
   recentSessions: TerminalSession[]
   auditEvents: Array<{ id: string; atMs: number; action: string; outcome: string; detailJson: string }>
 }
+export interface DeviceConnectivityTestRequest {
+  managementAddress: string
+  protocol: 'SSH' | 'TELNET'
+  port: number
+  username: string
+  credentialReference: string
+  hostKeySha256?: string
+  hostKeyUpdatePolicy?: 'STRICT'
+  allowLegacyAlgorithms?: boolean
+  terminalEncoding?: 'AUTO' | 'UTF-8' | 'GB18030'
+  timeoutMs?: number
+}
+export interface DeviceConnectivityTestResult {
+  outcome: string
+  stage: string
+  addressReachable: boolean
+  protocolHandshake: boolean
+  authentication: boolean
+  identityVerified: boolean
+  detail: string
+  deviceIdentity?: string | null
+  elapsedMs: number
+}
 export interface ZteProfile {
   id: string
   host: string
@@ -641,6 +664,9 @@ export function createDeviceGroup(payload: { siteId: string; name: string; descr
 }
 export function createDevice(payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
   return request('/api/system/devices', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function testDeviceConnectivity(payload: DeviceConnectivityTestRequest, signal?: AbortSignal): Promise<DeviceConnectivityTestResult> {
+  return request('/api/system/devices/connectivity-test', { method: 'POST', body: JSON.stringify(payload), signal })
 }
 export function updateDevice(id: string, payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
   return request('/api/system/devices/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(payload) })

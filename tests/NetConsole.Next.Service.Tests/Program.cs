@@ -1330,6 +1330,28 @@ internal static class SchedulerTests
             Assert(created.Item.ManagementIp == "192.0.2.50" && created.Item.GroupId == group.Id && created.Item.TerminalProfileId is null,
                 "device inventory create must persist the normalized management IP, site/group and optional terminal-profile link");
 
+            var creationFingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            var connectedRequest = new DeviceInventoryWriteRequest(null, "Phase 1 Switch", "switch.phase1.local", "H3C", "S5560", "H3C_SWITCH", "local", group.Id, "atomic profile fixture", true, null,
+                Protocol: "SSH", Port: 22, Username: "reader", CredentialReference: "PHASE1_CREATE", HostKeySha256: creationFingerprint,
+                TerminalEncoding: "GB18030", IdempotencyKey: "phase1-device-create");
+            var connected = catalog.CreateDeviceInventory(connectedRequest, "test");
+            var connectedRetry = catalog.CreateDeviceInventory(connectedRequest, "test");
+            Assert(connected.Item.Id == connectedRetry.Item.Id && connected.Item.TerminalProfileId is not null &&
+                   catalog.GetH3cDeviceProfile(connected.Item.TerminalProfileId!) is { Host: "switch.phase1.local", Port: 22, TerminalProtocol: "SSH" } &&
+                   catalog.QueryManagedDeviceInventory(pageSize: 100).Items.Count(item => item.ManagementIp == "switch.phase1.local") == 1,
+                "device creation must atomically persist the Site-scoped terminal profile and return the same device for a repeated idempotency key");
+            AssertThrows<ArgumentException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-no-pin", HostKeySha256 = null }, "test"));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-conflict", ManagementIp = "switch.phase1.local" }, "test"));
+            using (var db = OpenCatalog(root))
+            using (var audit = db.CreateCommand())
+            {
+                audit.CommandText = "SELECT detail_json FROM audit_events WHERE action='DEVICE_CREATE' AND json_extract(detail_json,'$.subjectId')=$id";
+                audit.Parameters.AddWithValue("$id", connected.Item.Id);
+                var detail = audit.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!detail.Contains("PHASE1_CREATE", StringComparison.Ordinal) && !detail.Contains("SHA256", StringComparison.Ordinal),
+                    "device creation audit must not contain credential references or host-key material");
+            }
+
             var updated = catalog.UpdateDeviceInventory(created.Item.Id,
                 new(created.Item.Id, "Phase 1 AP renamed", "192.0.2.51", "H3C", "S", "NETWORK_DEVICE", "local", group.Id, "updated", true, null), "test");
             Assert(updated.Item.ManagementIp == "192.0.2.51" && updated.Item.Name == "Phase 1 AP renamed",
@@ -1339,14 +1361,14 @@ internal static class SchedulerTests
             Assert(preview.CreateCount == 1 && preview.UpdateCount == 1 && preview.ConflictCount == 0 && preview.ErrorCount == 0,
                 "CSV preview must classify create/update rows without writing them");
             var committed = catalog.CommitDeviceImport(preview.PreviewId, true, "test");
-            Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+            Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 3,
                 "CSV commit must atomically create/update the previewed inventory rows");
 
             var conflict = catalog.PreviewDeviceImport("name,managementIp\nDuplicate,192.0.2.52\nDuplicate again,192.0.2.52", "test");
             Assert(conflict.ConflictCount == 1 && conflict.ErrorCount == 1,
                 "CSV duplicate management IP must be reported as a conflict");
             AssertThrows<InvalidOperationException>(() => catalog.CommitDeviceImport(conflict.PreviewId, true, "test"));
-            Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+            Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 3,
                 "conflicted import must roll back the whole batch");
             AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp,password\nBad,192.0.2.61,nope", "test"));
 

@@ -20,6 +20,7 @@ builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
+builder.Services.AddSingleton<DeviceConnectivityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
@@ -643,6 +644,15 @@ app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteReq
     catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "SITE_OR_GROUP_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "CONFLICT", request.Id ?? "devices", null, Array.Empty<string>(), "DEVICE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices/connectivity-test", async (HttpContext context,
+    DeviceConnectivityTestRequest request, DeviceConnectivityService connectivity, Catalog rawCatalog,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_CONNECTIVITY_TEST_PERMISSION_DENIED", "devices");
+    try { return Results.Ok(await connectivity.TestAsync(request, cancellationToken)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
