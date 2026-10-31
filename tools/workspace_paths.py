@@ -89,7 +89,7 @@ def workspace_root(
 
     study_root = _absolute(Path(r"D:\study"))
     if platform_name == "nt" and _key(root) != _key(DEFAULT_WINDOWS_WORKSPACE_ROOT):
-        if _key(root) == _key(study_root) or root.parent == study_root:
+        if _key(root) == _key(study_root) or _key(root.parent) == _key(study_root):
             raise ValueError(f"NetConsole-Next workspace root may not be a D:\\study root child: {root}")
 
     _assert_no_reparse_points(root)

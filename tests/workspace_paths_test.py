@@ -101,6 +101,14 @@ class WorkspacePathTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reparse point"):
                 workspace_path("build", "dangling", "capture.png", root=root)
 
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive path comparison")
+    def test_study_child_with_case_variant_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "may not be a D:"):
+            workspace_root(
+                environ={WORKSPACE_ROOT_ENV: r"D:\Study\case-variant"},
+                platform_name="nt",
+            )
+
     def test_legacy_root_is_rejected(self):
         with self.assertRaises(ValueError):
             workspace_root(
