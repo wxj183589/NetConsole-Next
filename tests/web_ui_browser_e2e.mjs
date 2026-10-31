@@ -4,7 +4,7 @@ import { chromium } from '../web/node_modules/playwright/index.mjs'
 import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const root = new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url).pathname
-const output = process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || workspacePath('build', 'web-ui-acceptance')
+const output = workspacePath('build', process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || 'web-ui-acceptance')
 mkdirSync(output, { recursive: true })
 const server = spawn('python3', ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
 const base = 'http://127.0.0.1:4173'

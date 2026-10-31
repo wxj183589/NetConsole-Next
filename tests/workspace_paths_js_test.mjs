@@ -14,6 +14,8 @@ try {
   const outside = path.join(temporary, 'outside')
   mkdirSync(build, { recursive: true })
   mkdirSync(outside)
+  assert.throws(() => workspacePath('build', outside), /escapes/)
+  assert.equal(workspacePath('build', path.join(build, 'allowed.png')), path.join(build, 'allowed.png'))
   symlinkSync(outside, path.join(build, 'browser'), process.platform === 'win32' ? 'junction' : 'dir')
   assert.throws(() => workspacePath('build', 'browser', 'capture.png'), /reparse point/)
 
