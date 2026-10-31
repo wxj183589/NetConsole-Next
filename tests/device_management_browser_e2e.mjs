@@ -1,9 +1,9 @@
 import { mkdirSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
+import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const base = process.env.NETCONSOLE_E2E_BASE_URL || 'http://127.0.0.1:18773'
-const output = fileURLToPath(new URL('../artifacts/device-management-browser/', import.meta.url))
+const output = workspacePath('build', process.env.NETCONSOLE_NEXT_DEVICE_ARTIFACTS || 'device-management-browser')
 mkdirSync(output, { recursive: true })
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', args: ['--no-sandbox'] })
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 })

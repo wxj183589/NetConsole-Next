@@ -1,9 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
+import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const base = process.env.NETCONSOLE_E2E_BASE_URL || 'http://127.0.0.1:18775'
-const output = process.env.NETCONSOLE_P2B5_ARTIFACT_DIR || fileURLToPath(new URL('../web/artifacts/p2b5-network-planning-browser/', import.meta.url))
+const output = workspacePath('build', process.env.NETCONSOLE_P2B5_ARTIFACT_DIR || 'p2b5-network-planning-browser')
 mkdirSync(output, { recursive: true })
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', args: ['--no-sandbox'] })
 const diagnostics = { consoleErrors: [], expectedConsoleErrors: [], pageErrors: [], failedRequests: [], expectedHttp: [], unexpectedHttp: [], screenshots: [], viewportResults: [] }

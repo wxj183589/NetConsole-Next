@@ -19,6 +19,12 @@ import urllib.request
 
 import paramiko
 
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
+from workspace_paths import workspace_path  # noqa: E402
+
+
 PASSWORD = "synthetic-e2e-password"
 SIMULATOR_ERRORS = []
 SIMULATOR_EVENTS = []
@@ -180,17 +186,14 @@ def request_json(url, token, method="GET", payload=None):
 
 
 def main():
-    repo = Path(__file__).resolve().parents[1]
+    repo = REPOSITORY_ROOT
     dll = repo / "src" / "NetConsole.Next.Service" / "bin" / "Release" / "net10.0" / "NetConsole.Next.Service.dll"
     if not dll.is_file():
         raise RuntimeError("Run dotnet build -c Release first")
-    configured_parent = os.environ.get("NETCONSOLE_NEXT_E2E_DATA_PARENT")
-    if configured_parent:
-        data_parent = Path(configured_parent)
-    elif os.name == "nt":
-        data_parent = Path(r"D:\NetConsoleNextLabData")
-    else:
-        data_parent = Path(tempfile.gettempdir()) / "netconsole-next-lab"
+    configured_parent = os.environ.get("NETCONSOLE_NEXT_E2E_DATA_PARENT", "").strip()
+    # Relative overrides are under test-data; absolute overrides must stay
+    # within that category. CI configures an isolated workspace root.
+    data_parent = workspace_path("test-data", configured_parent or "LabData")
     data_parent.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="g23-terminal-e2e-", dir=data_parent))
     ssh_listener = socket.socket(); ssh_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); ssh_listener.bind(("127.0.0.1", 0)); ssh_listener.listen(8)

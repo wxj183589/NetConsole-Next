@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Regression tests for the NetConsole-Next development workspace layout."""
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
+
+from workspace_paths import (  # noqa: E402
+    DEFAULT_WINDOWS_WORKSPACE_ROOT,
+    WORKSPACE_ROOT_ENV,
+    workspace_layout,
+    workspace_path,
+    workspace_root,
+)
+
+
+class WorkspacePathTests(unittest.TestCase):
+    def _make_directory_link(self, link: Path, target: Path) -> None:
+        if os.name == "nt":
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                check=False, capture_output=True, text=True,
+            )
+            if created.returncode != 0:
+                self.skipTest("Windows junction creation is unavailable")
+        else:
+            link.symlink_to(target, target_is_directory=True)
+
+    @unittest.skipUnless(os.name == "nt", "the canonical default is Windows-specific")
+    def test_windows_default_is_canonical_root(self):
+        self.assertEqual(
+            workspace_root(environ={}, platform_name="nt"),
+            DEFAULT_WINDOWS_WORKSPACE_ROOT,
+        )
+
+    def test_layout_is_bounded_under_configured_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            self.assertEqual(workspace_path("diagnostic", "run.json", root=root), root / "diagnostic" / "run.json")
+            self.assertEqual(workspace_layout(root=root)["build"], root / "build")
+
+    def test_absolute_test_data_override_outside_workspace_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            outside = Path(temporary) / "outside"
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                workspace_path("test-data", str(outside), root=root)
+            self.assertEqual(
+                workspace_path("test-data", "LabData", root=root),
+                root / "test-data" / "LabData",
+            )
+
+    def test_path_traversal_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            with self.assertRaises(ValueError):
+                workspace_path("build", "..", "outside.txt", root=root)
+
+    def test_nested_symlink_or_junction_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            category = root / "build"
+            category.mkdir(parents=True)
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            link = category / "browser"
+            self._make_directory_link(link, outside)
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_path("build", "browser", "capture.png", root=root)
+
+    def test_workspace_root_ancestor_link_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = Path(temporary) / "actual"
+            actual.mkdir()
+            link = Path(temporary) / "shortcut"
+            self._make_directory_link(link, actual)
+            root = link / "NetConsole-Next-Workspace"
+            root.mkdir()
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_path("build", "capture.png", root=root)
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_root(
+                    environ={WORKSPACE_ROOT_ENV: str(root)},
+                    platform_name=os.name,
+                )
+
+    @unittest.skipIf(os.name == "nt", "dangling symlink creation requires Windows privileges")
+    def test_dangling_nested_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "NetConsole-Next-Workspace"
+            category = root / "build"
+            category.mkdir(parents=True)
+            (category / "dangling").symlink_to(Path(temporary) / "missing", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                workspace_path("build", "dangling", "capture.png", root=root)
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive path comparison")
+    def test_study_child_with_case_variant_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "may not be a D:"):
+            workspace_root(
+                environ={WORKSPACE_ROOT_ENV: r"D:\Study\case-variant"},
+                platform_name="nt",
+            )
+
+    def test_legacy_root_is_rejected(self):
+        with self.assertRaises(ValueError):
+            workspace_root(
+                environ={WORKSPACE_ROOT_ENV: r"D:\study\build\NetConsole-Next"},
+                platform_name="nt",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

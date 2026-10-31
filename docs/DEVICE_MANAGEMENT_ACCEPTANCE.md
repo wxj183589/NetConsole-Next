@@ -2,7 +2,7 @@
 
 目标分支：`codex-A/next-device-management-phase1-20261026`
 
-数据边界：验收使用临时隔离目录（例如 `D:\NetConsoleNext-Device-Phase1Data` 或测试临时目录），不读取、不写入 `D:\NetConsoleData` 与 `D:\NetConsoleData-dev`。
+数据边界：验收使用临时隔离目录（例如 `D:\study\NetConsole-Next-Workspace\test-data\Device-Phase1Data` 或测试临时目录），不读取、不写入 `D:\NetConsoleData` 与 `D:\NetConsoleData-dev`。
 
 ## 自动化证据
 
@@ -29,4 +29,4 @@
 
 ## 真实设备边界
 
-本验收不连接真实 SSH/Telnet/Serial 设备，不执行真实采集，不使用生产或长期开发数据。真实设备连通性、Windows 服务安装和 Desktop Helper 由既有验收门单独负责。隔离目录 `D:\NetConsoleNext-Device-Phase1Data` 已在验收结束后移除；浏览器截图保留在 worktree 的 `artifacts/device-management-browser`。
+本验收不连接真实 SSH/Telnet/Serial 设备，不执行真实采集，不使用生产或长期开发数据。真实设备连通性、Windows 服务安装和 Desktop Helper 由既有验收门单独负责。隔离目录 `D:\study\NetConsole-Next-Workspace\test-data\Device-Phase1Data` 已在验收结束后移除；浏览器截图保留在构建产物目录的 `D:\study\NetConsole-Next-Workspace\build\device-management-browser`。

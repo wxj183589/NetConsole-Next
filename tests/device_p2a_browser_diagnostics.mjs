@@ -3,12 +3,13 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
+import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const repo = fileURLToPath(new URL('..', import.meta.url))
 const base = process.env.NETCONSOLE_E2E_BASE_URL || 'http://127.0.0.1:18773'
 const dataRoot = process.env.NETCONSOLE_E2E_DATA_ROOT
 if (!dataRoot) throw new Error('NETCONSOLE_E2E_DATA_ROOT must point to the isolated browser data root')
-const output = process.env.NETCONSOLE_P2A_BROWSER_OUTPUT || join(repo, 'artifacts/device-p2a-browser')
+const output = workspacePath('build', process.env.NETCONSOLE_P2A_BROWSER_OUTPUT || 'device-p2a-browser')
 mkdirSync(output, { recursive: true })
 const gitSha = process.env.NETCONSOLE_P2A_GIT_SHA || execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
 const token = readFileSync(join(dataRoot, 'local-api-token'), 'utf8').trim()

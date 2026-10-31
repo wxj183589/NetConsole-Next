@@ -34,7 +34,7 @@ The .NET build reports the repository's existing `SQLitePCLRaw.lib.e_sqlite3 2.1
 
 ## Browser and CI boundary
 
-The implementation is browser-ready and keeps the existing device-management selectors intact. The final Chrome evidence is stored under `artifacts/device-p2a-browser/` and is bound to the P2-A hardening SHA in `browser-evidence.json`; the crash harness evidence is written to the workspace diagnostic directory and removed after review. GitHub Actions final-head URLs are recorded in the completion report after the final push. Real devices, production data and the development Authority are out of scope.
+The implementation is browser-ready and keeps the existing device-management selectors intact. The original P2-A Chrome evidence was stored under `artifacts/device-p2a-browser/` and remains tied to the historical hardening SHA. Current reruns write `browser-evidence.json` and screenshots to `D:\study\NetConsole-Next-Workspace\build\device-p2a-browser\` (or the configured workspace root's `build/device-p2a-browser/` directory); the crash harness evidence is written to the workspace diagnostic directory and removed after review. GitHub Actions final-head URLs are recorded in the completion report after the final push. Real devices, production data and the development Authority are out of scope.
 
 ## PR21 review status
 

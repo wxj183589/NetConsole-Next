@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
+import { workspacePath } from '../tools/workspace_paths.mjs'
 
 const root = new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url).pathname
-const preferredOutput = '/codex/browser/projectless/0002-files-pasted-by-the-user-uploaded-pasted-text-po/output'
-let output = preferredOutput
-try { mkdirSync(output, { recursive: true }) } catch { output = '/workspace/work/web-pr1-screenshots'; mkdirSync(output, { recursive: true }) }
+const output = workspacePath('build', process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || 'web-ui-acceptance')
+mkdirSync(output, { recursive: true })
 const server = spawn('python3', ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
 const base = 'http://127.0.0.1:4173'
 for (let attempt = 0; attempt < 40; attempt += 1) {
