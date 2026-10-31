@@ -16,6 +16,14 @@ try {
   mkdirSync(outside)
   symlinkSync(outside, path.join(build, 'browser'), process.platform === 'win32' ? 'junction' : 'dir')
   assert.throws(() => workspacePath('build', 'browser', 'capture.png'), /reparse point/)
+
+  const actual = path.join(temporary, 'actual')
+  mkdirSync(actual)
+  const ancestor = path.join(temporary, 'ancestor-link')
+  symlinkSync(actual, ancestor, process.platform === 'win32' ? 'junction' : 'dir')
+  process.env[WORKSPACE_ROOT_ENV] = path.join(ancestor, 'NetConsole-Next-Workspace')
+  mkdirSync(process.env[WORKSPACE_ROOT_ENV])
+  assert.throws(() => workspacePath('build', 'capture.png'), /reparse point/)
 } finally {
   if (previous === undefined) delete process.env[WORKSPACE_ROOT_ENV]
   else process.env[WORKSPACE_ROOT_ENV] = previous

@@ -35,6 +35,16 @@ function isReparsePoint(value) {
   }
 }
 
+function assertNoReparsePoints(value) {
+  let probe = value
+  while (true) {
+    if (isReparsePoint(probe)) throw new Error(`workspace path traverses a reparse point: ${probe}`)
+    const parent = path.dirname(probe)
+    if (parent === probe) break
+    probe = parent
+  }
+}
+
 export function workspaceRoot() {
   const configured = process.env[WORKSPACE_ROOT_ENV]?.trim()
   const root = configured || (process.platform === 'win32' ? DEFAULT_WINDOWS_WORKSPACE_ROOT : path.join(os.tmpdir(), 'netconsole-next-workspace'))
@@ -45,7 +55,7 @@ export function workspaceRoot() {
     const study = normalized('D:\\study')
     if (key === study || path.dirname(key) === study) throw new Error(`workspace root must not be a D:\\study child: ${absolute}`)
   }
-  if (isReparsePoint(absolute)) throw new Error(`workspace root must not be a reparse point: ${absolute}`)
+  assertNoReparsePoints(absolute)
   return absolute
 }
 
@@ -55,15 +65,7 @@ export function workspacePath(category, ...parts) {
   const candidate = path.resolve(base, ...parts)
   const relative = path.relative(base, candidate)
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`workspace path escapes ${base}: ${candidate}`)
-  // Existing links anywhere below the category may redirect writes outside it.
-  let probe = candidate
-  const root = workspaceRoot()
-  while (true) {
-    if (isReparsePoint(probe)) throw new Error(`workspace path traverses a reparse point: ${probe}`)
-    if (probe === root) break
-    const parent = path.dirname(probe)
-    if (parent === probe) throw new Error(`workspace path has no workspace ancestor: ${candidate}`)
-    probe = parent
-  }
+  // Reject links at all existing levels, including workspace root ancestors.
+  assertNoReparsePoints(candidate)
   return candidate
 }

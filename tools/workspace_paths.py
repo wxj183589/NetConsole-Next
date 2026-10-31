@@ -60,6 +60,13 @@ def _is_reparse_point(path: Path) -> bool:
     )
 
 
+def _assert_no_reparse_points(path: Path) -> None:
+    """Reject existing links and reparse points in any path component."""
+    for component in (path, *path.parents):
+        if _is_reparse_point(component):
+            raise ValueError(f"NetConsole-Next workspace path traverses a reparse point: {component}")
+
+
 def workspace_root(
     *,
     environ: Mapping[str, str] | None = None,
@@ -85,8 +92,7 @@ def workspace_root(
         if _key(root) == _key(study_root) or root.parent == study_root:
             raise ValueError(f"NetConsole-Next workspace root may not be a D:\\study root child: {root}")
 
-    if _is_reparse_point(root):
-        raise ValueError(f"NetConsole-Next workspace root may not be a reparse point: {root}")
+    _assert_no_reparse_points(root)
     return root
 
 
@@ -101,18 +107,9 @@ def workspace_path(category: str, *parts: str, root: Path | None = None) -> Path
     if not _is_within(candidate, base):
         raise ValueError(f"NetConsole-Next workspace path escapes {base}: {candidate}")
 
-    # A link at any existing descendant can redirect later artifact writes.
-    # Inspect each component, not only the workspace root and category base.
-    probe = candidate
-    while True:
-        if _is_reparse_point(probe):
-            raise ValueError(f"NetConsole-Next workspace path traverses a reparse point: {probe}")
-        if probe == root:
-            break
-        parent = probe.parent
-        if parent == probe:
-            raise ValueError(f"NetConsole-Next workspace path has no workspace ancestor: {candidate}")
-        probe = parent
+    # An existing link at any level, even above the configured workspace root,
+    # can redirect subsequent artifact writes outside the governed tree.
+    _assert_no_reparse_points(candidate)
     return candidate
 
 
