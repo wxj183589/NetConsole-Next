@@ -243,6 +243,9 @@ internal sealed partial class Catalog
     public DeviceInventoryDetail CreateDeviceInventory(DeviceInventoryWriteRequest request, string actor)
     {
         var normalized = NormalizeDeviceInput(request, null);
+        if (string.Equals(normalized.Vendor, "H3C", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(normalized.DeviceType, "H3C_WIRELESS_AP", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("FIT-AP creation requires a trusted AC association contract and is not enabled in this workflow.");
         var profile = CreateProfileForDevice(normalized);
         if (profile is not null) normalized = normalized with { TerminalProfileId = profile.Id };
         var idempotencyKey = NormalizeIdempotencyKey(normalized.IdempotencyKey);

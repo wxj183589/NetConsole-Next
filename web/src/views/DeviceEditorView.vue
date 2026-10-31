@@ -61,6 +61,18 @@ const submitLabel = computed(() => isEdit.value ? '保存设备信息' : '创建
 function clearErrors(): void { Object.keys(formErrors).forEach(key => delete formErrors[key]) }
 function setError(field: string, message: string): void { formErrors[field] = message }
 function newIdempotencyKey(): string { return globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}` }
+function resetCreateForm(): void {
+  Object.assign(form, {
+    id: '', name: '', siteId: siteContext.currentSiteId, groupId: '', vendor: 'H3C', category: 'NETWORK_DEVICE', subtype: '', model: '',
+    managementAddress: '', protocol: 'SSH', port: 22, username: '', credentialReference: '', hostKeySha256: '', terminalEncoding: 'AUTO', timeoutMs: 10000,
+    description: '', enabled: true,
+  })
+  legacySubtype.value = null
+  selectedProfileId.value = ''
+  connectivity.value = null
+  idempotencyKey.value = newIdempotencyKey()
+  clearErrors()
+}
 
 async function refreshGroups(): Promise<void> {
   if (!form.siteId) { groups.value = []; return }
@@ -131,6 +143,7 @@ async function save(): Promise<void> {
     if (isEdit.value) await updateDevice(form.id, editPayload())
     else await createDevice(connectionPayload())
     ElMessage.success(isEdit.value ? '设备信息已保存' : '设备及终端档案已原子创建')
+    if (currentSite.value?.status === 'ACTIVE') siteContext.selectSite(form.siteId)
     await router.push('/devices')
   } catch (cause) {
     if (cause instanceof ApiRequestError && cause.status === 409) ElMessage.error(`保存冲突：${cause.message}`)
@@ -186,6 +199,10 @@ watch(() => siteContext.currentSiteId, value => {
 })
 watch(() => form.siteId, (value, previous) => {
   if (value && value !== previous) { if (!isEdit.value) form.groupId = ''; void refreshGroups() }
+})
+watch([isEdit, editingId], ([edit, id], [previousEdit, previousId]) => {
+  if (edit && id && (edit !== previousEdit || id !== previousId)) void loadDetail()
+  else if (!edit && previousEdit) resetCreateForm()
 })
 onMounted(async () => {
   if (!isEdit.value) form.siteId = siteContext.currentSiteId
@@ -263,6 +280,7 @@ onMounted(async () => {
 .form-field textarea { resize: vertical; line-height: 1.5; }
 .form-field input:focus, .form-field textarea:focus { border-color: var(--nc-primary); box-shadow: 0 0 0 2px rgb(18 111 232 / 12%); }
 .form-field input:disabled { color: var(--nc-text-secondary); background: var(--nc-surface-muted); }
+.device-editor :deep(.el-select__selected-item.el-select__placeholder) { z-index: 0; color: var(--nc-text-secondary); opacity: 1; }
 .full-control { width: 100%; min-height: 38px; }
 .form-field small, .toggle-field small { color: var(--nc-text-muted); font-size: 13px; line-height: 1.45; }
 .field-error, .form-error { color: var(--nc-danger) !important; }

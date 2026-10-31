@@ -1341,6 +1341,7 @@ internal static class SchedulerTests
                    catalog.QueryManagedDeviceInventory(pageSize: 100).Items.Count(item => item.ManagementIp == "switch.phase1.local") == 1,
                 "device creation must atomically persist the Site-scoped terminal profile and return the same device for a repeated idempotency key");
             AssertThrows<ArgumentException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-no-pin", HostKeySha256 = null }, "test"));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(connectedRequest with { DeviceType = "H3C_WIRELESS_AP", IdempotencyKey = "phase1-device-fit-ap" }, "test"));
             AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-conflict", ManagementIp = "switch.phase1.local" }, "test"));
             using (var db = OpenCatalog(root))
             using (var audit = db.CreateCommand())

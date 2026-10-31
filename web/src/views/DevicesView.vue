@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CircleCheck, Document, Filter, Monitor, Search, Upload, Warning } from '@element-plus/icons-vue'
@@ -78,6 +78,7 @@ async function commitImport(): Promise<void> { if (!importPreview.value || impor
 function importFile(): void { document.getElementById('device-import-file')?.click() }
 watch(() => siteContext.currentSiteId, async (value, previous) => { if (!value || value === previous) return; selectedIds.value = []; groupId.value = ''; groupForm.siteId = value; await Promise.all([refresh(), refreshGroups()]) })
 onMounted(async () => { groupForm.siteId = siteId.value; const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await Promise.all([refresh(), refreshGroups()]) })
+onActivated(() => { if (result.value) void Promise.all([refresh(), refreshGroups()]) })
 </script>
 
 <template>
