@@ -58,8 +58,10 @@ async function typeCommand(command) {
 
 try {
   await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' })
-  await page.getByLabel('用户名').fill('admin')
-  await page.getByLabel('密码').fill('admin')
+  // Site-scoped users require explicit membership claims; the isolated terminal
+  // fixture has no membership authority, so use the seeded global test identity.
+  await page.getByLabel('用户名').fill('superadmin')
+  await page.getByLabel('密码').fill('superadmin')
   await page.getByRole('button', { name: '登录工作台' }).click()
   await page.getByRole('heading', { name: '运行总览' }).waitFor()
 
