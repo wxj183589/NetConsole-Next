@@ -181,8 +181,10 @@ internal static class SchedulerTests
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
+        VerifiesDeviceCredentialProvisioningAndReplacement();
         await VerifiesDeviceManagementSafetyBoundaries();
         await VerifiesDeviceManagementPhase2A();
+        await VerifiesSiteManagementAndScopeAsync();
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
@@ -1329,6 +1331,29 @@ internal static class SchedulerTests
             Assert(created.Item.ManagementIp == "192.0.2.50" && created.Item.GroupId == group.Id && created.Item.TerminalProfileId is null,
                 "device inventory create must persist the normalized management IP, site/group and optional terminal-profile link");
 
+            var creationFingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            var connectedRequest = new DeviceInventoryWriteRequest(null, "Phase 1 Switch", "switch.phase1.local", "H3C", "S5560", "H3C_SWITCH", "local", group.Id, "atomic profile fixture", true, null,
+                Protocol: "SSH", Port: 22, Username: "reader", CredentialReference: "PHASE1_CREATE", HostKeySha256: creationFingerprint,
+                TerminalEncoding: "GB18030", IdempotencyKey: "phase1-device-create");
+            var connected = catalog.CreateDeviceInventory(connectedRequest, "test");
+            var connectedRetry = catalog.CreateDeviceInventory(connectedRequest, "test");
+            Assert(connected.Item.Id == connectedRetry.Item.Id && connected.Item.TerminalProfileId is not null &&
+                   catalog.GetH3cDeviceProfile(connected.Item.TerminalProfileId!) is { Host: "switch.phase1.local", Port: 22, TerminalProtocol: "SSH" } &&
+                   catalog.QueryManagedDeviceInventory(pageSize: 100).Items.Count(item => item.ManagementIp == "switch.phase1.local") == 1,
+                "device creation must atomically persist the Site-scoped terminal profile and return the same device for a repeated idempotency key");
+            AssertThrows<ArgumentException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-no-pin", HostKeySha256 = null }, "test"));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(connectedRequest with { DeviceType = "H3C_WIRELESS_AP", IdempotencyKey = "phase1-device-fit-ap" }, "test"));
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(connectedRequest with { IdempotencyKey = "phase1-device-conflict", ManagementIp = "switch.phase1.local" }, "test"));
+            using (var db = OpenCatalog(root))
+            using (var audit = db.CreateCommand())
+            {
+                audit.CommandText = "SELECT detail_json FROM audit_events WHERE action='DEVICE_CREATE' AND json_extract(detail_json,'$.subjectId')=$id";
+                audit.Parameters.AddWithValue("$id", connected.Item.Id);
+                var detail = audit.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!detail.Contains("PHASE1_CREATE", StringComparison.Ordinal) && !detail.Contains("SHA256", StringComparison.Ordinal),
+                    "device creation audit must not contain credential references or host-key material");
+            }
+
             var updated = catalog.UpdateDeviceInventory(created.Item.Id,
                 new(created.Item.Id, "Phase 1 AP renamed", "192.0.2.51", "H3C", "S", "NETWORK_DEVICE", "local", group.Id, "updated", true, null), "test");
             Assert(updated.Item.ManagementIp == "192.0.2.51" && updated.Item.Name == "Phase 1 AP renamed",
@@ -1338,14 +1363,14 @@ internal static class SchedulerTests
             Assert(preview.CreateCount == 1 && preview.UpdateCount == 1 && preview.ConflictCount == 0 && preview.ErrorCount == 0,
                 "CSV preview must classify create/update rows without writing them");
             var committed = catalog.CommitDeviceImport(preview.PreviewId, true, "test");
-            Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+            Assert(committed.Created == 1 && committed.Updated == 1 && catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 3,
                 "CSV commit must atomically create/update the previewed inventory rows");
 
             var conflict = catalog.PreviewDeviceImport("name,managementIp\nDuplicate,192.0.2.52\nDuplicate again,192.0.2.52", "test");
             Assert(conflict.ConflictCount == 1 && conflict.ErrorCount == 1,
                 "CSV duplicate management IP must be reported as a conflict");
             AssertThrows<InvalidOperationException>(() => catalog.CommitDeviceImport(conflict.PreviewId, true, "test"));
-            Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 2,
+            Assert(catalog.QueryManagedDeviceInventory(pageSize: 20).Total == 3,
                 "conflicted import must roll back the whole batch");
             AssertThrows<ArgumentException>(() => catalog.PreviewDeviceImport("name,managementIp,password\nBad,192.0.2.61,nope", "test"));
 
@@ -1371,6 +1396,107 @@ internal static class SchedulerTests
                 "device mutations must leave audit_events evidence without credential fields");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void VerifiesDeviceCredentialProvisioningAndReplacement()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("SKIP: device credential DPAPI workflow requires Windows");
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-credentials-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        const string firstPassword = "synthetic-device-password-1";
+        const string replacementPassword = "synthetic-device-password-2";
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var group = catalog.CreateDeviceGroup("local", "Credential workflow", "isolated fixture", "test");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            var request = new DeviceInventoryWriteRequest(null, "Password provisioned switch", "192.0.2.240", "H3C", "S5560", "H3C_SWITCH", "local", group.Id, "credential fixture", true, null,
+                Protocol: "SSH", Port: 22, Username: "reader", HostKeySha256: fingerprint,
+                IdempotencyKey: "credential-provisioned-device", Password: firstPassword);
+            var created = catalog.CreateDeviceInventory(request, "test");
+            var profile = catalog.GetH3cDeviceProfile(created.TerminalProfileId!)!;
+            Assert(profile.CredentialReference.StartsWith("H3C_", StringComparison.Ordinal) &&
+                   WindowsDpapiCredentialVault.Get(root, profile.CredentialReference) == firstPassword,
+                "password workflow must generate an internal reference and store the secret in Windows DPAPI");
+
+            using (var db = OpenCatalog(root))
+            {
+                using var checkpoint = db.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+                checkpoint.ExecuteNonQuery();
+                using var schema = db.CreateCommand();
+                schema.CommandText = "SELECT GROUP_CONCAT(name, ',') FROM pragma_table_info('device_inventory')";
+                var columns = schema.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!columns.Contains("password", StringComparison.OrdinalIgnoreCase),
+                    "device inventory schema must not contain a password column");
+                using var audit = db.CreateCommand();
+                audit.CommandText = "SELECT detail_json FROM audit_events WHERE action='DEVICE_CREATE' ORDER BY at_ms DESC LIMIT 1";
+                var detail = audit.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!detail.Contains(firstPassword, StringComparison.Ordinal) && !detail.Contains(profile.CredentialReference, StringComparison.Ordinal),
+                    "device create audit must not contain the password or internal credential reference");
+            }
+
+            var retried = catalog.CreateDeviceInventory(request, "test");
+            Assert(retried.Item.Id == created.Item.Id && retried.TerminalProfileId == created.TerminalProfileId,
+                "repeated credential submission must return the same device/profile without provisioning another secret");
+
+            H3cDeviceCredentialService.Store(root, profile.CredentialReference, replacementPassword);
+            var restarted = new Catalog(TestSettings(root));
+            restarted.Initialize();
+            Assert(restarted.GetH3cDeviceProfile(profile.Id) is not null &&
+                   WindowsDpapiCredentialVault.Get(root, profile.CredentialReference) == replacementPassword,
+                "restarted catalog must retain the terminal profile while a credential replacement updates DPAPI");
+
+            var failed = request with { IdempotencyKey = "credential-failed-device", ManagementIp = request.ManagementIp };
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(failed, "test"));
+            var vaultJson = File.ReadAllText(Path.Combine(root, "credentials", "h3c-credentials.v1.json"));
+            Assert(!vaultJson.Contains(firstPassword, StringComparison.Ordinal) && !vaultJson.Contains(replacementPassword, StringComparison.Ordinal),
+                "DPAPI vault file must not contain clear-text passwords");
+            using (var vault = JsonDocument.Parse(vaultJson))
+                Assert(vault.RootElement.EnumerateObject().Count() == 1,
+                    "a failed duplicate-address create must revoke its newly generated credential reference");
+            Console.WriteLine("PASS: device password provisioning, DPAPI replacement, idempotency, redaction and failure compensation");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private static async Task VerifiesSiteManagementAndScopeAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-site-management-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var siteA = catalog.CreateSite(new("site-a", "Site A", "first site"), "site-test");
+            var siteB = catalog.CreateSite(new("site-b", "Site B", "second site"), "site-test");
+            var groupA = catalog.CreateDeviceGroup(siteA.Id, "Group A", null, "site-test");
+            var groupB = catalog.CreateDeviceGroup(siteB.Id, "Group B", null, "site-test");
+            catalog.CreateDeviceInventory(new(null, "Device A", "192.0.2.151", "H3C", "S", "AP", siteA.Id, groupA.Id, null, true, null), "site-test");
+            catalog.CreateDeviceInventory(new(null, "Device B", "192.0.2.152", "H3C", "S", "AP", siteB.Id, groupB.Id, null, true, null), "site-test");
+
+            var authorizedA = new P2B5SiteScopeDecision("AUTHORIZED", false,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { siteA.Id }, "site-a fixture scope");
+            Assert(catalog.QuerySites(authorizedA).Select(site => site.Id).SequenceEqual(new[] { siteA.Id }),
+                "Site listing must be limited to the authorized Site Scope");
+            Assert(catalog.QueryManagedDeviceInventory(siteScope: authorizedA).Total == 1,
+                "Device inventory must be limited to the authorized Site Scope");
+            Assert(catalog.QueryDeviceGroups(siteScope: authorizedA).Single().SiteId == siteA.Id,
+                "Device groups must be limited to the authorized Site Scope");
+
+            AssertThrows<ArgumentException>(() => catalog.UpdateSite(siteA.Id,
+                new("site-renamed", "Site A", "changed", siteA.UpdatedMs), "site-test"));
+            var disabled = catalog.SetSiteStatus(siteB.Id, new("DISABLED", siteB.UpdatedMs), "site-test");
+            Assert(disabled.Status == "DISABLED", "Site status transition must be persisted");
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceGroup(siteB.Id, "Rejected", null, "site-test"));
+            Console.WriteLine("PASS: global Site lifecycle, stable IDs and Site Scope projections");
+        }
+        finally { await DeleteTestDirectoryWithRetryAsync(root); }
     }
 
     private static async Task VerifiesDeviceManagementPhase2A()

@@ -122,8 +122,10 @@ def main():
             assert admin_a.request("/api/system/h3c/profiles", "POST", profile)[0] == 403
             assert superadmin.request("/api/system/h3c/profiles", "POST", profile)[0] == 201
             profiles_status, profiles = admin_a.request("/api/system/h3c/profiles")
-            assert profiles_status == 200 and profiles and all(
-                "credentialReference" not in item and "hostKeySha256" not in item for item in profiles
+            assert profiles_status == 403 and "P2B_SITE_SCOPE_UNAVAILABLE" in profiles, profiles
+            super_profiles_status, super_profiles = superadmin.request("/api/system/h3c/profiles")
+            assert super_profiles_status == 200 and super_profiles and all(
+                "credentialReference" not in item and "hostKeySha256" not in item for item in super_profiles
             )
             assert admin_a.request("/api/system/h3c/profiles/00000000000000000000000000000011/compatibility", "PUT",
                                    {"hostKeyUpdatePolicy": "AUTO_UPDATE"})[0] == 403

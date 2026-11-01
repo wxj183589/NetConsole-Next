@@ -29,6 +29,22 @@ export interface HealthSnapshot {
   instanceId?: string
 }
 
+export type SiteStatus = 'ACTIVE' | 'DISABLED' | 'ARCHIVED'
+export interface Site {
+  id: string
+  name: string
+  description: string
+  status: SiteStatus
+  createdMs: number
+  updatedMs: number
+  archivedMs?: number | null
+  deviceCount: number
+  groupCount: number
+  collectionSourceCount: number
+  terminalProfileCount: number
+  canWrite: boolean
+}
+
 export interface DeviceInventorySummary {
   totalRecords: number
   validDevices: number
@@ -99,6 +115,33 @@ export interface DeviceInventoryDetail {
   terminalProfile?: TerminalDevice | null
   recentSessions: TerminalSession[]
   auditEvents: Array<{ id: string; atMs: number; action: string; outcome: string; detailJson: string }>
+}
+export interface DeviceConnectivityTestRequest {
+  managementAddress: string
+  protocol: 'SSH' | 'TELNET'
+  port: number
+  username: string
+  password?: string
+  credentialReference?: string
+  hostKeySha256?: string
+  hostKeyUpdatePolicy?: 'STRICT'
+  allowLegacyAlgorithms?: boolean
+  terminalEncoding?: 'AUTO' | 'UTF-8' | 'GB18030'
+  timeoutMs?: number
+}
+export interface DeviceConnectivityTestResult {
+  outcome: string
+  stage: string
+  addressReachable: boolean
+  protocolHandshake: boolean
+  authentication: boolean
+  identityVerified: boolean
+  detail: string
+  deviceIdentity?: string | null
+  elapsedMs: number
+  hostKeySha256?: string | null
+  hostKeyType?: string | null
+  requiresHostKeyConfirmation?: boolean
 }
 export interface ZteProfile {
   id: string
@@ -535,7 +578,17 @@ export function changePassword(payload: { currentPassword?: string; newPassword:
 }
 
 export function getHealth(): Promise<HealthSnapshot> { return request('/api/system/health') }
-export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string; siteId?: string; groupId?: string } = {}): Promise<DeviceInventoryPage> {
+export function getSites(): Promise<Site[]> { return request('/api/system/sites') }
+export function createSite(payload: { id: string; name: string; description?: string }): Promise<Site> {
+  return request('/api/system/sites', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateSite(id: string, payload: { id: string; name: string; description?: string; expectedUpdatedMs?: number }): Promise<Site> {
+  return request(`/api/system/sites/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function updateSiteStatus(id: string, status: SiteStatus, expectedUpdatedMs?: number): Promise<Site> {
+  return request(`/api/system/sites/${encodeURIComponent(id)}/status`, { method: 'POST', body: JSON.stringify({ status, expectedUpdatedMs }) })
+}
+export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string; siteId?: string; groupId?: string; ungrouped?: boolean; vendor?: string; deviceType?: string } = {}): Promise<DeviceInventoryPage> {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })
   return request('/api/system/devices?' + query.toString())
@@ -616,8 +669,16 @@ export function createDeviceGroup(payload: { siteId: string; name: string; descr
 export function createDevice(payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
   return request('/api/system/devices', { method: 'POST', body: JSON.stringify(payload) })
 }
+export function testDeviceConnectivity(payload: DeviceConnectivityTestRequest, signal?: AbortSignal): Promise<DeviceConnectivityTestResult> {
+  return request('/api/system/devices/connectivity-test', { method: 'POST', body: JSON.stringify(payload), signal })
+}
 export function updateDevice(id: string, payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
   return request('/api/system/devices/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function replaceDeviceCredential(id: string, password: string): Promise<{ credentialStored: boolean; username: string }> {
+  return request('/api/system/devices/' + encodeURIComponent(id) + '/credential', {
+    method: 'PUT', body: JSON.stringify({ password }),
+  })
 }
 export function previewDeviceImport(csv: string): Promise<DeviceImportPreview> {
   return request('/api/system/devices/import/preview', { method: 'POST', body: JSON.stringify({ csv }) })
@@ -637,7 +698,9 @@ export function confirmDeviceBatch(id: string): Promise<DeviceBatchOperation> {
 export function cancelDeviceBatch(id: string): Promise<DeviceBatchOperation> {
   return request('/api/system/devices/batch/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })
 }
-export function getTerminalDevices(): Promise<TerminalDevice[]> { return request('/api/system/terminal/devices') }
+export function getTerminalDevices(siteId?: string): Promise<TerminalDevice[]> {
+  return request(queryPath('/api/system/terminal/devices', { siteId }))
+}
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }

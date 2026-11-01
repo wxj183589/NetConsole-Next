@@ -20,6 +20,7 @@ builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<H3cCapabilityService>();
+builder.Services.AddSingleton<DeviceConnectivityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
@@ -299,13 +300,53 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         ,instanceId = auth.InstanceIdOrUnknown
     });
 });
-app.MapGet("/api/system/devices", (HttpRequest request, Catalog rawCatalog) =>
+app.MapGet("/api/system/sites", (HttpContext context, P2B5SiteScopeStore scopes, Catalog rawCatalog) =>
 {
+    var denied = RequireSiteScope(context, scopes);
+    if (denied is not null) return denied;
+    return Results.Ok(rawCatalog.QuerySites(CurrentSiteScope(context)));
+});
+app.MapPost("/api/system/sites", (HttpContext context, SiteWriteRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "SITE_CREATE_PERMISSION_DENIED", request.Id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Created("/api/system/sites/" + request.Id, rawCatalog.CreateSite(request, actor)); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_CREATE_FAILED", "FAILED", request.Id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_CREATE_FAILED", "CONFLICT", request.Id, null, Array.Empty<string>(), "SITE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPut("/api/system/sites/{id}", (HttpContext context, string id, SiteWriteRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "SITE_UPDATE_PERMISSION_DENIED", id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.UpdateSite(id, request, actor)); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_UPDATE_FAILED", "FAILED", id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_UPDATE_FAILED", "FAILED", id, null, Array.Empty<string>(), "SITE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (SiteConcurrencyException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_UPDATE_FAILED", "CONFLICT", id, null, Array.Empty<string>(), "SITE_VERSION_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/sites/{id}/status", (HttpContext context, string id, SiteStatusRequest request, Catalog rawCatalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "SITE_STATUS_PERMISSION_DENIED", id);
+    var actor = CurrentIdentity(context).Username;
+    try { return Results.Ok(rawCatalog.SetSiteStatus(id, request, actor)); }
+    catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_STATUS_FAILED", "FAILED", id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
+    catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_STATUS_FAILED", "FAILED", id, null, Array.Empty<string>(), "SITE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
+    catch (SiteConcurrencyException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_STATUS_FAILED", "CONFLICT", id, null, Array.Empty<string>(), "SITE_VERSION_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "SITE_STATUS_FAILED", "CONFLICT", id, null, Array.Empty<string>(), "SITE_STATUS_PROTECTED"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapGet("/api/system/devices", (HttpContext context, HttpRequest request, P2B5SiteScopeStore scopes, Catalog rawCatalog) =>
+{
+    var requestedSite = string.IsNullOrWhiteSpace(request.Query["siteId"]) ? null : request.Query["siteId"].ToString();
+    var requestedVendor = string.IsNullOrWhiteSpace(request.Query["vendor"]) ? null : request.Query["vendor"].ToString();
+    var requestedDeviceType = string.IsNullOrWhiteSpace(request.Query["deviceType"]) ? null : request.Query["deviceType"].ToString();
+    var requestedUngrouped = bool.TryParse(request.Query["ungrouped"], out var ungrouped) && ungrouped;
+    var denied = RequireSiteScope(context, scopes, requestedSite);
+    if (denied is not null) return denied;
     var page = int.TryParse(request.Query["page"], out var requestedPage) ? requestedPage : 1;
     var pageSize = int.TryParse(request.Query["pageSize"], out var requestedPageSize) ? requestedPageSize : 20;
     return Results.Ok(rawCatalog.QueryManagedDeviceInventory(page, pageSize,
         request.Query["search"].ToString(), request.Query["status"].ToString(),
-        request.Query["siteId"].ToString(), request.Query["groupId"].ToString()));
+        requestedSite, request.Query["groupId"].ToString(), CurrentSiteScope(context),
+        requestedVendor, requestedDeviceType, requestedUngrouped));
 });
 app.MapPost("/api/system/devices/batch", (HttpContext context, DeviceBatchOperationRequest request, Catalog rawCatalog) =>
 {
@@ -342,8 +383,12 @@ app.MapPost("/api/system/devices/batch/{id}/cancel", (HttpContext context, strin
     catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_BATCH_CANCEL_FAILED", "CONFLICT", id, id, Array.Empty<string>(), "CANCEL_NOT_ALLOWED"); return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/devices/{id}", (string id, Catalog rawCatalog) =>
-    rawCatalog.GetDeviceInventoryDetail(id) is { } detail ? Results.Ok(detail) : Results.NotFound());
+app.MapGet("/api/system/devices/{id}", (HttpContext context, string id, P2B5SiteScopeStore scopes, Catalog rawCatalog) =>
+{
+    var denied = RequireSiteScope(context, scopes);
+    if (denied is not null) return denied;
+    return rawCatalog.GetDeviceInventoryDetail(id, CurrentSiteScope(context)) is { } detail ? Results.Ok(detail) : Results.NotFound();
+});
 app.MapGet("/api/system/devices/{id}/addresses", (HttpContext context, HttpRequest request, string id, P2B3ReadRepository repository) =>
 {
     if (P2B3ReadGuard(context) is { } denied) return denied;
@@ -575,8 +620,13 @@ app.MapPost("/api/system/rail-reference/imports/{id}/confirm", (HttpContext cont
     try { return Results.Ok(rail.Confirm(CurrentIdentity(context), id)); }
     catch (P2B5RailReferenceException exception) { return P2B5RailReferenceError(exception); }
 });
-app.MapGet("/api/system/device-groups", (HttpRequest request, Catalog rawCatalog) =>
-    Results.Ok(rawCatalog.QueryDeviceGroups(request.Query["siteId"].ToString())));
+app.MapGet("/api/system/device-groups", (HttpContext context, HttpRequest request, P2B5SiteScopeStore scopes, Catalog rawCatalog) =>
+{
+    var requestedSite = string.IsNullOrWhiteSpace(request.Query["siteId"]) ? null : request.Query["siteId"].ToString();
+    var denied = RequireSiteScope(context, scopes, requestedSite);
+    if (denied is not null) return denied;
+    return Results.Ok(rawCatalog.QueryDeviceGroups(requestedSite, CurrentSiteScope(context)));
+});
 app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupRequest request, Catalog rawCatalog) =>
 {
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_GROUP_PERMISSION_DENIED", request.SiteId);
@@ -586,9 +636,11 @@ app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupReques
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "FAILED", request.SiteId, null, Array.Empty<string>(), "SITE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "CONFLICT", request.SiteId, null, Array.Empty<string>(), "GROUP_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
+app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog,
+    P2B5SiteScopeStore scopes) =>
 {
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_WRITE_PERMISSION_DENIED", request.Id ?? "devices");
+    if (RequireSiteScope(context, scopes, request.SiteId) is { } denied) return denied;
     var actor = CurrentIdentity(context).Username;
     try
     {
@@ -598,6 +650,41 @@ app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteReq
     catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "SITE_OR_GROUP_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "CONFLICT", request.Id ?? "devices", null, Array.Empty<string>(), "DEVICE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPost("/api/system/devices/connectivity-test", async (HttpContext context,
+    DeviceConnectivityTestRequest request, DeviceConnectivityService connectivity, Catalog rawCatalog,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_CONNECTIVITY_TEST_PERMISSION_DENIED", "devices");
+    try { return Results.Ok(await connectivity.TestAsync(request, cancellationToken)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPut("/api/system/devices/{id}/credential", (HttpContext context, string id,
+    DeviceCredentialUpdateRequest request, Catalog rawCatalog, RuntimeSettings runtime, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_CREDENTIAL_WRITE_PERMISSION_DENIED", id);
+    if (RequireSiteScope(context, scopes) is { } denied) return denied;
+    var actor = CurrentIdentity(context).Username;
+    try
+    {
+        H3cDeviceCredentialService.ValidatePassword(request.Password);
+        var detail = rawCatalog.GetDeviceInventoryDetail(id, CurrentSiteScope(context));
+        if (detail?.TerminalProfileId is null || detail.TerminalProfile is null) return Results.NotFound();
+        H3cDeviceCredentialService.Store(runtime.DataRoot, detail.TerminalProfile.CredentialReference,
+            request.Password);
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "SUCCEEDED", id, null,
+            new[] { id }, "CREDENTIAL_REPLACED");
+        return Results.Ok(new { credentialStored = true, username = detail.TerminalProfile.Username });
+    }
+    catch (ArgumentException ex)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "FAILED", id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED");
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (PlatformNotSupportedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable); }
+    catch (IOException ex) { return Results.Problem($"Credential storage is unavailable ({ex.GetType().Name}).", statusCode: StatusCodes.Status503ServiceUnavailable); }
 });
 app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
@@ -698,10 +785,14 @@ app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context,
 });
 if (settings.TerminalEnabled)
 {
-    app.MapGet("/api/system/terminal/devices", (Catalog rawCatalog, TerminalSessionManager manager) =>
+    app.MapGet("/api/system/terminal/devices", (HttpContext context, HttpRequest request, Catalog rawCatalog,
+        TerminalSessionManager manager, P2B5SiteScopeStore scopes) =>
     {
+        var requestedSite = string.IsNullOrWhiteSpace(request.Query["siteId"]) ? null : request.Query["siteId"].ToString();
+        var denied = RequireSiteScope(context, scopes, requestedSite);
+        if (denied is not null) return denied;
         var sessions = manager.Recent();
-        var devices = rawCatalog.RecentH3cDeviceProfiles(100).Select(profile =>
+        var devices = rawCatalog.RecentH3cDeviceProfiles(100, CurrentSiteScope(context), requestedSite).Select(profile =>
         {
             var latest = sessions.FirstOrDefault(session => session.TargetId == profile.Id);
             return new TerminalDeviceView(profile.Id, profile.Host, profile.Port, profile.Username, profile.Enabled,
@@ -717,36 +808,57 @@ if (settings.TerminalEnabled)
         if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
         return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
     });
-    app.MapGet("/api/system/terminal/sessions", (HttpRequest request, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
+    app.MapGet("/api/system/terminal/sessions", (HttpContext context, HttpRequest request,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
     {
-        var session = rawCatalog.GetTerminalSession(sessionId);
-        return session is null ? Results.NotFound() : Results.Ok(session);
+        var denied = RequireSiteScope(context, scopes);
+        if (denied is not null) return denied;
+        return Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query), CurrentSiteScope(context)));
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
-        Results.Ok(rawCatalog.TerminalEvents(sessionId, Math.Clamp(limit ?? 500, 1, 5000))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.TerminalRecordingSegments(sessionId)));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/integrity", (string sessionId,
-        TerminalRecordingService recordings) =>
+    app.MapGet("/api/system/terminal/sessions/{sessionId}", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
+        return rawCatalog.GetTerminalSession(sessionId) is { } session ? Results.Ok(session) : Results.NotFound();
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes, int? limit) =>
+    {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
+        return Results.Ok(rawCatalog.TerminalEvents(sessionId, Math.Clamp(limit ?? 500, 1, 5000)));
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/segments", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
+        return Results.Ok(rawCatalog.TerminalRecordingSegments(sessionId));
+    });
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/integrity", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalRecordingService recordings) =>
+    {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/recording/verify", (string sessionId,
-        TerminalRecordingService recordings) =>
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/recording/verify", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalRecordingService recordings) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.TerminalExports(sessionId)));
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/exports", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
+        return Results.Ok(rawCatalog.TerminalExports(sessionId));
+    });
     app.MapGet("/api/system/terminal/sessions/{sessionId}/export", async (HttpContext context, string sessionId,
-        string? format, Catalog rawCatalog, TerminalRecordingService recordings, TerminalExportService exports) =>
+        string? format, Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalRecordingService recordings, TerminalExportService exports) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         var session = rawCatalog.GetTerminalSession(sessionId);
         if (session is null) return Results.NotFound();
         try
@@ -758,9 +870,11 @@ if (settings.TerminalEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/replay", (string sessionId,
-        long? offset, int? limit, long? fromMs, long? toMs, TerminalRecordingService recordings) =>
+    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/replay", (HttpContext context, string sessionId,
+        long? offset, int? limit, long? fromMs, long? toMs, Catalog rawCatalog, P2B5SiteScopeStore scopes,
+        TerminalRecordingService recordings) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         try
         {
             var safeOffset = Math.Max(0, offset ?? 0);
@@ -780,8 +894,16 @@ if (settings.TerminalEnabled)
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (FileNotFoundException) { return Results.NotFound(); }
     });
-    app.MapPost("/api/system/terminal/sessions", (TerminalSessionRequest request, TerminalSessionManager manager) =>
+    app.MapPost("/api/system/terminal/sessions", (HttpContext context, TerminalSessionRequest request,
+        TerminalSessionManager manager, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
     {
+        var denied = RequireSiteScope(context, scopes);
+        if (denied is not null) return denied;
+        var scope = CurrentSiteScope(context);
+        if ((!scope.IsGlobal && request.TargetId.StartsWith("serial:", StringComparison.OrdinalIgnoreCase)) ||
+            (!request.TargetId.StartsWith("serial:", StringComparison.OrdinalIgnoreCase) &&
+             !rawCatalog.H3cProfileIsInScope(request.TargetId, scope)))
+            return Results.NotFound();
         try
         {
             var sessionId = manager.Create(request);
@@ -793,21 +915,28 @@ if (settings.TerminalEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/ticket", (string sessionId,
-        TerminalSessionManager manager, TerminalTicketStore tickets) =>
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/ticket", (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         if (manager.Get(sessionId) is null) return Results.NotFound();
         return Results.Ok(tickets.Issue(sessionId));
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/close", async (string sessionId,
-        TerminalSessionManager manager) =>
+    app.MapPost("/api/system/terminal/sessions/{sessionId}/close", async (HttpContext context, string sessionId,
+        Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalSessionManager manager) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied) return denied;
         if (!await manager.CloseAsync(sessionId)) return Results.NotFound();
         return Results.Ok(new { sessionId, state = "CLOSED" });
     });
     app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
-        string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
+        string sessionId, Catalog rawCatalog, P2B5SiteScopeStore scopes, TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
+        if (RequireTerminalSessionScope(context, sessionId, rawCatalog, scopes) is { } denied)
+        {
+            await denied.ExecuteAsync(context);
+            return;
+        }
         var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}", $"http://[::1]:{settings.WebPort}" };
         var origin = context.Request.Headers.Origin.ToString();
         if (origin.Length > 0 && !expectedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
@@ -842,8 +971,12 @@ if (settings.TerminalEnabled)
 }
 if (settings.H3cEnabled)
 {
-    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.RecentH3cDeviceProfiles().Select(profile => profile.ToView())));
+    app.MapGet("/api/system/h3c/profiles", (HttpContext context, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        var denied = RequireSiteScope(context, scopes);
+        if (denied is not null) return denied;
+        return Results.Ok(rawCatalog.RecentH3cDeviceProfiles(100, CurrentSiteScope(context)).Select(profile => profile.ToView()));
+    });
     app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
@@ -1133,6 +1266,28 @@ static WebUserIdentity CurrentIdentity(HttpContext context) =>
     context.Items[WebCookieNames.IdentityItem] as WebUserIdentity ?? throw new UnauthorizedAccessException("Web identity is missing.");
 static P2B5SiteScopeDecision CurrentSiteScope(HttpContext context) =>
     context.Items[P2B5SiteScopeHttpContextKeys.Decision] as P2B5SiteScopeDecision ?? P2B5SiteScopeDecision.Global;
+static IResult? RequireSiteScope(HttpContext context, P2B5SiteScopeStore scopes, string? requestedSite = null)
+{
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    context.Items[P2B5SiteScopeHttpContextKeys.Decision] = scope;
+    if (!scope.IsAuthorized)
+        return Results.Json(new
+        {
+            error = scope.State == "UNAVAILABLE" ? "P2B_SITE_SCOPE_UNAVAILABLE" : "P2B_SITE_SCOPE_DENIED",
+            detail = scope.Detail
+        }, statusCode: StatusCodes.Status403Forbidden);
+    if (!scope.IsGlobal && !string.IsNullOrWhiteSpace(requestedSite) &&
+        !scope.AllowedSiteReferences.Contains(requestedSite, StringComparer.OrdinalIgnoreCase))
+        return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = "The requested Site is outside the current user scope." }, statusCode: StatusCodes.Status403Forbidden);
+    return null;
+}
+static IResult? RequireTerminalSessionScope(HttpContext context, string sessionId, Catalog catalog, P2B5SiteScopeStore scopes)
+{
+    if (RequireSiteScope(context, scopes) is { } denied) return denied;
+    return catalog.TerminalSessionIsInScope(sessionId, CurrentSiteScope(context))
+        ? null
+        : Results.NotFound();
+}
 static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
 static IResult DevicePermissionDenied(HttpContext context, Catalog catalog, string action, string subjectId = "devices")
 {
@@ -1246,6 +1401,7 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
+internal sealed record DeviceCredentialUpdateRequest(string Password);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);

@@ -32,7 +32,7 @@ The browser uses `netconsole_session` (HttpOnly, SameSite=Lax) and a separate CS
 
 ## Navigation and state
 
-The primary routes are: overview, devices, terminal, tasks, wireless, rail, tools, files, and settings. PR-2 activates tools and files against real service APIs; wireless and rail remain explicitly disabled and do not render fixture business records. Workspace tabs are independent and persisted in sessionStorage; route components are kept alive for the current browser tab.
+The primary routes are: overview, sites, devices, terminal, tasks, wireless, rail, tools, files, and settings. The SUPERADMIN-only Sites route manages stable Site identities and lifecycle; the shell keeps one selected active Site context for inventory and terminal workbenches. PR-2 activates tools and files against real service APIs; wireless and rail remain explicitly disabled and do not render fixture business records. Workspace tabs are independent and persisted in sessionStorage; route components are kept alive for the current browser tab.
 
 ## Web PR-1 scope
 
@@ -44,6 +44,7 @@ The primary routes are: overview, devices, terminal, tasks, wireless, rail, tool
 - origin + CSRF checks for Cookie-authenticated writes;
 - Next-specific layout, light/dark theme, workspace tabs, real health/device/task APIs;
 - Vue xterm terminal for SSH/Telnet/COM, multiple tabs, split view, search, history, read-only replay and TXT/JSONL/HTML export;
+- global Site management, server-enforced Site Scope filtering, Site context switching, and collapsible readable workbench panels;
 - deterministic unit tests and offline Vite output under Service `wwwroot`.
 
 PENDING_REAL_ENVIRONMENT: Windows Service installation, cross-computer LAN access, physical COM, real Comware device, screenshot evidence against a running .NET service, and production host acceptance.

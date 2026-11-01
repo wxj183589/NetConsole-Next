@@ -8,9 +8,11 @@ import {
 } from '@element-plus/icons-vue'
 import { getDeviceInventory, getHealth, type HealthSnapshot } from '../api/client'
 import { useAuthStore } from '../stores/auth'
+import { useSiteContextStore } from '../stores/siteContext'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const auth = useAuthStore()
+const siteContext = useSiteContextStore()
 const workspace = useWorkspaceStore()
 const route = useRoute()
 const router = useRouter()
@@ -19,10 +21,12 @@ const deviceCount = ref<number | null>(null)
 const dark = ref(document.documentElement.dataset.theme === 'dark')
 const globalSearch = ref('')
 const sidebarCollapsed = ref(false)
+const density = ref<'normal' | 'compact'>((localStorage.getItem('netconsole-density') as 'normal' | 'compact') || 'normal')
 
 const nav = [
   { path: '/', label: '运行总览', icon: House },
   { path: '/devices', label: '设备管理', icon: Monitor },
+  { path: '/sites', label: '局点管理', icon: Share, superAdminOnly: true },
   { path: '/zte', label: 'ZTE 采集', icon: Connection },
   { path: '/h3c', label: 'H3C 事实回放', icon: Connection },
   { path: '/network-planning', label: '网络规划', icon: Share },
@@ -62,7 +66,7 @@ async function submitGlobalSearch(): Promise<void> {
 async function refreshShell(): Promise<void> {
   try {
     health.value = await getHealth()
-    const inventory = await getDeviceInventory({ page: 1, pageSize: 1 })
+    const inventory = await getDeviceInventory({ page: 1, pageSize: 1, siteId: siteContext.currentSiteId || undefined })
     deviceCount.value = inventory.summary.totalRecords
   } catch { /* keep the shell usable while a service is starting */ }
 }
@@ -70,10 +74,14 @@ async function refreshShell(): Promise<void> {
 onMounted(async () => {
   const saved = localStorage.getItem('netconsole-theme')
   if (saved) { dark.value = saved === 'dark'; document.documentElement.dataset.theme = saved }
+  document.documentElement.dataset.density = density.value
+  await siteContext.refresh()
   workspace.open(route.path === '/index.html' ? '/' : route.path, currentLabel.value)
   await refreshShell()
 })
 watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label || '工作区')); void refreshShell() })
+watch(() => siteContext.currentSiteId, () => { void refreshShell() })
+watch(density, value => { document.documentElement.dataset.density = value; localStorage.setItem('netconsole-density', value) })
 </script>
 
 <template>
@@ -85,7 +93,7 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
       </div>
       <div class="nav-group">
         <p class="nav-group__title">工作台</p>
-        <button v-for="item in nav" :key="item.path" :class="['nav-item', { active: route.path === item.path, disabled: item.disabled }]" type="button" :title="item.label" @click="navigate(item)">
+        <button v-for="item in nav" v-show="!item.superAdminOnly || auth.isSuperAdmin" :key="item.path" :class="['nav-item', { active: route.path === item.path, disabled: item.disabled }]" type="button" :title="item.label" @click="navigate(item)">
           <span class="nav-item__content"><el-icon class="nav-item__icon"><component :is="item.icon" /></el-icon><span class="nav-item__label">{{ item.label }}</span></span>
           <span v-if="item.disabled" class="status-chip">未开放</span>
         </button>
@@ -98,6 +106,14 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
       <header class="app-header">
         <div class="header-context"><span class="header-context__product">NetConsole Next</span><span class="header-context__divider">/</span><strong>{{ currentLabel }}</strong></div>
         <div class="header-actions">
+          <div class="site-context-control" data-testid="site-context-switcher">
+            <span class="site-context-control__label">当前局点</span>
+            <el-select v-if="!siteContext.unavailable" :model-value="siteContext.currentSiteId" filterable size="small" class="site-context-control__select" placeholder="选择局点" @change="siteContext.selectSite">
+              <el-option v-for="site in siteContext.activeSites" :key="site.id" :label="`${site.name} · ${site.id}`" :value="site.id" />
+            </el-select>
+            <span v-else class="site-context-control__unavailable">无可信局点授权</span>
+          </div>
+          <select v-model="density" class="density-select" aria-label="显示密度"><option value="normal">正常密度</option><option value="compact">紧凑密度</option></select>
           <label class="global-search"><el-icon><Search /></el-icon><input v-model="globalSearch" placeholder="搜索设备、IP、任务…" @keydown.enter="submitGlobalSearch" /><kbd>⌘ K</kbd></label>
           <div class="header-status"><span class="header-status__item"><i class="status-dot status-dot--success" />{{ healthLabel }}</span><span class="header-status__item header-status__queue"><el-icon><DataLine /></el-icon>{{ queueLabel }}</span><span class="header-status__item">在线设备 <b>{{ deviceCount ?? '—' }}</b></span></div>
           <button class="header-icon-button" type="button" title="通知"><el-icon><Bell /></el-icon><span class="notification-badge">0</span></button>

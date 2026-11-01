@@ -12,6 +12,9 @@ const router = createRouter({
       children: [
         { path: '', component: () => import('./views/DashboardView.vue'), name: 'dashboard', meta: { label: '运行总览' } },
         { path: 'devices', component: () => import('./views/DevicesView.vue'), name: 'devices', meta: { label: '设备管理' } },
+        { path: 'devices/new', component: () => import('./views/DeviceEditorView.vue'), name: 'device-new', meta: { label: '新增设备' } },
+        { path: 'devices/:id/edit', component: () => import('./views/DeviceEditorView.vue'), name: 'device-edit', meta: { label: '编辑设备' } },
+        { path: 'sites', component: () => import('./views/SitesView.vue'), name: 'sites', meta: { label: '局点管理' } },
         { path: 'zte', component: () => import('./views/ZteView.vue'), name: 'zte', meta: { label: 'ZTE 采集' } },
         { path: 'h3c', component: () => import('./views/H3cView.vue'), name: 'h3c', meta: { label: 'H3C 事实回放' } },
         { path: 'network-planning', component: () => import('./views/NetworkPlanningView.vue'), name: 'network-planning', meta: { label: '网络规划' } },

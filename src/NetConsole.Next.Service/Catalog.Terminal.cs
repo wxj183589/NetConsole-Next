@@ -155,6 +155,31 @@ internal sealed partial class Catalog
         return reader.Read() ? ReadTerminalSession(reader) : null;
     }
 
+    public bool TerminalSessionIsInScope(string sessionId, P2B5SiteScopeDecision scope)
+    {
+        if (scope.IsGlobal)
+        {
+            using var globalDb = Open();
+            using var globalCommand = globalDb.CreateCommand();
+            globalCommand.CommandText = "SELECT 1 FROM terminal_sessions WHERE id=$id LIMIT 1";
+            globalCommand.Parameters.AddWithValue("$id", sessionId);
+            return globalCommand.ExecuteScalar() is not null;
+        }
+
+        var parameters = new List<(string Name, object? Value)>();
+        var siteFilter = P2B5SiteScopeSql.ForSite("source.site_id", scope, parameters, "session_detail_scope");
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = $@"SELECT 1
+            FROM terminal_sessions session
+            JOIN h3c_device_profiles profile ON profile.id=session.target_id
+            LEFT JOIN collection_sources source ON source.id=profile.source_id
+            WHERE session.id=$id AND {siteFilter} LIMIT 1";
+        command.Parameters.AddWithValue("$id", sessionId);
+        foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        return command.ExecuteScalar() is not null;
+    }
+
     public IReadOnlyList<TerminalSessionSnapshot> RecentTerminalSessions(string? targetId = null, int limit = 50)
     {
         using var db = Open();
@@ -170,12 +195,20 @@ internal sealed partial class Catalog
         return result;
     }
 
-    public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query)
+    public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query, P2B5SiteScopeDecision? siteScope = null)
     {
         var where = new List<string>();
         using var db = Open();
         using var command = db.CreateCommand();
         void Add(string sql, string name, object value) { where.Add(sql); command.Parameters.AddWithValue(name, value); }
+        siteScope ??= P2B5SiteScopeDecision.Global;
+        var scopeParameters = new List<(string Name, object? Value)>();
+        if (!siteScope.IsGlobal)
+        {
+            var scopeFilter = P2B5SiteScopeSql.ForSite("source.site_id", siteScope, scopeParameters, "session_scope");
+            where.Add($"EXISTS (SELECT 1 FROM h3c_device_profiles scoped_profile LEFT JOIN collection_sources source ON source.id=scoped_profile.source_id WHERE scoped_profile.id=terminal_sessions.target_id AND {scopeFilter})");
+            foreach (var (name, value) in scopeParameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        }
         if (query.TargetId is not null) Add("target_id=$target", "$target", query.TargetId);
         if (query.SiteName is not null) Add("site_name=$site", "$site", query.SiteName);
         if (query.Protocol is not null) Add("protocol=$protocol", "$protocol", query.Protocol.ToUpperInvariant());

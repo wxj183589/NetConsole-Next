@@ -160,6 +160,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV11Migration(db);
         ApplyV12Migration(db);
         ApplyV15Migration(db);
+        ApplyV16Migration(db);
+        ApplyV17Migration(db);
         ZteCollectionSchema.Apply(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
@@ -403,6 +405,46 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v15.sql")
             ?? throw new InvalidOperationException("Embedded schema_v15.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV16Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        AddColumnIfMissing(db, transaction, "sites", "description", "TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(db, transaction, "sites", "status", "TEXT NOT NULL DEFAULT 'ACTIVE'");
+        AddColumnIfMissing(db, transaction, "sites", "created_ms", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, transaction, "sites", "updated_ms", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing(db, transaction, "sites", "archived_ms", "INTEGER");
+        using (var normalize = db.CreateCommand())
+        {
+            normalize.Transaction = transaction;
+            normalize.CommandText = @"UPDATE sites SET
+                    status=CASE WHEN status IN ('ACTIVE','DISABLED','ARCHIVED') THEN status ELSE 'ACTIVE' END,
+                    created_ms=CASE WHEN created_ms>0 THEN created_ms ELSE CAST(strftime('%s','now') AS INTEGER)*1000 END,
+                    updated_ms=CASE WHEN updated_ms>0 THEN updated_ms ELSE CAST(strftime('%s','now') AS INTEGER)*1000 END";
+            normalize.ExecuteNonQuery();
+        }
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v16.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v16.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV17Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v17.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v17.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -1144,29 +1186,32 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        var siteParameters = string.Join(',', scope.AllowedSiteReferences.Select((_, index) => "$site" + index));
-        command.CommandText = scope.IsGlobal
-            ? "SELECT 1 FROM h3c_device_profiles WHERE id=$id"
-            : $"SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id " +
-              $"WHERE profile.id=$id AND source.site_id IN ({siteParameters})";
+        var siteParameters = new List<(string Name, object? Value)>();
+        var siteFilter = P2B5SiteScopeSql.ForSite("source.site_id", scope, siteParameters, "profile_scope");
+        command.CommandText = $"SELECT 1 FROM h3c_device_profiles profile LEFT JOIN collection_sources source ON source.id=profile.source_id " +
+            $"WHERE profile.id=$id AND {siteFilter} LIMIT 1";
         command.Parameters.AddWithValue("$id", id);
-        if (!scope.IsGlobal)
-        {
-            var index = 0;
-            foreach (var site in scope.AllowedSiteReferences.Order(StringComparer.Ordinal))
-                command.Parameters.AddWithValue("$site" + index++, site);
-        }
+        foreach (var (name, value) in siteParameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         return command.ExecuteScalar() is not null;
     }
 
-    public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25)
+    public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25,
+        P2B5SiteScopeDecision? siteScope = null, string? siteId = null)
     {
+        siteScope ??= P2B5SiteScopeDecision.Global;
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = P2B5SiteScopeSql.ForSite("source.site_id", siteScope, scopeParameters, "terminal_scope");
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
+        command.CommandText = $@"SELECT profile.id,profile.host,profile.port,profile.username,profile.credential_reference,profile.host_key_sha256,profile.enabled,profile.created_ms,profile.updated_ms,
             host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
-            FROM h3c_device_profiles ORDER BY updated_ms DESC LIMIT $limit";
+            FROM h3c_device_profiles profile
+            LEFT JOIN collection_sources source ON source.id=profile.source_id
+            WHERE ($site IS NULL OR source.site_id=$site) AND {scopeFilter}
+            ORDER BY profile.updated_ms DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
+        command.Parameters.AddWithValue("$site", (object?)NullIfBlank(siteId) ?? DBNull.Value);
+        foreach (var (name, value) in scopeParameters) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var profiles = new List<H3cDeviceProfileSnapshot>();
         while (reader.Read())
