@@ -181,6 +181,7 @@ internal static class SchedulerTests
         await ZteCollectionTests.Run();
         VerifiesDeviceInventoryMappingAndCounts();
         VerifiesDeviceManagementPhase1();
+        VerifiesDeviceCredentialProvisioningAndReplacement();
         await VerifiesDeviceManagementSafetyBoundaries();
         await VerifiesDeviceManagementPhase2A();
         await VerifiesSiteManagementAndScopeAsync();
@@ -1395,6 +1396,74 @@ internal static class SchedulerTests
                 "device mutations must leave audit_events evidence without credential fields");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void VerifiesDeviceCredentialProvisioningAndReplacement()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("SKIP: device credential DPAPI workflow requires Windows");
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-device-credentials-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        const string firstPassword = "synthetic-device-password-1";
+        const string replacementPassword = "synthetic-device-password-2";
+        try
+        {
+            var catalog = new Catalog(TestSettings(root));
+            catalog.Initialize();
+            var group = catalog.CreateDeviceGroup("local", "Credential workflow", "isolated fixture", "test");
+            var fingerprint = "SHA256:" + Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray()).TrimEnd('=');
+            var request = new DeviceInventoryWriteRequest(null, "Password provisioned switch", "192.0.2.240", "H3C", "S5560", "H3C_SWITCH", "local", group.Id, "credential fixture", true, null,
+                Protocol: "SSH", Port: 22, Username: "reader", HostKeySha256: fingerprint,
+                IdempotencyKey: "credential-provisioned-device", Password: firstPassword);
+            var created = catalog.CreateDeviceInventory(request, "test");
+            var profile = catalog.GetH3cDeviceProfile(created.TerminalProfileId!)!;
+            Assert(profile.CredentialReference.StartsWith("H3C_", StringComparison.Ordinal) &&
+                   WindowsDpapiCredentialVault.Get(root, profile.CredentialReference) == firstPassword,
+                "password workflow must generate an internal reference and store the secret in Windows DPAPI");
+
+            using (var db = OpenCatalog(root))
+            {
+                using var checkpoint = db.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+                checkpoint.ExecuteNonQuery();
+                using var schema = db.CreateCommand();
+                schema.CommandText = "SELECT GROUP_CONCAT(name, ',') FROM pragma_table_info('device_inventory')";
+                var columns = schema.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!columns.Contains("password", StringComparison.OrdinalIgnoreCase),
+                    "device inventory schema must not contain a password column");
+                using var audit = db.CreateCommand();
+                audit.CommandText = "SELECT detail_json FROM audit_events WHERE action='DEVICE_CREATE' ORDER BY at_ms DESC LIMIT 1";
+                var detail = audit.ExecuteScalar()?.ToString() ?? string.Empty;
+                Assert(!detail.Contains(firstPassword, StringComparison.Ordinal) && !detail.Contains(profile.CredentialReference, StringComparison.Ordinal),
+                    "device create audit must not contain the password or internal credential reference");
+            }
+
+            var retried = catalog.CreateDeviceInventory(request, "test");
+            Assert(retried.Item.Id == created.Item.Id && retried.TerminalProfileId == created.TerminalProfileId,
+                "repeated credential submission must return the same device/profile without provisioning another secret");
+
+            H3cDeviceCredentialService.Store(root, profile.CredentialReference, replacementPassword);
+            var restarted = new Catalog(TestSettings(root));
+            restarted.Initialize();
+            Assert(restarted.GetH3cDeviceProfile(profile.Id) is not null &&
+                   WindowsDpapiCredentialVault.Get(root, profile.CredentialReference) == replacementPassword,
+                "restarted catalog must retain the terminal profile while a credential replacement updates DPAPI");
+
+            var failed = request with { IdempotencyKey = "credential-failed-device", ManagementIp = request.ManagementIp };
+            AssertThrows<InvalidOperationException>(() => catalog.CreateDeviceInventory(failed, "test"));
+            var vaultJson = File.ReadAllText(Path.Combine(root, "credentials", "h3c-credentials.v1.json"));
+            Assert(!vaultJson.Contains(firstPassword, StringComparison.Ordinal) && !vaultJson.Contains(replacementPassword, StringComparison.Ordinal),
+                "DPAPI vault file must not contain clear-text passwords");
+            using (var vault = JsonDocument.Parse(vaultJson))
+                Assert(vault.RootElement.EnumerateObject().Count() == 1,
+                    "a failed duplicate-address create must revoke its newly generated credential reference");
+            Console.WriteLine("PASS: device password provisioning, DPAPI replacement, idempotency, redaction and failure compensation");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     private static async Task VerifiesSiteManagementAndScopeAsync()

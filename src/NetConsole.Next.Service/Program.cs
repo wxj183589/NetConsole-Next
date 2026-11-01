@@ -632,9 +632,11 @@ app.MapPost("/api/system/device-groups", (HttpContext context, DeviceGroupReques
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "FAILED", request.SiteId, null, Array.Empty<string>(), "SITE_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_GROUP_FAILED", "CONFLICT", request.SiteId, null, Array.Empty<string>(), "GROUP_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
+app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteRequest request, Catalog rawCatalog,
+    P2B5SiteScopeStore scopes) =>
 {
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_WRITE_PERMISSION_DENIED", request.Id ?? "devices");
+    if (RequireSiteScope(context, scopes, request.SiteId) is { } denied) return denied;
     var actor = CurrentIdentity(context).Username;
     try
     {
@@ -653,6 +655,32 @@ app.MapPost("/api/system/devices/connectivity-test", async (HttpContext context,
     try { return Results.Ok(await connectivity.TestAsync(request, cancellationToken)); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
+app.MapPut("/api/system/devices/{id}/credential", (HttpContext context, string id,
+    DeviceCredentialUpdateRequest request, Catalog rawCatalog, RuntimeSettings runtime, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_CREDENTIAL_WRITE_PERMISSION_DENIED", id);
+    if (RequireSiteScope(context, scopes) is { } denied) return denied;
+    var actor = CurrentIdentity(context).Username;
+    try
+    {
+        H3cDeviceCredentialService.ValidatePassword(request.Password);
+        var detail = rawCatalog.GetDeviceInventoryDetail(id, CurrentSiteScope(context));
+        if (detail?.TerminalProfileId is null || detail.TerminalProfile is null) return Results.NotFound();
+        H3cDeviceCredentialService.Store(runtime.DataRoot, detail.TerminalProfile.CredentialReference,
+            request.Password);
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "SUCCEEDED", id, null,
+            new[] { id }, "CREDENTIAL_REPLACED");
+        return Results.Ok(new { credentialStored = true, username = detail.TerminalProfile.Username });
+    }
+    catch (ArgumentException ex)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "FAILED", id, null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED");
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (PlatformNotSupportedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable); }
+    catch (IOException ex) { return Results.Problem($"Credential storage is unavailable ({ex.GetType().Name}).", statusCode: StatusCodes.Status503ServiceUnavailable); }
 });
 app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
@@ -1369,6 +1397,7 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
+internal sealed record DeviceCredentialUpdateRequest(string Password);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);

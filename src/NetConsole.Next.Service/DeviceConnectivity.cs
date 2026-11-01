@@ -17,13 +17,14 @@ internal sealed class DeviceConnectivityService(IH3cCredentialProvider credentia
             request.ManagementAddress.Length > 253 || request.ManagementAddress.Any(char.IsWhiteSpace) ||
             request.ManagementAddress.Any(char.IsControl) || Uri.CheckHostName(request.ManagementAddress) == UriHostNameType.Unknown)
             throw new ArgumentException("Management address must be a valid IP address or DNS hostname.", nameof(request));
-        if (!H3cCredentialReference.IsValid(request.CredentialReference))
-            throw new ArgumentException("Credential reference is invalid.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 64 ||
+            request.Username.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
+            throw new ArgumentException("Username contains unsupported characters.", nameof(request));
+        if (string.IsNullOrEmpty(request.Password) && !H3cCredentialReference.IsValid(request.CredentialReference ?? string.Empty))
+            throw new ArgumentException("A device password is required for this connectivity test.", nameof(request));
         if (request.HostKeyUpdatePolicy.Trim().ToUpperInvariant() != "STRICT")
             throw new ArgumentException("Connectivity testing requires STRICT SSH host-key verification.", nameof(request));
         var fingerprint = string.IsNullOrWhiteSpace(request.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(request.HostKeySha256);
-        if (protocol == "SSH" && fingerprint.Length == 0)
-            throw new ArgumentException("SSH connectivity testing requires a SHA256 host-key fingerprint.", nameof(request));
         if (!TerminalTextEncoding.IsSupported(request.TerminalEncoding))
             throw new ArgumentException("Terminal encoding must be AUTO, UTF-8 or GB18030.", nameof(request));
         var timeoutMs = Math.Clamp(request.TimeoutMs, 1000, 60000);
@@ -50,22 +51,40 @@ internal sealed class DeviceConnectivityService(IH3cCredentialProvider credentia
                 return Failed("ADDRESS", false, false, false, false, "地址或端口连接超时。", started);
             }
 
-            var password = credentials.GetPassword(request.CredentialReference);
+            var password = request.Password;
             if (string.IsNullOrEmpty(password))
-                return Failed("CREDENTIAL", true, false, false, false, "凭据引用未在受控凭据库中找到可用秘密；页面不会接收或保存明文密码。", started);
+                password = credentials.GetPassword(request.CredentialReference!);
+            if (string.IsNullOrEmpty(password))
+                return Failed("CREDENTIAL", true, false, false, false, "登录凭据不可用。页面不会接收或保存明文密码。", started);
 
             var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), request.ManagementAddress.Trim(), request.Port,
-                request.Username.Trim(), request.CredentialReference, fingerprint, true, 0, 0, "STRICT",
+                request.Username.Trim(), request.CredentialReference ?? "PROBE", fingerprint, true, 0, 0, "STRICT",
                 request.AllowLegacyAlgorithms, request.TerminalEncoding.Trim().ToUpperInvariant(), protocol, false);
             if (protocol == "SSH")
             {
+                string? observedFingerprint = null;
+                string? observedKeyType = null;
                 using var transport = new SshNetH3cSshTransportFactory().Create(profile, password);
-                await transport.ConnectAsync((_, presented) => H3cHostKeyFingerprint.Matches(fingerprint, presented), timeout.Token).ConfigureAwait(false);
+                await transport.ConnectAsync((keyType, presented) =>
+                {
+                    observedKeyType = keyType;
+                    observedFingerprint = string.IsNullOrWhiteSpace(presented) ? null : H3cHostKeyFingerprint.Normalize(presented);
+                    // A discovery probe may complete authentication so the user
+                    // can verify the presented identity. It never persists or
+                    // binds this key; saving still requires explicit confirmation.
+                    return fingerprint.Length == 0 || H3cHostKeyFingerprint.Matches(fingerprint, presented);
+                }, timeout.Token).ConfigureAwait(false);
                 var versionOutput = await transport.ExecuteAsync(H3cCommandPolicy.DisplayVersion, timeout.Token).ConfigureAwait(false);
                 var version = H3cComwareParser.ParseVersion(versionOutput);
-                return new("SUCCEEDED", "IDENTITY", true, true, true, version.Recognized,
-                    version.Recognized ? "SSH 握手、凭据认证和 H3C 版本识别均成功。" : "SSH 握手和凭据认证成功，但返回内容未识别为 H3C Comware。",
-                    version.Recognized ? $"{version.Vendor} {version.Version}" : null, ElapsedMs(started));
+                var requiresConfirmation = fingerprint.Length == 0;
+                var identityVerified = fingerprint.Length > 0;
+                return new(requiresConfirmation ? "PENDING_CONFIRMATION" : "SUCCEEDED",
+                    requiresConfirmation ? "HOST_KEY" : "IDENTITY", true, true, true, identityVerified,
+                    requiresConfirmation
+                        ? "已完成 SSH 握手、凭据认证和只读探测；这是首次发现的主机身份，请确认后再保存设备。"
+                        : version.Recognized ? "SSH 握手、凭据认证和 H3C 版本识别均成功。" : "SSH 握手和凭据认证成功，但返回内容未识别为 H3C Comware。",
+                    version.Recognized ? $"{version.Vendor} {version.Version}" : null, ElapsedMs(started),
+                    observedFingerprint, observedKeyType, requiresConfirmation);
             }
 
             await using (var transport = new TelnetTerminalTransport(profile, password))
@@ -73,7 +92,7 @@ internal sealed class DeviceConnectivityService(IH3cCredentialProvider credentia
                 await transport.ConnectAsync(timeout.Token).ConfigureAwait(false);
             }
             return new("PARTIAL", "AUTHENTICATION", true, true, true, false,
-                "Telnet 握手和登录成功；当前受控探测不执行版本命令，因此设备身份仍待终端会话确认。", null, ElapsedMs(started));
+                "Telnet 连接和登录成功；Telnet 传输不加密，当前受控探测不执行版本命令，因此设备身份仍待终端会话确认。", null, ElapsedMs(started));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -85,7 +104,7 @@ internal sealed class DeviceConnectivityService(IH3cCredentialProvider credentia
         }
         catch (H3cHostKeyMismatchException)
         {
-            return Failed("HOST_KEY", true, true, false, false, "SSH 主机密钥与填写的 SHA256 指纹不匹配，未接受未知主机。", started);
+            return Failed("HOST_KEY", true, true, false, false, "SSH 主机密钥与已确认的身份不匹配，连接已拒绝。", started);
         }
         catch (H3cAuthenticationFailedException)
         {
@@ -93,7 +112,7 @@ internal sealed class DeviceConnectivityService(IH3cCredentialProvider credentia
         }
         catch (H3cCredentialUnavailableException)
         {
-            return Failed("CREDENTIAL", true, false, false, false, "凭据引用没有可用秘密。", started);
+            return Failed("CREDENTIAL", true, false, false, false, "登录凭据不可用。", started);
         }
         catch (H3cConnectionTimeoutException)
         {

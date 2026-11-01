@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  ApiRequestError, createDevice, getDeviceGroups, getDeviceInventoryDetail, testDeviceConnectivity, updateDevice,
+  ApiRequestError, createDevice, getDeviceGroups, getDeviceInventoryDetail, replaceDeviceCredential, testDeviceConnectivity, updateDevice,
   type DeviceConnectivityTestResult, type DeviceGroup,
 } from '../api/client'
 import NcLayout from '../components/NcLayout.vue'
@@ -29,10 +29,17 @@ const connectivity = ref<DeviceConnectivityTestResult | null>(null)
 const connectivityLoading = ref(false)
 const connectivityController = ref<AbortController | null>(null)
 const idempotencyKey = ref(newIdempotencyKey())
+const showPassword = ref(false)
+const showReplacementPassword = ref(false)
+const passwordChangeOpen = ref(false)
+const replacementPassword = ref('')
+const credentialSaving = ref(false)
+const credentialStored = ref(false)
+const hostKeyConfirmed = ref(false)
 const formErrors = reactive<Record<string, string>>({})
 const form = reactive({
   id: '', name: '', siteId: '', groupId: '', vendor: 'H3C', category: 'NETWORK_DEVICE', subtype: '', model: '',
-  managementAddress: '', protocol: 'SSH' as 'SSH' | 'TELNET', port: 22, username: '', credentialReference: '',
+  managementAddress: '', protocol: 'SSH' as 'SSH' | 'TELNET', port: 22, username: '', password: '',
   hostKeySha256: '', terminalEncoding: 'AUTO' as 'AUTO' | 'UTF-8' | 'GB18030', timeoutMs: 10000,
   description: '', enabled: true,
 })
@@ -64,12 +71,14 @@ function newIdempotencyKey(): string { return globalThis.crypto?.randomUUID?.() 
 function resetCreateForm(): void {
   Object.assign(form, {
     id: '', name: '', siteId: siteContext.currentSiteId, groupId: '', vendor: 'H3C', category: 'NETWORK_DEVICE', subtype: '', model: '',
-    managementAddress: '', protocol: 'SSH', port: 22, username: '', credentialReference: '', hostKeySha256: '', terminalEncoding: 'AUTO', timeoutMs: 10000,
+    managementAddress: '', protocol: 'SSH', port: 22, username: '', password: '', hostKeySha256: '', terminalEncoding: 'AUTO', timeoutMs: 10000,
     description: '', enabled: true,
   })
   legacySubtype.value = null
   selectedProfileId.value = ''
   connectivity.value = null
+  showPassword.value = false
+  hostKeyConfirmed.value = false
   idempotencyKey.value = newIdempotencyKey()
   clearErrors()
 }
@@ -92,9 +101,19 @@ function chooseSubtype(value: string): void {
   if (item?.creation === 'RESTRICTED') setError('subtype', item.note || '该设备类型暂不支持新增')
   else delete formErrors.subtype
 }
-function changeProtocol(value: 'SSH' | 'TELNET'): void { form.protocol = value; if (!isEdit.value) form.port = value === 'SSH' ? 22 : 23 }
+function changeProtocol(value: 'SSH' | 'TELNET'): void {
+  form.protocol = value
+  if (!isEdit.value) form.port = value === 'SSH' ? 22 : 23
+  clearHostKeyConfirmation()
+}
 
-function validate(): boolean {
+function clearHostKeyConfirmation(): void {
+  form.hostKeySha256 = ''
+  hostKeyConfirmed.value = false
+  connectivity.value = null
+}
+
+function validate(requireHostKey = true): boolean {
   clearErrors()
   const site = currentSite.value
   if (!canWrite.value) setError('form', '当前身份没有设备写入权限。')
@@ -107,8 +126,8 @@ function validate(): boolean {
     if (!form.protocol) setError('protocol', '请选择协议。')
     if (form.port < 1 || form.port > 65535) setError('port', '端口必须在 1-65535 范围内。')
     if (!form.username.trim()) setError('username', '用户名为必填项。')
-    if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(form.credentialReference.trim())) setError('credentialReference', '请输入有效的凭据引用，例如 H3C_READER。')
-    if (form.protocol === 'SSH' && !form.hostKeySha256.trim()) setError('hostKeySha256', 'SSH 必须填写 SHA256 主机密钥指纹，未知主机不会自动接受。')
+    if (!form.password) setError('password', '请输入设备登录密码。')
+    if (requireHostKey && form.protocol === 'SSH' && (!form.hostKeySha256.trim() || !hostKeyConfirmed.value)) setError('hostKeySha256', '请先测试连接并确认首次发现的 SSH 主机身份。')
   }
   return Object.keys(formErrors).length === 0
 }
@@ -119,7 +138,7 @@ function connectionPayload(): Record<string, unknown> {
     name: form.name.trim(), managementIp: form.managementAddress.trim(), vendor: form.vendor,
     model: form.model.trim(), deviceType: selectedSubtype.value?.backendType || '', siteId: form.siteId,
     groupId: form.groupId || null, description: form.description.trim(), enabled: form.enabled,
-    protocol: form.protocol, port: form.port, username: form.username.trim(), credentialReference: form.credentialReference.trim(),
+    protocol: form.protocol, port: form.port, username: form.username.trim(), password: form.password,
     hostKeySha256: form.hostKeySha256.trim(), hostKeyUpdatePolicy: 'STRICT', terminalEncoding: form.terminalEncoding,
     allowLegacyAlgorithms: false, allowTelnetFallback: false, idempotencyKey: idempotencyKey.value,
   }
@@ -153,15 +172,15 @@ async function save(): Promise<void> {
 
 async function runConnectivityTest(): Promise<void> {
   clearErrors(); connectivity.value = null
-  if (isEdit.value || !validate()) { if (!isEdit.value) ElMessage.warning('请先填写完整连接信息'); return }
+  if (isEdit.value || !validate(false)) { if (!isEdit.value) ElMessage.warning('请先填写完整连接信息'); return }
   connectivityLoading.value = true
   const controller = new AbortController()
   connectivityController.value = controller
   try {
     connectivity.value = await testDeviceConnectivity({
       managementAddress: form.managementAddress.trim(), protocol: form.protocol, port: form.port,
-      username: form.username.trim(), credentialReference: form.credentialReference.trim(),
-      hostKeySha256: form.hostKeySha256.trim(), hostKeyUpdatePolicy: 'STRICT', terminalEncoding: form.terminalEncoding,
+      username: form.username.trim(), password: form.password,
+      hostKeySha256: form.hostKeySha256.trim() || undefined, hostKeyUpdatePolicy: 'STRICT', terminalEncoding: form.terminalEncoding,
       timeoutMs: form.timeoutMs,
     }, controller.signal)
   } catch (cause) {
@@ -169,7 +188,34 @@ async function runConnectivityTest(): Promise<void> {
   } finally { connectivityLoading.value = false; connectivityController.value = null }
 }
 function cancelConnectivityTest(): void { connectivityController.value?.abort() }
-function statusClass(value?: string): string { return value === 'SUCCEEDED' ? 'good' : value === 'PARTIAL' ? 'warn' : 'bad' }
+function statusClass(value?: string): string { return value === 'SUCCEEDED' ? 'good' : value === 'PARTIAL' || value === 'PENDING_CONFIRMATION' ? 'warn' : 'bad' }
+
+function confirmHostKey(): void {
+  const fingerprint = connectivity.value?.hostKeySha256
+  if (!fingerprint || !connectivity.value?.requiresHostKeyConfirmation) return
+  form.hostKeySha256 = fingerprint
+  hostKeyConfirmed.value = true
+  delete formErrors.hostKeySha256
+  ElMessage.success('SSH 主机身份已确认；保存时将绑定该身份')
+}
+
+async function saveReplacementPassword(): Promise<void> {
+  if (!isEdit.value || !replacementPassword.value) {
+    ElMessage.warning('请输入新的设备登录密码')
+    return
+  }
+  credentialSaving.value = true
+  try {
+    await replaceDeviceCredential(form.id, replacementPassword.value)
+    replacementPassword.value = ''
+    passwordChangeOpen.value = false
+    showReplacementPassword.value = false
+    credentialStored.value = true
+    ElMessage.success('设备登录密码已安全替换')
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '设备登录密码替换失败')
+  } finally { credentialSaving.value = false }
+}
 
 async function loadDetail(): Promise<void> {
   if (!isEdit.value) return
@@ -184,6 +230,7 @@ async function loadDetail(): Promise<void> {
     legacySubtype.value = subtype || (item.deviceType ? { key: `LEGACY_${item.deviceType}`, label: `现有类型（${item.deviceType}）`, backendType: item.deviceType, creation: 'SUPPORTED' } : null)
     form.subtype = legacySubtype.value?.key || ''; form.managementAddress = item.managementIp || item.managementAddress
     form.description = detail.description; form.enabled = item.enabled; selectedProfileId.value = detail.terminalProfileId || ''
+    credentialStored.value = Boolean(item.credentialConfigured)
     if (detail.terminalProfile) {
       form.port = detail.terminalProfile.port; form.username = detail.terminalProfile.username
       form.protocol = detail.terminalProfile.terminalProtocol === 'TELNET' ? 'TELNET' : 'SSH'
@@ -199,6 +246,9 @@ watch(() => siteContext.currentSiteId, value => {
 })
 watch(() => form.siteId, (value, previous) => {
   if (value && value !== previous) { if (!isEdit.value) form.groupId = ''; void refreshGroups() }
+})
+watch([() => form.managementAddress, () => form.port], () => {
+  if (!isEdit.value) clearHostKeyConfirmation()
 })
 watch([isEdit, editingId], ([edit, id], [previousEdit, previousId]) => {
   if (edit && id && (edit !== previousEdit || id !== previousId)) void loadDetail()
@@ -234,24 +284,24 @@ onMounted(async () => {
       </section>
 
       <section class="card editor-card">
-        <div class="editor-card__header"><div><h2>连接信息</h2><p>{{ isEdit ? '连接档案已存在；身份、凭据引用和主机指纹不会在编辑页面回显或替换。' : '连接信息只保存凭据引用，不接收、不落库、不回显明文密码。' }}</p></div><span class="security-badge">受保护边界</span></div>
+        <div class="editor-card__header"><div><h2>连接信息</h2><p>{{ isEdit ? '用户名和连接方式可查看；密码不回显，可通过独立操作安全替换。' : '请输入设备登录信息；凭据由系统安全保存，页面不会显示内部凭据标识。' }}</p></div><div class="editor-card__header-actions"><el-button v-if="isEdit" link type="primary" @click="passwordChangeOpen = !passwordChangeOpen">{{ passwordChangeOpen ? '取消修改密码' : '修改登录密码' }}</el-button><span class="security-badge">受保护边界</span></div></div>
         <div class="editor-card__body form-grid form-grid--wide">
           <label class="form-field form-field--full"><span>管理 IP / 主机名 <i>*</i></span><input v-model="form.managementAddress" :disabled="connectionReadOnly" placeholder="192.0.2.10 或 device.example.local" /><small v-if="formErrors.managementAddress" class="field-error">{{ formErrors.managementAddress }}</small></label>
-          <label class="form-field"><span>协议 <i>*</i></span><el-select :model-value="form.protocol" class="full-control" :disabled="connectionReadOnly" @change="changeProtocol"><el-option label="SSH" value="SSH" /><el-option label="Telnet" value="TELNET" /></el-select><small>仅显示当前网络设备工作流真正支持的协议；COM 串口需要独立参数与本机权限，本页面未启用。</small></label>
+          <label class="form-field"><span>协议 <i>*</i></span><el-select :model-value="form.protocol" class="full-control" :disabled="connectionReadOnly" @change="changeProtocol"><el-option label="SSH" value="SSH" /><el-option label="Telnet" value="TELNET" /></el-select><small v-if="form.protocol === 'TELNET'" class="warning-hint">Telnet 传输不加密，不享有 SSH 的主机身份保证。</small><small v-else>系统会在首次测试时获取主机身份，确认后绑定。</small></label>
           <label class="form-field"><span>端口 <i>*</i></span><el-input-number v-model="form.port" :min="1" :max="65535" :disabled="connectionReadOnly" controls-position="right" class="full-control" /><small v-if="formErrors.port" class="field-error">{{ formErrors.port }}</small></label>
           <label class="form-field"><span>用户名 <i>*</i></span><input v-model="form.username" :disabled="connectionReadOnly" placeholder="例如 operator" /><small v-if="formErrors.username" class="field-error">{{ formErrors.username }}</small></label>
-          <label class="form-field"><span>凭据引用 <i>*</i></span><input v-model="form.credentialReference" :disabled="connectionReadOnly" placeholder="例如 H3C_READER" autocomplete="off" /><small v-if="formErrors.credentialReference" class="field-error">{{ formErrors.credentialReference }}</small><small v-else>由本机 Local Manager / DPAPI 凭据库预先配置。</small></label>
-          <label v-if="form.protocol === 'SSH'" class="form-field form-field--full"><span>SSH 主机密钥 SHA256 指纹 <i>*</i></span><input v-model="form.hostKeySha256" :disabled="connectionReadOnly" placeholder="SHA256:…" autocomplete="off" /><small v-if="formErrors.hostKeySha256" class="field-error">{{ formErrors.hostKeySha256 }}</small><small v-else>必须人工提供已核验指纹；不会接受未知主机密钥。</small></label>
-          <label class="form-field"><span>终端编码</span><el-select v-model="form.terminalEncoding" class="full-control" :disabled="connectionReadOnly"><el-option label="自动" value="AUTO" /><el-option label="UTF-8" value="UTF-8" /><el-option label="GB18030" value="GB18030" /></el-select></label>
-          <label v-if="!isEdit" class="form-field"><span>连通性超时（毫秒）</span><el-input-number v-model="form.timeoutMs" :min="1000" :max="60000" :step="1000" controls-position="right" class="full-control" /></label>
-          <div class="form-field form-field--full connection-actions"><el-button v-if="!isEdit && !connectivityLoading" type="primary" plain @click="runConnectivityTest">测试连通性</el-button><el-button v-if="!isEdit && connectivityLoading" type="warning" plain @click="cancelConnectivityTest">取消测试</el-button><span class="muted">测试只做地址/端口、协议握手、认证和只读版本识别，不创建会话、不修改设备配置。</span></div>
-          <div v-if="connectivity" class="connectivity-result" :class="statusClass(connectivity.outcome)"><div class="connectivity-result__title"><strong>{{ connectivity.outcome === 'SUCCEEDED' ? '连通性测试通过' : connectivity.outcome === 'PARTIAL' ? '连通性测试部分通过' : '连通性测试失败' }}</strong><span>{{ connectivity.elapsedMs }} ms · {{ connectivity.stage }}</span></div><p>{{ connectivity.detail }}</p><div class="connectivity-steps"><span :class="{ done: connectivity.addressReachable }">地址/端口 {{ connectivity.addressReachable ? '可达' : '未通过' }}</span><span :class="{ done: connectivity.protocolHandshake }">协议握手 {{ connectivity.protocolHandshake ? '通过' : '未通过' }}</span><span :class="{ done: connectivity.authentication }">认证 {{ connectivity.authentication ? '通过' : '未通过' }}</span><span :class="{ done: connectivity.identityVerified }">设备身份 {{ connectivity.identityVerified ? '已识别' : '未确认' }}</span></div></div>
+          <label v-if="!isEdit" class="form-field"><span>密码 <i>*</i></span><div class="password-control"><input v-model="form.password" :type="showPassword ? 'text' : 'password'" placeholder="设备登录密码" autocomplete="new-password" /><el-button text @click="showPassword = !showPassword">{{ showPassword ? '隐藏' : '显示' }}</el-button></div><small v-if="formErrors.password" class="field-error">{{ formErrors.password }}</small><small v-else>登录凭据由系统安全保存，设备清单和浏览器不会保存明文密码。</small></label>
+          <div v-else class="form-field credential-status-field"><span>登录凭据</span><div class="credential-status" :class="{ missing: !credentialStored }"><b>{{ credentialStored ? '凭据已保存' : '未配置凭据' }}</b><small>{{ credentialStored ? '密码不会回显；未修改时继续使用现有凭据。' : '请使用“修改登录密码”完成配置。' }}</small></div></div>
+          <div v-if="isEdit && passwordChangeOpen" class="credential-replace form-field form-field--full"><span>新的登录密码 <i>*</i></span><div class="password-control"><input v-model="replacementPassword" :type="showReplacementPassword ? 'text' : 'password'" placeholder="输入新密码" autocomplete="new-password" /><el-button text @click="showReplacementPassword = !showReplacementPassword">{{ showReplacementPassword ? '隐藏' : '显示' }}</el-button></div><div class="credential-replace-actions"><small>替换在可信后端完成，现有设备与终端档案关联保持不变。</small><el-button type="primary" :loading="credentialSaving" @click="saveReplacementPassword">安全保存新密码</el-button></div></div>
+          <div class="form-field form-field--full connection-actions"><el-button v-if="!isEdit && !connectivityLoading" type="primary" plain @click="runConnectivityTest">测试连接</el-button><el-button v-if="!isEdit && connectivityLoading" type="warning" plain @click="cancelConnectivityTest">取消测试</el-button><span class="muted">测试只做地址/端口、协议握手、认证和只读版本识别，不创建会话、不修改设备配置。</span><small v-if="formErrors.hostKeySha256" class="field-error">{{ formErrors.hostKeySha256 }}</small></div>
+          <div v-if="connectivity" class="connectivity-result" :class="statusClass(connectivity.outcome)"><div class="connectivity-result__title"><strong>{{ connectivity.outcome === 'SUCCEEDED' ? '连通性测试通过' : connectivity.outcome === 'PENDING_CONFIRMATION' ? '请确认 SSH 主机身份' : connectivity.outcome === 'PARTIAL' ? '连通性测试部分通过' : '连通性测试失败' }}</strong><span>{{ connectivity.elapsedMs }} ms · {{ connectivity.stage }}</span></div><p>{{ connectivity.detail }}</p><div class="connectivity-steps"><span :class="{ done: connectivity.addressReachable }">地址/端口 {{ connectivity.addressReachable ? '可达' : '未通过' }}</span><span :class="{ done: connectivity.protocolHandshake }">协议握手 {{ connectivity.protocolHandshake ? '通过' : '未通过' }}</span><span :class="{ done: connectivity.authentication }">认证 {{ connectivity.authentication ? '通过' : '未通过' }}</span><span :class="{ done: connectivity.identityVerified }">设备身份 {{ connectivity.identityVerified ? '已识别' : '未确认' }}</span></div><div v-if="connectivity.requiresHostKeyConfirmation" class="host-key-confirmation"><div><b>首次发现的 SSH 主机</b><small>{{ connectivity.hostKeyType || '未知密钥类型' }} · {{ connectivity.hostKeySha256 }}</small></div><el-button type="warning" plain :disabled="hostKeyConfirmed" @click="confirmHostKey">{{ hostKeyConfirmed ? '已确认并绑定' : '确认并绑定此身份' }}</el-button></div></div>
+          <div class="form-field form-field--full connection-advanced"><button type="button" class="connection-advanced__toggle" @click="advancedOpen = advancedOpen.includes('connection') ? [] : ['connection']"><span><b>高级连接参数</b><small>终端编码与测试超时</small></span><span>{{ advancedOpen.includes('connection') ? '收起' : '展开' }}</span></button><div v-if="advancedOpen.includes('connection')" class="connection-advanced__body"><label class="form-field"><span>终端编码</span><el-select v-model="form.terminalEncoding" class="full-control" :disabled="connectionReadOnly"><el-option label="自动" value="AUTO" /><el-option label="UTF-8" value="UTF-8" /><el-option label="GB18030" value="GB18030" /></el-select></label><label v-if="!isEdit" class="form-field"><span>连通性超时（毫秒）</span><el-input-number v-model="form.timeoutMs" :min="1000" :max="60000" :step="1000" controls-position="right" class="full-control" /></label></div></div>
         </div>
       </section>
 
       <section class="card editor-card">
-        <button type="button" class="editor-collapse" @click="advancedOpen = advancedOpen.length ? [] : ['advanced']"><span><b>高级文件传输设置</b><small>FTP / TFTP / SFTP / HTTP</small></span><span>{{ advancedOpen.length ? '收起' : '展开' }}</span></button>
-        <div v-if="advancedOpen.length" class="editor-unsupported"><strong>当前工作流未启用文件传输能力</strong><p>本版本不会自动启用 FTP、TFTP、SFTP 或 HTTP，也不会保存未实现的开关；需要明确的设备能力、授权和审计契约后再接入。</p></div>
+        <button type="button" class="editor-collapse" @click="advancedOpen = advancedOpen.includes('advanced') ? [] : ['advanced']"><span><b>高级文件传输设置</b><small>FTP / TFTP / SFTP / HTTP</small></span><span>{{ advancedOpen.includes('advanced') ? '收起' : '展开' }}</span></button>
+        <div v-if="advancedOpen.includes('advanced')" class="editor-unsupported"><strong>当前工作流未启用文件传输能力</strong><p>本版本不会自动启用 FTP、TFTP、SFTP 或 HTTP，也不会保存未实现的开关；需要明确的设备能力、授权和审计契约后再接入。</p></div>
       </section>
       <section class="card editor-card">
         <button type="button" class="editor-collapse" @click="advancedOpen = advancedOpen.includes('proxy') ? [] : ['proxy']"><span><b>代理信息</b><small>远程代理 / 跳板机</small></span><span>{{ advancedOpen.includes('proxy') ? '收起' : '展开' }}</span></button>
@@ -269,6 +319,7 @@ onMounted(async () => {
 .editor-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 19px 22px 15px; border-bottom: 1px solid var(--nc-border); }
 .editor-card__header h2 { margin: 0; font-size: 17px; }
 .editor-card__header p { margin: 6px 0 0; color: var(--nc-text-secondary); font-size: 14px; line-height: 1.55; }
+.editor-card__header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .editor-card__body { padding: 21px 22px 23px; }
 .required-hint { color: var(--nc-text-muted); font-size: 13px; white-space: nowrap; }
 .security-badge { border-radius: 999px; padding: 4px 10px; color: var(--nc-success); background: rgb(22 184 120 / 11%); font-size: 12px; white-space: nowrap; }
@@ -280,6 +331,25 @@ onMounted(async () => {
 .form-field textarea { resize: vertical; line-height: 1.5; }
 .form-field input:focus, .form-field textarea:focus { border-color: var(--nc-primary); box-shadow: 0 0 0 2px rgb(18 111 232 / 12%); }
 .form-field input:disabled { color: var(--nc-text-secondary); background: var(--nc-surface-muted); }
+.password-control { display: flex; align-items: center; gap: 4px; min-height: 38px; border: 1px solid var(--nc-border); border-radius: 6px; padding-left: 10px; background: var(--nc-surface); }
+.password-control:focus-within { border-color: var(--nc-primary); box-shadow: 0 0 0 2px rgb(18 111 232 / 12%); }
+.password-control input { min-width: 0; flex: 1; border: 0; padding-left: 0; box-shadow: none !important; }
+.credential-status-field, .credential-replace { display: grid; gap: 7px; }
+.credential-status { display: grid; gap: 3px; min-height: 38px; border: 1px solid rgb(22 184 120 / 25%); border-radius: 6px; padding: 8px 10px; color: var(--nc-success); background: rgb(22 184 120 / 7%); }
+.credential-status.missing { color: var(--nc-warning); border-color: rgb(225 145 36 / 30%); background: rgb(225 145 36 / 8%); }
+.credential-status small { color: var(--nc-text-secondary); font-weight: 400; }
+.credential-replace { grid-column: 1 / -1; padding: 13px 15px; border: 1px dashed var(--nc-border); border-radius: 7px; background: var(--nc-surface-muted); }
+.credential-replace-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.warning-hint { color: var(--nc-warning) !important; }
+.host-key-confirmation { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid rgb(225 145 36 / 32%); border-radius: 7px; background: rgb(225 145 36 / 8%); }
+.host-key-confirmation > div { display: grid; gap: 4px; min-width: 0; }
+.host-key-confirmation small { color: var(--nc-text-secondary); overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.connection-advanced { border-top: 1px solid var(--nc-border); padding-top: 12px; }
+.connection-advanced__toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; border: 0; padding: 0; color: var(--nc-text); background: transparent; text-align: left; }
+.connection-advanced__toggle span:first-child { display: grid; gap: 3px; }
+.connection-advanced__toggle small { color: var(--nc-text-secondary); font-size: 13px; }
+.connection-advanced__toggle > span:last-child { color: var(--nc-primary); font-size: 13px; }
+.connection-advanced__body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 20px; padding-top: 14px; }
 .device-editor :deep(.el-select__selected-item.el-select__placeholder) { z-index: 0; color: var(--nc-text-secondary); opacity: 1; }
 .full-control { width: 100%; min-height: 38px; }
 .form-field small, .toggle-field small { color: var(--nc-text-muted); font-size: 13px; line-height: 1.45; }
@@ -310,5 +380,5 @@ onMounted(async () => {
 .device-editor-actions > div:first-child { min-width: 0; font-size: 13px; }
 .device-editor-actions > div:last-child { display: flex; gap: 8px; flex: 0 0 auto; }
 .editor-loading { padding: 28px; color: var(--nc-text-secondary); font-size: 14px; }
-@media (max-width: 1250px) { .editor-card__header, .editor-card__body { padding-left: 17px; padding-right: 17px; } .editor-unsupported { margin-left: 17px; margin-right: 17px; } .device-editor-actions { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 1250px) { .editor-card__header, .editor-card__body { padding-left: 17px; padding-right: 17px; } .editor-unsupported { margin-left: 17px; margin-right: 17px; } .device-editor-actions { align-items: flex-start; flex-direction: column; } .connection-advanced__body { grid-template-columns: 1fr; } }
 </style>

@@ -121,7 +121,8 @@ export interface DeviceConnectivityTestRequest {
   protocol: 'SSH' | 'TELNET'
   port: number
   username: string
-  credentialReference: string
+  password?: string
+  credentialReference?: string
   hostKeySha256?: string
   hostKeyUpdatePolicy?: 'STRICT'
   allowLegacyAlgorithms?: boolean
@@ -138,6 +139,9 @@ export interface DeviceConnectivityTestResult {
   detail: string
   deviceIdentity?: string | null
   elapsedMs: number
+  hostKeySha256?: string | null
+  hostKeyType?: string | null
+  requiresHostKeyConfirmation?: boolean
 }
 export interface ZteProfile {
   id: string
@@ -670,6 +674,11 @@ export function testDeviceConnectivity(payload: DeviceConnectivityTestRequest, s
 }
 export function updateDevice(id: string, payload: Record<string, unknown>): Promise<DeviceInventoryDetail> {
   return request('/api/system/devices/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function replaceDeviceCredential(id: string, password: string): Promise<{ credentialStored: boolean; username: string }> {
+  return request('/api/system/devices/' + encodeURIComponent(id) + '/credential', {
+    method: 'PUT', body: JSON.stringify({ password }),
+  })
 }
 export function previewDeviceImport(csv: string): Promise<DeviceImportPreview> {
   return request('/api/system/devices/import/preview', { method: 'POST', body: JSON.stringify({ csv }) })
