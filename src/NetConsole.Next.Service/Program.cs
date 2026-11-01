@@ -336,13 +336,17 @@ app.MapPost("/api/system/sites/{id}/status", (HttpContext context, string id, Si
 app.MapGet("/api/system/devices", (HttpContext context, HttpRequest request, P2B5SiteScopeStore scopes, Catalog rawCatalog) =>
 {
     var requestedSite = string.IsNullOrWhiteSpace(request.Query["siteId"]) ? null : request.Query["siteId"].ToString();
+    var requestedVendor = string.IsNullOrWhiteSpace(request.Query["vendor"]) ? null : request.Query["vendor"].ToString();
+    var requestedDeviceType = string.IsNullOrWhiteSpace(request.Query["deviceType"]) ? null : request.Query["deviceType"].ToString();
+    var requestedUngrouped = bool.TryParse(request.Query["ungrouped"], out var ungrouped) && ungrouped;
     var denied = RequireSiteScope(context, scopes, requestedSite);
     if (denied is not null) return denied;
     var page = int.TryParse(request.Query["page"], out var requestedPage) ? requestedPage : 1;
     var pageSize = int.TryParse(request.Query["pageSize"], out var requestedPageSize) ? requestedPageSize : 20;
     return Results.Ok(rawCatalog.QueryManagedDeviceInventory(page, pageSize,
         request.Query["search"].ToString(), request.Query["status"].ToString(),
-        requestedSite, request.Query["groupId"].ToString(), CurrentSiteScope(context)));
+        requestedSite, request.Query["groupId"].ToString(), CurrentSiteScope(context),
+        requestedVendor, requestedDeviceType, requestedUngrouped));
 });
 app.MapPost("/api/system/devices/batch", (HttpContext context, DeviceBatchOperationRequest request, Catalog rawCatalog) =>
 {
