@@ -53,7 +53,15 @@ try {
   const groupEdit = page.getByRole('dialog', { name: '编辑设备' })
   await groupEdit.locator('label.form-field').filter({ hasText: '分组' }).locator('select').selectOption({ label: 'Browser Group' })
   await groupEdit.getByRole('button', { name: '保存' }).click()
-  await page.locator('select[aria-label="设备分组"]').selectOption({ label: 'Browser Group' })
+  await page.locator('button.scope-item').filter({ hasText: 'Browser Group' }).click()
+  await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).waitFor()
+
+  await page.locator('select[aria-label="设备厂商"]').selectOption('H3C')
+  await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).waitFor()
+  const actualType = (await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).first().locator('td').nth(5).innerText()).trim()
+  await page.locator('select[aria-label="设备类型"]').selectOption(actualType)
+  await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).waitFor()
+  await page.getByRole('button', { name: '清除筛选' }).click()
   await page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).waitFor()
 
   const batchRow = page.locator('tbody tr').filter({ hasText: 'Browser Phase1 AP' }).first()
@@ -84,6 +92,28 @@ try {
   await conflictDialog.getByText('DUPLICATE_IMPORT_ADDRESS').waitFor()
   if (await conflictDialog.getByRole('button', { name: '确认原子导入' }).isEnabled()) throw new Error('conflicted CSV must not be committable')
   await conflictDialog.getByRole('button', { name: '取消' }).click()
+
+  const csrf = await page.evaluate(async () => (await fetch('/api/auth/csrf', { credentials: 'include' })).json()).then(result => result.csrfToken)
+  const fitCreate = await page.evaluate(async csrfToken => {
+    const response = await fetch('/api/system/devices', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-NC-CSRF': csrfToken },
+      body: JSON.stringify({ name: 'must-not-create-fit-ap', managementIp: '192.0.2.94', vendor: 'H3C', model: 'FIT', deviceType: 'FIT_AP', siteId: 'local', enabled: true })
+    })
+    return { status: response.status, body: await response.json() }
+  }, csrf)
+  if (fitCreate.status !== 400 || !String(fitCreate.body.error || '').includes('FIT-AP') || !String(fitCreate.body.error || '').includes('AC')) throw new Error(`direct FIT_AP create should be rejected, got ${fitCreate.status} ${JSON.stringify(fitCreate.body)}`)
+
+  const fitCsv = 'name,managementIp,vendor,model,deviceType,siteId\nfit-import,192.0.2.95,H3C,FIT,FIT_AP,local'
+  const fitPreview = await page.evaluate(async ({ csrfToken, csv }) => {
+    const response = await fetch('/api/system/devices/import/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'X-NC-CSRF': csrfToken },
+      body: JSON.stringify({ csv })
+    })
+    return { status: response.status, body: await response.json() }
+  }, { csrfToken: csrf, csv: fitCsv })
+  if (fitPreview.status !== 200 || fitPreview.body.conflictCount !== 1 || !fitPreview.body.rows.some(row => row.detail === 'FIT_AP_MUST_BE_MANAGED_BY_AC')) throw new Error(`CSV FIT_AP preview should be blocked, got ${fitPreview.status} ${JSON.stringify(fitPreview.body)}`)
 
   const adminContext = await browser.newContext({ viewport: { width: 1200, height: 800 } })
   const admin = await adminContext.newPage()

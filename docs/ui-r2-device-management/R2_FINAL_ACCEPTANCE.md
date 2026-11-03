@@ -2,7 +2,7 @@
 
 ## 结论
 
-R2 UI integration 在本地代码、隔离 fixture、前端测试、服务编译和截图证据范围内完成。结果是 `LOCAL_UI_ACCEPTED_WITH_ENVIRONMENT_LIMITS`，不是发布结论：真实 Site claims、Windows 125% 实机和真实设备仍未执行。
+R2 UI integration 在本地代码、隔离 fixture、前端测试、服务编译、服务型 Browser CRUD E2E 和截图证据范围内完成，但最终状态仍为 `PARTIAL`。真实有效 Windows 125% GUI 尚未具备，多 Site claims 也没有覆盖设备库存 CRUD；两者不能由 CSS 模拟或单 Site UI 代替。完整证据见 `R2_FINAL_GUI_AND_CONTRACT_ACCEPTANCE.md`。
 
 ## Gate
 
@@ -10,9 +10,9 @@ R2 UI integration 在本地代码、隔离 fixture、前端测试、服务编译
 | --- | --- | --- |
 | Gate A Design | PASS | SmartHub clean-room 适用性和禁止项已记录；无专有资产复制 |
 | Gate B UI | PASS | Workbench、设备列表、创建/编辑、详情已完成 R2 范围 |
-| Gate C Security | PASS（UI boundary） | Site scope、stable ID、credential reference、FIT-AP 创建入口均有证据 |
-| Gate D GUI | PARTIAL | 1920/2560 通过；125% 为模拟，不是真实系统缩放 |
-| Gate E Regression | PASS（定向） | typecheck、Vitest、service build、visual fixture 通过 |
+| Gate C Security | PARTIAL | stable ID、credential reference、FIT-AP 和角色门禁通过；设备库存多 Site claims 合同仍缺 |
+| Gate D GUI | PARTIAL | 1920/2560 通过；当前有效显示器/Chrome 为 100%，125% 仍是模拟 |
+| Gate E Regression | PASS | typecheck、Vitest、service build、Service harness、visual fixture 和隔离 Browser CRUD E2E 通过 |
 
 ## 不变更项
 
@@ -23,6 +23,7 @@ R2 UI integration 在本地代码、隔离 fixture、前端测试、服务编译
 - SmartHub original/research baseline：NO CHANGE
 - real device/network/login：NO
 - release publish/remote push/branch merge：NO
+- Site claims API contract：PARTIAL，设备 inventory/group/CRUD 路由尚未统一调用 `P2B5SiteScopeStore`
 
 ## DevStatus
 
@@ -33,4 +34,5 @@ R2 UI integration 在本地代码、隔离 fixture、前端测试、服务编译
 1. 在授权的真实 Next 环境补充 Site list/claims API 合同后，再把 scope tree 扩展到真实多局点。
 2. 在真实 Windows 125% 显示缩放下重跑截图与人工验收。
 3. 后续 AC/FIT-AP domain work 接入真实详情 API 后，再替换当前“未接入”能力边界卡。
+4. 以独立后端任务补齐设备库存 Site claims API；本轮不修改身份模型或数据库。
 
