@@ -306,6 +306,7 @@ internal sealed partial class Catalog
             if ((byId is not null && byIp is not null && byId.Id != byIp.Id) ||
                 (id.Length > 0 && byIp is not null && byIp.Id != id)) errors.Add("ID_IP_TARGET_CONFLICT");
             var target = byId ?? byIp;
+            if (target is null && type.Equals("FIT_AP", StringComparison.OrdinalIgnoreCase)) errors.Add("FIT_AP_MUST_BE_MANAGED_BY_AC");
             if (target is not null && profileId.Length > 0 && existing.Any(item => item.TerminalProfileId == profileId && item.Id != target.Id)) errors.Add("TERMINAL_PROFILE_ALREADY_LINKED");
             var action = target is null ? "CREATE" : "UPDATE";
             if (errors.Count == 0 && normalizedIp.Length > 0)
@@ -492,6 +493,7 @@ internal sealed partial class Catalog
         if (!TryNormalizeIp(request.ManagementIp, out var ip)) throw new ArgumentException("managementIp must be a valid IP address.", nameof(request));
         var type = string.IsNullOrWhiteSpace(request.DeviceType) ? "NETWORK_DEVICE" : request.DeviceType.Trim().ToUpperInvariant();
         if (!IsValidToken(type, 48)) throw new ArgumentException("deviceType contains unsupported characters.", nameof(request));
+        if (existingId is null && type == "FIT_AP") throw new ArgumentException("FIT-AP must be managed by an AC and cannot be created as an independent device.", nameof(request));
         var site = RequiredText(request.SiteId, "siteId", 80);
         return new DeviceInventoryWriteRequest(id, name, ip, Clean(request.Vendor, 80), Clean(request.Model, 80), type, site,
             CleanNullable(request.GroupId, 80), Clean(request.Description, 500), request.Enabled, CleanNullable(request.TerminalProfileId, 80));
