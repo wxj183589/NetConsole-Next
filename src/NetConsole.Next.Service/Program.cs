@@ -305,7 +305,8 @@ app.MapGet("/api/system/devices", (HttpRequest request, Catalog rawCatalog) =>
     var pageSize = int.TryParse(request.Query["pageSize"], out var requestedPageSize) ? requestedPageSize : 20;
     return Results.Ok(rawCatalog.QueryManagedDeviceInventory(page, pageSize,
         request.Query["search"].ToString(), request.Query["status"].ToString(),
-        request.Query["siteId"].ToString(), request.Query["groupId"].ToString()));
+        request.Query["siteId"].ToString(), request.Query["groupId"].ToString(),
+        request.Query["vendor"].ToString(), request.Query["deviceType"].ToString()));
 });
 app.MapPost("/api/system/devices/batch", (HttpContext context, DeviceBatchOperationRequest request, Catalog rawCatalog) =>
 {

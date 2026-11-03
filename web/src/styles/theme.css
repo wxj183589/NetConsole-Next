@@ -526,3 +526,78 @@ button, input, select { color: inherit; }
   .planning-toolbar { align-items: stretch; }
   .planning-device-picker, .planning-filter { flex: 1 1 180px; }
 }
+
+/* R2 device console: preserve the terminal workbench density while making the inventory readable. */
+.app-shell:not(.app-shell--terminal) .nav-item { min-height: 40px; font-size: 12px; }
+.app-shell:not(.app-shell--terminal) .nav-item__label { font-size: 12px; }
+.app-shell:not(.app-shell--terminal) .header-status__item { font-size: 11px; }
+.app-shell:not(.app-shell--terminal) .page-header h1 { font-size: 22px; }
+.app-shell:not(.app-shell--terminal) .page-header p { font-size: 13px; }
+.app-shell:not(.app-shell--terminal) .el-button { font-size: 12px; }
+
+.device-management-workspace { display: grid; grid-template-columns: 232px minmax(0, 1fr); align-items: start; gap: 12px; }
+.device-list-region { min-width: 0; }
+.device-scope-panel { min-width: 0; padding: 14px; overflow: hidden; }
+.device-scope-panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
+.device-scope-panel__head h2 { margin: 3px 0 0; color: var(--nc-text); font-size: 14px; }
+.section-kicker { color: var(--nc-primary); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.scope-lock { border: 1px solid rgb(22 201 133 / 30%); border-radius: 10px; padding: 3px 7px; color: var(--nc-success); background: rgb(22 201 133 / 8%); font-size: 10px; }
+.scope-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 52px; border: 1px solid transparent; border-radius: 6px; padding: 8px 9px; color: var(--nc-text-secondary); background: transparent; text-align: left; cursor: pointer; }
+.scope-item:hover { border-color: var(--nc-border); background: var(--nc-surface-muted); }
+.scope-item.is-active { border-color: rgb(47 130 237 / 35%); color: var(--nc-text); background: var(--nc-primary-soft); }
+.scope-item > span { min-width: 0; }
+.scope-item strong, .scope-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-item strong { color: inherit; font-size: 12px; font-weight: 600; }
+.scope-item small { margin-top: 4px; color: var(--nc-text-muted); font-size: 10px; }
+.scope-item b { flex: 0 0 auto; color: var(--nc-primary); font-size: 13px; }
+.scope-divider { display: flex; align-items: center; justify-content: space-between; margin: 13px 4px 5px; color: var(--nc-text-muted); font-size: 10px; }
+.scope-divider span:last-child { color: var(--nc-text-secondary); }
+.scope-empty { padding: 10px 6px; color: var(--nc-text-muted); font-size: 11px; }
+.scope-note { display: flex; align-items: flex-start; gap: 6px; margin-top: 13px; border-top: 1px solid var(--nc-border); padding: 11px 3px 0; color: var(--nc-text-muted); font-size: 10px; line-height: 1.5; }
+.scope-note .el-icon { flex: 0 0 auto; margin-top: 2px; color: var(--nc-success); }
+.device-management-workspace .data-table { min-width: 1030px; font-size: 12px; }
+.device-management-workspace .data-table th, .device-management-workspace .data-table td { height: 42px; padding: 9px 11px; }
+.device-management-workspace .data-table th { font-size: 11px; }
+.device-management-workspace .filter-bar input, .device-management-workspace .filter-bar select { height: 34px; font-size: 12px; }
+.device-management-workspace .filter-input { width: 260px; }
+.device-management-workspace .device-subline { font-size: 11px; }
+.device-management-workspace .device-address { font-size: 11px; }
+.device-management-workspace .state-pill { font-size: 11px; }
+.device-table-wrap { overflow-x: auto; }
+.detail-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: -4px 0 13px; padding-bottom: 13px; border-bottom: 1px solid var(--nc-border); }
+.detail-hero h2 { margin: 4px 0 3px; color: var(--nc-text); font-size: 18px; }
+.detail-hero p { margin: 0; color: var(--nc-text-muted); font-size: 11px; }
+.detail-hero__badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.scope-flag { border: 1px solid var(--nc-border); border-radius: 5px; padding: 4px 7px; color: var(--nc-text-secondary); background: var(--nc-surface-muted); font-size: 11px; }
+.detail-section { margin-top: 14px; }
+.detail-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 3px; }
+.detail-section__head h3 { margin: 0; color: var(--nc-text); font-size: 13px; }
+.detail-section__head .muted { font-size: 10px; }
+.detail-capability-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.detail-capability-grid > div { display: grid; gap: 4px; min-height: 70px; border: 1px solid var(--nc-border); border-radius: 6px; padding: 9px; background: var(--nc-surface-muted); }
+.detail-capability-grid span { color: var(--nc-text-secondary); font-size: 10px; }
+.detail-capability-grid b { color: var(--nc-text); font-size: 12px; }
+.detail-capability-grid small { color: var(--nc-text-muted); font-size: 10px; line-height: 1.35; }
+.detail-empty { padding: 9px 0; color: var(--nc-text-muted); font-size: 11px; }
+.detail-event { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--nc-border); padding: 8px 0; color: var(--nc-text-secondary); font-size: 11px; }
+.detail-event:last-child { border-bottom: 0; }
+.form-hint { color: var(--nc-text-muted); font-size: 10px; line-height: 1.35; }
+
+@media (max-width: 1500px) {
+  .device-management-workspace { grid-template-columns: minmax(0, 1fr); }
+  .device-scope-panel { display: grid; grid-template-columns: auto minmax(210px, 1fr) minmax(180px, 1.3fr); align-items: center; gap: 8px 12px; }
+  .device-scope-panel__head { margin: 0; }
+  .scope-divider { margin: 0 0 0 4px; }
+  .scope-item { min-height: 45px; }
+  .scope-note { grid-column: 1 / -1; margin-top: 2px; }
+  .device-management-workspace .filter-input { width: 235px; }
+  .device-management-workspace .data-table th:nth-child(8), .device-management-workspace .data-table td:nth-child(8), .device-management-workspace .data-table th:nth-child(9), .device-management-workspace .data-table td:nth-child(9) { display: none; }
+  .device-management-workspace .data-table { min-width: 920px; }
+}
+@media (max-width: 1100px) {
+  .device-scope-panel { display: block; }
+  .device-scope-panel__head { margin-bottom: 11px; }
+  .scope-divider { margin: 13px 4px 5px; }
+  .scope-note { margin-top: 13px; }
+  .detail-capability-grid { grid-template-columns: minmax(0, 1fr); }
+}

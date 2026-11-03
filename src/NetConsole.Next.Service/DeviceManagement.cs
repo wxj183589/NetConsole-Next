@@ -73,11 +73,12 @@ internal sealed partial class Catalog
     private readonly Dictionary<string, DeviceImportCommitReceipt> _deviceImportReceipts = new(StringComparer.Ordinal);
 
     public DeviceInventoryPage QueryManagedDeviceInventory(int page = 1, int pageSize = 20,
-        string? search = null, string? status = null, string? siteId = null, string? groupId = null)
+        string? search = null, string? status = null, string? siteId = null, string? groupId = null,
+        string? vendor = null, string? deviceType = null)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var filters = InventoryFilters(search, status, siteId, groupId);
+        var filters = InventoryFilters(search, status, siteId, groupId, vendor, deviceType);
         var where = filters.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", filters);
         using var db = Open();
 
@@ -100,7 +101,7 @@ internal sealed partial class Catalog
             LEFT JOIN h3c_device_profiles p ON p.id=d.terminal_profile_id
             LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
             {where}";
-        AddInventoryParameters(summary, search, status, siteId, groupId);
+        AddInventoryParameters(summary, search, status, siteId, groupId, vendor, deviceType);
         using var summaryReader = summary.ExecuteReader();
         summaryReader.Read();
         var total = summaryReader.GetInt64(0);
@@ -126,7 +127,7 @@ internal sealed partial class Catalog
             {where}
             ORDER BY d.updated_ms DESC,d.id ASC
             LIMIT $limit OFFSET $offset";
-        AddInventoryParameters(command, search, status, siteId, groupId);
+        AddInventoryParameters(command, search, status, siteId, groupId, vendor, deviceType);
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * pageSize);
         using var reader = command.ExecuteReader();
@@ -408,12 +409,15 @@ internal sealed partial class Catalog
         return result;
     }
 
-    private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId)
+    private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId,
+        string? vendor, string? deviceType)
     {
         var filters = new List<string>();
         if (!string.IsNullOrWhiteSpace(search)) filters.Add("(d.id LIKE $search OR d.name LIKE $search OR d.management_ip LIKE $search OR d.vendor LIKE $search OR d.model LIKE $search OR st.name LIKE $search)");
         if (!string.IsNullOrWhiteSpace(siteId)) filters.Add("d.site_id=$site");
         if (!string.IsNullOrWhiteSpace(groupId)) filters.Add("d.group_id=$group");
+        if (!string.IsNullOrWhiteSpace(vendor)) filters.Add("d.vendor=$vendor");
+        if (!string.IsNullOrWhiteSpace(deviceType)) filters.Add("d.device_type=$deviceType");
         switch (status?.Trim().ToUpperInvariant())
         {
             case "ENABLED": filters.Add("d.enabled=1"); break;
@@ -425,11 +429,14 @@ internal sealed partial class Catalog
         return filters;
     }
 
-    private static void AddInventoryParameters(SqliteCommand command, string? search, string? status, string? siteId, string? groupId)
+    private static void AddInventoryParameters(SqliteCommand command, string? search, string? status, string? siteId, string? groupId,
+        string? vendor, string? deviceType)
     {
         if (!string.IsNullOrWhiteSpace(search)) command.Parameters.AddWithValue("$search", $"%{search.Trim()}%");
         if (!string.IsNullOrWhiteSpace(siteId)) command.Parameters.AddWithValue("$site", siteId.Trim());
         if (!string.IsNullOrWhiteSpace(groupId)) command.Parameters.AddWithValue("$group", groupId.Trim());
+        if (!string.IsNullOrWhiteSpace(vendor)) command.Parameters.AddWithValue("$vendor", vendor.Trim());
+        if (!string.IsNullOrWhiteSpace(deviceType)) command.Parameters.AddWithValue("$deviceType", deviceType.Trim());
     }
 
     private static DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader)
