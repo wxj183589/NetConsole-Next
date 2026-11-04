@@ -176,6 +176,30 @@ internal static class H3cHostKeyFingerprint
     }
 }
 
+/// <summary>
+/// User-facing SSH policy aliases.  The catalog stores one canonical value so
+/// host-key compare/pending/commit remains atomic and does not need to know
+/// about presentation terminology.
+/// </summary>
+internal static class H3cHostKeyPolicy
+{
+    public const string Automatic = "AUTO_UPDATE";
+    public const string Strict = "STRICT";
+
+    public static string Normalize(string? value)
+    {
+        var normalized = value?.Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "AUTO" or "AUTO_TRUST" or "AUTO_REPLACE" or "AUTO_UPDATE" => Automatic,
+            Strict => Strict,
+            _ => throw new ArgumentException(
+                "Host key policy must be AUTO_TRUST, AUTO_REPLACE, AUTO_UPDATE or STRICT.",
+                nameof(value))
+        };
+    }
+}
+
 internal static partial class H3cCredentialReference
 {
     [GeneratedRegex(@"^[A-Z][A-Z0-9_]{0,63}$", RegexOptions.CultureInvariant)]
@@ -194,7 +218,7 @@ internal sealed record H3cDeviceProfileSnapshot(
     bool Enabled,
     long CreatedMs,
     long UpdatedMs,
-    string HostKeyUpdatePolicy = "STRICT",
+    string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic,
     bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO",

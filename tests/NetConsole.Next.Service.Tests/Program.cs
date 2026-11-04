@@ -1641,7 +1641,7 @@ internal static class SchedulerTests
             catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.10", 22, "readonly", "LAB_SWITCH_A",
                 fingerprint, true, 0, 0));
             AssertThrows<ArgumentException>(() => catalog.CreateH3cDeviceProfile(new(Guid.NewGuid().ToString("N"),
-                "192.0.2.11", 22, "readonly", "LAB_SWITCH_A", string.Empty, true, 0, 0)));
+                "192.0.2.11", 22, "readonly", "LAB_SWITCH_A", string.Empty, true, 0, 0, "STRICT")));
             AssertThrows<InvalidOperationException>(() => catalog.CreateH3cDeviceProfile(new(profileId,
                 "192.0.2.11", 22, "readonly", "LAB_SWITCH_A", fingerprint, true, 0, 0)));
             await VerifiesH3cTransportLifecycle(catalog.GetH3cDeviceProfile(profileId)!, fingerprint);
