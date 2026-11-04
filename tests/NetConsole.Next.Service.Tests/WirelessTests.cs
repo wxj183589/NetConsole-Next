@@ -165,7 +165,8 @@ internal static class WirelessTests
         Directory.CreateDirectory(root);
         try
         {
-            var catalog = new Catalog(new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = System.Net.IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 });
+            var settings = new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = System.Net.IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
+            var catalog = new Catalog(settings);
             catalog.Initialize();
             for (var i = 1; i <= 101; i++)
                 catalog.CreateDeviceInventory(new(null, "AC-" + i, "192.0.2." + i, "H3C", "WX", "AC", "local", null, "fixture", true, null), "fixture");
@@ -174,8 +175,11 @@ internal static class WirelessTests
             var pin = "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('=');
             var profileId = Guid.NewGuid().ToString("N");
             catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.200", 22, "reader", "FIXTURE_REFERENCE", pin, true, 0, 0));
-            catalog.CreateTaskDefinition("scope-task", "H3C_SSH_READONLY", profileId, "display version", TimeSpan.FromSeconds(1), true);
+            var taskScope = new TaskSiteScopeAuthorizer(catalog, new P2B5SiteScopeStore(settings)).CaptureDefinition(profileId, "local-api-token");
+            catalog.CreateTaskDefinition("scope-task", "H3C_SSH_READONLY", profileId, "display version", TimeSpan.FromSeconds(1), true, scopeSnapshot: taskScope);
             catalog.CreateTaskRun("scope-task");
+            catalog.CreateTaskDefinition("legacy-scope-task", "H3C_SSH_READONLY", profileId, "display version", TimeSpan.FromSeconds(1), true);
+            catalog.CreateTaskRun("legacy-scope-task");
             var session = new TerminalSessionSnapshot("scope-session", profileId, "fixture", "SSH", "RESTRICTED_READONLY",
                 "192.0.2.200", 22, null, null, "CONNECTING", 1, null, 1, null, null, null, null, null, 0, null, false);
             catalog.CreateTerminalSession(session);
@@ -232,7 +236,8 @@ internal static class WirelessTests
             Assert(catalog.QueryTerminalSessions(query, hidden).Total == 0 && !catalog.TerminalSessionIsInScope(session.Id, hidden),
                 "terminal list/count/detail must reject another Site");
             Assert(catalog.RecentTaskRuns(scope: visible).Count == 1 && catalog.RecentTaskRuns(scope: hidden).Count == 0,
-                "generic task results must filter current claims before the limit");
+                "generic task results must filter current claims and proven creation scope before the limit");
+            Assert(catalog.RecentTaskRuns(scope: global).Count == 2, "global operator retains access to unscoped legacy records without exposing them to Site-scoped users");
             var revoked = P2B5SiteScopeDecision.Denied("revoked");
             Assert(!catalog.TerminalSessionIsInScope(session.Id, revoked) && catalog.QueryTerminalSessions(query, revoked).Total == 0 &&
                 catalog.RecentTaskRuns(scope: revoked).Count == 0, "revocation must hide terminal and task evidence");

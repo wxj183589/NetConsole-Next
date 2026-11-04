@@ -19,6 +19,8 @@ builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
+builder.Services.AddSingleton<TaskSiteScopeAuthorizer>();
+builder.Services.AddSingleton<ITaskScopeAuthorizer>(sp => sp.GetRequiredService<TaskSiteScopeAuthorizer>());
 builder.Services.AddSingleton<WirelessReadModelService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
@@ -55,7 +57,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
     {
         sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
-    }, sp.GetRequiredService<ITaskResultSink>()));
+    }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
@@ -977,20 +979,24 @@ if (settings.H3cEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog,
+        TaskSiteScopeAuthorizer taskScopes) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_DEFINITION_PERMISSION_DENIED", request.Id);
         if (request.TimeoutMs is < 100 or > 600000)
             return Results.BadRequest(new { error = "timeoutMs must be between 100 and 600000." });
         try
         {
+            var snapshot = taskScopes.CaptureDefinition(request.ProfileId, CurrentIdentity(context).UserId);
             rawCatalog.CreateTaskDefinition(request.Id, "H3C_SSH_READONLY", request.ProfileId,
-                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled);
+                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled, scopeSnapshot: snapshot);
             return Results.Created($"/api/system/tasks/definitions/{request.Id}",
                 rawCatalog.GetTaskDefinition(request.Id));
         }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         {
             return Results.Conflict(new { error = $"Task definition could not be saved ({ex.GetType().Name})." });
@@ -1006,10 +1012,11 @@ if (settings.H3cEnabled)
         {
             if (rawCatalog.GetTaskDefinition(definitionId)?.TaskType != "H3C_SSH_READONLY")
                 return Results.NotFound();
-            if (!scheduler.TryScheduleDefinition(definitionId, out var runId))
+            if (!scheduler.TryScheduleDefinition(definitionId, out var runId, CurrentIdentity(context).UserId))
                 return Results.Problem("The bounded collection queue is full or shutting down.", statusCode: StatusCodes.Status429TooManyRequests);
             return Results.Accepted("/api/system/tasks", new { runId });
         }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }

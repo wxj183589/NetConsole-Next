@@ -77,7 +77,7 @@ internal sealed record DeviceInventoryPage(
     DeviceInventorySummary Summary,
     IReadOnlyList<DeviceInventoryItem> Items);
 internal sealed record TaskDefinitionSnapshot(string Id, string TaskType, string Target, string Command,
-    long TimeoutMs, bool Enabled, string RestartPolicy);
+    long TimeoutMs, bool Enabled, string RestartPolicy, TaskScopeSnapshot? ScopeSnapshot = null);
 internal sealed record RawIntegrityAuditSnapshot(string Id, string RelativePath, long DetectedMs, string Reason,
     string? ExpectedSha256, string? ObservedSha256, long? ExpectedBytes, long? ObservedBytes, string? EvidencePath,
     string Detail, string? Disposition, string? DisposedBy, string? DispositionDetail, long? DisposedMs);
@@ -1324,7 +1324,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     }
 
     public void CreateTaskDefinition(string id, string taskType, string target, string command,
-        TimeSpan timeout, bool enabled = true, string restartPolicy = "NEVER")
+        TimeSpan timeout, bool enabled = true, string restartPolicy = "NEVER", TaskScopeSnapshot? scopeSnapshot = null)
     {
         if (taskType is not ("SIMULATED_DEVICE_ECHO" or "H3C_SSH_READONLY"))
             throw new ArgumentException("Unsupported task type.", nameof(taskType));
@@ -1342,7 +1342,37 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         }
         var now = UtcNowMs();
         using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using (var existing = db.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = @"SELECT request_json,EXISTS(SELECT 1 FROM task_runs WHERE definition_id=$id)
+                FROM task_definitions WHERE id=$id";
+            existing.Parameters.AddWithValue("$id", id);
+            using var reader = existing.ExecuteReader();
+            if (reader.Read())
+            {
+                using var storedRequest = JsonDocument.Parse(reader.GetString(0));
+                var storedScope = ReadTaskScope(storedRequest.RootElement);
+                if (reader.GetInt64(1) != 0 && (storedScope is not null || scopeSnapshot is not null))
+                {
+                    if (storedScope is null || storedScope.ProfileId != target ||
+                        (scopeSnapshot is not null && (scopeSnapshot.DeviceId != storedScope.DeviceId ||
+                            scopeSnapshot.SiteId != storedScope.SiteId || scopeSnapshot.ProfileId != storedScope.ProfileId)))
+                        throw new InvalidOperationException("TASK_SCOPE_FROZEN_CREATE_NEW_DEFINITION_ID");
+                    scopeSnapshot = storedScope;
+                }
+                else if (scopeSnapshot is null && storedScope is not null)
+                {
+                    if (storedScope.ProfileId != target) throw new InvalidOperationException("TASK_SCOPE_TARGET_MISMATCH");
+                    scopeSnapshot = storedScope;
+                }
+            }
+        }
+        if (scopeSnapshot is not null && (taskType != "H3C_SSH_READONLY" || scopeSnapshot.Version != 1 || scopeSnapshot.ProfileId != target))
+            throw new InvalidOperationException("TASK_SCOPE_TARGET_MISMATCH");
         using var insert = db.CreateCommand();
+        insert.Transaction = transaction;
         insert.CommandText = @"INSERT INTO task_definitions(id,task_type,target,request_json,timeout_ms,enabled,restart_policy,created_ms,updated_ms)
             VALUES($id,$type,$target,$request,$timeout,$enabled,$policy,$now,$now)
             ON CONFLICT(id) DO UPDATE SET task_type=excluded.task_type,target=excluded.target,request_json=excluded.request_json,
@@ -1350,12 +1380,13 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         insert.Parameters.AddWithValue("$id", id);
         insert.Parameters.AddWithValue("$type", taskType);
         insert.Parameters.AddWithValue("$target", target);
-        insert.Parameters.AddWithValue("$request", JsonSerializer.Serialize(new { command }));
+        insert.Parameters.AddWithValue("$request", JsonSerializer.Serialize(new { command, scopeSnapshot }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         insert.Parameters.AddWithValue("$timeout", (long)timeout.TotalMilliseconds);
         insert.Parameters.AddWithValue("$enabled", enabled ? 1 : 0);
         insert.Parameters.AddWithValue("$policy", restartPolicy);
         insert.Parameters.AddWithValue("$now", now);
         insert.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public TaskDefinitionSnapshot? GetTaskDefinition(string id)
@@ -1371,7 +1402,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         {
             var commandText = request.RootElement.GetProperty("command").GetString() ?? "";
             return new(reader.GetString(0), reader.GetString(1), reader.GetString(2), commandText,
-                reader.GetInt64(4), reader.GetInt32(5) != 0, reader.GetString(6));
+                reader.GetInt64(4), reader.GetInt32(5) != 0, reader.GetString(6), ReadTaskScope(request.RootElement));
         }
     }
 
@@ -1381,7 +1412,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         return CreateTaskRun(definition);
     }
 
-    public string CreateTaskRun(TaskDefinitionSnapshot definition)
+    public string CreateTaskRun(TaskDefinitionSnapshot definition, string? executionActorUserId = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (!definition.Enabled) throw new InvalidOperationException("Disabled task definitions cannot be scheduled.");
@@ -1401,7 +1432,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             var currentCommand = request.RootElement.GetProperty("command").GetString() ?? string.Empty;
             if (reader.GetString(0) != definition.TaskType || reader.GetString(1) != definition.Target ||
                 currentCommand != definition.Command || reader.GetInt64(3) != definition.TimeoutMs ||
-                (reader.GetInt32(4) != 0) != definition.Enabled || reader.GetString(5) != definition.RestartPolicy)
+                (reader.GetInt32(4) != 0) != definition.Enabled || reader.GetString(5) != definition.RestartPolicy ||
+                !SameTaskScope(ReadTaskScope(request.RootElement), definition.ScopeSnapshot))
                 throw new InvalidOperationException("Task definition changed during queue admission; reload it and retry.");
         }
         string? sourceId = null;
@@ -1412,7 +1444,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             profile.CommandText = "SELECT source_id FROM h3c_device_profiles WHERE id=$id AND enabled=1";
             profile.Parameters.AddWithValue("$id", definition.Target);
             sourceId = Convert.ToString(profile.ExecuteScalar());
-            if (sourceId is null) throw new InvalidOperationException("Enabled H3C profile disappeared before task-run admission.");
+            if (string.IsNullOrWhiteSpace(sourceId)) throw new InvalidOperationException("Enabled H3C profile disappeared before task-run admission.");
         }
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -1424,12 +1456,17 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$now", now);
         command.Parameters.AddWithValue("$definition", definition.Id);
         command.ExecuteNonQuery();
+        if (executionActorUserId is not null)
+            InsertDeviceAudit(db, transaction, executionActorUserId, "TASK_RUN_ADMITTED", id,
+                new { definitionId = definition.Id, scopeRevision = definition.ScopeSnapshot?.ClaimsRevision,
+                    sourceDeviceId = definition.ScopeSnapshot?.DeviceId, sourceSiteId = definition.ScopeSnapshot?.SiteId }, "ACCEPTED");
         transaction.Commit();
         return id;
     }
 
-    public void TransitionTaskRun(string id, string nextState, string? failureReason = null)
+    public void TransitionTaskRun(string id, string nextState, string? failureReason = null, long? admittedTimeoutMs = null)
     {
+        if (admittedTimeoutMs is < 100 or > 600000) throw new ArgumentOutOfRangeException(nameof(admittedTimeoutMs));
         if (nextState is not ("CONNECTING" or "RUNNING" or "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED"))
             throw new ArgumentException("Unsupported task run state.", nameof(nextState));
         var now = UtcNowMs();
@@ -1438,13 +1475,14 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.CommandText = @"UPDATE task_runs SET state=$next,
             started_ms=CASE WHEN $next='CONNECTING' THEN COALESCE(started_ms,$now) ELSE started_ms END,
             deadline_ms=CASE WHEN $next='CONNECTING' AND definition_id IS NOT NULL
-                THEN $now+(SELECT timeout_ms FROM task_definitions WHERE id=definition_id) ELSE deadline_ms END,
+                THEN $now+COALESCE($admittedTimeout,(SELECT timeout_ms FROM task_definitions WHERE id=definition_id)) ELSE deadline_ms END,
             ended_ms=CASE WHEN $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED') THEN $now ELSE ended_ms END,
             failure_reason=$reason
             WHERE id=$id AND ((state='QUEUED' AND $next IN ('CONNECTING','FAILED','CANCELLED')) OR
               (state='CONNECTING' AND $next IN ('RUNNING','FAILED','TIMED_OUT','CANCELLED')) OR
               (state='RUNNING' AND $next IN ('SUCCEEDED','FAILED','TIMED_OUT','CANCELLED')))";
         command.Parameters.AddWithValue("$next", nextState);
+        command.Parameters.AddWithValue("$admittedTimeout", (object?)admittedTimeoutMs ?? DBNull.Value);
         command.Parameters.AddWithValue("$now", now);
         command.Parameters.AddWithValue("$reason", (object?)failureReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$id", id);
@@ -1653,6 +1691,21 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var command = db.CreateCommand();
         var scopeParameters = new List<(string Name, object? Value)>();
         var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
+        if (scope is not null && !scope.IsGlobal)
+        {
+            // A legacy H3C run has no proven creation boundary. Global operators
+            // retain access; a Site-scoped response requires a frozen target proof.
+            const string safeJson = "CASE WHEN json_valid(frozen.request_json) THEN frozen.request_json ELSE '{}' END";
+            scopeFilter += $@" AND (t.task_type<>'H3C_SSH_READONLY' OR EXISTS(
+                SELECT 1 FROM task_definitions frozen
+                JOIN h3c_device_profiles profile ON profile.source_id=t.source_id
+                JOIN device_inventory device ON device.terminal_profile_id=profile.id
+                WHERE frozen.id=t.definition_id AND json_extract({safeJson},'$.scopeSnapshot.version')=1
+                  AND json_extract({safeJson},'$.scopeSnapshot.profileId')=profile.id
+                  AND json_extract({safeJson},'$.scopeSnapshot.deviceId')=device.id
+                  AND json_extract({safeJson},'$.scopeSnapshot.siteId')=source.site_id
+                  AND device.site_id=source.site_id))";
+        }
         command.CommandText = $@"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
                 o.relative_path,o.sha256,o.byte_count,o.parsed_json,o.capture_status,o.parse_status
             FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id

@@ -11,7 +11,8 @@ internal sealed record P2B5SiteScopeDecision(
     string State,
     bool IsGlobal,
     IReadOnlySet<string> AllowedSiteReferences,
-    string Detail)
+    string Detail,
+    string? ClaimsRevision = null)
 {
     public bool IsAuthorized => IsGlobal || string.Equals(State, "AUTHORIZED", StringComparison.Ordinal);
 
@@ -74,6 +75,7 @@ internal sealed class P2B5SiteScopeStore
             }
 
             var allowed = new HashSet<string>(StringComparer.Ordinal);
+            var revisionEvidence = new List<string>();
             var conflict = false;
             foreach (var sourceClaims in claims.GroupBy(claim => new SiteMembershipSource(
                          claim.SiteReference, claim.SourceKind, claim.SourceReference)))
@@ -104,14 +106,21 @@ internal sealed class P2B5SiteScopeStore
                 }
 
                 if (states[0] == "ACTIVE" && effectiveClaims.Any(claim => claim.IsValidAt(now)))
+                {
                     allowed.Add(sourceClaims.Key.SiteReference);
+                    revisionEvidence.AddRange(effectiveClaims.Where(claim => claim.IsValidAt(now)).Select(claim =>
+                        System.Text.Json.JsonSerializer.Serialize(new { claim.SiteReference, claim.SourceKind, claim.SourceReference,
+                            claim.Revision, claim.ValidFromMs, claim.ValidToMs })));
+                }
             }
 
             if (conflict)
                 return P2B5SiteScopeDecision.Conflict("The current user has conflicting active Site claims.");
             if (allowed.Count == 0)
                 return P2B5SiteScopeDecision.Denied("The current user has no active Site membership.");
-            return new("AUTHORIZED", false, allowed, "Explicit Site membership claims are active.");
+            return new("AUTHORIZED", false, allowed, "Explicit Site membership claims are active.",
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+                    System.Text.Json.JsonSerializer.Serialize(revisionEvidence.Order(StringComparer.Ordinal))))).ToLowerInvariant()[..24]);
         }
         catch (SqliteException)
         {

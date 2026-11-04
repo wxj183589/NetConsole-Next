@@ -19,3 +19,5 @@ Batch E：多来源master不推断HA，返回MULTI_SOURCE_MASTER；完整回归�
 数据/生命周期：未修改真实数据/schema/migration/SmartHub；只读检查12个Next测试catalog寻找白名单凭据引用，未命中。仅精确退役本轮两组共30个失效生成静态资源，逐项确认新包不引用；未清理基线文件、历史数据库或其他工作树。保留有效代码工作树、最终截图和精简日志用于复核。
 
 Checkpoint F：复查阻断后继续实现只读AP/来源状态历史、runtime-state API、时效策略和GUI；14既有无线方法+13新runtime方法、真实最小SQLite和11种Chrome离线状态PASS。未新增schema。详见AUTONOMOUS_RUNTIME_HISTORY_ACCEPTANCE.md。
+
+Checkpoint G：使用现有Task request JSON冻结单目标scope，并保留definition_id/source_id引用；增加执行边界当前actor/role/Site复查，撤权后不连接/不发后续command，原子输出封存PARTIAL；11个最小SQLite/调度器case PASS。既有38个后端无线/状态/任务case对应各自计数，不与原57场景重复累加。

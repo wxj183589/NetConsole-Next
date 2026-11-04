@@ -474,7 +474,7 @@ internal sealed partial class WirelessReadModelService
     }
 
     private static string ClaimsRevision(P2B5SiteScopeDecision scope) =>
-        scope.IsGlobal ? "GLOBAL" : WirelessProjectionEngine.Fingerprint(new[] { scope.State, string.Join(',', scope.AllowedSiteReferences.Order(StringComparer.Ordinal)) });
+        scope.IsGlobal ? "GLOBAL" : scope.ClaimsRevision ?? WirelessProjectionEngine.Fingerprint(new[] { scope.State, string.Join(',', scope.AllowedSiteReferences.Order(StringComparer.Ordinal)) });
 }
 
 internal sealed record WirelessCatalogSnapshot(
