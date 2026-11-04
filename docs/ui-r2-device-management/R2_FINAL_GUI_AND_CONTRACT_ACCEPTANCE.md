@@ -42,3 +42,11 @@
 ## 收口条件
 
 只剩在真实有效 Windows 125% 显示环境重新跑 GUI 门禁；本轮不修改全局缩放、不注销、不重启、不结束用户浏览器。R3 进入实现前仍需冻结无线 API 合同，详见 `R3_WIRELESS_UI_READONLY_PREPARATION.md`。
+
+## 2026-11-04 当前运行复核
+
+本轮实际 Win32/Chrome DPI 仍为 96（100%），隔离 headed Chrome 的 `visualViewport.scale=1`、`devicePixelRatio=1`、CSS viewport=`1584×849`，截图像素=`1584×849`。`LogPixels=120` 仅作为注册表值保留，未被当作原生 125% 证据。
+
+当前裁决保持：`WINDOWS_NATIVE_125PCT=PENDING_ENVIRONMENT_NOT_READY`、`NATIVE_125PCT_SCREENSHOTS=0`、`GATE_D_GUI=PARTIAL`。本轮 Browser CRUD 只作为当前 100% 回归基线，未发现需要修复的 R2 UI 缺陷，也未修改 R2 产品代码。
+
+详细记录见：`R2_WINDOWS_125PCT_NATIVE_FINAL_RECHECK.md`、`R2_GUI_NATIVE_DPI_EVIDENCE_MATRIX.md` 和 `R2_FINAL_GATE_CLOSURE_20261104.md`。

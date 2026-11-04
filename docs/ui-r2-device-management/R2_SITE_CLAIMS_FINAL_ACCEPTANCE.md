@@ -23,3 +23,9 @@
 - 无真实设备访问、真实登录、网络扫描、生产数据写入或 SmartHub 修改。
 - `/wireless` 仍是 disabled；R3 仍缺授权 AC inventory、AP facts、AC/AP relation、AP groups、serial/MAC identity、runtime status、stack/cluster topology、task/audit 的正式无线业务合同。
 - 原生 Windows 125% 需在真实有效 125% 环境重新执行 GUI 门禁；本轮不修改系统缩放。
+
+## 2026-11-04 回归补充
+
+本轮重新执行 `tests/r2_site_claims_e2e.py`，实际输出为 `R2_SITE_CLAIMS_TESTS=31/31 PASS`；另执行 P2B5 Site Scope HTTP、Service harness 和 Browser CRUD，均通过。Site claims 结论继续为 `PASS`，不因 Windows 原生 125% 环境阻断而降级。
+
+当前 Windows 有效显示/Chrome DPI 仍为 96（100%），故 `GATE_D_GUI=PARTIAL`、`R2_FINAL_STATUS=PARTIAL` 保持不变。原生 125% 没有截图、缺陷复验或修复，详见 `R2_WINDOWS_125PCT_NATIVE_FINAL_RECHECK.md`。
