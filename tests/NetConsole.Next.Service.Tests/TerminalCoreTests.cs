@@ -406,6 +406,14 @@ internal static class TerminalCoreTests
             Assert(catalog.SshHostKeyHistory(deviceId).Any(x => x.State == "EFFECTIVE" && x.KeyType == "ssh-ed25519"),
                 "SSH Exec host-key verification should retain the concrete SSH key type");
 
+            var connectionTest = new H3cConnectionTestService(catalog,
+                new H3cSshDeviceSessionFactory(catalog, new TerminalCoreFixedH3cCredentialProvider("synthetic"), execFactory),
+                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+            var summary = await connectionTest.TestAsync(deviceId, CancellationToken.None);
+            Assert(summary is not null && summary.Status == "CONNECTED" && summary.Vendor == "H3C Comware" &&
+                   summary.Version == "7.1.070",
+                "one-click connection test should return a sanitized connection and device-version summary");
+
             var unauthorized = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "192.0.2.99", 22,
                 "reader", "TEST_CREDENTIAL", "", true, 0, 0, "AUTO_UPDATE", false);
             var unauthorizedDecision = catalog.CheckSshHostKey(unauthorized, "ssh-ed25519", first);
@@ -506,7 +514,7 @@ internal static class TerminalCoreTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsConnected) throw new IOException("terminal host-key test transport is disconnected");
-            return Task.FromResult("synthetic Comware output");
+            return Task.FromResult("H3C Comware Software, Version 7.1.070, Release 1234\n");
         }
 
         public void Abort() => IsConnected = false;
