@@ -422,6 +422,112 @@ export interface H3cFact {
   freshness?: string
 }
 
+export interface WirelessScope {
+  status: string
+  claimsRevision: string
+}
+
+export interface WirelessAcMember {
+  deviceId: string
+  displayName: string
+  siteId: string
+  managementIp: string
+  vendor: string
+  model: string
+  version?: string | null
+  role: string
+  runtimeState: string
+  connectionStatus: string
+  enabled: boolean
+}
+
+export interface WirelessAcDomain {
+  id: string
+  displayName: string
+  domainKind: string
+  topologyStatus: string
+  memberDeviceIds: string[]
+  members: WirelessAcMember[]
+  sourceEvidenceRefs: string[]
+  siteScopeStatus: string
+  revision: string
+  asOf: number
+}
+
+export interface WirelessObservation {
+  id: string
+  resourceId: string
+  sourceAcDeviceId: string
+  sourceAcDomainId: string
+  sourceSiteId: string
+  observedApName: string
+  serialEvidence?: string | null
+  normalizedMacSet: string[]
+  apModel?: string | null
+  apGroup?: string | null
+  rawState: string
+  normalizedState: string
+  stateConfidence: string
+  capturedMs: number
+  receivedMs: number
+  rawManifestRef: string
+  parserRevision: string
+  sourceRevision: string
+  relationStatus: string
+}
+
+export interface WirelessApResource {
+  id: string
+  displayName: string
+  identityStatus: string
+  serialEvidence?: string | null
+  normalizedMacSet: string[]
+  sourceObservationIds: string[]
+  sourceAcDomainIds: string[]
+  scopeStatus: string
+  firstSeenMs: number
+  lastSeenMs: number
+  sourceRevision: string
+  projectionRevision: string
+  conflictReason?: string | null
+  observations: WirelessObservation[]
+}
+
+export interface WirelessApGroup {
+  id: string
+  sourceAcDeviceId: string
+  sourceAcDomainId: string
+  sourceGroupKey: string
+  displayName: string
+  groupScope: string
+  memberResourceIds: string[]
+  sourceRevision: string
+  scopeStatus: string
+}
+
+export interface WirelessPage<T> {
+  items: T[]
+  page: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+  asOf: number
+  scope: WirelessScope
+  sourceRevision: string
+  warnings: string[]
+}
+
+export interface WirelessTopology {
+  domainId: string
+  domainKind: string
+  topologyStatus: string
+  memberDeviceIds: string[]
+  sourceEvidenceRefs: string[]
+  confirmed: boolean
+  revision: string
+  asOf: number
+}
+
 export interface HostTool {
   id: string
   displayName: string
@@ -560,6 +666,24 @@ export function getZteFacts(id: string, params: { kind?: string; history?: boole
 }
 export function getH3cFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<H3cFact[]> {
   return request(queryPath(`/api/system/h3c/profiles/${encodeURIComponent(id)}/facts`, params))
+}
+export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
+  return request(queryPath('/api/system/wireless/ac-domains', params))
+}
+export function getWirelessApResources(params: { page?: number; pageSize?: number; serial?: string; mac?: string; domainId?: string; sourceAcId?: string; search?: string } = {}): Promise<WirelessPage<WirelessApResource>> {
+  return request(queryPath('/api/system/wireless/ap-resources', params))
+}
+export function getWirelessApResource(id: string): Promise<WirelessApResource> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}`)
+}
+export function getWirelessApObservations(id: string, params: { page?: number; pageSize?: number; sourceAcId?: string; domainId?: string } = {}): Promise<WirelessPage<WirelessObservation>> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/observations`, params))
+}
+export function getWirelessTopology(domainId: string): Promise<WirelessTopology> {
+  return request(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/topology`)
+}
+export function getWirelessApGroups(domainId: string, params: { page?: number; pageSize?: number } = {}): Promise<WirelessPage<WirelessApGroup>> {
+  return request(queryPath(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/ap-groups`, params))
 }
 function queryPath(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams()

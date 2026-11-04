@@ -19,6 +19,7 @@ builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
+builder.Services.AddSingleton<WirelessReadModelService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
@@ -1048,6 +1049,142 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 
+app.MapGet("/api/system/wireless/ac-domains", (HttpContext context, HttpRequest request,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var sourceAcId = QueryValue(request, "sourceAcId");
+        var items = snapshot.AcDomains.Where(item => sourceAcId is null || item.MemberDeviceIds.Contains(sourceAcId, StringComparer.Ordinal)).ToArray();
+        return Results.Ok(ToWirelessPage(items, request, snapshot));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ac-domains/{id}", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var item = snapshot.AcDomains.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        return item is null ? WirelessResourceNotVisible() : Results.Ok(item);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources", (HttpContext context, HttpRequest request,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var serial = WirelessProjectionEngine.NormalizeSerial(QueryValue(request, "serial"));
+        var mac = QueryValue(request, "mac") is { } rawMac ? WirelessProjectionEngine.NormalizeMac(rawMac) : null;
+        if (mac is { Length: 0 }) return Results.BadRequest(new { error = "mac must be a complete normalized MAC address." });
+        var domainId = QueryValue(request, "domainId");
+        var sourceAcId = QueryValue(request, "sourceAcId");
+        var search = QueryValue(request, "search");
+        var items = snapshot.ApResources.Where(item =>
+                (serial is null || string.Equals(item.SerialEvidence, serial, StringComparison.Ordinal)) &&
+                (mac is null || item.NormalizedMacSet.Contains(mac, StringComparer.Ordinal)) &&
+                (domainId is null || item.SourceAcDomainIds.Contains(domainId, StringComparer.Ordinal)) &&
+                (sourceAcId is null || item.Observations.Any(observation => string.Equals(observation.SourceAcDeviceId, sourceAcId, StringComparison.Ordinal))) &&
+                (search is null || string.Equals(item.Id, search, StringComparison.Ordinal) || string.Equals(item.DisplayName, search, StringComparison.Ordinal)))
+            .ToArray();
+        return Results.Ok(ToWirelessPage(items, request, snapshot));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var item = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        return item is null ? WirelessResourceNotVisible() : Results.Ok(item);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/observations", (HttpContext context, HttpRequest request, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var resource = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        if (resource is null) return WirelessResourceNotVisible();
+        var sourceAcId = QueryValue(request, "sourceAcId");
+        var domainId = QueryValue(request, "domainId");
+        var items = resource.Observations.Where(item =>
+            (sourceAcId is null || string.Equals(item.SourceAcDeviceId, sourceAcId, StringComparison.Ordinal)) &&
+            (domainId is null || string.Equals(item.SourceAcDomainId, domainId, StringComparison.Ordinal))).ToArray();
+        return Results.Ok(ToWirelessPage(items, request, snapshot));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ac-domains/{id}/topology", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var domain = snapshot.AcDomains.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        return domain is null ? WirelessResourceNotVisible() : Results.Ok(new WirelessTopologyView(
+            domain.Id, domain.DomainKind, domain.TopologyStatus, domain.MemberDeviceIds, domain.SourceEvidenceRefs,
+            string.Equals(domain.TopologyStatus, "CONFIRMED", StringComparison.Ordinal), domain.Revision, domain.AsOf));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ac-domains/{id}/ap-groups", (HttpContext context, HttpRequest request, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        if (!snapshot.AcDomains.Any(domain => string.Equals(domain.Id, id, StringComparison.Ordinal))) return WirelessResourceNotVisible();
+        var items = snapshot.ApGroups.Where(group => string.Equals(group.SourceAcDomainId, id, StringComparison.Ordinal)).ToArray();
+        return Results.Ok(ToWirelessPage(items, request, snapshot));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-groups/{id}/members", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var group = snapshot.ApGroups.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        if (group is null) return WirelessResourceNotVisible();
+        var items = snapshot.ApResources.Where(resource => group.MemberResourceIds.Contains(resource.Id, StringComparer.Ordinal)).ToArray();
+        return Results.Ok(new { items, total = items.Length, asOf = snapshot.AsOf, scope = snapshot.Scope, sourceRevision = snapshot.SourceRevision, warnings = snapshot.Warnings });
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
 // Vue Router uses history mode. API and WebSocket routes are mapped above; all other
 // application paths must return the same offline entry so browser refresh keeps working.
 app.MapFallbackToFile("index.html");
@@ -1062,6 +1199,44 @@ static bool IsAllowedWebHost(HostString host, RuntimeSettings settings)
         string.Equals(host.Host, "[::1]", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(host.Host, "::1", StringComparison.OrdinalIgnoreCase)) return true;
     return false;
+}
+
+static IResult? WirelessScopeGuard(HttpContext context, P2B5SiteScopeStore scopes)
+{
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized)
+    {
+        var status = scope.State == "UNAVAILABLE" ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status403Forbidden;
+        var error = scope.State switch
+        {
+            "CONFLICT" => "P2B_SITE_SCOPE_CONFLICT",
+            "DENIED" => "P2B_SITE_SCOPE_DENIED",
+            "UNAVAILABLE" => "WIRELESS_AUTHORITY_UNAVAILABLE",
+            _ => "P2B_SITE_SCOPE_DENIED"
+        };
+        return Results.Json(new { error, detail = scope.Detail }, statusCode: status);
+    }
+    context.Items[P2B5SiteScopeHttpContextKeys.Decision] = scope;
+    return null;
+}
+
+static IResult WirelessResourceNotVisible() =>
+    Results.Json(new { error = "RESOURCE_NOT_VISIBLE" }, statusCode: StatusCodes.Status404NotFound);
+
+static IResult WirelessAuthorityUnavailable(Exception exception) =>
+    Results.Json(new { error = "WIRELESS_AUTHORITY_UNAVAILABLE", detail = "Wireless source facts are not safely readable." },
+        statusCode: StatusCodes.Status503ServiceUnavailable);
+
+static WirelessPage<T> ToWirelessPage<T>(IReadOnlyList<T> items, HttpRequest request, WirelessProjectionSnapshot snapshot)
+{
+    var page = ParseQueryInt(QueryValue(request, "page"), 1);
+    var pageSize = ParseQueryInt(QueryValue(request, "pageSize") ?? QueryValue(request, "limit"), 50);
+    if (page < 1 || pageSize is < 1 or > 100)
+        throw new InvalidDataException("page must be positive and pageSize must be between 1 and 100.");
+    var total = items.Count;
+    var pageItems = items.Skip((page - 1) * pageSize).Take(pageSize).ToArray();
+    return new(pageItems, page, pageSize, total, page * (long)pageSize < total, snapshot.AsOf,
+        snapshot.Scope, snapshot.SourceRevision, snapshot.Warnings);
 }
 
 static int ParseQueryInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;

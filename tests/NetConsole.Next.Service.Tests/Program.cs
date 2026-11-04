@@ -29,6 +29,8 @@ else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
 else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
     SchedulerTests.RunPhase11H3cFactReplay();
+else if (args.Length > 0 && args[0] == "--wireless-tests")
+    WirelessTests.Run();
 else
     await SchedulerTests.RunAsync();
 

@@ -28,7 +28,7 @@ const nav = [
   { path: '/network-planning', label: '网络规划', icon: Share },
   { path: '/terminal', label: '终端控制台', icon: Connection },
   { path: '/tasks', label: '任务中心', icon: List },
-  { path: '/wireless', label: '无线管理', icon: TrendCharts, disabled: true },
+  { path: '/wireless', label: '无线业务', icon: TrendCharts },
   { path: '/rail', label: '轨道交通', icon: DataLine, disabled: true },
   { path: '/tools', label: '工具集', icon: Tools },
   { path: '/files', label: '文件管理', icon: FolderOpened },
