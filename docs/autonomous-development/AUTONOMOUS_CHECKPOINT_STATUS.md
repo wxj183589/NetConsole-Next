@@ -1,18 +1,19 @@
-# 最终Checkpoint
+# 最新Checkpoint（J）
 
-CURRENT_BATCH=E_ACCEPTANCE_AND_HANDOFF
-COMPLETED_TASKS=13
+CURRENT_BATCH=J_RAW_FACT_PUBLICATION_AND_HANDOFF
+TASKS=26
+COMPLETED_TASKS=18
 FAILED_TASKS=0
 BLOCKED_TASKS=4
-PARTIAL_BLOCKED_TASKS=3
-NEW_DEFECTS=已全部进入20项任务池，参见各项EVIDENCE
-FIXED_DEFECTS=A01-A09,A17,A18（按任务计11项，不按断言重复计数）
-TESTS_RUN=23_UNIT_CASES_PLUS_9_GUI_STATES_PLUS_SUITE_GATES
-TESTS_PASS=23_UNIT_CASES_AND_9_GUI_STATES_AND_CORE_HARNESS
+PARTIAL_BLOCKED_TASKS=4
+NEW_DEFECTS=A21-A26已进入动态任务池
+FIXED_DEFECTS=以任务池逐项EVIDENCE和验收文档为准
+TESTS_RUN=后端61方法/分支、Vitest5、Workspace4、15浏览器状态、完整Service suite及各构建
+TESTS_PASS=后端61个具名方法/分支、Vitest5、Workspace Python4；另有15个GUI状态及完整Service harness
 TESTS_FAIL=0_CURRENT_PRODUCT_FAILURES
-LATEST_CODE_COMMIT=8d5244f144b7969df80522356750d82c3378edb3
-LATEST_COMMIT=本文件所属最终文档commit，以git log为准
-NEXT_RECOMMENDED_TASK=取得安全凭据/维护窗口后完成Service-backed API、真实双AC证据和切换；独立评审持久化方案
-FINAL_STATUS=PARTIAL
+LATEST_CODE_COMMIT=82a67f1
+LATEST_COMMIT=本文件所属报告commit，以git log为准
+NEXT_RECOMMENDED_TASK=安全认证材料和维护窗口到位后HTTP/真实双AC；评审协调多命令Plan及正式identity生命周期
+FINAL_STATUS=PARTIAL_PENDING_EXTERNAL_GATES
 
-用户追加自动登录授权已生效；不再逐次审批。剩余认证是外部材料缺失，非额外行为批准要求。UI预览PID60784持续保留。没有Merge/Push/Release。
+F-J额外交付只读Recent10/时效、单目标Task scope、当前交互身份/ZIP撤权、事实修订/归属及单命令Raw发布。旧Checkpoint E的“Recent10/task snapshot均被schema阻断”结论已被实现证据修正。自动登录授权持续有效；没有Merge/Push/Release，没有终止预览PID60784。未宣称全产品完成。

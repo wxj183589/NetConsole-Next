@@ -1,106 +1,17 @@
-# 自主开发最终报告
+# 自主开发阶段报告（Checkpoint J，PARTIAL）
 
-本轮以无线业务为第一优先，结合代码缺陷动态发现20项任务：完成13项、部分完成但后续受阻3项、完全受外部条件阻断4项；5批次产品修复提交。高优先级选择依据是身份正确性、Site权限泄露、失败状态误报和既有UI阻断，不是新增无证据功能。
+2026-11-05；任务池26项：完成18、部分完成4、阻断4。产品HEAD=82a67f1，文档提交以git log/Workspace报告回执为准。不是全产品发布验收结论。
 
-主要文件：WirelessReadModel.cs、H3cFacts.cs、Catalog.cs、Catalog.Terminal.cs、Program.cs、WirelessTests.cs、WirelessView.vue、api/client.ts、r3_dual_ac_api_e2e.py和wireless_browser_e2e.mjs。正式schema/migration零变更。
+F-J在前期无线/终端修复上继续交付：只读AP及各来源Current/PreviousEffective/Recent10、显式时效和部分历史提示；单目标actor/Site/endpoint冻结与执行撤权；当前交互session与机器级文件/ZIP授权；事实Current单调、冲突整批回滚、采集时Site/设备归属；成功Raw到单命令facts发布及可核验hash引用。任务定义已有run后命令不可原地改写，超时编辑不改变已入队deadline。
 
-设备管理未发现本轮核心回归；现有Service harness覆盖的设备ID、CRUD、凭据、FIT-AP创建限制、Site claims、LLDP/解析、调度、Raw与故障注入均通过。未重跑R2 HTTP 31条，不能改写为31/31本轮端到端通过。
+后端61个具名方法/分支及完整harness通过，Vitest5、Workspace Python4、JS路径脚本、vue-tsc、Vite与Service/Tests/LocalManager构建通过。浏览器15状态通过，实际Chrome 1920/2560、DPR1；包含历史错误/不完整、分页、来源筛选、文件401/403、撤权后晚到200。HTTP/Service-backed GUI实际受mutex阻断；原生125%未验收。错误命令调用Python模块未找到是测试启动方式错误，改为现有workspace_paths_test.py后4项通过，不计产品失败。
 
-终端改善：服务端当前Site门禁覆盖创建/历史/详情/事件/回放/导出/ticket/stream；WebSocket每次输入/输出检查当前Site。任务改善：结果读取先按当前Site过滤再取limit；完整持久scope snapshot与actor生命周期仍未交付。
+真实四台模拟器只有TCP/协议协商证据，自动none/本机密钥/Agent未认证成功。用户自动登录授权持续有效，不再重复询问审批；缺少可用认证材料，不把fixture当实时事实。没有HA、切换或恢复实测，没有设备配置变化。
 
-采集改善：AP地址事实能够贯通，MAC只与同次采集source关联；失败保留旧有效证据，离线/旧事实标STALE。身份改善：完整MAC严格解析、缺证据不算矛盾、相同AP多AC去重、相同revision冲突与多master原因显式保留。
+单命令事实保留独立run来源，不拼接不同任务的AP表/地址表；当前可出现Serial候选且显示STALE。协调多命令Plan、正式身份延续/replacement、组/域稳定生命周期、完整多目标Report及长期Audit Authority仍待独立持久合同评审。既有JSON已经支持的Recent10、单目标scope及Raw provenance已完成，不再称它们全部受schema阻断。
 
-无线UI已在实际Chrome离线fixture中可交互：105条分页边界、搜索、状态筛选、AC1/AC2组与来源联动、无数据、权限错误、采集错误、revision变化与状态冲突均验证。未完成新代码Service-backed GUI，不能声明整产品可发布。
+所有项目产物限定Next Workspace，真实数据/schema/migration零修改；无旧HistoryStore读写，无整个Site/数据根复制。主仓库clean保留27ebfb8，用户预览PID60784保留。开发分支codex-A/netconsole-next-autonomous-full-feature只本地提交，不push/merge/release；DevStatus另行本地交接。
 
-真实模拟器证据仅包括四台TCP/协议可达与SSH认证协商/自动密钥尝试，没有登录成功、设备身份、HA、AP实际归属、切换或恢复证据。双AC身份去重与1+1仅有明确离线fixture依据。没有配置变更需要恢复。
+主要文件：WirelessRuntimeState.cs、TaskSiteScope.cs、InteractiveScopeAuthorizer.cs、H3cFactScope.cs、H3cTaskFactPublication.cs、H3cFacts.cs、Program.cs、FilesView.vue、WirelessView.vue及各定向测试。各批详细证据见本目录*_ACCEPTANCE.md、测试矩阵、GUI证据及阻断登记；下一步是安全认证材料/Service维护窗口下真实Gate和持久合同评审。
 
-14/57原设计场景的不变量有本轮离线通过证据，其余按矩阵逐项记录BLOCKED/NOT_IMPLEMENTED。测试总数保守分开：14个无线方法+5个Vitest+4个Workspace Python=23个具名unit case均通过；另有9个Browser状态、JS Workspace脚本和完整Service harness suite通过。不把多个粒度或旧报告数字相加。所有产品测试当前FAIL=0；HTTP启动失败归类B02环境阻断，不隐藏。
-
-数据库后续需要独立设计：稳定identity/replacement、Current/PreviousEffective/Recent10、任务actor/scope snapshot、group source key和manifest/hash生命周期不能长期由临时projection替代。独立方案已交付，未在真实用户数据应用。
-
-```ini
-PROJECT=NetConsole-Next-Autonomous-Full-Feature-Development-And-Continuous-Acceptance
-MAIN_REPOSITORY_PATH=D:\study\NetConsole-Next-Workspace\NetConsole-Next
-IMPLEMENTATION_WORKTREE=D:\study\NetConsole-Next-Workspace\worktrees\next-autonomous-full-feature
-START_HEAD=27ebfb8cd33ae6174379350db35ba0cce45e2f08
-FINAL_CODE_HEAD=8d5244f144b7969df80522356750d82c3378edb3
-FINAL_HEAD=见最终提交回执（文档不能自引用其commit SHA）
-AUTONOMOUS_MODE=ENABLED
-TASKS_DISCOVERED=20
-TASKS_SELECTED=20
-TASKS_COMPLETED=13
-TASKS_PARTIAL=3
-TASKS_BLOCKED=4
-TASKS_REMAINING=7_WITH_EXPLICIT_BLOCKERS
-WIRELESS_BUSINESS_STATUS=PARTIAL_READONLY_PROJECTION
-DEVICE_MANAGEMENT_STATUS=CORE_REGRESSION_PASS_HTTP_PENDING
-TERMINAL_STATUS=SITE_GUARDS_IMPLEMENTED_HTTP_PENDING
-COLLECTION_STATUS=FIXED_OFFLINE_FACT_CHAIN_LIVE_PENDING
-TASK_SYSTEM_STATUS=RESULT_SCOPE_FIXED_SNAPSHOT_PENDING
-NETWORK_DIAGNOSTICS_STATUS=EXISTING_PARSER_CORE_REGRESSION_PASS
-WEB_UI_STATUS=WIRELESS_FIXTURE_BROWSER_PASS_SERVICE_BACKED_PENDING
-AC_DOMAIN_STATUS=READONLY_PROJECTION_OFFLINE_PASS
-AP_IDENTITY_STATUS=EXACT_CANDIDATE_CONFLICT_OFFLINE_PASS_LIFECYCLE_PENDING
-MULTI_AC_STATUS=OFFLINE_OBSERVATION_PASS_LIVE_PENDING
-RUNTIME_STATE_STATUS=PARTIAL_CONFLICT_STALE_PRESERVATION_RECENT10_PENDING
-AP_GROUP_STATUS=AC_OWNED_READONLY_PASS_DOMAIN_SHARED_EVIDENCE_PENDING
-SITE_AUTHORIZATION_STATUS=CORE_NEGATIVE_TEST_PASS_HTTP_PENDING
-SIMULATOR_AC1=TCP_SSH_PASS_AUTH_REQUIRED
-SIMULATOR_AC2=TCP_SSH_PASS_AUTH_REQUIRED
-SIMULATOR_SW=TCP_SSH_PASS_AUTH_REQUIRED
-SIMULATOR_FIT_AP=TCP_TELNET_BANNER_PASS_AUTH_NOT_COMPLETED
-SIMULATOR_TOPOLOGY=ONE_PLUS_ONE_EXPECTED
-SIMULATOR_HA_VERIFICATION=EVIDENCE_PENDING
-SIMULATOR_FAILOVER=NOT_RUN
-SIMULATOR_CONFIG_CHANGES=0
-SIMULATOR_RESTORE_STATUS=NOT_APPLICABLE
-API_GAPS_BEFORE=10_DESIGN_BASELINE
-API_GAPS_CLOSED=0_FULL_CHAIN_ACCEPTANCE_GAPS
-API_GAPS_REMAINING=10_PARTIALLY_IMPLEMENTED_NOT_FULLY_ACCEPTED
-TESTS_TOTAL=23_NAMED_UNIT_CASES_PLUS_9_BROWSER_STATES_PLUS_SUITES
-TESTS_PASS=23_UNIT_AND_9_BROWSER_AND_CORE_SUITES
-TESTS_FAIL=0_CURRENT_PRODUCT_FAILURES
-TESTS_BLOCKED=3_INTEGRATION_GATE_TYPES_API_SERVICE_GUI_NATIVE_DPI
-R3_SCENARIOS_DESIGNED=57
-R3_SCENARIOS_EXECUTED=14_OFFLINE_INVARIANTS
-R3_SCENARIOS_PASS=14_OFFLINE_INVARIANTS_NOT_FULL_E2E
-GUI_1920X1080=OFFLINE_FIXTURE_PASS
-GUI_2560X1440=OFFLINE_FIXTURE_PASS
-WINDOWS_NATIVE_125PCT=BLOCKED_DPI96_DPR1
-R2_SITE_CLAIMS_REGRESSION=CORE_SUITE_PASS_HTTP31_NOT_RERUN
-R2_DEVICE_IDENTITY_REGRESSION=CORE_SUITE_PASS
-R2_CREDENTIAL_SECURITY_REGRESSION=CORE_SUITE_PASS
-FIT_AP_CREATION_RESTRICTION=CORE_SUITE_PASS
-DOTNET_BUILD_STATUS=PASS
-SERVICE_HARNESS_STATUS=PASS
-VITEST_STATUS=5_OF_5_PASS
-VUE_TSC_STATUS=PASS
-VITE_BUILD_STATUS=PASS_WITH_EXISTING_CHUNK_SIZE_WARNING
-BROWSER_E2E_STATUS=OFFLINE_FIXTURE_PASS_SERVICE_BACKED_BLOCKED
-PRODUCTION_DATA_CHANGED=NO
-UNAUTHORIZED_DEVICE_ACCESS=NO
-NETWORK_SCAN_OUTSIDE_WHITELIST=NO
-SMART_HUB_ORIGINAL_CHANGED=NO
-SMART_HUB_RESEARCH_BASELINE_CHANGED=NO
-BRANCH=codex-A/netconsole-next-autonomous-full-feature
-HEAD=8d5244f144b7969df80522356750d82c3378edb3_CODE_PLUS_FINAL_DOC_COMMIT
-LOCAL_COMMITS=7716677,985d057,888c487,f441250,8d5244f,FINAL_DOC_COMMIT
-GIT_WORKTREE_STATUS=仅本轮工作树修改；主仓库clean且保留27ebfb8
-REMOTE_PUSH=NO
-BRANCH_MERGE=NO
-RELEASE_PUBLISH=NO
-NEXT_RECOMMENDED_TASK=凭据与维护窗口到位后的HTTP和双AC实测；持久化独立评审
-FINAL_STATUS=PARTIAL
-```
-
-本轮不具备全功能集成或发布验收结论。剩余7项任务依赖认证材料、独立Service验收窗口、正式持久化/来源事实或有效原生125%环境。旧Preview及其他工作树均未关闭/覆盖；本轮起始未发现主仓库用户dirty修改。
-
-本地产品提交：
-
-7716677 修复无线身份输入、来源隔离和连接失败状态
-985d057 补齐终端与任务结果的Site授权并拒绝矛盾拓扑
-888c487 完善无线分页筛选、来源详情及浏览器离线验收
-f441250 贯通AP地址事实并保留失败前证据、显式处理状态冲突
-8d5244f 补充多来源主状态冲突提示并退役本轮中间静态资源
-
-完整任务池、测试/GUI矩阵、模拟器报告、阻断登记及持久化方案在本目录。最终Git/DevStatus提交SHA见Workspace/reports/autonomous-20261105-final-receipt.md，或当前chat最终汇报。
+按附件要求的全部机器字段（实际最终HEAD、任务/模块/模拟器/API gap/测试粒度/回归/Git/DevStatus状态）见Workspace reports/autonomous-20261105-final-receipt.md；回执在本报告提交后生成，不自引用Git SHA。原10个R3 gap按完整端到端合同保守仍计未关闭，不能用本轮18个任务完成数替代gap数。

@@ -164,6 +164,7 @@ try {
  await capture('wireless-empty', '空态')
  await page.setViewportSize({ width: 1920, height: 1080 })
  const beforeRoots = fileRootRequests
+ mode = 'file-scoped-user'
  currentRole = 'ADMIN'
  await page.goto(base + '/files')
  await page.reload({ waitUntil: 'networkidle' })

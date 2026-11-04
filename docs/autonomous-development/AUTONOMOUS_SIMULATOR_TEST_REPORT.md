@@ -14,3 +14,5 @@ EXPECTED_TOPOLOGY=ONE_PLUS_ONE；RUNTIME_TOPOLOGY_STATUS=EVIDENCE_PENDING；HA_V
 SIMULATOR_CONFIG_CHANGES=0；RESTORE_STATUS=NOT_APPLICABLE；UNAUTHORIZED_DEVICE_ACCESS=NO；NETWORK_SCAN_OUTSIDE_WHITELIST=NO。
 
 OFFLINE_FIXTURE_EVIDENCE：双AC同一物理AP去重、独立来源、R/M与R/B、MAC规范化、候选/冲突、重复投递、多来源master、错误采集保留旧证据、局部Site可见性和分页均在单元/浏览器fixture中验证。它们不是四台设备的实时输出。
+
+Checkpoint J复核：本表保留前期实际网络证据，本增量未取得新的设备认证成功记录。用户追加自动登录授权持续有效；本轮不再要求逐台授权。单命令Raw发布、Recent10和Site/ZIP测试均为隔离fixture/可控session证据，不能替代四台实时身份、HA和切换。
