@@ -319,7 +319,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     {
         using var transaction = db.BeginTransaction();
         AddColumnIfMissing(db, transaction, "h3c_device_profiles", "host_key_update_policy",
-            "TEXT NOT NULL DEFAULT 'STRICT'");
+            "TEXT NOT NULL DEFAULT 'AUTO_UPDATE'");
         AddColumnIfMissing(db, transaction, "h3c_device_profiles", "allow_legacy_algorithms",
             "INTEGER NOT NULL DEFAULT 0");
         AddColumnIfMissing(db, transaction, "h3c_device_profiles", "terminal_encoding",
@@ -1007,6 +1007,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     public void CreateH3cDeviceProfile(H3cDeviceProfileSnapshot profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        var hostKeyPolicy = H3cHostKeyPolicy.Normalize(profile.HostKeyUpdatePolicy);
         if (!Guid.TryParseExact(profile.Id, "N", out _))
             throw new ArgumentException("H3C profile id must be a 32-character GUID.", nameof(profile));
         if (!string.Equals(profile.Id, profile.Id.ToLowerInvariant(), StringComparison.Ordinal))
@@ -1023,13 +1024,11 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             throw new ArgumentException("Credential reference must match [A-Z][A-Z0-9_]{0,63}.", nameof(profile));
         var fingerprint = string.IsNullOrWhiteSpace(profile.HostKeySha256) ? string.Empty :
             H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
-        if (profile.HostKeyUpdatePolicy is not ("AUTO_UPDATE" or "STRICT"))
-            throw new ArgumentException("Host key update policy must be AUTO_UPDATE or STRICT.", nameof(profile));
         if (!TerminalTextEncoding.IsSupported(profile.TerminalEncoding))
             throw new ArgumentException("Terminal encoding must be AUTO, UTF-8 or GB18030.", nameof(profile));
         if (profile.TerminalProtocol is not ("AUTO" or "SSH" or "TELNET"))
             throw new ArgumentException("Terminal protocol must be AUTO, SSH or TELNET.", nameof(profile));
-        if (fingerprint.Length == 0 && profile.HostKeyUpdatePolicy != "AUTO_UPDATE")
+        if (fingerprint.Length == 0 && hostKeyPolicy != H3cHostKeyPolicy.Automatic)
             throw new ArgumentException("A STRICT H3C profile requires an initial SHA256 host-key fingerprint.", nameof(profile));
         var sourceId = "h3c-" + profile.Id;
         var now = UtcNowMs();
@@ -1081,7 +1080,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
             insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
             insert.Parameters.AddWithValue("$updated", now);
-            insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
+            insert.Parameters.AddWithValue("$policy", hostKeyPolicy);
             insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0);
             insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding);
             insert.Parameters.AddWithValue("$protocol", profile.TerminalProtocol);
@@ -1100,7 +1099,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             binding.Parameters.AddWithValue("$device", profile.Id);
             binding.Parameters.AddWithValue("$host", profile.Host);
             binding.Parameters.AddWithValue("$port", profile.Port);
-            binding.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy);
+            binding.Parameters.AddWithValue("$policy", hostKeyPolicy);
             binding.Parameters.AddWithValue("$fingerprint", fingerprint);
             binding.ExecuteNonQuery();
         }
@@ -1292,8 +1291,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     public void SetH3cCompatibility(string id, string hostKeyUpdatePolicy, bool allowLegacyAlgorithms,
         string terminalEncoding = "AUTO", string terminalProtocol = "AUTO", bool allowTelnetFallback = false)
     {
-        if (hostKeyUpdatePolicy is not ("AUTO_UPDATE" or "STRICT"))
-            throw new ArgumentException("Host key update policy must be AUTO_UPDATE or STRICT.", nameof(hostKeyUpdatePolicy));
+        var normalizedHostKeyPolicy = H3cHostKeyPolicy.Normalize(hostKeyUpdatePolicy);
         if (!TerminalTextEncoding.IsSupported(terminalEncoding))
             throw new ArgumentException("Terminal encoding must be AUTO, UTF-8 or GB18030.", nameof(terminalEncoding));
         if (terminalProtocol is not ("AUTO" or "SSH" or "TELNET"))
@@ -1305,7 +1303,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         update.CommandText = @"UPDATE h3c_device_profiles
             SET host_key_update_policy=$policy,allow_legacy_algorithms=$legacy,terminal_encoding=$encoding,
                 terminal_protocol=$protocol,allow_telnet_fallback=$telnetFallback,updated_ms=$now WHERE id=$id";
-        update.Parameters.AddWithValue("$policy", hostKeyUpdatePolicy);
+        update.Parameters.AddWithValue("$policy", normalizedHostKeyPolicy);
         update.Parameters.AddWithValue("$legacy", allowLegacyAlgorithms ? 1 : 0);
         update.Parameters.AddWithValue("$encoding", terminalEncoding);
         update.Parameters.AddWithValue("$protocol", terminalProtocol);
@@ -1316,7 +1314,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var binding = db.CreateCommand();
         binding.Transaction = transaction;
         binding.CommandText = "UPDATE ssh_host_keys SET update_policy=$policy WHERE device_id=$id";
-        binding.Parameters.AddWithValue("$policy", hostKeyUpdatePolicy);
+        binding.Parameters.AddWithValue("$policy", normalizedHostKeyPolicy);
         binding.Parameters.AddWithValue("$id", id);
         binding.ExecuteNonQuery();
         transaction.Commit();

@@ -363,8 +363,10 @@ internal static class TerminalCoreTests
             var fourth = Fingerprint(0x44);
             var fifth = Fingerprint(0x55);
             catalog.CreateH3cDeviceProfile(new(deviceId, "192.0.2.10", 22, "reader", "TEST_CREDENTIAL", "",
-                true, 0, 0, "AUTO_UPDATE", false));
+                true, 0, 0, "AUTO_TRUST", false));
             var profile = catalog.GetH3cDeviceProfile(deviceId)!;
+            Assert(profile.HostKeyUpdatePolicy == H3cHostKeyPolicy.Automatic,
+                "AUTO_TRUST should be stored as the canonical automatic host-key policy");
             var firstDecision = catalog.CheckSshHostKey(profile, "ssh-ed25519", first);
             Assert(firstDecision.Accepted && firstDecision.Decision == "FIRST_TRUST" && firstDecision.CorrelationId is not null,
                 "an authorized device without a saved key should enter first-trust pending state");
@@ -392,7 +394,7 @@ internal static class TerminalCoreTests
             Assert(catalog.GetH3cDeviceProfile(deviceId)!.HostKeySha256 == H3cHostKeyFingerprint.Normalize(second),
                 "STRICT rejection must not overwrite the current fingerprint");
 
-            catalog.SetH3cCompatibility(deviceId, "AUTO_UPDATE", false, "GB18030", "AUTO", true);
+            catalog.SetH3cCompatibility(deviceId, "AUTO_REPLACE", false, "GB18030", "AUTO", true);
             profile = catalog.GetH3cDeviceProfile(deviceId)!;
             Assert(profile.TerminalEncoding == "GB18030" && profile.TerminalProtocol == "AUTO" &&
                    profile.AllowTelnetFallback,

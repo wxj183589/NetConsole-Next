@@ -1485,9 +1485,9 @@ internal sealed record DeviceGroupRequest(string SiteId, string Name, string? De
 internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,
-    string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
+    string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
-internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
+internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true);
