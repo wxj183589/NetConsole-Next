@@ -23,7 +23,7 @@ const base = process.env.NETCONSOLE_NEXT_UI_URL || 'http://127.0.0.1:18792'
 function paged(items, url) {
  const current = Number(url.searchParams.get('page') || 1)
  const size = Number(url.searchParams.get('pageSize') || 100)
- return { items: items.slice((current - 1) * size, current * size), page: current, pageSize: size, hasMore: current * size < items.length, total: items.length, warnings: ['OFFLINE_FIXTURE_EVIDENCE'], scope: snapshot.scope, sourceRevision: 'fixture-revision' }
+ return { items: items.slice((current - 1) * size, current * size), page: current, pageSize: size, hasMore: current * size < items.length, total: items.length, warnings: ['OFFLINE_FIXTURE_EVIDENCE'], scope: snapshot.scope, sourceRevision: mode === 'revision-drift' && current > 1 ? 'changed-revision' : 'fixture-revision' }
 }
 await page.route('**/api/**', async route => {
  const url = new URL(route.request().url())
@@ -86,6 +86,11 @@ try {
  await expect(page.getByText('无线业务暂不可用')).toBeVisible()
  await expect(page.locator('.wireless-table')).toHaveCount(0)
  await capture('wireless-denied', '撤销后不残留旧数据')
+ mode = 'revision-drift'
+ await page.getByRole('button', { name: '刷新数据' }).click()
+ await expect(page.getByText('无线业务暂不可用')).toBeVisible()
+ await expect(page.locator('.wireless-table')).toHaveCount(0)
+ await capture('wireless-revision-drift', '分页间revision变化时拒绝拼接')
  mode = 'empty'
  await page.getByRole('button', { name: '刷新数据' }).click()
  await expect(page.getByText('暂无无线业务数据')).toBeVisible()

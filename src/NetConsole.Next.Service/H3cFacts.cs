@@ -184,7 +184,7 @@ internal sealed partial class Catalog
                 Add("lldp.neighbor", $"{neighbor.LocalInterface}|{neighbor.NeighborInterface}|{neighbor.ChassisId}", neighbor);
         }
 
-        foreach (var command in new[] { H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanServiceTemplateAll, H3cCommandPolicy.DisplayWlanClient })
+        foreach (var command in new[] { H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress, H3cCommandPolicy.DisplayWlanServiceTemplateAll, H3cCommandPolicy.DisplayWlanClient })
         {
             if (!outputs.TryGetValue(command, out var output)) continue;
             var transcript = CliTranscriptParser.Parse(output, command);

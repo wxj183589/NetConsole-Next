@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import subprocess
 import tempfile
 import time
@@ -38,8 +39,12 @@ def main():
     dll = Path(os.environ.get("R3_SERVICE_DLL", repo / "src" / "NetConsole.Next.Service" / "bin" / "Release" / "net10.0" / "NetConsole.Next.Service.dll"))
     if not dll.is_file():
         raise RuntimeError("Run dotnet build -c Release before this isolated API test")
+    sys.path.insert(0, str(repo))
+    from tools.workspace_paths import workspace_path
+    test_root = workspace_path("test-data")
+    test_root.mkdir(parents=True, exist_ok=True)
     fixture = repo / "tests" / "NetConsole.Next.Service.Tests" / "fixtures" / "r3_dual_ac_wireless.json"
-    with tempfile.TemporaryDirectory(prefix="netconsole-next-r3-dual-ac-") as temp:
+    with tempfile.TemporaryDirectory(prefix="netconsole-next-r3-dual-ac-", dir=test_root) as temp:
         port = unused_port()
         env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(Path(temp) / "data"),
                    NETCONSOLE_NEXT_WEB_PORT=str(port), NETCONSOLE_NEXT_SYSLOG_PORT="0",
@@ -54,7 +59,11 @@ def main():
             for _ in range(120):
                 if service.poll() is not None:
                     raise RuntimeError("service exited before health became ready")
-                status, _ = request(base, "/api/system/health")
+                try:
+                    status, _ = request(base, "/api/system/health")
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
+                    time.sleep(0.1)
+                    continue
                 if status == 200:
                     break
                 time.sleep(0.1)

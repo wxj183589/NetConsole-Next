@@ -15,6 +15,8 @@ internal static class WirelessTests
         KeepsIdentityWhenNameMissing();
         RejectsAmbiguousTopologyEvidence();
         CatalogPaginationAndProtectedReads();
+        MissingEvidenceIsNotContradiction();
+        SameRevisionStateConflictIsPreserved();
         Console.WriteLine("WIRELESS_PROJECTION_TESTS=PASS");
     }
 
@@ -176,6 +178,25 @@ internal static class WirelessTests
             var session = new TerminalSessionSnapshot("scope-session", profileId, "fixture", "SSH", "RESTRICTED_READONLY",
                 "192.0.2.200", 22, null, null, "CONNECTING", 1, null, 1, null, null, null, null, null, 0, null, false);
             catalog.CreateTerminalSession(session);
+            var linked = catalog.QueryManagedDeviceInventory(search: "192.0.2.200").Items.Single();
+            catalog.UpdateDeviceInventory(linked.Id, new(linked.Id, "Fixture AC", "192.0.2.200", "H3C", "WX", "AC", "local", null, "fixture", true, profileId), "fixture");
+            var outputs = new Dictionary<string, string>
+            {
+                [H3cCommandPolicy.DisplayWlanApAll] = "<AC>display wlan ap all\nAP-ONE 1 R/M WA6320 SERIAL-001 group-a 1 day\n<AC>",
+                [H3cCommandPolicy.DisplayWlanApAllAddress] = "<AC>display wlan ap all address\nAP-ONE 192.0.2.201 4c6f-d608-0400\n<AC>"
+            };
+            catalog.ImportH3cOfflineReplay(profileId, outputs, 1000);
+            var collected = catalog.QueryWirelessCatalog(global);
+            Assert(collected.Observations.Single().NormalizedMacSet.Single() == "4c6f-d608-0400", "address command facts must reach wireless projection");
+            Assert(collected.Observations.Single().NormalizedState == "STALE" && collected.Warnings!.Contains("OFFLINE_FIXTURE_EVIDENCE"),
+                "offline replay must not masquerade as live AP status");
+            catalog.ImportH3cOfflineReplay(profileId, new Dictionary<string, string>
+            {
+                [H3cCommandPolicy.DisplayWlanApAll] = "<AC>display wlan ap all\n% Unrecognized command found at '^' position.\n<AC>"
+            }, 2000);
+            var preserved = catalog.QueryWirelessCatalog(global);
+            Assert(preserved.Observations.Single().SerialEvidence == "SERIAL-001" && preserved.Observations.Single().CapturedMs == 1000 &&
+                preserved.Warnings!.Contains("AP_COLLECTION_FAILED_PREVIOUS_EVIDENCE_PRESERVED"), "failed collection must preserve the previous valid AP evidence");
             var query = new TerminalSessionQuery(null, null, null, null, null, null, null, null, 1, 20, "started", true);
             var visible = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture");
             var hidden = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other-site" }, "fixture");
@@ -189,8 +210,55 @@ internal static class WirelessTests
             Assert(!catalog.TerminalSessionIsInScope(session.Id, revoked) && catalog.QueryTerminalSessions(query, revoked).Total == 0 &&
                 catalog.RecentTaskRuns(scope: revoked).Count == 0, "revocation must hide terminal and task evidence");
             Assert(catalog.QueryTerminalSessions(query, global).Total == 1, "global administrator must retain existing access");
+            var fixture = new WirelessFixtureDocument(
+                new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-b") },
+                new[] { Observation("AC1", "AP", "4c6fd6080400", "R/M", "RUNNING_MASTER", 100),
+                    Observation("AC2", "AP", "4c6fd6080400", "R/B", "RUNNING_BACKUP", 101) with { SourceSiteId = "site-b" } },
+                Array.Empty<WirelessTopologyEvidence>());
+            var path = Path.Combine(root, "scoped-wireless.json");
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(fixture));
+            var previousFixture = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WIRELESS_FIXTURE_PATH");
+            try
+            {
+                Environment.SetEnvironmentVariable("NETCONSOLE_NEXT_WIRELESS_FIXTURE_PATH", path);
+                var read = new WirelessReadModelService(catalog);
+                var oneSite = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "site-a" }, "fixture");
+                var partial = read.GetSnapshot(oneSite);
+                Assert(partial.Scope.Status == "PARTIAL_SCOPE" && partial.ApResources.Single().Observations.Single().SourceAcDeviceId == "AC1" &&
+                    partial.AcDomains.SelectMany(item => item.Members).All(item => item.SiteId == "site-a") && partial.ApGroups.Count == 1,
+                    "partial Site visibility must project only visible observations, members, groups and counts");
+                Assert(read.GetSnapshot(global).ApResources.Single().Observations.Count == 2, "global scope must retain independent multi-AC observations");
+                Assert(read.GetSnapshot(revoked).ApResources.Count == 0 && read.GetSnapshot(revoked).AcDomains.Count == 0,
+                    "revoked fixture scope must reveal zero resources");
+            }
+            finally { Environment.SetEnvironmentVariable("NETCONSOLE_NEXT_WIRELESS_FIXTURE_PATH", previousFixture); }
+
         }
         finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+
+    private static void MissingEvidenceIsNotContradiction()
+    {
+        var result = new WirelessProjectionEngine().Project(
+            new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-a") },
+            new[] { Observation("AC1", "AP", "4c6fd6080400", "R/M", "RUNNING_MASTER", 100),
+                Observation("AC2", "AP", null, "R/B", "RUNNING_BACKUP", 101) },
+            Array.Empty<WirelessTopologyEvidence>(), new("FULL", "claims"));
+        Assert(result.ApResources.Count == 2 && result.ApResources.Any(item => item.IdentityStatus == "CANDIDATE") &&
+            result.ApResources.Any(item => item.IdentityStatus == "CONFIRMED"), "missing MAC must stay candidate without creating a false contradiction or merging");
+    }
+
+    private static void SameRevisionStateConflictIsPreserved()
+    {
+        var observation = Observation("AC1", "AP", "4c6fd6080400", "R/M", "RUNNING_MASTER", 100);
+        var result = new WirelessProjectionEngine().Project(new[] { Ac("AC1", "192.168.56.2", "site-a") },
+            new[] { observation, observation with { RawState = "R/B", NormalizedState = "RUNNING_BACKUP" } },
+            Array.Empty<WirelessTopologyEvidence>(), new("FULL", "claims"));
+        var resource = result.ApResources.Single();
+        Assert(result.AcDomains.Single().Members.Single().RuntimeState == "CONFLICT", "domain member summary must not hide conflicting observations");
+        Assert(resource.Observations.Count == 2 && resource.Observations.All(item => item.NormalizedState == "CONFLICT") &&
+            resource.Observations.Select(item => item.Id).Distinct().Count() == 2, "contradictory same-revision state must retain both raw sources with unique conflict IDs");
+        Assert(result.ApGroups.Single().MemberResourceIds.Single() == resource.Id, "state conflict must preserve AP group membership");
     }
 
     private static WirelessAcDeviceSeed Ac(string id, string ip, string site) =>

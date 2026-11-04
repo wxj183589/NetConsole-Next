@@ -184,7 +184,7 @@ internal sealed class WirelessProjectionEngine
             .ToDictionary(group => group.Key, group => group.OrderBy(item => item.Domain.Id, StringComparer.Ordinal).First().Domain, StringComparer.Ordinal);
         var observationWithDomain = visibleObservations.Select(item =>
             (Seed: item, DomainId: domainByAc.TryGetValue(item.SourceAcDeviceId, out var domain) ? domain.Id : "ac-domain:" + item.SourceAcDeviceId))
-            .DistinctBy(item => ObservationId(item.Seed, item.DomainId))
+            .DistinctBy(item => (ObservationId(item.Seed, item.DomainId), item.Seed.RawState, item.Seed.NormalizedState))
             .ToArray();
 
         var resources = BuildResources(observationWithDomain, scope);
@@ -210,10 +210,10 @@ internal sealed class WirelessProjectionEngine
         IReadOnlyList<(WirelessObservationSeed Seed, string DomainId)> observations,
         WirelessScopeView scope)
     {
-        var bySerial = observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence))
+        var bySerial = observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence) && item.Seed.NormalizedMacSet.Count > 0)
             .GroupBy(item => item.Seed.SerialEvidence!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Select(item => MacKey(item.Seed.NormalizedMacSet)).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
-        var byMac = observations.SelectMany(item => item.Seed.NormalizedMacSet.Select(mac => (mac, item)))
+        var byMac = observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence)).SelectMany(item => item.Seed.NormalizedMacSet.Select(mac => (mac, item)))
             .GroupBy(item => item.mac, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Select(item => item.item.Seed.SerialEvidence ?? string.Empty).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
@@ -231,6 +231,14 @@ internal sealed class WirelessProjectionEngine
             var resourceId = "ap-resource:" + Fingerprint(new[] { group.Key });
             if (identityStatus == "UNKNOWN") resourceId = "ap-candidate:" + Fingerprint(sourceObservationIds);
             var views = items.Select(item => ToObservationView(item.Seed, item.DomainId, resourceId)).OrderBy(item => item.CapturedMs).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
+            var conflictingIds = views.GroupBy(item => item.Id, StringComparer.Ordinal)
+                .Where(group => group.Select(item => item.NormalizedState).Distinct(StringComparer.Ordinal).Count() > 1)
+                .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+            views = views.Select(item => conflictingIds.Contains(item.Id) ? item with
+            {
+                Id = item.Id + ":conflict:" + Fingerprint(new[] { item.RawState, item.NormalizedState }),
+                NormalizedState = "CONFLICT", StateConfidence = "LOW", RelationStatus = "CONFLICT"
+            } : item).ToArray();
             var sourceRevision = Fingerprint(views.Select(item => item.SourceRevision));
             resources.Add(new(resourceId,
                 views.Select(item => item.ObservedApName).FirstOrDefault(name => name.Length > 0) ?? "未命名 AP",
@@ -243,7 +251,7 @@ internal sealed class WirelessProjectionEngine
                 views.Min(item => item.CapturedMs),
                 views.Max(item => item.CapturedMs),
                 sourceRevision,
-                Fingerprint(new[] { resourceId, sourceRevision }),
+                Fingerprint(new[] { resourceId, sourceRevision }.Concat(views.Select(item => $"{item.Id}|{item.RawState}|{item.NormalizedState}"))),
                 conflict ? "SERIAL_MAC_EVIDENCE_CONFLICT" : null,
                 views));
         }
@@ -255,8 +263,8 @@ internal sealed class WirelessProjectionEngine
         IReadOnlyList<WirelessApResourceView> resources,
         WirelessScopeView scope)
     {
-        var resourceByObservation = resources.SelectMany(resource => resource.Observations.Select(observation =>
-                (ObservationId: observation.Id, ResourceId: resource.Id)))
+        var resourceByObservation = resources.SelectMany(resource => resource.SourceObservationIds.Select(observationId =>
+                (ObservationId: observationId, ResourceId: resource.Id)))
             .GroupBy(item => item.ObservationId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().ResourceId, StringComparer.Ordinal);
         return observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.ApGroup))
@@ -364,10 +372,15 @@ internal sealed class WirelessProjectionEngine
             seed.RawManifestRef, seed.ParserRevision, seed.SourceRevision,
             seed.NormalizedState == "CONFLICT" ? "CONFLICT" : "OBSERVED");
 
-    private static string RuntimeFor(WirelessAcDeviceSeed ac, IReadOnlyList<(WirelessObservationSeed Seed, string DomainId)> observations) =>
-        observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId && item.Seed.NormalizedState == "RUNNING_MASTER") ? "RUNNING_MASTER" :
-        observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId && item.Seed.NormalizedState == "RUNNING_BACKUP") ? "RUNNING_BACKUP" :
-        observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId) ? "UNKNOWN" : "STALE";
+    private static string RuntimeFor(WirelessAcDeviceSeed ac, IReadOnlyList<(WirelessObservationSeed Seed, string DomainId)> observations)
+    {
+        var own = observations.Where(item => item.Seed.SourceAcDeviceId == ac.DeviceId).ToArray();
+        if (own.GroupBy(item => (IdentityKey(item.Seed), item.Seed.SourceRevision, item.Seed.CapturedMs))
+            .Any(group => group.Select(item => item.Seed.NormalizedState).Distinct(StringComparer.Ordinal).Count() > 1)) return "CONFLICT";
+        if (own.Any(item => item.Seed.NormalizedState == "RUNNING_MASTER")) return "RUNNING_MASTER";
+        if (own.Any(item => item.Seed.NormalizedState == "RUNNING_BACKUP")) return "RUNNING_BACKUP";
+        return own.Length == 0 || own.All(item => item.Seed.NormalizedState == "STALE") ? "STALE" : "UNKNOWN";
+    }
 
     private static string RoleFor(WirelessDomainSeed domain, string deviceId) =>
         domain.DomainKind == "ONE_PLUS_ONE" ? "ROLE_EVIDENCE_PENDING" : "MEMBER";
@@ -444,8 +457,9 @@ internal sealed class WirelessReadModelService
         }
 
         var catalog = _catalog.QueryWirelessCatalog(scope);
-        return _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
+        var projected = _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
             scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
+        return projected with { Warnings = projected.Warnings.Concat(catalog.Warnings ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray() };
     }
 
     private static string ClaimsRevision(P2B5SiteScopeDecision scope) =>
@@ -455,7 +469,8 @@ internal sealed class WirelessReadModelService
 internal sealed record WirelessCatalogSnapshot(
     IReadOnlyList<WirelessAcDeviceSeed> Acs,
     IReadOnlyList<WirelessObservationSeed> Observations,
-    IReadOnlyList<WirelessTopologyEvidence> TopologyEvidence);
+    IReadOnlyList<WirelessTopologyEvidence> TopologyEvidence,
+    IReadOnlyList<string>? Warnings = null);
 
 internal sealed partial class Catalog
 {
@@ -470,6 +485,7 @@ internal sealed partial class Catalog
         }
         var acs = new List<WirelessAcDeviceSeed>();
         var observations = new List<WirelessObservationSeed>();
+        var warnings = new HashSet<string>(StringComparer.Ordinal);
         foreach (var device in inventory)
         {
             var profileId = device.TerminalProfileId;
@@ -485,11 +501,23 @@ internal sealed partial class Catalog
                 if (index >= 0) acs[index] = acs[index] with { Version = version };
             }
 
-            var apFact = facts.Where(item => item.Kind == "command.display.wlan.ap.all")
-                .OrderByDescending(item => item.CapturedMs).FirstOrDefault();
-            if (apFact is null) continue;
-            var addressFact = facts.Where(item => item.Kind == "command.display.wlan.ap.all.address")
-                .OrderByDescending(item => item.CapturedMs).FirstOrDefault();
+            const string apKind = "command.display.wlan.ap.all";
+            var latest = QueryH3cFacts(profileId, apKind, history: false, limit: 1).FirstOrDefault();
+            if (latest is null) continue;
+            bool Usable(H3cFactSnapshot fact) => fact.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY") &&
+                H3cComwareParser.ParseWlanApAll(ReadOutput(fact.PayloadJson)).Count > 0;
+            var apFact = Usable(latest) ? latest : QueryH3cFacts(profileId, apKind, history: true, limit: 1000)
+                .FirstOrDefault(Usable);
+            if (apFact is null) { warnings.Add("AP_COLLECTION_UNAVAILABLE"); continue; }
+            var preserved = apFact.Id != latest.Id;
+            if (preserved) warnings.Add("AP_COLLECTION_FAILED_PREVIOUS_EVIDENCE_PRESERVED");
+            if (apFact.Source == H3cOfflineFixtureSource) warnings.Add("OFFLINE_FIXTURE_EVIDENCE");
+            // Only correlate address rows from the same captured source revision.
+            const string addressKind = "command.display.wlan.ap.all.address";
+            var addressFact = QueryH3cFacts(profileId, addressKind, history: false, limit: 1)
+                .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000))
+                .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source &&
+                    item.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"));
             var addressByName = ParseAddressFacts(addressFact?.PayloadJson);
             var apRows = H3cComwareParser.ParseWlanApAll(ReadOutput(apFact.PayloadJson));
             foreach (var row in apRows)
@@ -500,16 +528,18 @@ internal sealed partial class Catalog
                 {
                     "R/M" or "RM" => "RUNNING_MASTER",
                     "R/B" or "RB" => "RUNNING_BACKUP",
-                    "I" => "OFFLINE",
+                    "I" when version is not null => "OFFLINE",
                     _ => "UNKNOWN"
                 };
+                if (preserved || apFact.Status == "STALE" || apFact.Source == H3cOfflineFixtureSource) normalized = "STALE";
+                else if (apFact.Status != "LIVE_VERIFIED") normalized = "UNKNOWN";
                 observations.Add(new(device.Id, device.Name, device.SiteId, device.Model, version, row.Name,
                     row.Serial, address is null ? Array.Empty<string>() : new[] { address }, row.Model, row.Group,
-                    rawState, normalized, normalized == "UNKNOWN" ? "LOW" : "HIGH", row.OnlineTime is null ? apFact.CapturedMs : apFact.CapturedMs,
+                    rawState, normalized, normalized is "UNKNOWN" or "STALE" ? "LOW" : "HIGH", apFact.CapturedMs,
                     "fact:" + apFact.Id, "h3c.ap.v1", apFact.Id));
             }
         }
-        return new(acs, observations, Array.Empty<WirelessTopologyEvidence>());
+        return new(acs, observations, Array.Empty<WirelessTopologyEvidence>(), warnings.Order(StringComparer.Ordinal).ToArray());
     }
 
     private static string ReadOutput(string payload)
@@ -537,7 +567,7 @@ internal sealed partial class Catalog
 
     private static Dictionary<string, string> ParseAddressFacts(string? payload)
     {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var output = ReadOutput(payload ?? string.Empty);
         foreach (var row in H3cComwareParser.ParseWlanApAllAddress(output))
             result[row.Name] = row.MacAddress ?? string.Empty;
