@@ -42,6 +42,14 @@ internal sealed class H3cConnectionTestService(
             var version = H3cComwareParser.ParseVersion(versionOutput);
             return Success(profile, started, "SSH", version);
         }
+        catch (H3cProtocolNegotiationException) when (
+            string.Equals(profile.TerminalProtocol, "AUTO", StringComparison.OrdinalIgnoreCase) &&
+            profile.AllowTelnetFallback)
+        {
+            try { return await TestTelnetAsync(profile, started, cancellationToken).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            { return Failure(profile, started, "TELNET", MapFailure(ex)); }
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return Failure(profile, started, ProtocolFor(profile), MapFailure(ex));
