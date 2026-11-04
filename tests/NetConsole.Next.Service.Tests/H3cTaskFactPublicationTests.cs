@@ -16,7 +16,9 @@ internal static class H3cTaskFactPublicationTests
         await TamperedRawCannotRebuildFacts();
         LegacyDefinitionsCannotAcquireEndpointProof();
         await ReferencedCommandCannotInvalidateAdmittedRaw();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=9/9 PASS");
+        await MultiCommandRawOutputsRemainIndependent();
+        await MultiCommandFailureKeepsEarlierRawBounded();
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=11/11 PASS");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()
@@ -148,6 +150,60 @@ internal static class H3cTaskFactPublicationTests
         var run = await f.Run(scheduler, H3cCommandPolicy.DisplayVersion);
         Assert(rejected && run.State == "SUCCEEDED" && f.Catalog.QueryH3cFacts(f.Profile).Single().Kind == "device.identity",
             "command edits cannot invalidate a queued/running Raw manifest; use a new definition for a new command");
+    }
+
+    private static async Task MultiCommandRawOutputsRemainIndependent()
+    {
+        using var f = new Fixture();
+        var definition = Guid.NewGuid().ToString("N");
+        var first = H3cCommandPolicy.DisplayVersion;
+        var second = H3cCommandPolicy.DisplayWlanApAll;
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, first, TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: new[] { first, second });
+        await using var scheduler = f.Scheduler(new Factory());
+        Assert(scheduler.TryScheduleDefinition(definition, out var runId, "local-api-token"), "multi-command task admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        DeviceCollectionSnapshot run;
+        while (true)
+        {
+            run = scheduler.Get(runId)!;
+            if (run.State is "SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT") break;
+            await Task.Delay(10, timeout.Token);
+        }
+        Assert(run.State == "SUCCEEDED" && f.Scalar($"SELECT COUNT(*) FROM task_run_command_outputs WHERE task_run_id='{runId}'") == "2",
+            "a successful multi-command task must seal one command-level Raw row per command");
+        var commands = f.Catalog.GetTaskRunCommands(runId);
+        Assert(commands.Count == 2 && commands.All(item => item.State == "SUCCEEDED") &&
+            commands[0].Command == first && commands[1].Command == second,
+            "task command detail must preserve order and independent success states");
+        var facts = f.Catalog.QueryH3cFacts(f.Profile, history: true);
+        Assert(facts.Count >= 2 && facts.All(item => item.CollectedRawVerified),
+            "complete multi-command facts must retain a verified collection-level Raw provenance");
+    }
+
+    private static async Task MultiCommandFailureKeepsEarlierRawBounded()
+    {
+        using var f = new Fixture();
+        var definition = Guid.NewGuid().ToString("N");
+        var first = H3cCommandPolicy.DisplayVersion;
+        var second = H3cCommandPolicy.DisplayWlanApAll;
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, first, TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: new[] { first, second });
+        await using var scheduler = f.Scheduler(new Factory { Execute = command =>
+            command == second ? throw new IOException("synthetic second command failure") : Factory.Output(command) });
+        Assert(scheduler.TryScheduleDefinition(definition, out var runId, "local-api-token"), "failing multi-command task admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        DeviceCollectionSnapshot run;
+        while (true)
+        {
+            run = scheduler.Get(runId)!;
+            if (run.State is "SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT") break;
+            await Task.Delay(10, timeout.Token);
+        }
+        var commands = f.Catalog.GetTaskRunCommands(runId);
+        Assert(run.State == "FAILED" && commands.Count == 2 && commands[0].State == "PARTIAL" && commands[1].State == "FAILED" &&
+            f.Catalog.QueryH3cFacts(f.Profile, history: true).Count == 0,
+            "a failed later command must retain earlier Raw as partial evidence without publishing facts");
     }
 
     private sealed class Fixture : IDisposable

@@ -313,7 +313,9 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         string terminalState;
         string? result = null;
         string? error = null;
-        var captureStatus = "COMPLETE";
+        var commandOutputs = new List<(string Command, string Output, int Index, string CaptureStatus)>();
+        var currentCommandIndex = 0;
+        var commandPlan = item.Definition?.CommandPlan ?? [item.Request.Command];
         var resultPersistedAtomically = false;
         var operationStarted = false;
         using var timeout = new CancellationTokenSource(item.Request.Timeout);
@@ -328,21 +330,28 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             await session.ConnectAsync(linked.Token);
             if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_COMMAND");
             SetState(item, "RUNNING");
-            result = await session.ExecuteAsync(item.Request.Command, linked.Token);
+            for (currentCommandIndex = 0; currentCommandIndex < commandPlan.Count; currentCommandIndex++)
+            {
+                var command = commandPlan[currentCommandIndex];
+                var output = await session.ExecuteAsync(command, linked.Token);
+                commandOutputs.Add((command, output, currentCommandIndex, "COMPLETE"));
+            }
+            result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "AFTER_COMMAND");
             terminalState = "SUCCEEDED";
         }
         catch (TaskScopeRevokedException ex)
         {
             terminalState = "CANCELLED";
-            captureStatus = "PARTIAL";
             error = operationStarted ? "REVOKED_AFTER_START:" + ex.Reason : ex.Reason;
         }
         catch (H3cPartialOutputException ex)
         {
             H3cCollectionMetrics.RecordFailure(ex);
-            result = ex.Output;
-            captureStatus = "PARTIAL";
+            if (!string.IsNullOrEmpty(ex.Output))
+                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output,
+                    Math.Min(currentCommandIndex, commandPlan.Count - 1), "PARTIAL"));
+            result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             terminalState = ex.IsCancellation ? timeout.IsCancellationRequested ? "TIMED_OUT" : "CANCELLED" : "FAILED";
             error = ex.FailureCode;
         }
@@ -392,7 +401,6 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             catch (TaskScopeRevokedException ex)
             {
                 terminalState = "CANCELLED";
-                captureStatus = "PARTIAL";
                 var reason = operationStarted ? "REVOKED_AFTER_START:" + ex.Reason : ex.Reason;
                 if (!IsScopeReason(error)) error = error is null ? reason : reason + ";PRIOR_OUTCOME=" + error;
             }
@@ -401,16 +409,31 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                     item.Snapshot.Id, item.Definition?.Id, Array.Empty<string>(), error);
         }
 
-        if (result is not null && item.Definition?.TaskType == "H3C_SSH_READONLY")
+        // Any command output attached to a non-successful run is evidence of a
+        // partial collection boundary. Preserve it independently, but never let
+        // it enter the complete-facts publication path.
+        if (terminalState != "SUCCEEDED" && commandOutputs.Count > 0)
+            commandOutputs = commandOutputs.Select(item => (item.Command, item.Output, item.Index, "PARTIAL")).ToList();
+
+        if (commandOutputs.Count > 0 && item.Definition?.TaskType == "H3C_SSH_READONLY")
         {
             try
             {
                 if (_resultSink is null)
                     throw new InvalidOperationException("H3C task cannot complete without a durable Raw result sink.");
                 BeginRawCommit(item, timeout, ref terminalState, ref error);
-                var manifest = await _resultSink.PersistAsync(item.Snapshot.Id, item.Definition, result, captureStatus);
+                var manifests = new List<H3cRawOutputManifest>(commandOutputs.Count);
+                foreach (var commandOutput in commandOutputs)
+                {
+                    var manifest = await _resultSink.PersistCommandAsync(item.Snapshot.Id, item.Definition,
+                        commandOutput.Command, commandOutput.Output, commandOutput.CaptureStatus, commandOutput.Index);
+                    manifests.Add(manifest);
+                }
                 var sqliteStarted = Stopwatch.GetTimestamp();
-                _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifest, terminalState, error);
+                if (item.Definition.CommandPlan.Count == 1 && manifests.Count == 1)
+                    _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifests[0], terminalState, error);
+                else
+                    _catalog!.CompleteTaskRunWithRawOutputs(item.Snapshot.Id, manifests, terminalState, error);
                 H3cCollectionMetrics.RecordSqliteCommit(Stopwatch.GetElapsedTime(sqliteStarted));
                 resultPersistedAtomically = true;
                 if (terminalState == "SUCCEEDED")

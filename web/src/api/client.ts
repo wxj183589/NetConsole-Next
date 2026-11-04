@@ -377,6 +377,19 @@ export interface TerminalDevice {
   lastDisconnectReason?: string | null
 }
 
+export interface H3cConnectionTestResult {
+  deviceId: string
+  host: string
+  port: number
+  protocol: string
+  status: string
+  message: string
+  vendor?: string | null
+  version?: string | null
+  hostKeyDecision?: string | null
+  elapsedMs: number
+}
+
 export interface TerminalSession {
   id: string
   targetId: string
@@ -406,6 +419,16 @@ export interface TaskRun {
   rawOutputPath?: string | null
   captureStatus?: string | null
   parseStatus?: string | null
+}
+export interface TaskCommand {
+  index: number
+  command: string
+  state: string
+  error?: string | null
+  rawOutputPath?: string | null
+  captureStatus?: string | null
+  parseStatus?: string | null
+  capturedMs?: number | null
 }
 
 export interface H3cFact {
@@ -829,6 +852,9 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
+}
 export function getHostTools(): Promise<HostTool[]> { return request('/api/system/host-tools') }
 export function updateHostTool(id: string, executablePath: string | null): Promise<HostTool> {
   return request('/api/system/host-tools/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ executablePath }) })
@@ -867,6 +893,9 @@ export async function downloadArchive(id: string): Promise<Blob> {
 
 export function createH3cProfile(payload: Record<string, unknown>): Promise<TerminalDevice> {
   return request('/api/system/h3c/profiles', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function testH3cConnection(profileId: string): Promise<H3cConnectionTestResult> {
+  return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/test-connection`, { method: 'POST' })
 }
 
 export function createTerminalSession(payload: Record<string, unknown>): Promise<{ sessionId: string }> {

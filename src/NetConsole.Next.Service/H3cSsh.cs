@@ -518,18 +518,26 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
 
 internal sealed record H3cRawOutputManifest(string RelativePath, string Command, long ByteCount,
     string OutputSha256, string SegmentSha256, string CaptureStatus, string ParseStatus,
-    string ParsedJson, long CapturedMs);
+    string ParsedJson, long CapturedMs, int CommandIndex = 0);
 
 internal interface ITaskResultSink
 {
     Task<H3cRawOutputManifest> PersistAsync(string runId, TaskDefinitionSnapshot definition,
         string output, string captureStatus);
+
+    Task<H3cRawOutputManifest> PersistCommandAsync(string runId, TaskDefinitionSnapshot definition,
+        string command, string output, string captureStatus, int commandIndex)
+        => PersistAsync(runId, definition, output, captureStatus);
 }
 
 internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? storageFailure = null) : ITaskResultSink
 {
     public async Task<H3cRawOutputManifest> PersistAsync(string runId, TaskDefinitionSnapshot definition,
         string output, string captureStatus)
+        => await PersistCommandAsync(runId, definition, definition.Command, output, captureStatus, 0).ConfigureAwait(false);
+
+    public async Task<H3cRawOutputManifest> PersistCommandAsync(string runId, TaskDefinitionSnapshot definition,
+        string command, string output, string captureStatus, int commandIndex)
     {
         if (definition.TaskType != "H3C_SSH_READONLY")
             throw new InvalidOperationException("Only H3C output can be written through the H3C Raw sink.");
@@ -545,16 +553,16 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
         try
         {
             var outputSha = writer.AppendH3cCommand(profile.Id, runId, definition.ScopeSnapshot?.Endpoint?.Host ?? profile.Host,
-                definition.Command, output, capturedMs, captureStatus);
+                command, output, capturedMs, captureStatus);
             await writer.FlushAsync().ConfigureAwait(false);
             await writer.SealAsync().ConfigureAwait(false);
             H3cCollectionMetrics.RecordRawCommit(writer.LastSyncDurationMs, writer.LastSealDurationMs);
             var parse = captureStatus == "PARTIAL"
                 ? new H3cParseResult("PARTIAL", "{}")
-                : H3cComwareParser.Parse(definition.Command, output, completedExec: true);
-            return new H3cRawOutputManifest(writer.RelativePath, definition.Command, outputByteCount,
+                : H3cComwareParser.Parse(command, output, completedExec: true);
+            return new H3cRawOutputManifest(writer.RelativePath, command, outputByteCount,
                 Convert.ToHexString(outputSha).ToLowerInvariant(), writer.Sha256!, captureStatus,
-                parse.Status, parse.Json, capturedMs);
+                parse.Status, parse.Json, capturedMs, commandIndex);
         }
         catch (Exception ex)
         {

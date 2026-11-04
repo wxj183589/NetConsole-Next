@@ -1,10 +1,14 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service;
 
 internal sealed record H3cFactRawProvenance(int Version, string RunId, string Command,
+    string OutputSha256, string SegmentSha256, long CapturedMs,
+    IReadOnlyList<H3cFactRawCommandProvenance>? Commands = null);
+internal sealed record H3cFactRawCommandProvenance(int Index, string Command,
     string OutputSha256, string SegmentSha256, long CapturedMs);
 internal sealed record H3cTaskFactPublication(string Status, int FactCount);
 
@@ -15,6 +19,13 @@ internal sealed partial class Catalog
     public H3cTaskFactPublication PublishH3cTaskFacts(string runId)
     {
         using var db = Open();
+        using (var multi = db.CreateCommand())
+        {
+            multi.CommandText = "SELECT COUNT(*) FROM task_run_command_outputs WHERE task_run_id=$run";
+            multi.Parameters.AddWithValue("$run", runId);
+            if (Convert.ToInt32(multi.ExecuteScalar()) > 0)
+                return PublishMultiH3cTaskFacts(db, runId);
+        }
         using var transaction = db.BeginTransaction();
         string profileId, requestJson, relativePath, commandText, outputSha, segmentSha;
         long capturedMs;
@@ -65,10 +76,67 @@ internal sealed partial class Catalog
         return new("PUBLISHED", facts.Count);
     }
 
+    private H3cTaskFactPublication PublishMultiH3cTaskFacts(SqliteConnection db, string runId)
+    {
+        using var transaction = db.BeginTransaction();
+        string profileId, requestJson;
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = @"SELECT d.target,d.request_json FROM task_runs t JOIN task_definitions d ON d.id=t.definition_id
+                WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND t.state='SUCCEEDED'";
+            query.Parameters.AddWithValue("$run", runId);
+            using var reader = query.ExecuteReader();
+            if (!reader.Read()) return new("NO_COMPLETE_SUCCEEDED_RAW", 0);
+            profileId = reader.GetString(0); requestJson = reader.GetString(1);
+        }
+        using var request = JsonDocument.Parse(requestJson);
+        var commands = ReadTaskCommands(request.RootElement);
+        var scope = CaptureH3cFactScope(db, transaction, profileId);
+        var outputs = new Dictionary<string, string>(StringComparer.Ordinal);
+        var provenance = new List<H3cFactRawCommandProvenance>();
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = @"SELECT o.command_index,o.command,o.relative_path,o.sha256,o.raw_segment_sha256,o.captured_ms
+                FROM task_run_command_outputs o JOIN raw_segments r ON r.relative_path=o.relative_path
+                WHERE o.task_run_id=$run AND o.capture_status='COMPLETE' AND r.state='FINALIZED' AND r.record_count=1
+                    AND r.task_run_id=$run AND r.sha256=o.raw_segment_sha256 ORDER BY o.command_index";
+            query.Parameters.AddWithValue("$run", runId);
+            using var reader = query.ExecuteReader();
+            while (reader.Read())
+            {
+                var index = reader.GetInt32(0); var command = reader.GetString(1); var relative = reader.GetString(2);
+                if (index < 0 || index >= commands.Count || !string.Equals(commands[index], command, StringComparison.Ordinal))
+                    return new("COMMAND_PLAN_MISMATCH", 0);
+                if (!TryResolveRawPath(relative, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
+                    return new("RAW_UNAVAILABLE", 0);
+                var bytes = File.ReadAllBytes(fullPath);
+                if (bytes.Length < 2 || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
+                    !string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), reader.GetString(4), StringComparison.OrdinalIgnoreCase) ||
+                    !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out _, out _, out var recordRun, out var capture) ||
+                    recordRun != runId || capture != "COMPLETE") return new("RAW_UNAVAILABLE", 0);
+                using var raw = JsonDocument.Parse(bytes.AsMemory(0, bytes.Length - 1));
+                var record = raw.RootElement;
+                var output = new UTF8Encoding(false, true).GetString(Convert.FromBase64String(record.GetProperty("output_utf8_base64").GetString()!));
+                outputs[command] = output;
+                provenance.Add(new(index, command, reader.GetString(3), reader.GetString(4), reader.GetInt64(5)));
+            }
+        }
+        if (provenance.Count != commands.Count) return new("NO_COMPLETE_SUCCEEDED_RAW", 0);
+        var capturedMs = provenance.Max(item => item.CapturedMs);
+        var facts = BuildFacts(profileId, outputs, capturedMs, "H3C_TASK_RAW:" + runId, scope,
+            new H3cFactRawProvenance(1, runId, "MULTI", string.Empty, string.Empty, capturedMs, provenance));
+        if (facts.Count == 0) return new("NO_SUPPORTED_FACT_PROJECTION", 0);
+        WriteH3cFacts(db, transaction, facts);
+        transaction.Commit();
+        return new("PUBLISHED", facts.Count);
+    }
+
     private static string H3cFactRawVerificationPredicate(string alias)
     {
         string Field(string name) => $"CASE WHEN json_valid({alias}.payload_json) THEN json_extract({alias}.payload_json,'$.rawProvenance.{name}') END";
-        return $@"EXISTS(SELECT 1 FROM task_run_raw_outputs raw_o
+        return $@"(EXISTS(SELECT 1 FROM task_run_raw_outputs raw_o
             JOIN task_runs raw_t ON raw_t.id=raw_o.task_run_id
             JOIN task_definitions raw_d ON raw_d.id=raw_t.definition_id
             JOIN raw_segments raw_r ON raw_r.relative_path=raw_o.relative_path
@@ -78,6 +146,17 @@ internal sealed partial class Catalog
                 AND raw_o.command={Field("command")} AND raw_o.captured_ms={alias}.captured_ms AND raw_o.captured_ms={Field("capturedMs")}
                 AND raw_o.sha256={Field("outputSha256")} AND raw_o.raw_segment_sha256={Field("segmentSha256")}
                 AND raw_r.state='FINALIZED' AND raw_r.record_count=1 AND raw_r.task_run_id=raw_t.id
-                AND raw_r.source_id=raw_t.source_id AND raw_r.sha256=raw_o.raw_segment_sha256)";
+                AND raw_r.source_id=raw_t.source_id AND raw_r.sha256=raw_o.raw_segment_sha256)
+            OR EXISTS(SELECT 1 FROM task_run_command_outputs multi_o
+                JOIN task_runs multi_t ON multi_t.id=multi_o.task_run_id
+                JOIN raw_segments multi_r ON multi_r.relative_path=multi_o.relative_path
+                WHERE multi_o.task_run_id={Field("runId")} AND {Field("version")}=1
+                    AND {alias}.source='H3C_TASK_RAW:' || multi_t.id
+                    AND {Field("command")}='MULTI' AND multi_t.state='SUCCEEDED'
+                    AND multi_o.capture_status='COMPLETE' AND multi_r.state='FINALIZED'
+                    AND multi_r.record_count=1 AND multi_r.task_run_id=multi_t.id
+                    AND multi_r.source_id=multi_t.source_id
+                GROUP BY multi_o.task_run_id
+                HAVING COUNT(*)=json_array_length({Field("commands")})))";
     }
 }

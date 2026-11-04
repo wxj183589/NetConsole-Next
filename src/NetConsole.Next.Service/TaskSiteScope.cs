@@ -119,5 +119,15 @@ internal sealed partial class Catalog
             ? JsonSerializer.Deserialize<TaskScopeSnapshot>(snapshot.GetRawText(), new JsonSerializerOptions(JsonSerializerDefaults.Web))
             : null;
 
+    private static IReadOnlyList<string> ReadTaskCommands(JsonElement request)
+    {
+        if (request.TryGetProperty("commands", out var commands) && commands.ValueKind == JsonValueKind.Array)
+        {
+            var plan = commands.EnumerateArray().Select(item => item.GetString() ?? string.Empty).ToArray();
+            if (plan.Length > 0) return plan;
+        }
+        return [request.GetProperty("command").GetString() ?? string.Empty];
+    }
+
     private static bool SameTaskScope(TaskScopeSnapshot? first, TaskScopeSnapshot? second) => first == second;
 }

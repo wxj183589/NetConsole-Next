@@ -668,6 +668,13 @@ app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     return Results.Ok(rawCatalog.RecentTaskRuns(scope: CurrentSiteScope(context)));
 });
+app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string runId, Catalog rawCatalog) =>
+{
+    var scope = CurrentSiteScope(context);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, scope).Any(item => item.Id == runId)) return Results.NotFound();
+    return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
+});
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
 {
@@ -1010,7 +1017,8 @@ if (settings.H3cEnabled)
         {
             var snapshot = taskScopes.CaptureDefinition(request.ProfileId, CurrentIdentity(context).UserId);
             rawCatalog.CreateTaskDefinition(request.Id, "H3C_SSH_READONLY", request.ProfileId,
-                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled, scopeSnapshot: snapshot);
+                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled, scopeSnapshot: snapshot,
+                commands: request.Commands);
             return Results.Created($"/api/system/tasks/definitions/{request.Id}",
                 rawCatalog.GetTaskDefinition(request.Id));
         }
@@ -1562,7 +1570,7 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
-    long TimeoutMs = 30000, bool Enabled = true);
+    long TimeoutMs = 30000, bool Enabled = true, IReadOnlyList<string>? Commands = null);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,
