@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
@@ -20,6 +20,13 @@ const selectedAcId = ref('')
 const selectedResourceId = ref('')
 const search = ref('')
 const error = ref('')
+const groupError = ref('')
+const warnings = ref<string[]>([])
+const page = ref(1)
+const pageSize = 20
+const stateFilter = ref('')
+let refreshGeneration = 0
+let groupGeneration = 0
 
 const selectedDomain = computed(() => domains.value.find(domain => domain.id === selectedDomainId.value) || domains.value[0] || null)
 const visibleResources = computed(() => resources.value.filter(resource => {
@@ -27,9 +34,16 @@ const visibleResources = computed(() => resources.value.filter(resource => {
   const inAc = !selectedAcId.value || resource.observations.some(observation => observation.sourceAcDeviceId === selectedAcId.value)
   const query = search.value.trim().toLowerCase()
   const matches = !query || resource.displayName.toLowerCase().includes(query) || resource.id.toLowerCase().includes(query) || (resource.serialEvidence || '').toLowerCase().includes(query) || resource.normalizedMacSet.some(mac => mac.toLowerCase().includes(query))
-  return inDomain && inAc && matches
+  const stateMatches = !stateFilter.value || viewObservations(resource).some(item => item.normalizedState === stateFilter.value)
+  return inDomain && inAc && matches && stateMatches
 }))
-const selectedResource = computed(() => resources.value.find(resource => resource.id === selectedResourceId.value) || visibleResources.value[0] || null)
+const pagedResources = computed(() => visibleResources.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+const selectedResource = computed(() => visibleResources.value.find(resource => resource.id === selectedResourceId.value) || pagedResources.value[0] || null)
+const visibleGroups = computed(() => groups.value.filter(group => !selectedAcId.value || group.sourceAcDeviceId === selectedAcId.value))
+function viewObservations(resource: WirelessApResource) {
+  return resource.observations.filter(item => (!selectedDomain.value || item.sourceAcDomainId === selectedDomain.value.id) && (!selectedAcId.value || item.sourceAcDeviceId === selectedAcId.value))
+}
+watch([search, stateFilter, selectedDomainId, selectedAcId], () => { page.value = 1; selectedResourceId.value = '' })
 const domainApCount = computed(() => visibleResources.value.length)
 const scopeLabel = computed(() => selectedDomain.value?.siteScopeStatus || '—')
 const runtimeLabel = computed(() => {
@@ -51,27 +65,55 @@ function selectAc(domain: WirelessAcDomain, deviceId: string): void {
   selectedResourceId.value = ''
   void loadGroups(domain.id)
 }
+async function readAll<T>(read: (params: { page: number; pageSize: number }) => Promise<{ items: T[]; hasMore: boolean; warnings?: string[] }>): Promise<T[]> {
+  const items: T[] = []
+  for (let current = 1; ; current++) {
+    const result = await read({ page: current, pageSize: 100 })
+    items.push(...result.items)
+    warnings.value = [...new Set([...warnings.value, ...(result.warnings || [])])]
+    if (!result.hasMore) return items
+    if (!result.items.length) throw new Error('分页响应不完整，请刷新重试')
+  }
+}
 async function loadGroups(domainId: string): Promise<void> {
-  try { groups.value = (await getWirelessApGroups(domainId, { page: 1, pageSize: 100 })).items }
-  catch { groups.value = [] }
+  const generation = ++groupGeneration
+  groups.value = []
+  groupError.value = ''
+  try {
+    const result = await readAll(params => getWirelessApGroups(domainId, params))
+    if (generation === groupGeneration) groups.value = result
+  } catch (cause) {
+    if (generation === groupGeneration) groupError.value = cause instanceof Error ? cause.message : 'AP 组读取失败'
+  }
 }
 async function refresh(): Promise<void> {
+  const generation = ++refreshGeneration
+  ++groupGeneration
   loading.value = true
   error.value = ''
+  groupError.value = ''
+  warnings.value = []
   try {
-    const [domainPage, resourcePage] = await Promise.all([
-      getWirelessAcDomains({ page: 1, pageSize: 100 }),
-      getWirelessApResources({ page: 1, pageSize: 100 }),
+    const [domainItems, resourceItems] = await Promise.all([
+      readAll(params => getWirelessAcDomains(params)),
+      readAll(params => getWirelessApResources(params)),
     ])
-    domains.value = domainPage.items
-    resources.value = resourcePage.items
+    if (generation !== refreshGeneration) return
+    domains.value = domainItems
+    resources.value = resourceItems
     if (!domains.value.some(domain => domain.id === selectedDomainId.value)) selectedDomainId.value = domains.value[0]?.id || ''
+    if (!selectedDomain.value?.members.some(member => member.deviceId === selectedAcId.value)) selectedAcId.value = ''
+    page.value = 1
+    selectedResourceId.value = ''
     if (selectedDomainId.value) await loadGroups(selectedDomainId.value)
-    if (!selectedResourceId.value || !resources.value.some(resource => resource.id === selectedResourceId.value)) selectedResourceId.value = visibleResources.value[0]?.id || ''
+    else groups.value = []
   } catch (cause) {
+    if (generation !== refreshGeneration) return
+    domains.value = []; resources.value = []; groups.value = []
+    selectedDomainId.value = ''; selectedAcId.value = ''; selectedResourceId.value = ''
     error.value = cause instanceof Error ? cause.message : '无线业务数据读取失败'
     ElMessage.error(error.value)
-  } finally { loading.value = false }
+  } finally { if (generation === refreshGeneration) loading.value = false }
 }
 function formatTime(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function stateClass(state: string): string {
@@ -88,6 +130,7 @@ onMounted(() => { void refresh() })
   <NcLayout title="无线业务" description="按 AC Domain 查看 FIT-AP 物理身份、来源 Observation、AP 组与主备运行证据">
     <template #actions><el-button size="small" :loading="loading" @click="refresh">刷新数据</el-button></template>
 
+    <el-alert v-if="warnings.includes('OFFLINE_FIXTURE_EVIDENCE')" title="离线演示数据 · 非模拟器实时状态" type="warning" :closable="false" show-icon />
     <div class="wireless-layout" v-loading="loading">
       <aside class="card wireless-sidebar">
         <div class="card__header"><h2>AC Domain</h2><span class="state-pill info">{{ domains.length }} 个</span></div>
@@ -116,17 +159,18 @@ onMounted(() => { void refresh() })
           <div class="stats-grid wireless-stats">
             <article class="card stat-card"><div class="stat-card__label">成员 AC</div><div class="stat-card__value">{{ selectedDomain.members.length }}</div><div class="stat-card__meta">设备库存稳定 ID</div></article>
             <article class="card stat-card"><div class="stat-card__label">可见 FIT-AP</div><div class="stat-card__value">{{ domainApCount }}</div><div class="stat-card__meta">授权 Observation 投影</div></article>
-            <article class="card stat-card"><div class="stat-card__label">当前主备</div><div class="stat-card__value stat-card__value--small">{{ stateText(runtimeLabel) }}</div><div class="stat-card__meta">仅依据可见运行证据</div></article>
+            <article class="card stat-card"><div class="stat-card__label">AP 观察状态</div><div class="stat-card__value stat-card__value--small">{{ stateText(runtimeLabel) }}</div><div class="stat-card__meta">仅依据可见运行证据</div></article>
             <article class="card stat-card"><div class="stat-card__label">最近采集</div><div class="stat-card__value stat-card__value--small">{{ formatTime(selectedDomain.asOf) }}</div><div class="stat-card__meta">{{ selectedDomain.revision.slice(0, 12) }}</div></article>
           </div>
 
           <section class="card wireless-members"><div class="card__header"><h2>AC 成员与运行状态</h2><span class="state-pill">1+1 需运行证据确认</span></div><div class="wireless-member-grid"><article v-for="member in selectedDomain.members" :key="member.deviceId" class="wireless-member-card"><div class="wireless-member-card__top"><strong>{{ member.displayName }}</strong><span :class="['state-pill', stateClass(member.runtimeState)]">{{ stateText(member.runtimeState) }}</span></div><div class="wireless-member-card__line"><span>Device ID</span><code>{{ member.deviceId }}</code></div><div class="wireless-member-card__line"><span>地址 / 版本</span><span>{{ member.managementIp }} · {{ member.version || '—' }}</span></div><div class="wireless-member-card__line"><span>来源状态</span><span>{{ member.connectionStatus }} · {{ member.role }}</span></div></article></div></section>
 
-          <section class="card"><div class="card__header"><h2>FIT-AP</h2><div class="wireless-toolbar"><input v-model="search" placeholder="精确身份 / 名称搜索" /><span class="state-pill info">{{ visibleResources.length }} 条</span></div></div><div v-if="visibleResources.length" class="table-wrap"><table class="data-table wireless-table"><thead><tr><th>物理 AP</th><th>Serial</th><th>完整 MAC</th><th>来源 AC</th><th>AP 组</th><th>状态</th><th>身份</th><th>最近观察</th></tr></thead><tbody><tr v-for="resource in visibleResources" :key="resource.id" :class="{ selected: selectedResource?.id === resource.id }" @click="selectedResourceId = resource.id"><td><span class="device-name">{{ resource.displayName }}</span><span class="device-subline mono">{{ resource.id }}</span></td><td class="mono">{{ resource.serialEvidence || '—' }}</td><td class="mono">{{ resource.normalizedMacSet.join(' / ') || '—' }}</td><td><span v-for="observation in resource.observations" :key="observation.id" class="source-tag">{{ observation.sourceAcDeviceId }}</span></td><td>{{ resource.observations.map(observation => observation.apGroup).filter(Boolean).join(' / ') || '—' }}</td><td><span :class="['state-pill', stateClass(resource.observations[resource.observations.length - 1]?.normalizedState || 'UNKNOWN')]">{{ stateText(resource.observations[resource.observations.length - 1]?.normalizedState || 'UNKNOWN') }}</span></td><td><span :class="['state-pill', stateClass(resource.identityStatus)]">{{ stateText(resource.identityStatus) }}</span></td><td>{{ formatTime(resource.lastSeenMs) }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><strong>暂无可见 AP Observation</strong><small>页面不会使用模拟数据填充；请检查 AC 采集事实、Site claims 和 source revision。</small></div></div></section>
+          <section class="card"><div class="card__header"><h2>FIT-AP</h2><div class="wireless-toolbar"><input v-model="search" aria-label="搜索 AP" placeholder="Serial / MAC / 名称搜索" /><select v-model="stateFilter" aria-label="筛选 AP 状态"><option value="">所有状态</option><option v-for="state in ['RUNNING_MASTER', 'RUNNING_BACKUP', 'OFFLINE', 'UNKNOWN', 'STALE', 'CONFLICT']" :key="state" :value="state">{{ stateText(state) }}</option></select><span class="state-pill info">{{ visibleResources.length }} 条</span></div></div><div v-if="visibleResources.length" class="table-wrap"><table class="data-table wireless-table"><thead><tr><th>物理 AP</th><th>Serial</th><th>完整 MAC</th><th>来源 AC</th><th>AP 组</th><th>状态</th><th>身份</th><th>最近观察</th></tr></thead><tbody><tr v-for="resource in pagedResources" :key="resource.id" :class="{ selected: selectedResource?.id === resource.id }" @click="selectedResourceId = resource.id"><td><span class="device-name">{{ resource.displayName }}</span><span class="device-subline mono">{{ resource.id }}</span></td><td class="mono">{{ resource.serialEvidence || '—' }}</td><td class="mono">{{ resource.normalizedMacSet.join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" class="source-tag">{{ observation.sourceAcDeviceId }}</span></td><td>{{ viewObservations(resource).map(observation => observation.apGroup).filter(Boolean).join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" :class="['state-pill', stateClass(observation.normalizedState)]">{{ stateText(observation.normalizedState) }}</span></td><td><span :class="['state-pill', stateClass(resource.identityStatus)]">{{ stateText(resource.identityStatus) }}</span></td><td>{{ formatTime(resource.lastSeenMs) }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><strong>暂无可见 AP Observation</strong><small>当前筛选下没有 AP，请调整搜索或状态筛选。</small></div></div></section>
 
+          <el-pagination v-if="visibleResources.length > pageSize" v-model:current-page="page" :page-size="pageSize" :total="visibleResources.length" layout="total, prev, pager, next" />
           <div class="wireless-bottom-grid">
-            <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="groups.length" class="wireless-group-list"><div v-for="group in groups" :key="group.id" class="wireless-group-row"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></div></div><div v-else class="empty-state"><div><strong>暂无可见 AP 组</strong><small>组名称不是全局唯一键；当前实现按来源 AC 保留。</small></div></div></section>
-            <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource?.observations.length || 0 }} 条来源</span></div><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in selectedResource.observations" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
+            <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="visibleGroups.length" class="wireless-group-list"><div v-for="group in visibleGroups" :key="group.id" class="wireless-group-row"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></div></div><div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '按来源 AC 保留 AP 组。' }}</small></div></div></section>
+            <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
           </div>
         </template>
         <div v-else class="card empty-state"><div><strong>暂无无线业务数据</strong><small>AC Domain API 返回空集合。</small></div></div>
