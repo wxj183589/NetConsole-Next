@@ -1353,6 +1353,9 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             if (reader.Read())
             {
                 using var storedRequest = JsonDocument.Parse(reader.GetString(0));
+                if (reader.GetInt64(1) != 0 && taskType == "H3C_SSH_READONLY" &&
+                    storedRequest.RootElement.GetProperty("command").GetString() != command)
+                    throw new InvalidOperationException("A referenced H3C task command is immutable; use a new definition ID.");
                 var storedScope = ReadTaskScope(storedRequest.RootElement);
                 if (reader.GetInt64(1) != 0 && (storedScope is not null || scopeSnapshot is not null))
                 {
@@ -1545,10 +1548,12 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             JOIN raw_segments r ON r.relative_path=$path
             WHERE t.id=$run AND t.task_type='H3C_SSH_READONLY' AND d.task_type=t.task_type
               AND json_extract(d.request_json,'$.command')=$command
-              AND d.target=p.id AND p.id=$profile AND p.host=$host
+              AND d.target=p.id AND p.id=$profile AND (p.host=$host OR
+                  ($completionState='CANCELLED' AND $capture='PARTIAL' AND json_extract(d.request_json,'$.scopeSnapshot.endpoint.host')=$host))
               AND t.state='RUNNING' AND r.state='FINALIZED' AND r.record_count=1 AND r.source_id=t.source_id
               AND r.task_run_id=$run AND r.sha256=$segmentSha AND r.byte_count=$segmentBytes";
         AddManifestParameters(insert, runId, manifest, rawProfileId, rawDeviceHost);
+        insert.Parameters.AddWithValue("$completionState", terminalState);
         insert.Parameters.AddWithValue("$segmentBytes", rawBytes.Length);
         insert.ExecuteNonQuery();
         }

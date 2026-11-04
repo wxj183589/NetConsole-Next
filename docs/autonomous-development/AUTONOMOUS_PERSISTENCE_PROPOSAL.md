@@ -2,6 +2,8 @@
 
 日期：2026-11-05。本文是方案，不增加/执行 schema 或 migration。
 
+Checkpoint J修订说明：下文最初Checkpoint E对现有JSON能力估计过低。F已用有界事实历史重建Current/PreviousEffective/Recent10及显式可配置时效；G/J用task request JSON保存actor、target/Site/claims及endpoint snapshot；I保存capturedScope；J贯通单命令Raw provenance及事实发布。这些能力已实现和离线验证，不再构成schema阻断。以下新增模型建议只适用于正式身份延续/replacement、域与组稳定生命周期、协调多目标/多命令Plan及长期报告Authority；不得拿旧论述否定已交付部分。无真实数据migration授权状态保持不变。
+
 现有 h3c_facts 只有 profile/kind/identity/source/captured 和 Current 标记，AP projection ID 来自当前 exact evidence。它无法可靠表达缺字段后的身份延续、replacement review、域成员生命周期、AP组稳定 source key、任务创建者/claims snapshot 或跨重启 Recent10。读取有限历史可以保留采集失败前的有效证据，本轮已实现；这不等于建立完整业务历史 Authority。
 
 建议下一批独立评审如下增量模型，版本号须在最新主线核验后确定，不能在本轮自动应用真实数据：

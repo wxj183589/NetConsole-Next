@@ -25,3 +25,5 @@ Checkpoint G：使用现有Task request JSON冻结单目标scope，并保留defi
 Checkpoint H：交互会话复查当前角色/有效session；统一七路机器级文件门禁；ZIP在队列、文件、发布边界撤权收敛。六项SQLite/归档case及后端完整harness PASS，浏览器15状态PASS（含403之后晚到200和401清空）。HTTP E2E保留正向全局用户及新增Site用户拒绝断言，未实际通过HTTP运行。详见AUTONOMOUS_INTERACTIVE_SCOPE_ACCEPTANCE.md。重新发现A23–A25可安全工作，持续推进，不沿用旧Checkpoint E的“全部阻断”结论。
 
 Checkpoint I：A24/A25修复事实Current回退、同修订覆盖与迁站重归属。八项实际最小SQLite case、原无线/runtime及完整Service harness PASS。capturedScope写入既有JSON，不迁移/补写真实数据；旧无归属事实保留全局诊断读取。详见AUTONOMOUS_FACT_REVISION_ACCEPTANCE.md。A23真实采集发布链继续审计与实现。
+
+Checkpoint J：成功单目标任务封存Raw后发布单命令facts，核验实际Raw bytes/manifest/hash/scope；失败投影不推翻Raw结果，独立任务不拼接物理AP身份，保留候选/STALE。A26冻结host/port和已引用命令，防止端点编辑后Raw重标。九项case PASS；无凭据、schema或真实数据写入。A23协调多命令Plan/Raw grouping仍待独立合同评审，不能宣称LIVE无线全链完成。

@@ -366,6 +366,22 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifest, terminalState, error);
                 H3cCollectionMetrics.RecordSqliteCommit(Stopwatch.GetElapsedTime(sqliteStarted));
                 resultPersistedAtomically = true;
+                if (terminalState == "SUCCEEDED")
+                {
+                    try
+                    {
+                        if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_FACT_PUBLICATION");
+                        var publication = _catalog.PublishH3cTaskFacts(item.Snapshot.Id);
+                        _catalog.TryRecordDeviceAuditEvent(item.Scope?.ActorUserId ?? "collector", "H3C_FACT_PUBLICATION",
+                            publication.Status, item.Snapshot.Id, item.Definition.Id, Array.Empty<string>(), "facts=" + publication.FactCount);
+                    }
+                    catch (Exception ex)
+                    {
+                        _catalog.TryRecordDeviceAuditEvent(item.Scope?.ActorUserId ?? "collector", "H3C_FACT_PUBLICATION",
+                            ex is TaskScopeRevokedException ? "SCOPE_REVOKED" : "REPAIR_REQUIRED",
+                            item.Snapshot.Id, item.Definition.Id, Array.Empty<string>(), ex.GetType().Name);
+                    }
+                }
             }
             catch (Exception ex)
             {

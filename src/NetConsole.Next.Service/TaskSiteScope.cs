@@ -6,7 +6,8 @@ namespace NetConsole.Next.Service;
 // The existing collector has one immutable target per admitted run. Its scope
 // fits the existing task-definition JSON; no schema or audit-as-authority is needed.
 internal sealed record TaskScopeSnapshot(int Version, string ActorUserId, string DeviceId,
-    string ProfileId, string SiteId, long CreatedMs, string ClaimsRevision);
+    string ProfileId, string SiteId, long CreatedMs, string ClaimsRevision, H3cTaskEndpoint? Endpoint = null);
+internal sealed record H3cTaskEndpoint(string Host, int Port);
 internal sealed record TaskExecutionScope(TaskScopeSnapshot CreationScope, string ActorUserId, string DefinitionId,
     string RequiredRole = "SUPERADMIN");
 internal sealed class TaskScopeRevokedException(string reason) : InvalidOperationException(reason)
@@ -30,8 +31,10 @@ internal sealed class TaskSiteScopeAuthorizer(Catalog catalog, P2B5SiteScopeStor
         if (!current.IsAuthorized) throw new TaskScopeRevokedException("TASK_SCOPE_DENIED");
         var device = catalog.GetTaskScopeTarget(profileId, current)
             ?? throw new TaskScopeRevokedException("TASK_TARGET_NOT_VISIBLE");
+        var profile = catalog.GetH3cDeviceProfile(profileId) ?? throw new TaskScopeRevokedException("TASK_TARGET_NOT_VISIBLE");
         return new(1, actorUserId, device.Id, profileId, device.SiteId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            current.IsGlobal ? "GLOBAL" : current.ClaimsRevision ?? throw new TaskScopeRevokedException("TASK_CLAIMS_REVISION_UNAVAILABLE"));
+            current.IsGlobal ? "GLOBAL" : current.ClaimsRevision ?? throw new TaskScopeRevokedException("TASK_CLAIMS_REVISION_UNAVAILABLE"),
+            new(profile.Host, profile.Port));
     }
 
     public TaskExecutionScope CaptureExecution(TaskDefinitionSnapshot definition, string? actorUserId)
@@ -58,6 +61,9 @@ internal sealed class TaskSiteScopeAuthorizer(Catalog catalog, P2B5SiteScopeStor
             var device = catalog.GetTaskScopeTarget(target, current);
             if (device is null || device.Id != snapshot.DeviceId || device.SiteId != snapshot.SiteId || !device.Enabled)
                 throw new TaskScopeRevokedException("TASK_TARGET_REVOKED_" + boundary);
+            var profile = catalog.GetH3cDeviceProfile(target);
+            if (snapshot.Endpoint is null || profile is null || profile.Host != snapshot.Endpoint.Host || profile.Port != snapshot.Endpoint.Port)
+                throw new TaskScopeRevokedException("TASK_ENDPOINT_REVOKED_" + boundary);
             var currentRevision = current.IsGlobal ? "GLOBAL" : current.ClaimsRevision;
             if (currentRevision != snapshot.ClaimsRevision)
                 catalog.TryRecordDeviceAuditEvent(scope.ActorUserId, "TASK_SCOPE_REVISION_CHECK", "AUTHORIZED", scope.DefinitionId,

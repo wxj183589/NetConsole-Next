@@ -1,0 +1,13 @@
+# 单命令Raw事实发布验收（Checkpoint J）
+
+日期：2026-11-05。A23部分实现、A26完成；新增九项最小SQLite/调度器/真实Raw sink测试通过。
+
+成功的单目标任务先按原有事务封存Raw和task result，再发布可重建事实。发布复核完整单条NDJSON、实际segment/output SHA、command/profile/source/run/captured时间及不可变任务Scope与端点，使用现有h3c_facts表和JSON provenance。数据库仍存STALE兼容状态，查询核验manifest/segment关联后派生COLLECTED_RAW_VERIFIED与AGE_DEPENDENT，不用离线API/source字符串伪造LIVE_VERIFIED，不修改schema CHECK。引用验证表达catalog provenance；Raw文件后续变化仍以既有完整性检查/受保护Raw读取为准。
+
+失败、超时、取消或PARTIAL capture不发布新的有效事实。投影解析/写入故障记录REPAIR_REQUIRED，保留已成功封存的Raw和task状态；显式重建再次核验Raw且幂等，不重新登录设备，不自动重试命令。审计只保存状态、稳定ID和异常类型，不保存命令输出、密码或token。
+
+每个命令run保留独立source revision；不同run的AP表与地址表不能按名称/时间拼接。当前通过采集发布的AP观察可以显示Serial候选，但仍为CANDIDATE/STALE，不能宣称完整物理身份或实时运行状态。完整协调多命令采集需要明确的持久Plan、Raw grouping与失败/重启合同；本批没有临时发明bundle Raw格式或绕过既有单命令Raw不变量。A23因此保留PARTIAL_BLOCKED。
+
+A26修复相邻的真实Raw归属问题：Scope同时冻结host/port；执行边界发生端点变化不发新命令。有界命令中改host时，以原Scope host封存PARTIAL Raw，取消任务，不把原输出改标成新host。旧无endpoint Scope不推测补齐，需新definition ID。被run引用的H3C command也不可原地编辑，避免队列中的旧命令或历史恢复被当前definition改写；超时仍允许编辑，已入队run保留自己的deadline。
+
+九项测试：发布/哈希引用/重启/幂等、独立命令不伪造AP身份、失败及部分输出拒绝、connect中改端点、命令中改host后真实Raw标签、投影写入故障保留Raw并重建、被篡改Raw拒绝重建、无endpoint旧定义拒绝、已引用命令编辑拒绝。实际四台模拟器登录及Service-backed HTTP仍未通过，不把注入的可控session测试作为设备实时证据。

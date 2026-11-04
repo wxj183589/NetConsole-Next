@@ -17,16 +17,18 @@ internal sealed record H3cFactSnapshot(
     bool IsCurrent,
     string PayloadJson)
 {
+    public bool CollectedRawVerified { get; init; }
     // The catalog keeps the original STALE status for schema compatibility. These
     // derived fields make the evidence boundary explicit to API and UI consumers.
     public string DataState => Status switch
     {
         "EMPTY" or "UNSUPPORTED" or "PARTIAL" or "FAILED" => Status,
+        _ when CollectedRawVerified => "COLLECTED_RAW_VERIFIED",
         _ when Source == Catalog.H3cOfflineFixtureSource => "OFFLINE_REAL_FIXTURE_VERIFIED",
         _ => Status
     };
 
-    public string Freshness => Source == Catalog.H3cOfflineFixtureSource
+    public string Freshness => CollectedRawVerified ? "AGE_DEPENDENT" : Source == Catalog.H3cOfflineFixtureSource
         ? Status == "STALE" ? "EXPIRED_DEVICE_OFFLINE" : "NOT_APPLICABLE"
         : Status == "LIVE_VERIFIED" ? "LIVE" : "UNKNOWN";
 }
@@ -64,6 +66,19 @@ internal sealed partial class Catalog
         var scope = CaptureH3cFactScope(db, transaction, profileId);
         var facts = BuildFacts(profileId, commandOutputs, capturedMs, source, scope);
         if (facts.Count == 0) throw new InvalidDataException("H3C replay did not produce a fact or structured command state.");
+        WriteH3cFacts(db, transaction, facts);
+        transaction.Commit();
+
+        using var counts = db.CreateCommand();
+        counts.CommandText = "SELECT COUNT(*),COALESCE(SUM(is_current),0) FROM h3c_facts WHERE profile_id=$profile";
+        counts.Parameters.AddWithValue("$profile", profileId);
+        using var countReader = counts.ExecuteReader();
+        countReader.Read();
+        return new(profileId, source, capturedMs, facts.Count, countReader.GetInt32(1), countReader.GetInt32(0) - countReader.GetInt32(1));
+    }
+
+    private static void WriteH3cFacts(SqliteConnection db, SqliteTransaction transaction, IReadOnlyList<H3cFactSnapshot> facts)
+    {
         foreach (var fact in facts)
         {
             // A revision is immutable, even for historical late arrivals. Validate
@@ -123,14 +138,6 @@ internal sealed partial class Catalog
             insert.Parameters.AddWithValue("$payload", fact.PayloadJson);
             insert.ExecuteNonQuery();
         }
-        transaction.Commit();
-
-        using var counts = db.CreateCommand();
-        counts.CommandText = "SELECT COUNT(*),COALESCE(SUM(is_current),0) FROM h3c_facts WHERE profile_id=$profile";
-        counts.Parameters.AddWithValue("$profile", profileId);
-        using var countReader = counts.ExecuteReader();
-        countReader.Read();
-        return new(profileId, source, capturedMs, facts.Count, countReader.GetInt32(1), countReader.GetInt32(0) - countReader.GetInt32(1));
     }
 
     public IReadOnlyList<H3cFactSnapshot> QueryH3cFacts(string profileId, string? kind = null,
@@ -143,7 +150,8 @@ internal sealed partial class Catalog
         filters.Add(H3cFactScopePredicate(scope, scopeParameters, "h3c_facts", requireCapturedScope));
         if (!history) filters.Add("is_current=1");
         if (!string.IsNullOrWhiteSpace(kind)) filters.Add("kind=$kind");
-        command.CommandText = $@"SELECT id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json
+        command.CommandText = $@"SELECT id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json,
+            {H3cFactRawVerificationPredicate("h3c_facts")}
             FROM h3c_facts WHERE {string.Join(" AND ", filters)}
             ORDER BY captured_ms DESC,kind,identity_key,source,id LIMIT $limit";
         command.Parameters.AddWithValue("$profile", profileId);
@@ -154,22 +162,25 @@ internal sealed partial class Catalog
         var rows = new List<H3cFactSnapshot>();
         while (reader.Read())
             rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-                reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetInt32(7) != 0, reader.GetString(8)));
+                reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetInt32(7) != 0, reader.GetString(8))
+                { CollectedRawVerified = reader.GetInt64(9) != 0 });
         return rows;
     }
 
     private static IReadOnlyList<H3cFactSnapshot> BuildFacts(string profileId,
-        IReadOnlyDictionary<string, string> outputs, long capturedMs, string source, H3cFactScope? scope)
+        IReadOnlyDictionary<string, string> outputs, long capturedMs, string source, H3cFactScope? scope,
+        H3cFactRawProvenance? provenance = null)
     {
         var facts = new List<H3cFactSnapshot>();
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         void Add(string kind, string identity, object payload, string status = "STALE")
         {
             var json = payload is string text ? text : JsonSerializer.Serialize(payload, jsonOptions);
-            if (scope is not null)
+            if (scope is not null || provenance is not null)
             {
                 var node = JsonNode.Parse(json)!.AsObject();
-                node["capturedScope"] = JsonSerializer.SerializeToNode(scope, jsonOptions);
+                if (scope is not null) node["capturedScope"] = JsonSerializer.SerializeToNode(scope, jsonOptions);
+                if (provenance is not null) node["rawProvenance"] = JsonSerializer.SerializeToNode(provenance, jsonOptions);
                 json = node.ToJsonString(jsonOptions);
             }
             var idInput = $"{profileId}|{kind}|{identity}|{source}|{capturedMs}";

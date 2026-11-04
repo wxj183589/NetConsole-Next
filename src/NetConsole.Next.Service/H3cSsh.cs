@@ -544,7 +544,7 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
         var writer = new RawSegmentWriterFactory().CreateH3c(catalog, profile.Id);
         try
         {
-            var outputSha = writer.AppendH3cCommand(profile.Id, runId, profile.Host,
+            var outputSha = writer.AppendH3cCommand(profile.Id, runId, definition.ScopeSnapshot?.Endpoint?.Host ?? profile.Host,
                 definition.Command, output, capturedMs, captureStatus);
             await writer.FlushAsync().ConfigureAwait(false);
             await writer.SealAsync().ConfigureAwait(false);

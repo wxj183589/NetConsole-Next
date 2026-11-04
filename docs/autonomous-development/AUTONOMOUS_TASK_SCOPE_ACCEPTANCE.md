@@ -8,7 +8,7 @@
 
 Scope Snapshot记录Version、创建actor稳定ID、inventory设备稳定ID、Profile ID、Site、创建时间和实际claims revision。它不存密码、session token、credential reference或命令输出。
 
-一旦definition已被任何run引用，目标device/profile/Site边界不可扩大、不可清除。相同目标的命令/超时显式编辑仍可用，已排队WorkItem保留自己的request；数据库deadline也改用入队时timeout。要改目标必须使用新definition ID，避免修改定义后回溯扩大旧run可见范围。入队事务复核定义及scope，存在并发修改则拒绝。
+一旦definition已被任何run引用，目标device/profile/Site边界不可扩大、不可清除。超时显式编辑仍可用，已排队WorkItem保留自己的request；数据库deadline也改用入队时timeout。Checkpoint J进一步冻结host/port，并禁止已引用H3C command原地改写；修改目标/命令须新definition ID，避免破坏旧Raw manifest或回溯扩大旧run可见范围。入队事务复核定义及scope，存在并发修改则拒绝。
 
 已有无Scope Snapshot的历史任务：全局operator保留读取；Site-scoped list不推测其创建范围，不暴露其结果。已有run的无scope definition不能追填新scope给旧数据“补授权”，需要新ID。无scope definition不经公开执行入口启动。这是任务范围缺失的fail-closed语义，不是Legacy HistoryStore fallback。
 

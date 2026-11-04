@@ -364,3 +364,115 @@ TESTABILITY=定向单元及fixture；实测单列
 ESTIMATED_EFFORT=按证据和schema依赖分批
 PRIORITY=P1
 STATUS=BLOCKED
+
+## A21 交互会话当前身份复核
+
+TASK_ID=A21
+MODULE=Terminal/Security
+FEATURE=交互会话当前身份复核
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=握手缓存SUPERADMIN角色；会话退出/降权后可继续stream
+IMPLEMENTATION_SCOPE=InteractiveScopeAuthorizer/Stream
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A22 机器级文件及ZIP当前全局权限
+
+TASK_ID=A22
+MODULE=Files/Security
+FEATURE=机器级文件及ZIP当前全局权限
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=Raw/录屏/备份无Site归属；原通用文件路由可绕过业务授权
+IMPLEMENTATION_SCOPE=FilesView/文件路由/Archive
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A23 真实采集Raw到facts发布
+
+TASK_ID=A23
+MODULE=Collection/Raw
+FEATURE=真实采集Raw到facts发布
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=单命令发布已完成；协调多命令快照需冻结的持久Plan/Raw grouping合同及后续schema专项
+EVIDENCE=原h3c_facts只有offline importer写入；真实任务结果未进入业务事实
+IMPLEMENTATION_SCOPE=H3cTaskFactPublication/调度器/显式coherent collection方案
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=PARTIAL_BLOCKED
+
+## A24 Current时间单调与不可变revision
+
+TASK_ID=A24
+MODULE=Facts/Persistence
+FEATURE=Current时间单调与不可变revision
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=迟到回放回退Current；同revision silently upsert
+IMPLEMENTATION_SCOPE=H3cFacts/409 conflict
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A25 冻结采集时设备、Site和端点归属
+
+TASK_ID=A25
+MODULE=Facts/Site
+FEATURE=冻结采集时设备、Site和端点归属
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=旧事实按当前inventory Site重新归属
+IMPLEMENTATION_SCOPE=capturedScope/SQL predicates/runtime history
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A26 冻结端点和已引用命令防止Raw重标
+
+TASK_ID=A26
+MODULE=Tasks/Raw
+FEATURE=冻结端点和已引用命令防止Raw重标
+CURRENT_STATUS=Checkpoints H-J实际审计与定向验证
+USER_VALUE=原始证据、任务边界和Site隔离可信
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=Raw sink重新读当前host；运行中命令编辑破坏manifest验证
+IMPLEMENTATION_SCOPE=TaskScopeEndpoint/Raw sink/definition command freeze
+SECURITY_RISK=不扩展目标；不以显示名拼接独立采集
+DATABASE_IMPACT=既有JSON/表；真实数据与schema零修改
+TESTABILITY=最小SQLite、调度器、Raw sink及浏览器fixture
+ESTIMATED_EFFORT=已按证据分批实施；未完成部分独立评审
+PRIORITY=P1
+STATUS=COMPLETED
+
+## Checkpoint J状态说明
+
+A10已实现只读Current/PreviousEffective/Recent10、显式deadline及partial-history；A11已实现单目标冻结scope与执行/读取撤权收敛。两项保留PARTIAL_BLOCKED仅指完整无线持久主体生命周期/多目标Plan与Report，不再把这些已实现能力归为schema阻断。A20已有单命令Raw引用核验，正式持久身份/生命周期及coherent多命令关系仍待方案评审。A23不会把独立AP表/地址任务伪装同一次采集；当前候选/STALE标记保留。任务池共26项，状态以下方实际统计为准。
