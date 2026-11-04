@@ -111,3 +111,20 @@ R3_B0_FINAL_STATUS=PARTIAL
 
 7 项决策仍须用户逐项选择后，才可把 proposed contract 转为 approved/frozen，并进入 R3-B1 产品实现。R2 `PARTIAL`、Windows native 125% `PENDING` 和所有真实设备限制保持不变。
 
+## R3-B0 Contract Amendment 2026-11-04
+
+本次追加修订保持上方历史口径不变：
+
+```text
+R3_B0_DECISIONS_APPROVED=0
+R3_B0_DECISIONS_PENDING=7
+R3_B0_API_GAPS_IMPLEMENTED_THIS_ROUND=0
+R3_B0_API_GAPS_REMAINING=10
+R3_B0_TEST_SCENARIOS_AFTER=57
+R3_B0_TEST_FIXTURES_AFTER=17
+R3_B0_POLICY=PROPOSED
+R3_B0_PRODUCT_CODE_CHANGED=NO
+```
+
+AP Group 现区分 Domain-owned 与 AC-owned scope；Task snapshot 只限制目标上限，执行/恢复/读取/下载/审计均需 current claims；R3-B1 从第一条无线 API 开始应用 P2B5，R3-B5 只负责高级跨 AC、partial visibility 和 no-leak 专项；API-W09 不再新增 claims 暴露 route。详见 `R3_B0_CONTRACT_AMENDMENT_20261104.md` 和 `R3_B0_AMENDED_READINESS_REPORT.md`。
+

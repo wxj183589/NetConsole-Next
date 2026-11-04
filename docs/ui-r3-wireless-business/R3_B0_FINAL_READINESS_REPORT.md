@@ -65,3 +65,16 @@
 - `R3_B0_API_GAP_TRACEABILITY_MATRIX.md`
 - `R3_B0_TEST_SCENARIO_MATRIX.md`
 - `R3_B0_BATCH_IMPLEMENTATION_PLAN.md`
+
+## Amendment 2026-11-04
+
+本轮 amendment 追加以下正式规则：
+
+- AP Group 只有在 domain-shared evidence 明确存在时才使用 `DOMAIN|ac_domain_id|source_group_key`；否则使用 `AC|source_ac_device_id|source_group_key`，缺 source key/ID 不合并。
+- Task scope snapshot 只限制最大目标集合；实际执行、恢复、读取、下载、报告和审计均重新计算 `CREATION_SCOPE_SNAPSHOT INTERSECT CURRENT_AUTHORIZED_TARGETS`。
+- 对不可安全中断的当前 bounded operation，只完成当前原子边界或安全中止，封存 partial evidence 并标记 `REVOKED_AFTER_START`，不启动后续操作。
+- R3-B1 从第一条无线资源 route 开始复用 P2B5 Site claims；R3-B5 只做高级跨 AC/partial/no-leak 闭环。
+- API-W09 改为内部 P2B5 predicate，不新增 Site claims route。
+- 测试设计从 35 场景/12 fixture 扩展为 57 场景/17 fixture；本轮产品测试仍为 `NOT_RUN_DOC_ONLY`。
+
+详细修订见 `R3_B0_CONTRACT_AMENDMENT_20261104.md`、`R3_B0_FINAL_USER_APPROVAL_SHEET.md` 和 `R3_B0_AMENDED_READINESS_REPORT.md`。7 项决策仍为 `0 approved / 7 pending`，policy 仍为 `PROPOSED`。
