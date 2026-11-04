@@ -167,14 +167,14 @@ internal sealed class WirelessProjectionEngine
             .Select(group => group.OrderByDescending(item => item.Enabled).ThenBy(item => item.DisplayName, StringComparer.Ordinal).First())
             .ToDictionary(ac => ac.DeviceId, StringComparer.Ordinal);
         var visibleObservations = observations
-            .Where(item => acById.ContainsKey(item.SourceAcDeviceId) && !string.IsNullOrWhiteSpace(item.SourceSiteId))
+            .Where(item => acById.TryGetValue(item.SourceAcDeviceId, out var ac) &&
+                string.Equals(ac.SiteId, item.SourceSiteId, StringComparison.Ordinal))
             .Select(item => item with
             {
                 SerialEvidence = NormalizeSerial(item.SerialEvidence),
                 NormalizedMacSet = NormalizeMacSet(item.NormalizedMacSet),
                 ApName = item.ApName?.Trim() ?? string.Empty
             })
-            .Where(item => item.ApName.Length > 0)
             .ToArray();
 
         var domainsById = BuildDomains(acById, topologyEvidence);
@@ -184,6 +184,7 @@ internal sealed class WirelessProjectionEngine
             .ToDictionary(group => group.Key, group => group.OrderBy(item => item.Domain.Id, StringComparer.Ordinal).First().Domain, StringComparer.Ordinal);
         var observationWithDomain = visibleObservations.Select(item =>
             (Seed: item, DomainId: domainByAc.TryGetValue(item.SourceAcDeviceId, out var domain) ? domain.Id : "ac-domain:" + item.SourceAcDeviceId))
+            .DistinctBy(item => ObservationId(item.Seed, item.DomainId))
             .ToArray();
 
         var resources = BuildResources(observationWithDomain, scope);
@@ -256,7 +257,8 @@ internal sealed class WirelessProjectionEngine
     {
         var resourceByObservation = resources.SelectMany(resource => resource.Observations.Select(observation =>
                 (ObservationId: observation.Id, ResourceId: resource.Id)))
-            .ToDictionary(item => item.ObservationId, item => item.ResourceId, StringComparer.Ordinal);
+            .GroupBy(item => item.ObservationId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().ResourceId, StringComparer.Ordinal);
         return observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.ApGroup))
             .GroupBy(item => (item.Seed.SourceAcDeviceId, GroupKey(item.Seed.ApGroup)), item => item)
             .Select(group =>
@@ -341,7 +343,7 @@ internal sealed class WirelessProjectionEngine
     private static string RuntimeFor(WirelessAcDeviceSeed ac, IReadOnlyList<(WirelessObservationSeed Seed, string DomainId)> observations) =>
         observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId && item.Seed.NormalizedState == "RUNNING_MASTER") ? "RUNNING_MASTER" :
         observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId && item.Seed.NormalizedState == "RUNNING_BACKUP") ? "RUNNING_BACKUP" :
-        ac.ConnectionStatus is "DISCONNECTED" or "FAILED" or "CLOSED" ? "OFFLINE" : observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId) ? "UNKNOWN" : "STALE";
+        observations.Any(item => item.Seed.SourceAcDeviceId == ac.DeviceId) ? "UNKNOWN" : "STALE";
 
     private static string RoleFor(WirelessDomainSeed domain, string deviceId) =>
         domain.DomainKind == "ONE_PLUS_ONE" ? "ROLE_EVIDENCE_PENDING" : "MEMBER";
@@ -365,8 +367,13 @@ internal sealed class WirelessProjectionEngine
 
     internal static string NormalizeMac(string value)
     {
-        var compact = new string((value ?? string.Empty).Where(Uri.IsHexDigit).ToArray());
-        return compact.Length == 12 && compact.All(Uri.IsHexDigit)
+        var input = (value ?? string.Empty).Trim();
+        // Accept only complete common representations, never discard arbitrary characters.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(input,
+                @"\A(?:[0-9A-Fa-f]{12}|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}|(?:[0-9A-Fa-f]{4}-){2}[0-9A-Fa-f]{4}|(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4})\z"))
+            return string.Empty;
+        var compact = new string(input.Where(Uri.IsHexDigit).ToArray());
+        return compact.Length == 12
             ? string.Join(':', Enumerable.Range(0, 6).Select(index => compact[(index * 2)..(index * 2 + 2)].ToUpperInvariant()))
             : string.Empty;
     }
@@ -408,12 +415,13 @@ internal sealed class WirelessReadModelService
             var allowedAcIds = acs.Select(ac => ac.DeviceId).ToHashSet(StringComparer.Ordinal);
             var observations = fixture.Observations.Where(item => allowedAcIds.Contains(item.SourceAcDeviceId) && DeviceSiteScope.Allows(scope, item.SourceSiteId)).ToArray();
             var topology = fixture.TopologyEvidence.Where(item => item.MemberDeviceIds.All(allowedAcIds.Contains)).ToArray();
-            return _engine.Project(acs, observations, topology, scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("AUTHORIZED", ClaimsRevision(scope)));
+            var snapshot = _engine.Project(acs, observations, topology, scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
+            return snapshot with { Warnings = snapshot.Warnings.Append("OFFLINE_FIXTURE_EVIDENCE").ToArray() };
         }
 
         var catalog = _catalog.QueryWirelessCatalog(scope);
         return _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
-            scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("AUTHORIZED", ClaimsRevision(scope)));
+            scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
     }
 
     private static string ClaimsRevision(P2B5SiteScopeDecision scope) =>
@@ -429,7 +437,13 @@ internal sealed partial class Catalog
 {
     public WirelessCatalogSnapshot QueryWirelessCatalog(P2B5SiteScopeDecision scope)
     {
-        var inventory = QueryManagedDeviceInventory(1, 100, deviceType: "AC", scope: scope).Items;
+        var inventory = new List<DeviceInventoryItem>();
+        for (var page = 1; ; page++)
+        {
+            var batch = QueryManagedDeviceInventory(page, 100, deviceType: "AC", scope: scope);
+            inventory.AddRange(batch.Items);
+            if (!batch.HasMore) break;
+        }
         var acs = new List<WirelessAcDeviceSeed>();
         var observations = new List<WirelessObservationSeed>();
         foreach (var device in inventory)
