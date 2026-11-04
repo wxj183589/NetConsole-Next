@@ -35,8 +35,21 @@ else if (args.Length > 0 && args[0] == "--wireless-fixture-json")
     var snapshot = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"));
     Console.WriteLine(JsonSerializer.Serialize(snapshot with { Warnings = new[] { "OFFLINE_FIXTURE_EVIDENCE" } }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 }
+else if (args.Length > 0 && args[0] == "--wireless-runtime-fixture-json")
+{
+    var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    var resource = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims")).ApResources.Single();
+    if (args.Length > 2) resource = resource with { Observations = resource.Observations.Where(item => item.SourceAcDeviceId == args[2]).ToArray() };
+    var samples = fixture.RuntimeSamples ?? throw new InvalidDataException("Runtime fixture must include history samples.");
+    var state = new WirelessRuntimeStateProjection().Project(resource, new(samples, false, new HashSet<string>()),
+        new("FULL", "fixture-claims"), samples.Max(item => item.CapturedMs) + 1000, new());
+    Console.WriteLine(JsonSerializer.Serialize(state, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+}
 else if (args.Length > 0 && args[0] == "--wireless-tests")
+{
     WirelessTests.Run();
+    WirelessRuntimeTests.Run();
+}
 else
     await SchedulerTests.RunAsync();
 
@@ -179,6 +192,7 @@ internal static class SchedulerTests
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
         WirelessTests.Run();
+        WirelessRuntimeTests.Run();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();

@@ -7,6 +7,9 @@ import { workspacePath } from '../tools/workspace_paths.mjs'
 const repo = path.resolve(import.meta.dirname, '..')
 const dll = path.join(repo, 'tests/NetConsole.Next.Service.Tests/bin/Release/net10.0/NetConsole.Next.Service.Tests.dll')
 const snapshot = JSON.parse(execFileSync('dotnet', [dll, '--wireless-fixture-json', path.join(repo, 'tests/NetConsole.Next.Service.Tests/fixtures/r3_dual_ac_wireless.json')], { encoding: 'utf8' }))
+const runtimeSnapshot = JSON.parse(execFileSync('dotnet', [dll, '--wireless-runtime-fixture-json', path.join(repo, 'tests/NetConsole.Next.Service.Tests/fixtures/r3_runtime_state_history.json')], { encoding: 'utf8' }))
+const sourceRuntime = Object.fromEntries(snapshot.acDomains.flatMap(domain => domain.memberDeviceIds).map(source => [source,
+ JSON.parse(execFileSync('dotnet', [dll, '--wireless-runtime-fixture-json', path.join(repo, 'tests/NetConsole.Next.Service.Tests/fixtures/r3_runtime_state_history.json'), source], { encoding: 'utf8' }))]))
 const output = workspacePath('build', 'autonomous-20261105', 'gui')
 fs.mkdirSync(output, { recursive: true })
 const browser = await chromium.launch({ headless: true, executablePath: process.env.NETCONSOLE_CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe' })
@@ -41,6 +44,17 @@ await page.route('**/api/**', async route => {
  } else if (pathname.endsWith('/wireless/ap-resources')) {
    if (url.searchParams.get('page') === '2') resourcePageTwo = true
    body = paged(mode === 'empty' ? [] : allResources, url)
+ } else if (pathname.endsWith('/runtime-state')) {
+   if (mode === 'runtime-error') { status = 503; body = { error: 'fixture runtime unavailable' } }
+   else {
+     const source = url.searchParams.get('sourceAcId')
+     body = structuredClone(source ? sourceRuntime[source] : runtimeSnapshot)
+     body.resourceId = pathname.split('/').at(-2)
+     if (mode === 'partial-history') {
+       body.sources.forEach(item => { item.historyStatus = 'PARTIAL_SCAN_LIMIT' })
+       body.warnings.push('RUNTIME_HISTORY_INCOMPLETE')
+     }
+   }
  } else if (pathname.endsWith('/ap-groups')) {
    if (mode === 'group-error') { status = 503; body = { error: 'fixture group unavailable' } }
    else body = paged(snapshot.apGroups, url)
@@ -50,13 +64,22 @@ await page.route('**/api/**', async route => {
 async function capture(name, interaction) {
  const screenshot = path.join(output, name + '.png')
  await page.screenshot({ path: screenshot, fullPage: true })
- evidence.push({ page: '无线业务', route: '/wireless', state: mode, viewport: page.viewportSize(), dpr: await page.evaluate(() => devicePixelRatio), screenshot, interaction, result: 'PASS', evidence: 'OFFLINE_FIXTURE_EVIDENCE' })
+ let detailScreenshot
+ if (name === 'wireless-1920' || name === 'wireless-2560') {
+   detailScreenshot = path.join(output, name + '-state-detail.png')
+   await page.locator('.wireless-source-history').first().screenshot({ path: detailScreenshot })
+ }
+ evidence.push({ page: '无线业务', route: '/wireless', state: mode, viewport: page.viewportSize(), dpr: await page.evaluate(() => devicePixelRatio), screenshot, detailScreenshot, interaction, result: 'PASS', evidence: 'OFFLINE_FIXTURE_EVIDENCE' })
 }
 try {
  await page.goto(base + '/wireless', {waitUntil: 'networkidle'})
  await expect(page.getByText('离线演示数据 · 非模拟器实时状态')).toBeVisible()
  await expect(page.locator('.wireless-table tbody tr')).toHaveCount(20)
  expect(resourcePageTwo).toBe(true)
+ await expect(page.locator('.wireless-source-history')).toHaveCount(2)
+ await expect(page.locator('.wireless-ap-state-values')).toContainText('0 / 10')
+ await expect(page.locator('.wireless-history-table tbody tr')).toHaveCount(20)
+ await expect(page.getByText('以下为离线状态历史，不能证明设备当前在线')).toBeVisible()
  await capture('wireless-1920', 'Domain、双 AC、多来源、分页显示')
  await page.setViewportSize({ width: 2560, height: 1440 })
  await capture('wireless-2560', '辅助视口')
@@ -70,9 +93,14 @@ try {
  await page.locator('.wireless-tree__member').first().click()
  await expect(page.locator('.wireless-group-row')).toHaveCount(1)
  await expect(page.locator('.wireless-observation')).toHaveCount(1)
+ await expect(page.locator('.wireless-source-history')).toHaveCount(1)
+ await expect(page.locator('.wireless-source-history')).toContainText('ac-device-1')
+ await expect(page.locator('.wireless-ap-history tbody tr')).toHaveCount(10)
  await capture('wireless-ac1', 'AC 筛选同时限制组与详情')
  await page.locator('.wireless-tree__member').nth(1).click()
  await expect(page.locator('.wireless-observation')).toHaveCount(1)
+ await expect(page.locator('.wireless-source-history')).toHaveCount(1)
+ await expect(page.locator('.wireless-source-history')).toContainText('ac-device-2')
  await capture('wireless-ac2', 'AC2 独立来源')
  await page.getByLabel('筛选 AP 状态').selectOption('OFFLINE')
  await expect(page.getByText('选择一条 AP')).toBeVisible()
@@ -83,6 +111,15 @@ try {
  await expect(page.getByText('来源状态存在冲突，请核对各 AC 的原始观察')).toBeVisible()
  await capture('wireless-conflict', '多来源状态冲突提示')
  delete allResources[0].stateConflictReason
+ mode = 'runtime-error'
+ await page.getByRole('button', { name: '刷新数据' }).click()
+ await expect(page.getByText('状态历史读取失败：fixture runtime unavailable')).toBeVisible()
+ await expect(page.locator('.wireless-source-history')).toHaveCount(0)
+ await capture('wireless-runtime-error', '历史失败不保留旧来源状态')
+ mode = 'partial-history'
+ await page.getByRole('button', { name: '刷新数据' }).click()
+ await expect(page.getByText('历史读取不完整，以下记录可能不足最近十次有效变化')).toBeVisible()
+ await capture('wireless-partial-history', '扫描上限或缺证据不虚报完整Recent10')
  mode = 'group-error'
  await page.getByRole('button', { name: '刷新数据' }).click()
  await expect(page.getByText('AP 组读取失败')).toBeVisible()

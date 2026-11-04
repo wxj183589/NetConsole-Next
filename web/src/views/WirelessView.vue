@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
   getWirelessAcDomains,
   getWirelessApGroups,
   getWirelessApResources,
+  getWirelessRuntimeState,
   type WirelessAcDomain,
   type WirelessApGroup,
   type WirelessApResource,
+  type WirelessRuntimeState,
 } from '../api/client'
 
 const loading = ref(false)
@@ -25,6 +27,11 @@ const warnings = ref<string[]>([])
 const page = ref(1)
 const pageSize = 20
 const stateFilter = ref('')
+const runtimeState = ref<WirelessRuntimeState | null>(null)
+const runtimeLoading = ref(false)
+const runtimeError = ref('')
+let runtimeGeneration = 0
+let runtimeController: AbortController | null = null
 let refreshGeneration = 0
 let groupGeneration = 0
 
@@ -44,6 +51,27 @@ function viewObservations(resource: WirelessApResource) {
   return resource.observations.filter(item => (!selectedDomain.value || item.sourceAcDomainId === selectedDomain.value.id) && (!selectedAcId.value || item.sourceAcDeviceId === selectedAcId.value))
 }
 watch([search, stateFilter, selectedDomainId, selectedAcId], () => { page.value = 1; selectedResourceId.value = '' })
+watch([() => selectedResource.value?.id, () => selectedResource.value?.projectionRevision, selectedDomainId, selectedAcId], () => { void loadRuntime() })
+
+async function loadRuntime(): Promise<void> {
+  const generation = ++runtimeGeneration
+  runtimeController?.abort()
+  runtimeState.value = null
+  runtimeError.value = ''
+  const resource = selectedResource.value
+  if (!resource) { runtimeLoading.value = false; return }
+  runtimeController = new AbortController()
+  runtimeLoading.value = true
+  try {
+    const result = await getWirelessRuntimeState(resource.id, {
+      sourceAcId: selectedAcId.value || undefined, domainId: selectedDomain.value?.id,
+    }, runtimeController.signal)
+    if (generation === runtimeGeneration) runtimeState.value = result
+  } catch (cause) {
+    if (generation === runtimeGeneration) runtimeError.value = cause instanceof Error ? cause.message : '状态历史读取失败'
+  } finally { if (generation === runtimeGeneration) runtimeLoading.value = false }
+}
+onBeforeUnmount(() => { ++runtimeGeneration; runtimeController?.abort() })
 const domainApCount = computed(() => visibleResources.value.length)
 const scopeLabel = computed(() => selectedDomain.value?.siteScopeStatus || '—')
 const runtimeLabel = computed(() => {
@@ -92,6 +120,9 @@ async function loadGroups(domainId: string): Promise<void> {
 async function refresh(): Promise<void> {
   const generation = ++refreshGeneration
   ++groupGeneration
+  ++runtimeGeneration
+  runtimeController?.abort()
+  runtimeState.value = null
   loading.value = true
   error.value = ''
   groupError.value = ''
@@ -110,6 +141,7 @@ async function refresh(): Promise<void> {
     selectedResourceId.value = ''
     if (selectedDomainId.value) await loadGroups(selectedDomainId.value)
     else groups.value = []
+    await loadRuntime()
   } catch (cause) {
     if (generation !== refreshGeneration) return
     domains.value = []; resources.value = []; groups.value = []
@@ -124,6 +156,10 @@ function stateClass(state: string): string {
 }
 function stateText(state: string): string {
   return ({ RUNNING_MASTER: '运行主', RUNNING_BACKUP: '运行备', OFFLINE: '离线', UNKNOWN: '未知', STALE: '过期', CONFLICT: '冲突', CANDIDATE: '候选', CONFIRMED: '已确认', EVIDENCE_PENDING: '证据待定' } as Record<string, string>)[state] || state
+}
+function outcomeText(outcome: string): string {
+  return ({ SUCCESS: '有效采集', FAILED: '采集失败', EMPTY: '空表', PARTIAL: '采集不完整', UNSUPPORTED: '命令不支持',
+    PARSE_FAILED: '解析失败', UNKNOWN: '未知状态', CONFLICT: '来源冲突', CLOCK_SKEW: '采集时间异常', NOT_COLLECTED: '未采集' } as Record<string, string>)[outcome] || outcome
 }
 
 onMounted(() => { void refresh() })
@@ -175,6 +211,32 @@ onMounted(() => { void refresh() })
             <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="visibleGroups.length" class="wireless-group-list"><div v-for="group in visibleGroups" :key="group.id" class="wireless-group-row"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></div></div><div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '按来源 AC 保留 AP 组。' }}</small></div></div></section>
             <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
           </div>
+          <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
+            <div class="card__header"><h2>状态与最近变化</h2><span class="state-pill" :class="stateClass(runtimeState?.normalizedState || 'UNKNOWN')">{{ stateText(runtimeState?.normalizedState || 'UNKNOWN') }}</span></div>
+            <el-alert v-if="runtimeError" :title="'状态历史读取失败：' + runtimeError" type="error" :closable="false" show-icon />
+            <template v-else-if="runtimeState">
+              <p class="wireless-runtime-note">仅显示当前可见 AC 的有效状态变化；无变化采集不增加记录。时效窗口：{{ runtimeState.freshnessWindowMs / 1000 }} 秒。</p>
+              <el-alert v-if="runtimeState.warnings.includes('OFFLINE_FIXTURE_EVIDENCE')" title="以下为离线状态历史，不能证明设备当前在线" type="warning" :closable="false" />
+              <div class="wireless-state-values wireless-ap-state-values">
+                <div><small>AP 最近有效状态</small><strong>{{ runtimeState.current ? stateText(runtimeState.current.normalizedState) : '暂无有效证据' }}</strong><span>{{ formatTime(runtimeState.current?.capturedMs) }}</span></div>
+                <div><small>AP 上一有效状态</small><strong>{{ runtimeState.previousEffective ? stateText(runtimeState.previousEffective.normalizedState) : '暂无上一有效状态' }}</strong><span>{{ formatTime(runtimeState.previousEffective?.capturedMs) }}</span></div>
+                <div><small>AP 有效变化记录</small><strong>{{ runtimeState.recent10?.length || 0 }} / 10</strong><span>按当前来源视图聚合</span></div>
+              </div>
+              <div v-if="runtimeState.recent10?.length" class="table-wrap wireless-ap-history"><table class="data-table"><thead><tr><th>AP 变化时间</th><th>前一状态</th><th>新状态</th><th>来源 AC</th></tr></thead><tbody><tr v-for="change in runtimeState.recent10" :key="change.id"><td>{{ formatTime(change.capturedMs) }}</td><td>{{ stateText(change.previousState) }}</td><td>{{ stateText(change.normalizedState) }}</td><td>{{ change.sources.map(source => source.sourceAcDeviceId).join(' / ') }}</td></tr></tbody></table></div>
+              <article v-for="source in runtimeState.sources" :key="source.sourceAcDeviceId" class="wireless-source-history">
+                <div class="wireless-member-card__top"><strong>{{ source.sourceAcDeviceId }}</strong><span :class="['state-pill', stateClass(source.normalizedState)]">{{ stateText(source.normalizedState) }}</span></div>
+                <div class="wireless-state-values">
+                  <div><small>最近有效状态</small><strong>{{ source.current ? stateText(source.current.normalizedState) : '暂无有效证据' }}</strong><span>{{ formatTime(source.current?.capturedMs) }}</span></div>
+                  <div><small>上一有效状态</small><strong>{{ source.previousEffective ? stateText(source.previousEffective.normalizedState) : '暂无上一有效状态' }}</strong><span>{{ formatTime(source.previousEffective?.capturedMs) }}</span></div>
+                  <div><small>最近采集结果</small><strong>{{ outcomeText(source.latestOutcome) }}</strong><span>{{ formatTime(source.latestCapturedMs) }}</span></div>
+                </div>
+                <el-alert v-if="source.historyStatus !== 'RECENT10_COMPLETE'" title="历史读取不完整，以下记录可能不足最近十次有效变化" type="warning" :closable="false" />
+                <div v-if="source.recent10.length" class="table-wrap"><table class="data-table wireless-history-table"><thead><tr><th>变化时间</th><th>前一状态</th><th>新状态</th><th>来源修订</th></tr></thead><tbody><tr v-for="change in source.recent10" :key="change.id"><td>{{ formatTime(change.capturedMs) }}</td><td>{{ stateText(change.previousState) }}</td><td>{{ stateText(change.normalizedState) }}</td><td class="mono">{{ change.sourceRevision }}</td></tr></tbody></table></div>
+                <p v-else class="wireless-runtime-note">暂无有效状态变化</p>
+              </article>
+              <div v-if="!runtimeState.sources.length" class="empty-state"><div><strong>身份尚未确认，无法关联状态历史</strong><small>请先核对 Serial 与完整 MAC 证据。</small></div></div>
+            </template>
+          </section>
         </template>
         <div v-else class="card empty-state"><div><strong>暂无无线业务数据</strong><small>AC Domain API 返回空集合。</small></div></div>
       </main>
@@ -217,6 +279,15 @@ onMounted(() => { void refresh() })
 .wireless-group-row small { margin-top: 3px; color: var(--nc-text-muted); }
 .wireless-observation > div { display: flex; align-items: center; gap: 7px; }
 .wireless-observation small { margin-top: 3px; color: var(--nc-text-muted); }
+.wireless-runtime { min-width: 0; }
+.wireless-runtime-note { margin: 12px 16px; color: var(--nc-text-secondary); font-size: 12px; }
+.wireless-source-history { margin: 12px 16px; border: 1px solid var(--nc-border); border-radius: 7px; padding: 14px; }
+.wireless-state-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.wireless-state-values small, .wireless-state-values strong, .wireless-state-values span { display: block; }
+.wireless-state-values small, .wireless-state-values span { color: var(--nc-text-secondary); font-size: 12px; }
+.wireless-state-values strong { margin: 5px 0; font-size: 14px; }
+.wireless-ap-state-values, .wireless-ap-history { margin: 14px 16px; }
+@media (max-width: 760px) { .wireless-state-values { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .wireless-layout { grid-template-columns: 210px minmax(0, 1fr); } .wireless-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .wireless-layout { grid-template-columns: 1fr; } .wireless-sidebar { position: static; min-height: 0; } .wireless-domain-header, .wireless-toolbar { align-items: flex-start; flex-direction: column; } .wireless-member-grid, .wireless-bottom-grid { grid-template-columns: 1fr; } }
 </style>

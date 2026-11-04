@@ -17,3 +17,5 @@ Batch E：多来源master不推断HA，返回MULTI_SOURCE_MASTER；完整回归�
 最终验证：Service harness PASS，Wireless 14方法PASS，Vitest 5/5，Python Workspace 4/4、JS Workspace脚本PASS，vue-tsc/Vite/LocalManager/Service构建PASS。HTTP API实际运行在Mutex处阻断。最初Vite临时文件Access denied后将TEMP/TMP限定到Workspace build并通过；并行test/build短暂DLL锁重试已通过，后续改为串行依赖验证。浏览器脚本初版错误拦截/src/api/client.ts，收窄到/api前缀后9状态通过。
 
 数据/生命周期：未修改真实数据/schema/migration/SmartHub；只读检查12个Next测试catalog寻找白名单凭据引用，未命中。仅精确退役本轮两组共30个失效生成静态资源，逐项确认新包不引用；未清理基线文件、历史数据库或其他工作树。保留有效代码工作树、最终截图和精简日志用于复核。
+
+Checkpoint F：复查阻断后继续实现只读AP/来源状态历史、runtime-state API、时效策略和GUI；14既有无线方法+13新runtime方法、真实最小SQLite和11种Chrome离线状态PASS。未新增schema。详见AUTONOMOUS_RUNTIME_HISTORY_ACCEPTANCE.md。

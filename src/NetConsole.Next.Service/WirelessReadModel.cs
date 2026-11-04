@@ -46,7 +46,8 @@ internal sealed record WirelessTopologyEvidence(
 internal sealed record WirelessFixtureDocument(
     IReadOnlyList<WirelessAcDeviceSeed> Acs,
     IReadOnlyList<WirelessObservationSeed> Observations,
-    IReadOnlyList<WirelessTopologyEvidence> TopologyEvidence);
+    IReadOnlyList<WirelessTopologyEvidence> TopologyEvidence,
+    IReadOnlyList<WirelessRuntimeSample>? RuntimeSamples = null);
 
 internal sealed record WirelessScopeView(string Status, string ClaimsRevision);
 
@@ -436,7 +437,7 @@ internal sealed class WirelessProjectionEngine
         bool Confirmed);
 }
 
-internal sealed class WirelessReadModelService
+internal sealed partial class WirelessReadModelService
 {
     private readonly Catalog _catalog;
     private readonly WirelessProjectionEngine _engine = new();
@@ -445,24 +446,31 @@ internal sealed class WirelessReadModelService
 
     public WirelessProjectionSnapshot GetSnapshot(P2B5SiteScopeDecision scope)
     {
+        var fixture = LoadFixture();
+        if (fixture is not null) return ProjectFixture(fixture, scope);
+
+        var catalog = _catalog.QueryWirelessCatalog(scope);
+        var projected = _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
+            scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
+        return projected with { Warnings = projected.Warnings.Concat(catalog.Warnings ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray() };
+    }
+
+    private static WirelessFixtureDocument? LoadFixture()
+    {
         var fixturePath = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WIRELESS_FIXTURE_PATH");
-        if (!string.IsNullOrWhiteSpace(fixturePath))
-        {
-            var json = File.ReadAllText(fixturePath);
-            var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-                ?? throw new InvalidDataException("Wireless fixture is empty.");
+        if (string.IsNullOrWhiteSpace(fixturePath)) return null;
+        return JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(fixturePath), new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidDataException("Wireless fixture is empty.");
+    }
+
+    private WirelessProjectionSnapshot ProjectFixture(WirelessFixtureDocument fixture, P2B5SiteScopeDecision scope)
+    {
             var acs = fixture.Acs.Where(ac => DeviceSiteScope.Allows(scope, ac.SiteId)).ToArray();
             var allowedAcIds = acs.Select(ac => ac.DeviceId).ToHashSet(StringComparer.Ordinal);
             var observations = fixture.Observations.Where(item => allowedAcIds.Contains(item.SourceAcDeviceId) && DeviceSiteScope.Allows(scope, item.SourceSiteId)).ToArray();
             var topology = fixture.TopologyEvidence.Where(item => item.MemberDeviceIds.All(allowedAcIds.Contains)).ToArray();
             var snapshot = _engine.Project(acs, observations, topology, scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
             return snapshot with { Warnings = snapshot.Warnings.Append("OFFLINE_FIXTURE_EVIDENCE").ToArray() };
-        }
-
-        var catalog = _catalog.QueryWirelessCatalog(scope);
-        var projected = _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
-            scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
-        return projected with { Warnings = projected.Warnings.Concat(catalog.Warnings ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray() };
     }
 
     private static string ClaimsRevision(P2B5SiteScopeDecision scope) =>

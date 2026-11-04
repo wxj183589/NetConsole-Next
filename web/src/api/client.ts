@@ -529,6 +529,60 @@ export interface WirelessTopology {
   asOf: number
 }
 
+export interface WirelessEffectiveState {
+  normalizedState: string
+  rawState: string
+  capturedMs: number
+  sourceRevision: string
+  rawManifestRef: string
+  parserRevision: string
+  verificationLevel: string
+  freshnessState: string
+}
+
+export interface WirelessSourceRuntimeState {
+  sourceAcDeviceId: string
+  sourceSiteId: string
+  normalizedState: string
+  current: WirelessEffectiveState | null
+  previousEffective: WirelessEffectiveState | null
+  recent10: Array<{ id: string; previousState: string; normalizedState: string; capturedMs: number; sourceRevision: string; rawManifestRef: string }>
+  latestOutcome: string
+  latestCapturedMs: number | null
+  freshnessDeadlineMs: number | null
+  historyStatus: string
+}
+
+export interface WirelessRuntimeState {
+  resourceId: string
+  normalizedState: string
+  sources: WirelessSourceRuntimeState[]
+  scope: WirelessScope
+  asOf: number
+  sourceRevision: string
+  freshnessWindowMs: number
+  warnings: string[]
+  current: WirelessAggregateEffectiveState | null
+  previousEffective: WirelessAggregateEffectiveState | null
+  recent10: Array<{ id: string; previousState: string; normalizedState: string; capturedMs: number; sourceRevision: string; sources: WirelessAggregateSourceEvidence[] }> | null
+}
+
+export interface WirelessAggregateSourceEvidence {
+  sourceAcDeviceId: string
+  sourceSiteId: string
+  normalizedState: string
+  capturedMs: number
+  sourceRevision: string
+  rawManifestRef: string
+}
+
+export interface WirelessAggregateEffectiveState {
+  normalizedState: string
+  capturedMs: number
+  sources: WirelessAggregateSourceEvidence[]
+  freshnessState: string
+}
+
 export interface HostTool {
   id: string
   displayName: string
@@ -676,6 +730,9 @@ export function getWirelessApResources(params: { page?: number; pageSize?: numbe
 }
 export function getWirelessApResource(id: string): Promise<WirelessApResource> {
   return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}`)
+}
+export function getWirelessRuntimeState(id: string, params: { sourceAcId?: string; domainId?: string } = {}, signal?: AbortSignal): Promise<WirelessRuntimeState> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/runtime-state`, params), { signal })
 }
 export function getWirelessApObservations(id: string, params: { page?: number; pageSize?: number; sourceAcId?: string; domainId?: string } = {}): Promise<WirelessPage<WirelessObservation>> {
   return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/observations`, params))

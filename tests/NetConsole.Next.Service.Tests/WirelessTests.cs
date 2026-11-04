@@ -183,6 +183,7 @@ internal static class WirelessTests
             catalog.UpdateDeviceInventory(linked.Id, new(linked.Id, "Fixture AC", "192.0.2.200", "H3C", "WX", "AC", "local", null, "fixture", true, profileId), "fixture");
             var outputs = new Dictionary<string, string>
             {
+                [H3cCommandPolicy.DisplayVersion] = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "display_version.txt")),
                 [H3cCommandPolicy.DisplayWlanApAll] = "<AC>display wlan ap all\nAP-ONE 1 R/M WA6320 SERIAL-001 group-a 1 day\n<AC>",
                 [H3cCommandPolicy.DisplayWlanApAllAddress] = "<AC>display wlan ap all address\nAP-ONE 192.0.2.201 4c6f-d608-0400\n<AC>"
             };
@@ -198,6 +199,31 @@ internal static class WirelessTests
             var preserved = catalog.QueryWirelessCatalog(global);
             Assert(preserved.Observations.Single().SerialEvidence == "SERIAL-001" && preserved.Observations.Single().CapturedMs == 1000 &&
                 preserved.Warnings!.Contains("AP_COLLECTION_FAILED_PREVIOUS_EVIDENCE_PRESERVED"), "failed collection must preserve the previous valid AP evidence");
+            var runtimeService = new WirelessReadModelService(catalog);
+            var physicalId = runtimeService.GetSnapshot(global).ApResources.Single().Id;
+            var failedRuntime = runtimeService.GetRuntimeState(physicalId, global, nowMs: 2500)!;
+            Assert(failedRuntime.NormalizedState == "STALE" && failedRuntime.Sources.Single().LatestOutcome == "UNSUPPORTED" &&
+                failedRuntime.Sources.Single().Current?.NormalizedState == "RUNNING_MASTER", "runtime API projection must preserve valid state after a failed command fact");
+            outputs[H3cCommandPolicy.DisplayWlanApAll] = outputs[H3cCommandPolicy.DisplayWlanApAll].Replace("R/M", "R/B");
+            catalog.ImportH3cOfflineReplay(profileId, outputs, 3000);
+            catalog.ImportH3cOfflineReplay(profileId, outputs, 4000);
+            outputs[H3cCommandPolicy.DisplayWlanApAll] = outputs[H3cCommandPolicy.DisplayWlanApAll].Replace("R/B", "I");
+            catalog.ImportH3cOfflineReplay(profileId, outputs, 3500); // A late import must not reorder effective history.
+            var reconstructed = runtimeService.GetRuntimeState(physicalId, global, nowMs: 5000)!;
+            var sourceHistory = reconstructed.Sources.Single();
+            Assert(sourceHistory.Current?.CapturedMs == 4000 && sourceHistory.Current.NormalizedState == "RUNNING_BACKUP" &&
+                sourceHistory.PreviousEffective?.NormalizedState == "OFFLINE" && sourceHistory.Recent10.Count == 3,
+                "existing SQLite facts must reconstruct chronological changes and suppress unchanged samples without adding schema");
+            Assert(runtimeService.GetRuntimeState(physicalId, global, nowMs: 5000, policy: new(300_000, 2))!.Sources.Single().HistoryStatus == "PARTIAL_SCAN_LIMIT",
+                "catalog scan cap must be observable instead of silently truncating effective history");
+            Assert(runtimeService.GetRuntimeState(physicalId, P2B5SiteScopeDecision.Denied("revoked"), nowMs: 5000) is null,
+                "runtime lookup after claims revocation must not reveal history");
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                try { catalog.QueryWirelessRuntimeHistory(runtimeService.GetSnapshot(global).ApResources.Single(), global, 10, cancelled.Token); throw new InvalidOperationException("cancelled read succeeded"); }
+                catch (OperationCanceledException) { }
+            }
             var query = new TerminalSessionQuery(null, null, null, null, null, null, null, null, 1, 20, "started", true);
             var visible = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture");
             var hidden = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other-site" }, "fixture");
@@ -228,6 +254,10 @@ internal static class WirelessTests
                 Assert(partial.Scope.Status == "PARTIAL_SCOPE" && partial.ApResources.Single().Observations.Single().SourceAcDeviceId == "AC1" &&
                     partial.AcDomains.SelectMany(item => item.Members).All(item => item.SiteId == "site-a") && partial.ApGroups.Count == 1,
                     "partial Site visibility must project only visible observations, members, groups and counts");
+                var scopedRuntime = read.GetRuntimeState(partial.ApResources.Single().Id, oneSite, nowMs: 1000)!;
+                Assert(scopedRuntime.Sources.Single().SourceAcDeviceId == "AC1" && scopedRuntime.Scope.Status == "PARTIAL_SCOPE" &&
+                    read.GetRuntimeState(partial.ApResources.Single().Id, oneSite, nowMs: 1000, sourceAcId: "AC2") is null,
+                    "runtime history filters cannot expand current authorized observation scope");
                 var bothSites = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "site-a", "site-b" }, "fixture");
                 Assert(read.GetSnapshot(bothSites).ApResources.Single().Observations.Count == 2, "two authorized Sites must retain both visible sources");
                 Assert(read.GetSnapshot(global).ApResources.Single().Observations.Count == 2, "global scope must retain independent multi-AC observations");
