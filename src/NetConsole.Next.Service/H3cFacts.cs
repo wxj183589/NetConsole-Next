@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service;
@@ -59,12 +60,43 @@ internal sealed partial class Catalog
             if (profile.ExecuteScalar() is null) throw new KeyNotFoundException($"H3C profile '{profileId}' does not exist.");
         }
 
-        var facts = BuildFacts(profileId, commandOutputs, capturedMs, source);
-        if (facts.Count == 0) throw new InvalidDataException("H3C replay did not produce a fact or structured command state.");
-
         using var transaction = db.BeginTransaction();
+        var scope = CaptureH3cFactScope(db, transaction, profileId);
+        var facts = BuildFacts(profileId, commandOutputs, capturedMs, source, scope);
+        if (facts.Count == 0) throw new InvalidDataException("H3C replay did not produce a fact or structured command state.");
         foreach (var fact in facts)
         {
+            // A revision is immutable, even for historical late arrivals. Validate
+            // before changing Current; the transaction rolls back the whole batch.
+            using (var existing = db.CreateCommand())
+            {
+                existing.Transaction = transaction;
+                existing.CommandText = @"SELECT source,status,payload_json FROM h3c_facts
+                    WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity AND captured_ms=$captured";
+                existing.Parameters.AddWithValue("$profile", fact.ProfileId);
+                existing.Parameters.AddWithValue("$kind", fact.Kind);
+                existing.Parameters.AddWithValue("$identity", fact.IdentityKey);
+                existing.Parameters.AddWithValue("$captured", fact.CapturedMs);
+                using var reader = existing.ExecuteReader();
+                var sameRevision = false;
+                while (reader.Read())
+                {
+                    if (reader.GetString(1) != fact.Status || reader.GetString(2) != fact.PayloadJson)
+                        throw new H3cFactRevisionConflictException();
+                    sameRevision |= reader.GetString(0) == fact.Source;
+                }
+                if (sameRevision) continue; // Exact replay performs no fact writes.
+            }
+            using var newest = db.CreateCommand();
+            newest.Transaction = transaction;
+            newest.CommandText = @"SELECT MAX(captured_ms) FROM h3c_facts
+                WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity";
+            newest.Parameters.AddWithValue("$profile", fact.ProfileId);
+            newest.Parameters.AddWithValue("$kind", fact.Kind);
+            newest.Parameters.AddWithValue("$identity", fact.IdentityKey);
+            var maximum = newest.ExecuteScalar();
+            var advance = maximum is null or DBNull || fact.CapturedMs > Convert.ToInt64(maximum);
+            if (advance)
             using (var clear = db.CreateCommand())
             {
                 clear.Transaction = transaction;
@@ -79,9 +111,7 @@ internal sealed partial class Catalog
             insert.Transaction = transaction;
             insert.CommandText = @"INSERT INTO h3c_facts
                 (id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json)
-                VALUES($id,$profile,$kind,$identity,$status,$source,$captured,1,$payload)
-                ON CONFLICT(profile_id,kind,identity_key,source,captured_ms) DO UPDATE SET
-                    id=excluded.id,status=excluded.status,is_current=1,payload_json=excluded.payload_json";
+                VALUES($id,$profile,$kind,$identity,$status,$source,$captured,$current,$payload)";
             insert.Parameters.AddWithValue("$id", fact.Id);
             insert.Parameters.AddWithValue("$profile", fact.ProfileId);
             insert.Parameters.AddWithValue("$kind", fact.Kind);
@@ -89,31 +119,37 @@ internal sealed partial class Catalog
             insert.Parameters.AddWithValue("$status", fact.Status);
             insert.Parameters.AddWithValue("$source", fact.Source);
             insert.Parameters.AddWithValue("$captured", fact.CapturedMs);
+            insert.Parameters.AddWithValue("$current", advance ? 1 : 0);
             insert.Parameters.AddWithValue("$payload", fact.PayloadJson);
             insert.ExecuteNonQuery();
         }
         transaction.Commit();
 
-        var current = QueryH3cFacts(profileId, null, false, 1000);
-        var history = QueryH3cFacts(profileId, null, true, 1000);
-        return new(profileId, source, capturedMs, facts.Count, current.Count,
-            Math.Max(0, history.Count - current.Count));
+        using var counts = db.CreateCommand();
+        counts.CommandText = "SELECT COUNT(*),COALESCE(SUM(is_current),0) FROM h3c_facts WHERE profile_id=$profile";
+        counts.Parameters.AddWithValue("$profile", profileId);
+        using var countReader = counts.ExecuteReader();
+        countReader.Read();
+        return new(profileId, source, capturedMs, facts.Count, countReader.GetInt32(1), countReader.GetInt32(0) - countReader.GetInt32(1));
     }
 
     public IReadOnlyList<H3cFactSnapshot> QueryH3cFacts(string profileId, string? kind = null,
-        bool history = false, int limit = 100)
+        bool history = false, int limit = 100, P2B5SiteScopeDecision? scope = null, bool requireCapturedScope = false)
     {
         using var db = Open();
         using var command = db.CreateCommand();
         var filters = new List<string> { "profile_id=$profile" };
+        var scopeParameters = new List<(string Name, object? Value)>();
+        filters.Add(H3cFactScopePredicate(scope, scopeParameters, "h3c_facts", requireCapturedScope));
         if (!history) filters.Add("is_current=1");
         if (!string.IsNullOrWhiteSpace(kind)) filters.Add("kind=$kind");
         command.CommandText = $@"SELECT id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json
             FROM h3c_facts WHERE {string.Join(" AND ", filters)}
-            ORDER BY captured_ms DESC,kind,identity_key LIMIT $limit";
+            ORDER BY captured_ms DESC,kind,identity_key,source,id LIMIT $limit";
         command.Parameters.AddWithValue("$profile", profileId);
         if (!string.IsNullOrWhiteSpace(kind)) command.Parameters.AddWithValue("$kind", kind.Trim());
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         using var reader = command.ExecuteReader();
         var rows = new List<H3cFactSnapshot>();
         while (reader.Read())
@@ -123,13 +159,19 @@ internal sealed partial class Catalog
     }
 
     private static IReadOnlyList<H3cFactSnapshot> BuildFacts(string profileId,
-        IReadOnlyDictionary<string, string> outputs, long capturedMs, string source)
+        IReadOnlyDictionary<string, string> outputs, long capturedMs, string source, H3cFactScope? scope)
     {
         var facts = new List<H3cFactSnapshot>();
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         void Add(string kind, string identity, object payload, string status = "STALE")
         {
             var json = payload is string text ? text : JsonSerializer.Serialize(payload, jsonOptions);
+            if (scope is not null)
+            {
+                var node = JsonNode.Parse(json)!.AsObject();
+                node["capturedScope"] = JsonSerializer.SerializeToNode(scope, jsonOptions);
+                json = node.ToJsonString(jsonOptions);
+            }
             var idInput = $"{profileId}|{kind}|{identity}|{source}|{capturedMs}";
             var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idInput))).ToLowerInvariant()[..32];
             facts.Add(new(id, profileId, kind, identity, status, source, capturedMs, true, json));

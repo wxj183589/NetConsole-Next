@@ -54,6 +54,8 @@ else if (args.Length > 0 && args[0] == "--task-site-scope-tests")
     await TaskSiteScopeTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--interactive-scope-tests")
     await InteractiveScopeTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-fact-scope-tests")
+    H3cFactScopeTests.Run();
 else
     await SchedulerTests.RunAsync();
 
@@ -199,6 +201,7 @@ internal static class SchedulerTests
         WirelessRuntimeTests.Run();
         await TaskSiteScopeTests.RunAsync();
         await InteractiveScopeTests.RunAsync();
+        H3cFactScopeTests.Run();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();

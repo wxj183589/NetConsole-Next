@@ -959,7 +959,7 @@ if (settings.H3cEnabled)
         var kind = request.Query["kind"].ToString();
         var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
         var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
-        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit));
+        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit, scope));
     });
     app.MapPost("/api/system/h3c/profiles/{id}/offline-replay", (HttpContext context, string id,
         H3cOfflineReplayRequest request, Catalog rawCatalog) =>
@@ -983,6 +983,7 @@ if (settings.H3cEnabled)
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
+        catch (H3cFactRevisionConflictException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
     app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog,
         TaskSiteScopeAuthorizer taskScopes) =>

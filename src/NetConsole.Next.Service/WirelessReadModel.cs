@@ -504,7 +504,7 @@ internal sealed partial class Catalog
             acs.Add(new(device.Id, device.Name, device.SiteId, device.ManagementIp, device.Vendor, device.Model,
                 device.ConnectionStatus, profileId, version, device.Enabled));
             if (string.IsNullOrWhiteSpace(profileId)) continue;
-            var facts = QueryH3cFacts(profileId, history: false, limit: 1000);
+            var facts = QueryH3cFacts(profileId, history: false, limit: 1000, scope: scope, requireCapturedScope: true);
             version = ReadVersion(facts.FirstOrDefault(item => item.Kind == "device.identity")?.PayloadJson);
             if (version is not null)
             {
@@ -513,11 +513,11 @@ internal sealed partial class Catalog
             }
 
             const string apKind = "command.display.wlan.ap.all";
-            var latest = QueryH3cFacts(profileId, apKind, history: false, limit: 1).FirstOrDefault();
+            var latest = QueryH3cFacts(profileId, apKind, history: false, limit: 1, scope: scope, requireCapturedScope: true).FirstOrDefault();
             if (latest is null) continue;
             bool Usable(H3cFactSnapshot fact) => fact.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY") &&
                 H3cComwareParser.ParseWlanApAll(ReadOutput(fact.PayloadJson)).Count > 0;
-            var apFact = Usable(latest) ? latest : QueryH3cFacts(profileId, apKind, history: true, limit: 1000)
+            var apFact = Usable(latest) ? latest : QueryH3cFacts(profileId, apKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true)
                 .FirstOrDefault(Usable);
             if (apFact is null) { warnings.Add("AP_COLLECTION_UNAVAILABLE"); continue; }
             var preserved = apFact.Id != latest.Id;
@@ -525,8 +525,8 @@ internal sealed partial class Catalog
             if (apFact.Source == H3cOfflineFixtureSource) warnings.Add("OFFLINE_FIXTURE_EVIDENCE");
             // Only correlate address rows from the same captured source revision.
             const string addressKind = "command.display.wlan.ap.all.address";
-            var addressFact = QueryH3cFacts(profileId, addressKind, history: false, limit: 1)
-                .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000))
+            var addressFact = QueryH3cFacts(profileId, addressKind, history: false, limit: 1, scope: scope, requireCapturedScope: true)
+                .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true))
                 .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source &&
                     item.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"));
             var addressByName = ParseAddressFacts(addressFact?.PayloadJson);

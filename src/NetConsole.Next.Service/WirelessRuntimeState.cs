@@ -259,17 +259,22 @@ internal sealed partial class Catalog
             var quota = Math.Max(1, remaining / (sourceList.Length - sourceIndex));
             using var db = Open();
             using var command = db.CreateCommand();
-            command.CommandText = @"SELECT ap.id,ap.status,ap.source,ap.captured_ms,ap.payload_json,addr.payload_json,
+            var proofParameters = new List<(string Name, object? Value)>();
+            var apProof = H3cFactScopePredicate(scope, proofParameters, "ap", true);
+            var addrProof = H3cFactScopePredicate(scope, proofParameters, "addr", true);
+            var versionProof = H3cFactScopePredicate(scope, proofParameters, "identity", true);
+            command.CommandText = $@"SELECT ap.id,ap.status,ap.source,ap.captured_ms,ap.payload_json,addr.payload_json,
                 EXISTS(SELECT 1 FROM h3c_facts identity WHERE identity.profile_id=ap.profile_id AND identity.kind='device.identity'
                     AND identity.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND identity.captured_ms<=ap.captured_ms
-                    AND identity.source=ap.source)
+                    AND identity.source=ap.source AND {versionProof})
                 FROM h3c_facts ap LEFT JOIN h3c_facts addr ON addr.profile_id=ap.profile_id
                     AND addr.kind='command.display.wlan.ap.all.address' AND addr.source=ap.source AND addr.captured_ms=ap.captured_ms
-                    AND addr.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL')
-                WHERE ap.profile_id=$profile AND ap.kind='command.display.wlan.ap.all'
+                    AND addr.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND {addrProof}
+                WHERE ap.profile_id=$profile AND ap.kind='command.display.wlan.ap.all' AND {apProof}
                 ORDER BY ap.captured_ms DESC,ap.id DESC LIMIT $limit";
             command.Parameters.AddWithValue("$profile", profile);
             command.Parameters.AddWithValue("$limit", quota + 1);
+            DeviceSiteScope.AddParameters(command, proofParameters);
             using var reader = command.ExecuteReader();
             var read = 0;
             while (reader.Read())
