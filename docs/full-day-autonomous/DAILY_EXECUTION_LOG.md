@@ -17,6 +17,7 @@
 - Tools 页面加入设备多选、诊断类型选择、进度和明细；不接收任意地址，不接触凭据。
 - 验证：`NETWORK_DIAGNOSTICS_TESTS=3/3 PASS`、完整 Service harness（隔离 TEMP）PASS、Vue typecheck/Vitest `4 files/7 tests`/Vite build PASS。
 - 真实四台模拟器仍只有 TCP/协议可达；缺安全凭据，未执行认证或配置写入。
+- 本批产品提交：`83e550a`；未 push/merge/release。
 
 ## 2026-11-05 Checkpoint 0
 
