@@ -37,10 +37,10 @@ AC 仍是设备管理中的普通设备；无线业务以 AC 为导航，FIT_AP 
 
 ## 后端阻断
 
-- 设备库存 CRUD 当前没有统一接入 P2B5 Site claims；R3 无线授权 API 不能直接假定设备管理的 `siteId` 查询已安全。
+- R2 设备库存/分组/CRUD/CSV/batch 已统一接入 P2B5 Site claims；R3 无线专用 API 仍不能由此推断已经存在，必须单独定义 AC/AP 事实和关联授权。
 - 当前没有无线专用 schema/API 组合，也没有为多 AC 复用 FIT_AP 建模的已验证合同。
 - 真实 AC/AP、堆叠/集群/1+1 和 R/M/R/B/I 运行期证据均未在本轮访问。
 
 ## 建议进入条件
 
-先独立冻结授权/身份/事实字段和 AC↔AP association 合同，再以离线脱敏 fixture 实现 R3 页面；完成服务端 Site claims 与稳定 identity 回归后，才进入真实无线 UI 实现。当前结论为 `R3_WIRELESS_UI_READONLY_PREPARATION=PARTIAL`，不是 R3 implementation ready。
+先独立冻结无线授权/身份/事实字段和 AC↔AP association 合同，再以离线脱敏 fixture 实现 R3 页面；R2 Site claims 回归已完成，但无线 API 事实和关联合同仍缺。当前结论为 `R3_WIRELESS_UI_READONLY_PREPARATION=PARTIAL`，不是 R3 implementation ready。

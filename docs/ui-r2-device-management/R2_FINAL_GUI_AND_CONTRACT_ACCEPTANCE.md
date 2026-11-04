@@ -2,43 +2,43 @@
 
 ## 最终裁决
 
-`FINAL_STATUS=PARTIAL`。
-
-R2 设备管理 UI 的功能、设计、服务型浏览器 CRUD、安全身份回归和非原生视口证据已完成；仍有两个独立收口条件未满足：当前有效 Windows 显示器为 100% 而非原生 125%，设备库存 API 尚未统一接入多 Site claims。两项都不应被模拟截图或单 Site UI 掩盖。
+`SITE_CLAIMS_CONTRACT=PASS`，`FINAL_STATUS=PARTIAL`。R2 设备管理的服务端 Site claims 合同已完成并通过隔离多用户回归；整体仍因当前机器没有真实有效 Windows 125% GUI 证据而保持 PARTIAL。
 
 ## 状态矩阵
 
 | 项目 | 结果 |
 | --- | --- |
-| Workbench / 设备列表 / 创建 / 编辑 / 详情 | PASS |
-| `1920×1080` GUI | PASS |
-| `2560×1440` GUI | PASS |
-| Windows 原生 125% | PENDING；当前有效显示器/Chrome 窗口为 100% DPI |
-| 服务型 Browser CRUD E2E | PASS；隔离 Service + SQLite + Cookie/CSRF |
-| Site claims API 合同 | PARTIAL_CONTRACT_GAP |
-| 设备身份、凭据安全、FIT-AP 限制 | PASS |
-| R3 无线 UI 只读准备 | PASS_WITH_CONTRACT_GAPS；产品实现保持未开放 |
+| Workbench / 设备列表 / Site selector / 创建 / 编辑 / 详情 | PASS |
+| Site claims、multi-site inventory/group/detail | PASS |
+| CSV import、batch operations | PASS |
+| 稳定设备 ID、凭据引用、FIT-AP 限制 | PASS |
+| 1920×1080 GUI | PASS，视觉 fixture 无 console/page error |
+| 2560×1440 GUI | PASS，视觉 fixture 无 console/page error |
+| Windows 原生 125% | PENDING；有效 Win32/Chrome DPI 仍为 96 |
+| 服务型 Browser CRUD E2E | PASS |
+| R3 无线 UI | NO IMPLEMENTATION，仍 disabled |
 
 ## Gate
 
-| Gate | 结果 | 理由 |
+| Gate | 结果 | 说明 |
 | --- | --- | --- |
-| Gate A Design | PASS | SmartHub 只作为 clean-room 参考；没有复制专有资产 |
-| Gate B UI | PASS | R2 页面、筛选、作用域、表单、详情和批量/CSV 入口均可用 |
-| Gate C Security | PARTIAL | 凭据/身份/FIT-AP PASS；设备库存的多 Site claims 接入仍缺 |
-| Gate D GUI | PARTIAL | 1920/2560 PASS；原生 Windows 125% 不能由当前 100% 环境批准 |
-| Gate E Regression | PASS | Vitest、typecheck、Vite、.NET build、Service harness、Browser E2E 均通过 |
+| Gate A Design | PASS | 沿用 P2B5 authority；没有新权限架构或 SmartHub 资产 |
+| Gate B UI | PASS | Site selector 是局部合同适配，既有 R2 布局未重做 |
+| Gate C Security | PASS | 31/31 Site claims 专项、角色/CSRF/审计、负向和关联引用过滤通过 |
+| Gate D GUI | PARTIAL | 1920/2560 PASS；原生 125% PENDING |
+| Gate E Regression | PASS | 前端、.NET、harness、Browser CRUD、视觉复验均通过 |
 
 ## 不变更项
 
 - `NEXT_DATABASE_SCHEMA_CHANGED=NO`
 - `NEXT_DATABASE_MIGRATION_CHANGED=NO`
 - `NEXT_DEVICE_IDENTITY_MODEL_CHANGED=NO`
+- `NEXT_CREDENTIAL_STORAGE_MODEL_CHANGED=NO`
 - `NEXT_AC_AP_MODEL_CHANGED=NO`
-- 没有真实设备/网络/登录/配置操作。
-- 没有修改 SmartHub 原版或研究基线。
-- 没有 push、merge 或 release。
+- `REAL_DEVICE_ACCESS=NO`、`REAL_DEVICE_LOGIN=NO`、`NETWORK_SCAN=NO`
+- `PRODUCTION_DATA_CHANGED=NO`、`SMART_HUB_ORIGINAL_CHANGED=NO`
+- `PUSH_STATUS=NOT_PUSHED`、`BRANCH_MERGE=NO`、`RELEASE_PUBLISH=NO`
 
-## R2 收口条件
+## 收口条件
 
-可以把本轮称为“R2 本地实现与自动化验收完成”，但不能称为全部 Gate 正式关闭。正式关闭需要在有效原生 125% Windows 环境补跑 GUI，并由独立后端任务定义、实现和验证设备库存的 Site claims API 合同。
+只剩在真实有效 Windows 125% 显示环境重新跑 GUI 门禁；本轮不修改全局缩放、不注销、不重启、不结束用户浏览器。R3 进入实现前仍需冻结无线 API 合同，详见 `R3_WIRELESS_UI_READONLY_PREPARATION.md`。

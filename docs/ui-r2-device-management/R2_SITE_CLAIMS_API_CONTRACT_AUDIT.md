@@ -2,40 +2,40 @@
 
 ## 结论
 
-`SITE_CLAIMS_API_CONTRACT=PARTIAL_CONTRACT_GAP`。
+`SITE_CLAIMS_API_CONTRACT=PASS`。本轮已将设备管理接入既有 P2B5 claims authority；没有新增身份系统、数据库 Schema/Migration、角色或设备身份模型。
 
-现有 P2B5 Site claims 解析和网络规划 API 的服务端保护仍有效，但设备管理库存 API 尚未接入同一 claims 过滤合同。本轮没有伪造 Site 列表、扩大身份模型、修改 schema/migration 或把 UI 的 `local` 作用域宣称为完整多 Site 授权。
+## 权威与调用链
 
-## 已确认的身份与 claims 规则
+`WebAuthStore.ValidateSession -> WebUserIdentity(UserId, Role) -> P2B5SiteScopeStore.Resolve -> DeviceSiteScopeGuard -> Catalog SQL/transaction check -> InsertDeviceAudit`
 
-- `WebUserIdentity` 以稳定 `UserId`、用户名、角色和会话标识服务端身份。
-- `P2B5SiteScopeStore.Resolve` 对 `SUPERADMIN` 返回明确的 `GLOBAL`；普通用户从 `web_user_site_memberships` 读取有效 claims。
-- claims 按来源和 revision 解析；更新的 `REVOKED` 不会被旧 `ACTIVE` 复活；冲突返回 `CONFLICT`，无有效 Site 返回 `DENIED`。
-- P2B3 读接口通过 `P2B3ReadGuard` 绑定 Site scope，并拒绝请求未授权的 `siteId`。既有 P2B5 测试覆盖 active/expired/conflict claim。
+普通用户的 claims 来自 `web_user_site_memberships`，按有效期、来源和 revision 解析；无 authority、无有效 Site、过期或 conflict 均拒绝。SUPERADMIN 保持既有 `GLOBAL` 合同。客户端的 `siteId` 仅用于筛选或写入目标，服务端不信任它作为权限来源。
 
-## 设备管理路由审计
+## 修复位置
 
-当前 `Program.cs` 的以下路由通过会话、回环来源和写入 CSRF/角色门禁，但没有调用 `P2B5SiteScopeStore`：
+- `Program.cs`：新增 `GET /api/system/device-sites`，设备库存/详情/分组/导入/批量路由统一进入 `DeviceSiteScopeGuard`；写入继续保留 SUPERADMIN、Origin/CSRF 和审计门禁。
+- `DeviceSiteScope.cs`：集中处理 Site allow、SQL `IN` 过滤和 scope 拒绝异常。
+- `DeviceManagement.cs`：列表 summary/分页前过滤，详情按 ID scoped，group 统计限定同 Site，创建/编辑核对目标和源 Site，CSV preview/commit 逐行/事务复核，关联终端档案按 `collection_sources.site_id` 过滤。
+- `DeviceBatchOperations.cs`：预览、operation 读取、确认、取消和事务执行逐目标核对源 Site、目标 Site 和分组 Site。
+- `Catalog.cs`：终端设备 profile 列表按来源 Site 过滤。
+- `web/src/api/client.ts`、`web/src/views/DevicesView.vue`：Site selector 改为服务端授权 Site 数据驱动；未重做 R2 页面布局。
 
-- `GET /api/system/devices`
-- `GET /api/system/devices/{id}`
-- `GET/POST /api/system/device-groups`
-- `POST /api/system/devices`
-- `PUT /api/system/devices/{id}`
-- 设备 CSV preview/commit 和设备批量操作
+## API 状态
 
-它们可以按 `siteId`、`groupId` 查询或写入，并由 Catalog 校验 Site/分组是否存在；这不是“当前用户 claims 允许该 Site”的等价校验。设备写入当前主要是 `SUPERADMIN` 门禁，ADMIN 被拒绝，但这仍不能替代普通用户的多 Site claims 合同。
+| API | 结果 |
+| --- | --- |
+| Site list、inventory list/detail、group list | PASS，服务端 SQL scope |
+| create/edit/group create | PASS，既有 SUPERADMIN 角色 + Site target check |
+| CSV preview/commit | PASS，逐行和 commit 事务复核 |
+| batch preview/status/confirm/cancel | PASS，逐目标和确认时复核 |
+| terminal device reference list | PASS，按 profile source Site 过滤 |
+| device delete / CSV export | `NOT_APPLICABLE`，当前无路由 |
 
-## 分层结果
+## 验收证据
 
-| 合同项 | 结果 | 说明 |
-| --- | --- | --- |
-| `SITE_UI_SCOPE_SUPPORTED` | PASS（单当前 Site UI） | R2 显示 `siteId`、分组和当前作用域，不伪造 Site 树 |
-| `SITE_LIST_API_AVAILABLE` | NO | 未发现供设备管理 UI 使用的“当前用户全部授权 Site” API |
-| `MULTI_SITE_CLAIMS_CONTRACT_VERIFIED` | PARTIAL | P2B3 网络规划链路有合同，设备库存链路没有统一接入 |
-| `SERVER_SIDE_SITE_AUTHORIZATION_VERIFIED` | PARTIAL | claims 服务端解析真实存在，但未覆盖设备库存/分组/CRUD 全部路由 |
-| `SITE_SCOPE_REGRESSION` | PARTIAL_CONTRACT_GAP | R2 UI 不越权伪造，但完整多 Site 设备授权待独立后端任务 |
+- `tests/r2_site_claims_e2e.py`：`31/31 PASS`。
+- `tests/device_management_browser_e2e.mjs`：真实隔离 Service CRUD、CSV、batch、FIT-AP 和 ADMIN 写入拒绝 PASS。
+- 完整 Service harness、Vitest、vue-tsc、Vite 和 .NET Release build PASS。
 
-## 本轮决策
+## 剩余边界
 
-不在 R2 末轮添加 Site 列表/claims API，不修改用户身份模型或数据库。后续独立契约应至少提供：当前用户授权 Site 列表、默认 Site、claims revision/有效期、Site 切换、设备列表/分组/详情/创建/编辑的同一服务端 scope decision，以及终端入口的设备所属 Site 校验。
+R2 Site claims 合同已闭环。Gate D 仍受真实 Windows 原生 125% 环境缺失影响；R3 无线 UI 和无线业务 API 仍未实现。

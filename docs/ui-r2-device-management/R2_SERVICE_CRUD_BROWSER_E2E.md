@@ -41,3 +41,7 @@
 - `device-imported.png`
 
 这些是虚构隔离数据的 UI 证据，不是生产或真实设备截图。
+
+## Site claims 补充回归
+
+本轮另执行 `tests/r2_site_claims_e2e.py`，使用 USER_A、USER_B、USER_AB、USER_NONE 和既有 SUPERADMIN 的一次性隔离 SQLite。结果为 `R2_SITE_CLAIMS_TESTS=31/31 PASS`；覆盖授权 Site 聚合、跨 Site 详情/搜索/计数拒绝、分组过滤、角色/CSRF、CSV、批量、稳定 ID、审计和凭据不暴露。该专项不读取真实数据根，也不连接设备。
