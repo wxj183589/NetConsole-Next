@@ -11,7 +11,7 @@
 | FD-P1-06 | Facts | 多命令 collection manifest 与 Raw→Facts→Current | P1 | FD-P1-02 | COMPLETED_LOCAL | coherent isolated fixture |
 | FD-P1-07 | Task UI | 任务中心按业务语言展示进度、设备明细、重试/取消 | P1 | FD-P1-01/02 | COMPLETED_LOCAL | command detail API/UI typecheck |
 | FD-P1-08 | Device UI | 新增设备默认协议/端口、当前 Site、测试连接 | P1 | FD-P1-04 | COMPLETED_LOCAL | device list quick test + typecheck |
-| FD-P2-01 | Diagnostics | Ping/TCP/LLDP 诊断批量任务和进度 | P2 | scheduler | QUEUED | whitelist fixture |
+| FD-P2-01 | Diagnostics | Ping/TCP/DNS/LLDP 诊断批量任务和进度 | P2 | scheduler | COMPLETED_LOCAL | isolated fixture + API/UI |
 | FD-P2-02 | Backup | 配置备份、历史版本、差异和下载授权 | P2 | Raw/archive/claims | QUEUED | isolated archive |
 | FD-P2-03 | Topology | LLDP 关系与变化历史 | P2 | verified facts | QUEUED | parser fixture |
 | FD-P3-01 | UI | 1920/2560 任务/设备/无线交互验收 | P3 | UI workstream | QUEUED | Chrome screenshots |

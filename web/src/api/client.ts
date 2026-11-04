@@ -431,6 +431,45 @@ export interface TaskCommand {
   capturedMs?: number | null
 }
 
+export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP'
+export interface NetworkDiagnosticItem {
+  id: string
+  deviceId: string
+  deviceName: string
+  siteId: string
+  kind: NetworkDiagnosticKind
+  state: string
+  outcome?: string | null
+  detail?: string | null
+  startedMs?: number | null
+  endedMs?: number | null
+  latencyMs?: number | null
+  evidenceCount: number
+  evidenceSources: string[]
+}
+export interface NetworkDiagnosticRun {
+  id: string
+  actor: string
+  state: string
+  siteId?: string | null
+  timeoutMs: number
+  totalDevices: number
+  totalChecks: number
+  completedChecks: number
+  succeededChecks: number
+  failedChecks: number
+  noEvidenceChecks: number
+  cancelledChecks: number
+  queuedChecks: number
+  runningChecks: number
+  progressPercent: number
+  createdMs: number
+  startedMs?: number | null
+  endedMs?: number | null
+  failureReason?: string | null
+  items: NetworkDiagnosticItem[]
+}
+
 export interface H3cFact {
   id: string
   profileId: string
@@ -854,6 +893,15 @@ export function getSerialPorts(): Promise<string[]> { return request('/api/syste
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
 export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
+}
+export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string }): Promise<NetworkDiagnosticRun> {
+  return request('/api/system/diagnostics/runs', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function getNetworkDiagnostics(id: string): Promise<NetworkDiagnosticRun> {
+  return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}`)
+}
+export function cancelNetworkDiagnostics(id: string): Promise<{ cancelled: boolean }> {
+  return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
 }
 export function getHostTools(): Promise<HostTool[]> { return request('/api/system/host-tools') }
 export function updateHostTool(id: string, executablePath: string | null): Promise<HostTool> {

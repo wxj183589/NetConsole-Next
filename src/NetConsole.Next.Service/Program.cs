@@ -62,6 +62,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
         sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
     }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
+builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
@@ -154,6 +155,8 @@ app.Lifetime.ApplicationStopping.Register(() =>
     try { app.Services.GetRequiredService<TerminalSessionManager>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     catch { }
     try { app.Services.GetRequiredService<ZteCollectionService>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+    catch { }
+    try { app.Services.GetRequiredService<NetworkDiagnosticsService>().Dispose(); }
     catch { }
 });
 RollingFileLoggerProvider? fileLoggerProvider = null;
@@ -674,6 +677,36 @@ app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string ru
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     if (!rawCatalog.RecentTaskRuns(100, scope).Any(item => item.Id == runId)) return Results.NotFound();
     return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
+});
+app.MapPost("/api/system/diagnostics/runs", (HttpContext context, NetworkDiagnosticBatchRequest request,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var run = diagnostics.Start(request, CurrentIdentity(context).UserId, CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/diagnostics/runs/{run.Id}", run);
+    }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+});
+app.MapGet("/api/system/diagnostics/runs/{id}", (HttpContext context, string id,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return diagnostics.Get(id, CurrentSiteScope(context)) is { } run ? Results.Ok(run) : Results.NotFound();
+});
+app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, string id,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var identity = CurrentIdentity(context);
+    return diagnostics.Cancel(id, identity.UserId, identity.Role, CurrentSiteScope(context))
+        ? Results.Ok(new { cancelled = true })
+        : Results.NotFound(new { error = "DIAGNOSTIC_RUN_NOT_VISIBLE_OR_TERMINAL" });
 });
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
