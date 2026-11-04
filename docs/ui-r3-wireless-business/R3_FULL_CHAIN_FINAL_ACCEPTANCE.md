@@ -92,3 +92,7 @@ FINAL_STATUS=PARTIAL
 已实际实现双 AC 读模型、Physical AP Identity、AC1/AC2 Observation、显式拓扑证据、AC-owned AP Group、P2B5 claims route guard 和无线业务 Web 页面。离线双 AC fixture 与投影测试通过，原有服务测试和前端测试通过。
 
 真实 AC1、AC2、SW、FIT-AP 目前只完成白名单 TCP 可达性检查，未完成安全认证、设备身份、HA 角色、FIT-AP CLI 事实、切换或恢复验证。隔离 HTTP/API 和浏览器验收被已有 Service 单实例锁阻断，未用旧进程结果替代。下一步需要在不结束现有预览的前提下安排独立 Service 实例/维护窗口，并通过安全凭据输入继续真实联调。
+
+## 本轮自主开发补充（2026-11-05）
+
+后续当前状态见 [自主开发最终报告](../autonomous-development/AUTONOMOUS_FINAL_REPORT.md)。Service harness已实际通过；HTTP仍受保留的Preview Mutex阻断。无线Browser fixture已验收9状态，但仍未完成真实模拟器HA/切换或Service-backed GUI。本文前文为上轮历史记录，不作覆盖。

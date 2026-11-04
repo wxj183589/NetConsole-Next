@@ -20,7 +20,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A02 校验 Observation Site 和来源 AC 一致
 
@@ -38,7 +38,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A03 连接失败不等于离线
 
@@ -56,7 +56,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A04 重复 Observation 幂等，缺名称保留身份
 
@@ -74,7 +74,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A05 读取超过 100 台 AC
 
@@ -92,7 +92,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A06 部分授权标记和离线证据标记
 
@@ -110,7 +110,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A07 筛选后详情/AP组不残留，异步请求竞态
 
@@ -128,7 +128,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A08 无线分页搜索和状态筛选
 
@@ -146,7 +146,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P2
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A09 拓扑证据冲突 fail closed
 
@@ -164,7 +164,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A10 状态时效/冲突/Recent10
 
@@ -182,7 +182,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=PARTIAL_BLOCKED
 
 ## A11 Scope Snapshot 与当前 claims 交集
 
@@ -200,7 +200,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=PARTIAL_BLOCKED
 
 ## A12 双 AC HA、身份、切换与恢复实测
 
@@ -218,7 +218,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=BLOCKED
 
 ## A13 HTTP/API 与 Service harness 回归
 
@@ -236,7 +236,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=PARTIAL_BLOCKED
 
 ## A14 浏览器离线夹具 1920/2560
 
@@ -254,7 +254,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=QUEUED
+STATUS=COMPLETED
 
 ## A15 Windows 原生125%
 
@@ -272,7 +272,7 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P2
-STATUS=QUEUED
+STATUS=BLOCKED
 
 ## A16 LLDP 与关联及终端回归
 
@@ -290,5 +290,77 @@ DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P2
-STATUS=QUEUED
+STATUS=COMPLETED
 
+
+## A17 AP地址事实贯通与失败后有效证据保留
+
+TASK_ID=A17
+MODULE=Wireless/Collection
+FEATURE=AP地址事实贯通与失败后有效证据保留
+CURRENT_STATUS=审计发现
+USER_VALUE=避免错误身份、状态和来源声明
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=H3cFacts 未保存 address 命令；失败 Current 没有回看有效事实
+IMPLEMENTATION_SCOPE=复用现有事实；无证据不得伪造
+SECURITY_RISK=不扩展Site或设备范围
+DATABASE_IMPACT=真实数据零修改；持久模型单独评审
+TESTABILITY=定向单元及fixture；实测单列
+ESTIMATED_EFFORT=按证据和schema依赖分批
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A18 缺失证据与矛盾证据分离，状态冲突保留
+
+TASK_ID=A18
+MODULE=Wireless/Collection
+FEATURE=缺失证据与矛盾证据分离，状态冲突保留
+CURRENT_STATUS=审计发现
+USER_VALUE=避免错误身份、状态和来源声明
+SEVERITY=P1
+DEPENDENCIES=NONE
+EVIDENCE=bySerial/byMac 把空证据算矛盾；同revision矛盾输入被去重
+IMPLEMENTATION_SCOPE=复用现有事实；无证据不得伪造
+SECURITY_RISK=不扩展Site或设备范围
+DATABASE_IMPACT=真实数据零修改；持久模型单独评审
+TESTABILITY=定向单元及fixture；实测单列
+ESTIMATED_EFFORT=按证据和schema依赖分批
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A19 Domain-owned AP Group 与稳定 source group key
+
+TASK_ID=A19
+MODULE=Wireless/Collection
+FEATURE=Domain-owned AP Group 与稳定 source group key
+CURRENT_STATUS=审计发现
+USER_VALUE=避免错误身份、状态和来源声明
+SEVERITY=P1
+DEPENDENCIES=设备认证及可验证 source group evidence
+EVIDENCE=现有事实只有组名，无经验证的共享组/source-key事实
+IMPLEMENTATION_SCOPE=复用现有事实；无证据不得伪造
+SECURITY_RISK=不扩展Site或设备范围
+DATABASE_IMPACT=真实数据零修改；持久模型单独评审
+TESTABILITY=定向单元及fixture；实测单列
+ESTIMATED_EFFORT=按证据和schema依赖分批
+PRIORITY=P1
+STATUS=BLOCKED
+
+## A20 持久身份/历史与可验证 Raw manifest/hash
+
+TASK_ID=A20
+MODULE=Wireless/Collection
+FEATURE=持久身份/历史与可验证 Raw manifest/hash
+CURRENT_STATUS=审计发现
+USER_VALUE=避免错误身份、状态和来源声明
+SEVERITY=P1
+DEPENDENCIES=独立持久化方案评审，新增schema专项授权
+EVIDENCE=当前投影引用 fact:id，无正式 manifest/hash外键和生命周期
+IMPLEMENTATION_SCOPE=复用现有事实；无证据不得伪造
+SECURITY_RISK=不扩展Site或设备范围
+DATABASE_IMPACT=真实数据零修改；持久模型单独评审
+TESTABILITY=定向单元及fixture；实测单列
+ESTIMATED_EFFORT=按证据和schema依赖分批
+PRIORITY=P1
+STATUS=BLOCKED
