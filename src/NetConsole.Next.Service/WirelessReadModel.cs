@@ -110,7 +110,8 @@ internal sealed record WirelessApResourceView(
     string SourceRevision,
     string ProjectionRevision,
     string? ConflictReason,
-    IReadOnlyList<WirelessApObservationView> Observations);
+    IReadOnlyList<WirelessApObservationView> Observations,
+    string? StateConflictReason = null);
 
 internal sealed record WirelessApGroupView(
     string Id,
@@ -253,7 +254,9 @@ internal sealed class WirelessProjectionEngine
                 sourceRevision,
                 Fingerprint(new[] { resourceId, sourceRevision }.Concat(views.Select(item => $"{item.Id}|{item.RawState}|{item.NormalizedState}"))),
                 conflict ? "SERIAL_MAC_EVIDENCE_CONFLICT" : null,
-                views));
+                views,
+                views.Where(item => item.NormalizedState == "RUNNING_MASTER").Select(item => item.SourceAcDeviceId).Distinct(StringComparer.Ordinal).Count() > 1
+                    ? "MULTI_SOURCE_MASTER" : conflictingIds.Count > 0 ? "SAME_REVISION_STATE_CONFLICT" : null));
         }
         return resources.OrderBy(item => item.DisplayName, StringComparer.Ordinal).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
     }

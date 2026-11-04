@@ -17,6 +17,7 @@ internal static class WirelessTests
         CatalogPaginationAndProtectedReads();
         MissingEvidenceIsNotContradiction();
         SameRevisionStateConflictIsPreserved();
+        ReportsMultiSourceMasterWithoutTopologyInference();
         Console.WriteLine("WIRELESS_PROJECTION_TESTS=PASS");
     }
 
@@ -227,6 +228,8 @@ internal static class WirelessTests
                 Assert(partial.Scope.Status == "PARTIAL_SCOPE" && partial.ApResources.Single().Observations.Single().SourceAcDeviceId == "AC1" &&
                     partial.AcDomains.SelectMany(item => item.Members).All(item => item.SiteId == "site-a") && partial.ApGroups.Count == 1,
                     "partial Site visibility must project only visible observations, members, groups and counts");
+                var bothSites = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "site-a", "site-b" }, "fixture");
+                Assert(read.GetSnapshot(bothSites).ApResources.Single().Observations.Count == 2, "two authorized Sites must retain both visible sources");
                 Assert(read.GetSnapshot(global).ApResources.Single().Observations.Count == 2, "global scope must retain independent multi-AC observations");
                 Assert(read.GetSnapshot(revoked).ApResources.Count == 0 && read.GetSnapshot(revoked).AcDomains.Count == 0,
                     "revoked fixture scope must reveal zero resources");
@@ -259,6 +262,18 @@ internal static class WirelessTests
         Assert(resource.Observations.Count == 2 && resource.Observations.All(item => item.NormalizedState == "CONFLICT") &&
             resource.Observations.Select(item => item.Id).Distinct().Count() == 2, "contradictory same-revision state must retain both raw sources with unique conflict IDs");
         Assert(result.ApGroups.Single().MemberResourceIds.Single() == resource.Id, "state conflict must preserve AP group membership");
+    }
+
+    private static void ReportsMultiSourceMasterWithoutTopologyInference()
+    {
+        var result = new WirelessProjectionEngine().Project(
+            new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-a") },
+            new[] { Observation("AC1", "AP", "4c6fd6080400", "R/M", "RUNNING_MASTER", 100),
+                Observation("AC2", "AP", "4c6fd6080400", "R/M", "RUNNING_MASTER", 101) },
+            Array.Empty<WirelessTopologyEvidence>(), new("FULL", "claims"));
+        Assert(result.ApResources.Single().StateConflictReason == "MULTI_SOURCE_MASTER" &&
+            result.ApResources.Single().Observations.Count == 2 && result.AcDomains.All(item => item.TopologyStatus == "EVIDENCE_PENDING"),
+            "multiple masters must expose the conflict reason without inferring HA topology or discarding sources");
     }
 
     private static WirelessAcDeviceSeed Ac(string id, string ip, string site) =>

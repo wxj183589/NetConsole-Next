@@ -77,6 +77,12 @@ try {
  await page.getByLabel('筛选 AP 状态').selectOption('OFFLINE')
  await expect(page.getByText('选择一条 AP')).toBeVisible()
  await page.getByLabel('筛选 AP 状态').selectOption('')
+ mode = 'conflict'
+ allResources[0].stateConflictReason = 'MULTI_SOURCE_MASTER'
+ await page.getByRole('button', { name: '刷新数据' }).click()
+ await expect(page.getByText('来源状态存在冲突，请核对各 AC 的原始观察')).toBeVisible()
+ await capture('wireless-conflict', '多来源状态冲突提示')
+ delete allResources[0].stateConflictReason
  mode = 'group-error'
  await page.getByRole('button', { name: '刷新数据' }).click()
  await expect(page.getByText('AP 组读取失败')).toBeVisible()

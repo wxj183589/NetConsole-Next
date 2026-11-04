@@ -490,6 +490,7 @@ export interface WirelessApResource {
   sourceRevision: string
   projectionRevision: string
   conflictReason?: string | null
+  stateConflictReason?: string | null
   observations: WirelessObservation[]
 }
 
