@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
+import sys
 import subprocess
 import tempfile
 import time
@@ -81,7 +83,11 @@ def main():
     dll = repo / "src/NetConsole.Next.Service/bin/Release/net10.0/NetConsole.Next.Service.dll"
     if not dll.is_file():
         raise RuntimeError("Run dotnet build -c Release first")
-    with tempfile.TemporaryDirectory(prefix="netconsole-next-pr2-") as temp:
+    sys.path.insert(0, str(repo))
+    from tools.workspace_paths import workspace_path
+    test_root = workspace_path("test-data")
+    test_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="netconsole-next-pr2-", dir=test_root) as temp:
         root = Path(temp) / "data"
         selected = port()
         env = dict(os.environ,
@@ -102,6 +108,8 @@ def main():
         try:
             client = Client(base)
             for _ in range(120):
+                if service.poll() is not None:
+                    raise RuntimeError("isolated Service exited before readiness")
                 try:
                     if client.request("/api/system/health")[0] == 200:
                         break
@@ -122,10 +130,26 @@ def main():
             (root / "raw" / "credentials" / "secret.txt").write_bytes(b"blocked")
             (root / "raw" / "blocked.open").write_bytes(b"blocked")
 
-            admin, other_admin, superadmin = Client(base), Client(base), Client(base)
-            admin.login("admin", "admin")
-            other_admin.login("admin", "admin")
-            superadmin.login("superadmin", "superadmin")
+            # Keep positive file/queue assertions under global roles; a second
+            # isolated global user preserves the cross-user quota coverage.
+            with sqlite3.connect(root / "catalog.db") as db:
+                db.execute("""INSERT INTO web_users(id,username,role,password_salt,password_hash,password_iterations,created_ms,updated_ms)
+                    SELECT 'global-fixture-2','global-fixture-2','SUPERADMIN',password_salt,password_hash,password_iterations,created_ms,updated_ms
+                    FROM web_users WHERE username='superadmin'""")
+            admin, other_admin, superadmin, scoped_admin = Client(base), Client(base), Client(base), Client(base)
+            admin.login("superadmin", "superadmin")
+            other_admin.login("superadmin", "superadmin")
+            superadmin.login("global-fixture-2", "superadmin")
+            scoped_admin.login("admin", "admin")
+            for path in ("/api/system/files/roots", "/api/system/files/list?rootId=raw&path=",
+                         "/api/system/files/download?rootId=raw&path=hello.txt", "/api/system/files/archive-jobs/not-visible",
+                         "/api/system/files/archive-jobs/not-visible/download"):
+                status, denied = scoped_admin.request(path)
+                assert status == 403 and denied['error'] == 'GLOBAL_FILE_SCOPE_REQUIRED', (status, denied)
+                assert 'items' not in denied and 'total' not in denied
+            assert scoped_admin.request("/api/system/files/archive-jobs", "POST", {"selections": [{"rootId": "raw", "paths": ["hello.txt"]}]})[0] == 403
+            assert scoped_admin.request("/api/system/files/archive-jobs/not-visible/cancel", "POST")[0] == 403
+            print("GLOBAL_FILE_SCOPE_NO_BYPASS=PASS")
 
             status, listing = admin.request("/api/system/files/list?rootId=raw&path=")
             assert status == 200 and any(item["name"] == "hello.txt" for item in listing["items"])
@@ -133,7 +157,7 @@ def main():
             assert status == 200 and data == "真实文件\n".encode()
             assert admin.request("/api/system/files/list?rootId=raw&path=" + urllib.parse.quote("../"))[0] == 400
             assert admin.request("/api/system/files/download?" + urllib.parse.urlencode({"rootId": "raw", "path": "catalog.db"}))[0] == 400
-            admin_tool_status = admin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
+            admin_tool_status = scoped_admin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})
             assert admin_tool_status[0] == 403, admin_tool_status
             assert superadmin.request("/api/system/host-tools/securecrt", "PUT", {"executablePath": "/bin/false"})[0] == 200
             assert superadmin.request("/api/system/host-tools/securecrt/launch", "POST", {"deviceId": "not-registered"})[1]["status"] == "INVALID_DEVICE"

@@ -27,6 +27,7 @@ builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
+builder.Services.AddSingleton<InteractiveScopeAuthorizer>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
     ? new EnvironmentH3cCredentialProvider(enabled: true)
@@ -43,7 +44,9 @@ builder.Services.AddSingleton<HostToolRegistry>();
 builder.Services.AddSingleton<HostToolLaunchService>();
 builder.Services.AddSingleton<FileManagerService>();
 builder.Services.AddSingleton<IArchiveDiskSpaceProvider, DriveInfoArchiveDiskSpaceProvider>();
-builder.Services.AddSingleton<FileArchiveService>();
+builder.Services.AddSingleton(sp => new FileArchiveService(sp.GetRequiredService<FileManagerService>(),
+    sp.GetRequiredService<RuntimeSettings>(), sp.GetRequiredService<IArchiveDiskSpaceProvider>(),
+    sp.GetRequiredService<InteractiveScopeAuthorizer>().CanUseGlobalFiles));
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -690,8 +693,12 @@ app.MapPost("/api/system/host-tools/open-directory", async (HttpContext context,
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/roots", (FileManagerService files) => Results.Ok(files.Roots()));
-app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService files) =>
+var globalFileRoutes = app.MapGroup("/api/system/files");
+globalFileRoutes.AddEndpointFilter(async (invocation, next) =>
+    invocation.HttpContext.RequestServices.GetRequiredService<InteractiveScopeAuthorizer>().RequireGlobalFiles(invocation.HttpContext)
+        is { } denied ? denied : await next(invocation));
+globalFileRoutes.MapGet("/roots", (FileManagerService files) => Results.Ok(files.Roots()));
+globalFileRoutes.MapGet("/list", (HttpRequest request, FileManagerService files) =>
 {
     try
     {
@@ -703,7 +710,7 @@ app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService fi
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerService files) =>
+globalFileRoutes.MapGet("/download", (HttpRequest request, FileManagerService files) =>
 {
     try
     {
@@ -713,7 +720,7 @@ app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerServic
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
+globalFileRoutes.MapPost("/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
 {
     try
     {
@@ -725,11 +732,11 @@ app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveReque
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapGet("/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
     archives.Get(id, CurrentIdentity(context)) is { } job ? Results.Ok(job) : Results.NotFound());
-app.MapPost("/api/system/files/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapPost("/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
     archives.Cancel(id, CurrentIdentity(context)) ? Results.Ok(new { cancelled = true }) : Results.NotFound());
-app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapGet("/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
 {
     var result = archives.OpenDownload(id, CurrentIdentity(context));
     return result is null ? Results.NotFound() : Results.File(result.Stream, "application/zip", result.Name, enableRangeProcessing: true);
@@ -883,9 +890,7 @@ if (settings.TerminalEnabled)
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         bool StillAuthorized()
         {
-            var scopes = context.RequestServices.GetRequiredService<P2B5SiteScopeStore>();
-            var current = scopes.Resolve(CurrentIdentity(context));
-            return context.RequestServices.GetRequiredService<Catalog>().TerminalSessionIsInScope(sessionId, current);
+            return context.RequestServices.GetRequiredService<InteractiveScopeAuthorizer>().CanUseTerminal(CurrentIdentity(context), sessionId);
         }
         var send = SendTerminalOutputAsync(socket, session, StillAuthorized, cancellation.Token);
         var receive = ReceiveTerminalInputAsync(socket, session, StillAuthorized, cancellation.Token);

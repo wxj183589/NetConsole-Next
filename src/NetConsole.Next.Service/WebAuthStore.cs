@@ -58,6 +58,19 @@ internal sealed class WebAuthStore
         return identity;
     }
 
+    public WebUserIdentity? ReadActiveSessionIdentity(string userId, string sessionId)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT u.id,u.username,u.role,s.id FROM web_sessions s JOIN web_users u ON u.id=s.user_id
+            WHERE s.id=$session AND u.id=$user AND s.revoked_ms IS NULL AND s.expires_ms>$now AND u.disabled=0";
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue("$user", userId);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)) : null;
+    }
+
     public bool ValidateCsrf(string sessionToken, string csrfToken)
     {
         if (string.IsNullOrWhiteSpace(csrfToken)) return false;
