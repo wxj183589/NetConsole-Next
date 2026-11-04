@@ -48,6 +48,7 @@ await page.route('**/api/**', async route => {
   if (url.pathname === '/api/auth/me') return route.fulfill(loggedIn ? json(200, { username: 'superadmin', role: 'SUPERADMIN' }) : json(401, {}))
   if (url.pathname === '/api/auth/login') { loggedIn = true; return route.fulfill(json(200, { user: { username: 'superadmin', role: 'SUPERADMIN' }, csrfToken: 'r2-fixture-csrf' })) }
   if (url.pathname === '/api/system/health') return route.fulfill(json(200, { status: 'RUNNING', serviceState: 'RUNNING', healthState: 'HEALTHY', collectionState: 'LISTENING', h3cCollectionEnabled: true, syslogEnabled: false, rawWriteAvailable: true, rawSegments: { finalized: 8, incomplete: 0, missing: 0 }, udpReceived: 812, rawFlushedRecords: 812, h3cMetrics: { activeSshSessions: 1, collectionFailures: 0 }, resources: { workingSetBytes: 73400320, threadCount: 18 }, instanceId: 'r2-visual-fixture' }))
+  if (url.pathname === '/api/system/device-sites') return route.fulfill(json(200, [{ id: 'local', name: 'Local Site' }]))
   if (url.pathname === '/api/system/devices' && request.method() === 'GET') {
     const search = (url.searchParams.get('search') || '').toLowerCase()
     const status = url.searchParams.get('status') || ''
