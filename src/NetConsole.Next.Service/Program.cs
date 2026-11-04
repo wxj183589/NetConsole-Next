@@ -35,6 +35,7 @@ IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() 
         ? new WindowsDpapiH3cCredentialProvider(settings.DataRoot)
         : new UnavailableH3cCredentialProvider();
 builder.Services.AddSingleton<IH3cCredentialProvider>(credentialProvider);
+builder.Services.AddSingleton<H3cConnectionTestService>();
 builder.Services.AddSingleton<TerminalSessionManager>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
@@ -909,6 +910,20 @@ if (settings.H3cEnabled)
     {
         if (DeviceSiteScopeGuard(context) is { } denied) return denied;
         return Results.Ok(rawCatalog.RecentH3cDeviceProfiles(scope: CurrentSiteScope(context)).Select(profile => profile.ToView()));
+    });
+    app.MapPost("/api/system/h3c/profiles/{id}/test-connection", async (HttpContext context, string id,
+        Catalog rawCatalog, H3cConnectionTestService tests, P2B5SiteScopeStore scopes) =>
+    {
+        if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized || !rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        try
+        {
+            var result = await tests.TestAsync(id, context.RequestAborted).ConfigureAwait(false);
+            return result is null ? Results.NotFound() : Results.Ok(result);
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
     });
     app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
