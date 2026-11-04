@@ -29,6 +29,12 @@ else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
 else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
     SchedulerTests.RunPhase11H3cFactReplay();
+else if (args.Length > 0 && args[0] == "--wireless-fixture-json")
+{
+    var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    var snapshot = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"));
+    Console.WriteLine(JsonSerializer.Serialize(snapshot with { Warnings = new[] { "OFFLINE_FIXTURE_EVIDENCE" } }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+}
 else if (args.Length > 0 && args[0] == "--wireless-tests")
     WirelessTests.Run();
 else
@@ -172,6 +178,7 @@ internal static class SchedulerTests
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
+        WirelessTests.Run();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();

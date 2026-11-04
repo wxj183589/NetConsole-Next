@@ -13,6 +13,8 @@ internal static class WirelessTests
         CollectionFailureIsNotOffline();
         RepeatedObservationIsIdempotent();
         KeepsIdentityWhenNameMissing();
+        RejectsAmbiguousTopologyEvidence();
+        CatalogPaginationAndProtectedReads();
         Console.WriteLine("WIRELESS_PROJECTION_TESTS=PASS");
     }
 
@@ -134,6 +136,61 @@ internal static class WirelessTests
             new[] { Observation("AC1", "", "4c6fd6080400", "R/M", "RUNNING_MASTER", 100) },
             Array.Empty<WirelessTopologyEvidence>(), new("FULL", "claims"));
         Assert(result.ApResources.Single().IdentityStatus == "CONFIRMED", "display name must not be required for physical identity");
+    }
+
+    private static void RejectsAmbiguousTopologyEvidence()
+    {
+        var acs = new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-a") };
+        var first = new WirelessTopologyEvidence("domain-a", "ONE_PLUS_ONE", "CONFIRMED", new[] { "AC1", "AC2" }, new[] { "fixture:ha" }, true);
+        var engine = new WirelessProjectionEngine();
+        var scope = new WirelessScopeView("FULL", "claims");
+        var conflicting = engine.Project(acs, Array.Empty<WirelessObservationSeed>(),
+            new[] { first, first with { DomainKind = "CLUSTER" } }, scope);
+        Assert(conflicting.AcDomains.Single().TopologyStatus == "CONFLICT", "contradictory same-domain evidence must fail closed");
+        var overlapping = engine.Project(acs, Array.Empty<WirelessObservationSeed>(),
+            new[] { first, first with { DomainId = "domain-b" } }, scope);
+        Assert(overlapping.AcDomains.Count == 2 && overlapping.AcDomains.All(item => item.TopologyStatus == "CONFLICT"),
+            "overlapping domain membership must never pick an arbitrary domain");
+        var unsupported = engine.Project(acs, Array.Empty<WirelessObservationSeed>(),
+            new[] { first with { SourceEvidenceRefs = Array.Empty<string>() } }, scope);
+        Assert(unsupported.AcDomains.Single().TopologyStatus == "EVIDENCE_PENDING", "confirmed flag without evidence refs is insufficient");
+    }
+
+    private static void CatalogPaginationAndProtectedReads()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-wireless-scope-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = 0, SyslogBind = System.Net.IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 });
+            catalog.Initialize();
+            for (var i = 1; i <= 101; i++)
+                catalog.CreateDeviceInventory(new(null, "AC-" + i, "192.0.2." + i, "H3C", "WX", "AC", "local", null, "fixture", true, null), "fixture");
+            var global = P2B5SiteScopeDecision.Global;
+            Assert(catalog.QueryWirelessCatalog(global).Acs.Count == 101, "wireless inventory must include ACs beyond page one");
+            var pin = "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('=');
+            var profileId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(profileId, "192.0.2.200", 22, "reader", "FIXTURE_REFERENCE", pin, true, 0, 0));
+            catalog.CreateTaskDefinition("scope-task", "H3C_SSH_READONLY", profileId, "display version", TimeSpan.FromSeconds(1), true);
+            catalog.CreateTaskRun("scope-task");
+            var session = new TerminalSessionSnapshot("scope-session", profileId, "fixture", "SSH", "RESTRICTED_READONLY",
+                "192.0.2.200", 22, null, null, "CONNECTING", 1, null, 1, null, null, null, null, null, 0, null, false);
+            catalog.CreateTerminalSession(session);
+            var query = new TerminalSessionQuery(null, null, null, null, null, null, null, null, 1, 20, "started", true);
+            var visible = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture");
+            var hidden = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other-site" }, "fixture");
+            Assert(catalog.QueryTerminalSessions(query, visible).Total == 1 && catalog.TerminalSessionIsInScope(session.Id, visible),
+                "authorized terminal must remain readable");
+            Assert(catalog.QueryTerminalSessions(query, hidden).Total == 0 && !catalog.TerminalSessionIsInScope(session.Id, hidden),
+                "terminal list/count/detail must reject another Site");
+            Assert(catalog.RecentTaskRuns(scope: visible).Count == 1 && catalog.RecentTaskRuns(scope: hidden).Count == 0,
+                "generic task results must filter current claims before the limit");
+            var revoked = P2B5SiteScopeDecision.Denied("revoked");
+            Assert(!catalog.TerminalSessionIsInScope(session.Id, revoked) && catalog.QueryTerminalSessions(query, revoked).Total == 0 &&
+                catalog.RecentTaskRuns(scope: revoked).Count == 0, "revocation must hide terminal and task evidence");
+            Assert(catalog.QueryTerminalSessions(query, global).Total == 1, "global administrator must retain existing access");
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
     }
 
     private static WirelessAcDeviceSeed Ac(string id, string ip, string site) =>

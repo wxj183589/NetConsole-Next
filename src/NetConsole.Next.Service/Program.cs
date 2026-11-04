@@ -657,7 +657,11 @@ app.MapPost("/api/system/devices/import/commit", (HttpContext context, DeviceImp
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "FAILED", request.PreviewId, null, Array.Empty<string>(), "PREVIEW_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "CONFLICT", request.PreviewId, null, Array.Empty<string>(), "IMPORT_VERSION_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return Results.Ok(rawCatalog.RecentTaskRuns(scope: CurrentSiteScope(context)));
+});
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
 {
@@ -730,6 +734,16 @@ app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context,
 });
 if (settings.TerminalEnabled)
 {
+    var sessionRoutes = app.MapGroup("/api/system/terminal/sessions");
+    sessionRoutes.AddEndpointFilter(async (invocation, next) =>
+    {
+        var context = invocation.HttpContext;
+        if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+        if (context.Request.RouteValues["sessionId"] is string sessionId &&
+            !context.RequestServices.GetRequiredService<Catalog>().TerminalSessionIsInScope(sessionId, CurrentSiteScope(context)))
+            return Results.NotFound();
+        return await next(invocation);
+    });
     app.MapGet("/api/system/terminal/devices", (HttpContext context, Catalog rawCatalog, TerminalSessionManager manager) =>
     {
         if (DeviceSiteScopeGuard(context) is { } denied) return denied;
@@ -750,34 +764,34 @@ if (settings.TerminalEnabled)
         if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
         return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
     });
-    app.MapGet("/api/system/terminal/sessions", (HttpRequest request, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("", (HttpContext context, HttpRequest request, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query), CurrentSiteScope(context))));
+    sessionRoutes.MapGet("/{sessionId}", (string sessionId, Catalog rawCatalog) =>
     {
         var session = rawCatalog.GetTerminalSession(sessionId);
         return session is null ? Results.NotFound() : Results.Ok(session);
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
+    sessionRoutes.MapGet("/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
         Results.Ok(rawCatalog.TerminalEvents(sessionId, Math.Clamp(limit ?? 500, 1, 5000))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
         Results.Ok(rawCatalog.TerminalRecordingSegments(sessionId)));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/integrity", (string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/recording/integrity", (string sessionId,
         TerminalRecordingService recordings) =>
     {
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/recording/verify", (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/recording/verify", (string sessionId,
         TerminalRecordingService recordings) =>
     {
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
         Results.Ok(rawCatalog.TerminalExports(sessionId)));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/export", async (HttpContext context, string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/export", async (HttpContext context, string sessionId,
         string? format, Catalog rawCatalog, TerminalRecordingService recordings, TerminalExportService exports) =>
     {
         var session = rawCatalog.GetTerminalSession(sessionId);
@@ -791,7 +805,7 @@ if (settings.TerminalEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/replay", (string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/recording/replay", (string sessionId,
         long? offset, int? limit, long? fromMs, long? toMs, TerminalRecordingService recordings) =>
     {
         try
@@ -813,8 +827,11 @@ if (settings.TerminalEnabled)
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (FileNotFoundException) { return Results.NotFound(); }
     });
-    app.MapPost("/api/system/terminal/sessions", (TerminalSessionRequest request, TerminalSessionManager manager) =>
+    sessionRoutes.MapPost("", (HttpContext context, TerminalSessionRequest request, TerminalSessionManager manager, Catalog rawCatalog) =>
     {
+        var scope = CurrentSiteScope(context);
+        if (!scope.IsGlobal && (string.Equals(request.Protocol, "SERIAL", StringComparison.OrdinalIgnoreCase) ||
+            !rawCatalog.H3cProfileIsInScope(request.TargetId, scope))) return Results.NotFound();
         try
         {
             var sessionId = manager.Create(request);
@@ -826,19 +843,19 @@ if (settings.TerminalEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/ticket", (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/ticket", (string sessionId,
         TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
         if (manager.Get(sessionId) is null) return Results.NotFound();
         return Results.Ok(tickets.Issue(sessionId));
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/close", async (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/close", async (string sessionId,
         TerminalSessionManager manager) =>
     {
         if (!await manager.CloseAsync(sessionId)) return Results.NotFound();
         return Results.Ok(new { sessionId, state = "CLOSED" });
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
+    sessionRoutes.MapGet("/{sessionId}/stream", async (HttpContext context,
         string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
         var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}", $"http://[::1]:{settings.WebPort}" };
@@ -862,8 +879,14 @@ if (settings.TerminalEnabled)
         }
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-        var send = SendTerminalOutputAsync(socket, session, cancellation.Token);
-        var receive = ReceiveTerminalInputAsync(socket, session, cancellation.Token);
+        bool StillAuthorized()
+        {
+            var scopes = context.RequestServices.GetRequiredService<P2B5SiteScopeStore>();
+            var current = scopes.Resolve(CurrentIdentity(context));
+            return context.RequestServices.GetRequiredService<Catalog>().TerminalSessionIsInScope(sessionId, current);
+        }
+        var send = SendTerminalOutputAsync(socket, session, StillAuthorized, cancellation.Token);
+        var receive = ReceiveTerminalInputAsync(socket, session, StillAuthorized, cancellation.Token);
         await Task.WhenAny(send, receive).ConfigureAwait(false);
         cancellation.Cancel();
         try { await Task.WhenAll(send, receive).ConfigureAwait(false); } catch { }
@@ -875,8 +898,11 @@ if (settings.TerminalEnabled)
 }
 if (settings.H3cEnabled)
 {
-    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.RecentH3cDeviceProfiles().Select(profile => profile.ToView())));
+    app.MapGet("/api/system/h3c/profiles", (HttpContext context, Catalog rawCatalog) =>
+    {
+        if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+        return Results.Ok(rawCatalog.RecentH3cDeviceProfiles(scope: CurrentSiteScope(context)).Select(profile => profile.ToView()));
+    });
     app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
@@ -1417,21 +1443,25 @@ static CookieOptions WebCookieOptions(bool httpOnly) => new()
     MaxAge = TimeSpan.FromHours(12),
 };
 
-static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
 {
+    if (!isAuthorized()) return;
     var status = JsonSerializer.SerializeToUtf8Bytes(new { type = "status", session = session.Snapshot });
     await socket.SendAsync(status, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
     await foreach (var output in session.Output.ReadAllAsync(cancellationToken))
+    {
+        if (!isAuthorized()) return;
         await socket.SendAsync(output, WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
+    }
 }
 
-static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
 {
     var buffer = new byte[64 * 1024];
     while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
     {
         var result = await socket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
-        if (result.MessageType == WebSocketMessageType.Close) return;
+        if (result.MessageType == WebSocketMessageType.Close || !isAuthorized()) return;
         if (result.MessageType != WebSocketMessageType.Text || !result.EndOfMessage || result.Count > buffer.Length)
         {
             await socket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "structured text messages only", cancellationToken).ConfigureAwait(false);

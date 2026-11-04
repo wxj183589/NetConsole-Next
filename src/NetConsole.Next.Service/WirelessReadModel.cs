@@ -288,18 +288,42 @@ internal sealed class WirelessProjectionEngine
     {
         var result = new Dictionary<string, WirelessDomainSeed>(StringComparer.Ordinal);
         var claimed = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var item in evidence.Where(item => item.MemberDeviceIds.Count > 0))
+        var candidates = evidence.Where(item => item.MemberDeviceIds.Count > 0)
+            .GroupBy(item => string.IsNullOrWhiteSpace(item.DomainId)
+                ? "ac-domain:" + Fingerprint(item.MemberDeviceIds.Distinct(StringComparer.Ordinal)) : item.DomainId.Trim(), StringComparer.Ordinal);
+        foreach (var group in candidates)
         {
-            var members = item.MemberDeviceIds.Where(acs.ContainsKey).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var items = group.ToArray();
+            var members = items.SelectMany(item => item.MemberDeviceIds).Where(acs.ContainsKey)
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (members.Length == 0) continue;
-            var id = string.IsNullOrWhiteSpace(item.DomainId) ? "ac-domain:" + Fingerprint(members) : item.DomainId.Trim();
-            var kind = string.IsNullOrWhiteSpace(item.DomainKind) ? "UNKNOWN" : item.DomainKind.Trim().ToUpperInvariant();
-            result[id] = new(id, members, kind,
-                string.IsNullOrWhiteSpace(item.TopologyStatus) ? item.Confirmed ? "CONFIRMED" : "EVIDENCE_PENDING" : item.TopologyStatus,
-                item.SourceEvidenceRefs.Where(refId => !string.IsNullOrWhiteSpace(refId)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
-                item.Confirmed);
-            foreach (var member in members) claimed.Add(member);
+            var signatures = items.Select(item => Fingerprint(new[] { item.DomainKind, item.TopologyStatus,
+                string.Join(',', item.MemberDeviceIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)), item.Confirmed.ToString() }))
+                .Distinct(StringComparer.Ordinal).ToArray();
+            var conflict = signatures.Length > 1;
+            var item = items[0];
+            var refs = items.SelectMany(value => value.SourceEvidenceRefs).Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var complete = item.MemberDeviceIds.All(acs.ContainsKey);
+            var kind = (item.DomainKind ?? "UNKNOWN").Trim().ToUpperInvariant();
+            var confirmed = !conflict && complete && item.Confirmed && refs.Length > 0 &&
+                kind is "STANDALONE" or "INDEPENDENT" or "STACK" or "IRF" or "CLUSTER" or "ONE_PLUS_ONE";
+            result[group.Key] = new(group.Key, members, conflict ? "UNKNOWN" : kind,
+                conflict ? "CONFLICT" : confirmed ? "CONFIRMED" : "EVIDENCE_PENDING", refs, confirmed);
         }
+        // A member assigned to multiple domains is ambiguous. Preserve each AC as a
+        // conflict candidate rather than choosing a domain by lexical sort order.
+        var overlapping = result.Values.SelectMany(domain => domain.MemberDeviceIds)
+            .GroupBy(id => id, StringComparer.Ordinal).Where(group => group.Count() > 1)
+            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        var conflictedMembers = result.Values.Where(domain => domain.MemberDeviceIds.Any(overlapping.Contains))
+            .SelectMany(domain => domain.MemberDeviceIds).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in result.Values.Where(domain => domain.MemberDeviceIds.Any(conflictedMembers.Contains)).Select(domain => domain.Id).ToArray())
+            result.Remove(id);
+        foreach (var id in conflictedMembers)
+            result["ac-domain:" + id] = new("ac-domain:" + id, new[] { id }, "UNKNOWN", "CONFLICT", Array.Empty<string>(), false);
+        foreach (var domain in result.Values)
+            foreach (var member in domain.MemberDeviceIds) claimed.Add(member);
         foreach (var ac in acs.Values.Where(item => !claimed.Contains(item.DeviceId)).OrderBy(item => item.DeviceId, StringComparer.Ordinal))
         {
             var id = "ac-domain:" + ac.DeviceId;

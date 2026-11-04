@@ -1142,6 +1142,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
 
     public bool H3cProfileIsInScope(string id, P2B5SiteScopeDecision scope)
     {
+        if (!scope.IsAuthorized) return false;
         using var db = Open();
         using var command = db.CreateCommand();
         var siteParameters = string.Join(',', scope.AllowedSiteReferences.Select((_, index) => "$site" + index));
@@ -1646,14 +1647,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<TaskRunSnapshot> RecentTaskRuns(int limit = 25)
+    public IReadOnlyList<TaskRunSnapshot> RecentTaskRuns(int limit = 25, P2B5SiteScopeDecision? scope = null)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-            command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
+        command.CommandText = $@"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
                 o.relative_path,o.sha256,o.byte_count,o.parsed_json,o.capture_status,o.parse_status
             FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id
+            LEFT JOIN collection_sources source ON source.id=t.source_id
+            WHERE {scopeFilter}
             ORDER BY COALESCE(t.queued_ms,t.started_ms) DESC LIMIT $limit";
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
         using var reader = command.ExecuteReader();
         var result = new List<TaskRunSnapshot>();
