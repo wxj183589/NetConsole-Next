@@ -6,6 +6,7 @@
 - 新增多命令任务计划：顺序执行、每条命令独立 Raw、失败/取消时保留 partial 证据、schema v16 命令输出账本、Raw→Facts→Current collection provenance。
 - 新增 `/api/system/tasks/{runId}/commands` 和任务中心命令明细；设备列表提供一键测试连接，复用服务端 DPAPI 引用与自动 HostKey/Telnet 策略。
 - 验证：Service build、Tests build、H3C task fact tests `11/11 PASS`、前端 `vue-tsc --noEmit`、Vitest `4 files/7 tests`。
+- 浏览器离线 fixture：登录、明暗主题、设备、终端、任务、工具、文件截图 PASS；证据目录为临时可重生成输出，已退役。
 - 四台授权模拟器仍缺可用认证材料；未猜测或记录密码，未宣称真实登录/HA/切换。
 - 最新恢复提交：`b5380e0`。
 
