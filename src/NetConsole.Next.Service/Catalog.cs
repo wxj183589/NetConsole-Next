@@ -1159,14 +1159,21 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         return command.ExecuteScalar() is not null;
     }
 
-    public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25)
+    public IReadOnlyList<H3cDeviceProfileSnapshot> RecentH3cDeviceProfiles(int limit = 25,
+        P2B5SiteScopeDecision? scope = null)
     {
+        var scopeParameters = new List<(string Name, object? Value)>();
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
+        var scopeFilter = scope is null || scope.IsGlobal ? "1=1" : DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
+        command.CommandText = $@"SELECT profile.id,profile.host,profile.port,profile.username,profile.credential_reference,profile.host_key_sha256,profile.enabled,profile.created_ms,profile.updated_ms,
             host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
-            FROM h3c_device_profiles ORDER BY updated_ms DESC LIMIT $limit";
+            FROM h3c_device_profiles profile
+            LEFT JOIN collection_sources source ON source.id=profile.source_id
+            WHERE {scopeFilter}
+            ORDER BY profile.updated_ms DESC LIMIT $limit";
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         using var reader = command.ExecuteReader();
         var profiles = new List<H3cDeviceProfileSnapshot>();
         while (reader.Read())

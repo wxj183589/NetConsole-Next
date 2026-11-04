@@ -23,6 +23,8 @@ internal sealed record DeviceInventoryWriteRequest(
 internal sealed record DeviceGroupView(string Id, string SiteId, string Name, string Description,
     long CreatedMs, long UpdatedMs, long DeviceCount);
 
+internal sealed record DeviceSiteView(string Id, string Name);
+
 internal sealed record DeviceAuditView(string Id, long AtMs, string Action, string Outcome, string DetailJson);
 
 internal sealed record DeviceInventoryDetail(
@@ -74,11 +76,12 @@ internal sealed partial class Catalog
 
     public DeviceInventoryPage QueryManagedDeviceInventory(int page = 1, int pageSize = 20,
         string? search = null, string? status = null, string? siteId = null, string? groupId = null,
-        string? vendor = null, string? deviceType = null)
+        string? vendor = null, string? deviceType = null, P2B5SiteScopeDecision? scope = null)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var filters = InventoryFilters(search, status, siteId, groupId, vendor, deviceType);
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var filters = InventoryFilters(search, status, siteId, groupId, vendor, deviceType, scope, scopeParameters);
         var where = filters.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", filters);
         using var db = Open();
 
@@ -102,6 +105,7 @@ internal sealed partial class Catalog
             LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
             {where}";
         AddInventoryParameters(summary, search, status, siteId, groupId, vendor, deviceType);
+        DeviceSiteScope.AddParameters(summary, scopeParameters);
         using var summaryReader = summary.ExecuteReader();
         summaryReader.Read();
         var total = summaryReader.GetInt64(0);
@@ -118,27 +122,29 @@ internal sealed partial class Catalog
             SELECT d.id,d.name,d.management_ip,d.vendor,d.model,d.device_type,d.site_id,d.group_id,
                 COALESCE(NULLIF(st.name,''),'—'),COALESCE(NULLIF(g.name,''),'—'),d.enabled,d.created_ms,d.updated_ms,
                 p.id,p.host,p.port,p.username,p.credential_reference,p.host_key_update_policy,p.terminal_encoding,p.terminal_protocol,
-                s.state,s.started_ms,s.disconnect_reason,d.description
+                s.state,s.started_ms,s.disconnect_reason,d.description,ps.site_id
             FROM device_inventory d
             LEFT JOIN sites st ON st.id=d.site_id
             LEFT JOIN device_groups g ON g.id=d.group_id
             LEFT JOIN h3c_device_profiles p ON p.id=d.terminal_profile_id
+            LEFT JOIN collection_sources ps ON ps.id=p.source_id
             LEFT JOIN latest s ON s.target_id=p.id AND s.rn=1
             {where}
             ORDER BY d.updated_ms DESC,d.id ASC
             LIMIT $limit OFFSET $offset";
         AddInventoryParameters(command, search, status, siteId, groupId, vendor, deviceType);
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * pageSize);
         using var reader = command.ExecuteReader();
         var items = new List<DeviceInventoryItem>();
-        while (reader.Read()) items.Add(ReadManagedInventoryItem(reader));
+        while (reader.Read()) items.Add(ReadManagedInventoryItem(reader, scope));
         return new DeviceInventoryPage(page, pageSize, total, (long)page * pageSize < total, counts, items);
     }
 
-    public DeviceInventoryDetail? GetDeviceInventoryDetail(string id)
+    public DeviceInventoryDetail? GetDeviceInventoryDetail(string id, P2B5SiteScopeDecision? scope = null)
     {
-        var page = QueryManagedDeviceInventory(1, 100, id, null, null, null);
+        var page = QueryManagedDeviceInventory(1, 100, id, null, null, null, null, null, scope);
         var item = page.Items.FirstOrDefault(candidate => candidate.Id == id);
         if (item is null) return null;
         using var db = Open();
@@ -152,22 +158,41 @@ internal sealed partial class Catalog
         var updated = reader.GetInt64(2);
         var profileId = reader.IsDBNull(3) ? null : reader.GetString(3);
         reader.Close();
+        var profileVisible = profileId is null || scope is null || scope.IsGlobal || H3cProfileIsInScope(profileId, scope);
+        if (!profileVisible) profileId = null;
         var profile = profileId is null ? null : GetH3cDeviceProfile(profileId);
         var sessions = profileId is null ? Array.Empty<TerminalSessionSnapshot>() : RecentTerminalSessions(profileId, 20);
         var audits = ReadDeviceAudits(db, id, 50);
         return new DeviceInventoryDetail(item, description, created, updated, profileId, profile, sessions, audits);
     }
 
-    public IReadOnlyList<DeviceGroupView> QueryDeviceGroups(string? siteId = null)
+    public IReadOnlyList<DeviceSiteView> QueryDeviceSites(P2B5SiteScopeDecision? scope = null)
     {
+        var scopeParameters = new List<(string Name, object? Value)>();
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms,COUNT(d.id)
-            FROM device_groups g LEFT JOIN device_inventory d ON d.group_id=g.id
-            WHERE ($site IS NULL OR g.site_id=$site)
+        var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "s.id");
+        command.CommandText = $"SELECT s.id,s.name FROM sites s WHERE {scopeFilter} ORDER BY s.id";
+        DeviceSiteScope.AddParameters(command, scopeParameters);
+        using var reader = command.ExecuteReader();
+        var result = new List<DeviceSiteView>();
+        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1)));
+        return result;
+    }
+
+    public IReadOnlyList<DeviceGroupView> QueryDeviceGroups(string? siteId = null, P2B5SiteScopeDecision? scope = null)
+    {
+        var scopeParameters = new List<(string Name, object? Value)>();
+        using var db = Open();
+        using var command = db.CreateCommand();
+        var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "g.site_id");
+        command.CommandText = $@"SELECT g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms,COUNT(d.id)
+            FROM device_groups g LEFT JOIN device_inventory d ON d.group_id=g.id AND d.site_id=g.site_id
+            WHERE ($site IS NULL OR g.site_id=$site) AND {scopeFilter}
             GROUP BY g.id,g.site_id,g.name,g.description,g.created_ms,g.updated_ms
             ORDER BY g.site_id,g.name";
         command.Parameters.AddWithValue("$site", (object?)NullIfBlank(siteId) ?? DBNull.Value);
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         using var reader = command.ExecuteReader();
         var result = new List<DeviceGroupView>();
         while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
@@ -175,9 +200,11 @@ internal sealed partial class Catalog
         return result;
     }
 
-    public DeviceGroupView CreateDeviceGroup(string siteId, string name, string? description, string actor)
+    public DeviceGroupView CreateDeviceGroup(string siteId, string name, string? description, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         siteId = RequiredText(siteId, "siteId", 80);
+        DeviceSiteScope.Require(scope, siteId);
         name = RequiredText(name, "name", 100);
         description = (description ?? string.Empty).Trim();
         if (description.Length > 500) throw new ArgumentException("Group description is too long.", nameof(description));
@@ -197,18 +224,21 @@ internal sealed partial class Catalog
         }
         InsertDeviceAudit(db, transaction, actor, "DEVICE_GROUP_CREATE", id, new { siteId, name });
         transaction.Commit();
-        return QueryDeviceGroups(siteId).Single(group => group.Id == id);
+        return QueryDeviceGroups(siteId, scope).Single(group => group.Id == id);
     }
 
-    public DeviceInventoryDetail CreateDeviceInventory(DeviceInventoryWriteRequest request, string actor)
+    public DeviceInventoryDetail CreateDeviceInventory(DeviceInventoryWriteRequest request, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         var normalized = NormalizeDeviceInput(request, null);
+        DeviceSiteScope.Require(scope, normalized.SiteId);
         var now = UtcNowMs();
         using var db = Open();
         using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
         EnsureSite(db, transaction, normalized.SiteId);
         EnsureGroup(db, transaction, normalized.GroupId, normalized.SiteId);
         EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId, normalized.Id);
+        EnsureTerminalProfileScope(normalized.TerminalProfileId, scope);
         EnsureUniqueManagementIp(db, transaction, normalized.SiteId, normalized.ManagementIp, normalized.Id);
         using (var insert = db.CreateCommand())
         {
@@ -221,18 +251,24 @@ internal sealed partial class Catalog
         }
         InsertDeviceAudit(db, transaction, actor, "DEVICE_CREATE", normalized.Id!, new { normalized.Name, normalized.ManagementIp, normalized.SiteId, normalized.GroupId, normalized.Enabled, normalized.TerminalProfileId });
         transaction.Commit();
-        return GetDeviceInventoryDetail(normalized.Id!) ?? throw new InvalidOperationException("Created device could not be reloaded.");
+        return GetDeviceInventoryDetail(normalized.Id!, scope) ?? throw new InvalidOperationException("Created device could not be reloaded.");
     }
 
-    public DeviceInventoryDetail UpdateDeviceInventory(string id, DeviceInventoryWriteRequest request, string actor)
+    public DeviceInventoryDetail UpdateDeviceInventory(string id, DeviceInventoryWriteRequest request, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         var normalized = NormalizeDeviceInput(request with { Id = id }, id);
         var now = UtcNowMs();
         using var db = Open();
         using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
+        var currentSiteId = ReadDeviceSite(db, transaction, id);
+        if (currentSiteId is null) throw new KeyNotFoundException("Device inventory record was not found.");
+        DeviceSiteScope.Require(scope, currentSiteId);
+        DeviceSiteScope.Require(scope, normalized.SiteId);
         EnsureSite(db, transaction, normalized.SiteId);
         EnsureGroup(db, transaction, normalized.GroupId, normalized.SiteId);
         EnsureTerminalProfile(db, transaction, normalized.TerminalProfileId, id);
+        EnsureTerminalProfileScope(normalized.TerminalProfileId, scope);
         EnsureUniqueManagementIp(db, transaction, normalized.SiteId, normalized.ManagementIp, id);
         using (var update = db.CreateCommand())
         {
@@ -246,10 +282,10 @@ internal sealed partial class Catalog
         InsertDeviceAudit(db, transaction, actor, normalized.Enabled ? "DEVICE_UPDATE" : "DEVICE_DISABLE", id,
             new { normalized.Name, normalized.ManagementIp, normalized.SiteId, normalized.GroupId, normalized.Enabled, normalized.TerminalProfileId });
         transaction.Commit();
-        return GetDeviceInventoryDetail(id) ?? throw new InvalidOperationException("Updated device could not be reloaded.");
+        return GetDeviceInventoryDetail(id, scope) ?? throw new InvalidOperationException("Updated device could not be reloaded.");
     }
 
-    public DeviceImportPreviewResult PreviewDeviceImport(string csv, string actor)
+    public DeviceImportPreviewResult PreviewDeviceImport(string csv, string actor, P2B5SiteScopeDecision? scope = null)
     {
         if (string.IsNullOrWhiteSpace(csv)) throw new ArgumentException("CSV content is required.", nameof(csv));
         actor = RequiredText(actor, "actor", 128);
@@ -271,6 +307,7 @@ internal sealed partial class Catalog
             var ipText = Text(row.Get("managementIp"));
             var site = Text(row.Get("siteId"));
             if (site.Length == 0) site = "local";
+            if (scope is not null && !DeviceSiteScope.Allows(scope, site)) errors.Add("SITE_SCOPE_DENIED");
             var normalizedIp = TryNormalizeIp(ipText, out var ip) ? ip : string.Empty;
             if (name.Length is < 1 or > 120 || name.Any(char.IsControl)) errors.Add("NAME_REQUIRED_OR_INVALID");
             if (normalizedIp.Length == 0) errors.Add("MANAGEMENT_IP_INVALID");
@@ -287,6 +324,7 @@ internal sealed partial class Catalog
             var profileId = Text(row.Get("terminalProfileId"));
             if (profileId.Length > 0 && !TerminalProfileExists(db, profileId)) errors.Add("TERMINAL_PROFILE_NOT_FOUND");
             if (profileId.Length > 0 && !IsValidDeviceId(profileId)) errors.Add("TERMINAL_PROFILE_ID_INVALID");
+            if (profileId.Length > 0 && scope is not null && !scope.IsGlobal && !H3cProfileIsInScope(profileId, scope)) errors.Add("TERMINAL_PROFILE_SCOPE_DENIED");
             if (profileId.Length > 0 && !seenProfiles.Add(profileId)) errors.Add("DUPLICATE_IMPORT_TERMINAL_PROFILE");
             if (!TryParseEnabled(Text(row.Get("enabled")), out var enabled)) errors.Add("ENABLED_INVALID");
             var vendor = Text(row.Get("vendor"));
@@ -302,6 +340,11 @@ internal sealed partial class Catalog
                 if (!seenKeys.Add(key)) errors.Add("DUPLICATE_IMPORT_ADDRESS");
             }
             var byId = id.Length == 0 ? null : existing.FirstOrDefault(item => item.Id == id);
+            if (byId is not null && scope is not null && !DeviceSiteScope.Allows(scope, byId.SiteId))
+            {
+                errors.Add("SITE_SCOPE_DENIED");
+                byId = null;
+            }
             var byIp = normalizedIp.Length == 0 ? null : existing.FirstOrDefault(item => item.SiteId == site && item.ManagementIp == normalizedIp);
             if ((byId is not null && byIp is not null && byId.Id != byIp.Id) ||
                 (id.Length > 0 && byIp is not null && byIp.Id != id)) errors.Add("ID_IP_TARGET_CONFLICT");
@@ -335,7 +378,8 @@ internal sealed partial class Catalog
         return result;
     }
 
-    public DeviceImportCommitResult CommitDeviceImport(string previewId, bool confirm, string actor)
+    public DeviceImportCommitResult CommitDeviceImport(string previewId, bool confirm, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         if (!confirm) throw new InvalidOperationException("Import commit requires explicit confirmation.");
         actor = RequiredText(actor, "actor", 128);
@@ -365,6 +409,8 @@ internal sealed partial class Catalog
             using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
             foreach (var candidate in state.Candidates)
             {
+                DeviceSiteScope.Require(scope, candidate.SiteId);
+                EnsureDeviceSiteScope(db, transaction, candidate.DeviceId, scope);
                 EnsureSite(db, transaction, candidate.SiteId);
                 EnsureGroup(db, transaction, candidate.GroupId, candidate.SiteId);
                 EnsureTerminalProfile(db, transaction, candidate.TerminalProfileId, candidate.DeviceId);
@@ -411,9 +457,11 @@ internal sealed partial class Catalog
     }
 
     private static List<string> InventoryFilters(string? search, string? status, string? siteId, string? groupId,
-        string? vendor, string? deviceType)
+        string? vendor, string? deviceType, P2B5SiteScopeDecision? scope,
+        List<(string Name, object? Value)> scopeParameters)
     {
         var filters = new List<string>();
+        if (scope is not null) filters.Add(DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "d.site_id"));
         if (!string.IsNullOrWhiteSpace(search)) filters.Add("(d.id LIKE $search OR d.name LIKE $search OR d.management_ip LIKE $search OR d.vendor LIKE $search OR d.model LIKE $search OR st.name LIKE $search)");
         if (!string.IsNullOrWhiteSpace(siteId)) filters.Add("d.site_id=$site");
         if (!string.IsNullOrWhiteSpace(groupId)) filters.Add("d.group_id=$group");
@@ -440,11 +488,14 @@ internal sealed partial class Catalog
         if (!string.IsNullOrWhiteSpace(deviceType)) command.Parameters.AddWithValue("$deviceType", deviceType.Trim());
     }
 
-    private static DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader)
+    private static DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader, P2B5SiteScopeDecision? scope)
     {
         var id = reader.GetString(0); var name = reader.GetString(1); var ip = reader.GetString(2);
         var type = reader.GetString(5); var enabled = reader.GetInt32(10) != 0;
         var profileId = reader.IsDBNull(13) ? null : reader.GetString(13);
+        var profileSiteId = reader.IsDBNull(25) ? null : reader.GetString(25);
+        var profileVisible = profileId is null || scope is null || scope.IsGlobal || profileSiteId is not null && scope.AllowedSiteReferences.Contains(profileSiteId);
+        if (!profileVisible) profileId = null;
         var profileHost = reader.IsDBNull(14) ? null : reader.GetString(14);
         var port = reader.IsDBNull(15) ? 0 : reader.GetInt32(15);
         var username = reader.IsDBNull(16) ? "—" : reader.GetString(16);
@@ -452,6 +503,16 @@ internal sealed partial class Catalog
         var policy = reader.IsDBNull(18) ? "—" : reader.GetString(18);
         var encoding = reader.IsDBNull(19) ? "—" : reader.GetString(19);
         var protocol = reader.IsDBNull(20) ? "—" : reader.GetString(20);
+        if (!profileVisible)
+        {
+            profileHost = null;
+            port = 0;
+            username = "—";
+            credential = string.Empty;
+            policy = "—";
+            encoding = "—";
+            protocol = "—";
+        }
         var issues = new List<string>();
         if (string.IsNullOrWhiteSpace(id)) issues.Add("MISSING_ID");
         if (string.IsNullOrWhiteSpace(name)) issues.Add("MISSING_NAME");
@@ -505,6 +566,23 @@ internal sealed partial class Catalog
         if (command.ExecuteScalar() is null) throw new KeyNotFoundException("Site was not found.");
     }
 
+    private static string? ReadDeviceSite(SqliteConnection db, SqliteTransaction transaction, string deviceId)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT site_id FROM device_inventory WHERE id=$id";
+        command.Parameters.AddWithValue("$id", deviceId);
+        return command.ExecuteScalar()?.ToString();
+    }
+
+    private static void EnsureDeviceSiteScope(SqliteConnection db, SqliteTransaction transaction, string deviceId,
+        P2B5SiteScopeDecision? scope)
+    {
+        if (scope is null) return;
+        var siteId = ReadDeviceSite(db, transaction, deviceId);
+        if (siteId is not null) DeviceSiteScope.Require(scope, siteId);
+    }
+
     private static void EnsureGroup(SqliteConnection db, SqliteTransaction transaction, string? groupId, string siteId)
     {
         if (groupId is null) return;
@@ -523,6 +601,12 @@ internal sealed partial class Catalog
         linked.Parameters.AddWithValue("$profile", profileId); linked.Parameters.AddWithValue("$exclude", (object?)excludeDeviceId ?? DBNull.Value);
         if (linked.ExecuteScalar() is string otherDevice)
             throw new InvalidOperationException($"Terminal profile is already linked to device {otherDevice}.");
+    }
+
+    private void EnsureTerminalProfileScope(string? profileId, P2B5SiteScopeDecision? scope)
+    {
+        if (profileId is not null && scope is not null && !scope.IsGlobal && !H3cProfileIsInScope(profileId, scope))
+            throw new DeviceSiteScopeException("DEVICE_PROFILE_SCOPE_DENIED", "The terminal profile is outside the current user scope.");
     }
 
     private static void EnsureDeviceIdAvailable(SqliteConnection db, SqliteTransaction transaction, string deviceId)

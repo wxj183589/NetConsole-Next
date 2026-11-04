@@ -90,6 +90,11 @@ export interface DeviceGroup {
   deviceCount: number
 }
 
+export interface DeviceSite {
+  id: string
+  name: string
+}
+
 export interface DeviceInventoryDetail {
   item: DeviceInventoryItem
   description: string
@@ -540,6 +545,7 @@ export function getDeviceInventory(params: { page?: number; pageSize?: number; s
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })
   return request('/api/system/devices?' + query.toString())
 }
+export function getDeviceSites(): Promise<DeviceSite[]> { return request('/api/system/device-sites') }
 export function getDeviceInventoryDetail(id: string): Promise<DeviceInventoryDetail> { return request('/api/system/devices/' + encodeURIComponent(id)) }
 export function getZteProfiles(): Promise<ZteProfile[]> { return request('/api/system/zte/profiles') }
 export function createZteProfile(payload: Record<string, unknown>): Promise<ZteProfile> {

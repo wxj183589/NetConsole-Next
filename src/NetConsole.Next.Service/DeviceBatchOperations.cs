@@ -100,7 +100,8 @@ internal sealed partial class Catalog
         string IdempotencyKey,
         IReadOnlyList<DeviceBatchOperationItemView> Items);
 
-    public DeviceBatchOperationView CreateDeviceBatchOperation(DeviceBatchOperationRequest request, string actor)
+    public DeviceBatchOperationView CreateDeviceBatchOperation(DeviceBatchOperationRequest request, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         actor = RequiredText(actor, "actor", 128);
         request = NormalizeBatchRequest(request);
@@ -123,6 +124,7 @@ internal sealed partial class Catalog
         }
 
         EnforceBatchResourceLimits(db, transaction, actor);
+        EnsureBatchScope(db, transaction, request, scope);
         var drafts = BuildBatchPreview(db, transaction, request);
         var operationId = "op-" + Guid.NewGuid().ToString("N");
         var now = UtcNowMs();
@@ -165,10 +167,11 @@ internal sealed partial class Catalog
             new { correlationId = operationId, kind = request.Kind, targetCount = drafts.Count, safeChangedFields = ChangedFields(request), safeFailureReason = state == "CONFLICT" ? "PREVIEW_CONFLICT" : (string?)null },
             state == "CONFLICT" ? "CONFLICT" : "SUCCESS");
         transaction.Commit();
-        return GetDeviceBatchOperation(operationId, actor) ?? throw new InvalidOperationException("Created batch operation could not be reloaded.");
+        return GetDeviceBatchOperation(operationId, actor, scope) ?? throw new InvalidOperationException("Created batch operation could not be reloaded.");
     }
 
-    public DeviceBatchOperationView? GetDeviceBatchOperation(string operationId, string actor)
+    public DeviceBatchOperationView? GetDeviceBatchOperation(string operationId, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         actor = RequiredText(actor, "actor", 128);
         using var db = Open();
@@ -176,19 +179,23 @@ internal sealed partial class Catalog
         if (stored is null) return null;
         if (!string.Equals(stored.Actor, actor, StringComparison.Ordinal))
             throw new UnauthorizedAccessException("Batch operation belongs to another administrator.");
+        EnsureBatchScope(db, null, stored, scope);
         return ToBatchView(stored);
     }
 
-    public DeviceBatchOperationView ConfirmDeviceBatchOperation(string operationId, string actor)
+    public DeviceBatchOperationView ConfirmDeviceBatchOperation(string operationId, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         actor = RequiredText(actor, "actor", 128);
+        _ = GetDeviceBatchOperation(operationId, actor, scope)
+            ?? throw new KeyNotFoundException("Batch operation was not found.");
         var claimed = ClaimBatchOperation(operationId, actor);
         if (claimed.State == "SUCCEEDED") return ToBatchView(claimed);
         DeviceBatchCrashTestHooks.WaitFor("AFTER_CLAIM");
 
         try
         {
-            ExecuteBatchOperation(claimed);
+            ExecuteBatchOperation(claimed, scope);
         }
         catch (DeviceBatchConflictException)
         {
@@ -199,10 +206,11 @@ internal sealed partial class Catalog
             FinalizeBatchFailure(claimed.Id, actor, ex);
             throw;
         }
-        return GetDeviceBatchOperation(operationId, actor) ?? throw new InvalidOperationException("Batch operation disappeared after commit.");
+        return GetDeviceBatchOperation(operationId, actor, scope) ?? throw new InvalidOperationException("Batch operation disappeared after commit.");
     }
 
-    public DeviceBatchOperationView CancelDeviceBatchOperation(string operationId, string actor)
+    public DeviceBatchOperationView CancelDeviceBatchOperation(string operationId, string actor,
+        P2B5SiteScopeDecision? scope = null)
     {
         actor = RequiredText(actor, "actor", 128);
         using var db = Open();
@@ -210,6 +218,7 @@ internal sealed partial class Catalog
         var stored = ReadStoredBatchOperation(db, transaction, operationId)
             ?? throw new KeyNotFoundException("Batch operation was not found.");
         EnsureBatchOwner(stored, actor);
+        EnsureBatchScope(db, transaction, stored, scope);
         if (stored.State == "SUCCEEDED" || stored.State == "CANCELLED")
         {
             transaction.Commit();
@@ -226,7 +235,7 @@ internal sealed partial class Catalog
         InsertDeviceAudit(db, transaction, actor, "DEVICE_BATCH_CANCEL", operationId,
             new { correlationId = operationId, kind = stored.Kind, targetCount = stored.Items.Count, safeChangedFields = Array.Empty<string>(), safeFailureReason = (string?)null });
         transaction.Commit();
-        return GetDeviceBatchOperation(operationId, actor) ?? throw new InvalidOperationException("Cancelled batch operation could not be reloaded.");
+        return GetDeviceBatchOperation(operationId, actor, scope) ?? throw new InvalidOperationException("Cancelled batch operation could not be reloaded.");
     }
 
     public bool TryRecordDeviceAuditEvent(string actor, string action, string outcome, string subjectId,
@@ -387,7 +396,7 @@ internal sealed partial class Catalog
         return new BatchInventoryState(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetString(8), reader.GetInt32(9) != 0, reader.GetInt64(10));
     }
 
-    private static string? ReadGroupSite(SqliteConnection db, SqliteTransaction transaction, string groupId)
+    private static string? ReadGroupSite(SqliteConnection db, SqliteTransaction? transaction, string groupId)
     {
         using var command = db.CreateCommand(); command.Transaction = transaction; command.CommandText = "SELECT site_id FROM device_groups WHERE id=$id"; command.Parameters.AddWithValue("$id", groupId);
         return command.ExecuteScalar()?.ToString();
@@ -424,7 +433,7 @@ internal sealed partial class Catalog
         return GetStoredBatchOperationForOwner(operationId, actor) ?? throw new InvalidOperationException("Batch operation could not be claimed.");
     }
 
-    private void ExecuteBatchOperation(StoredBatchOperation claimed)
+    private void ExecuteBatchOperation(StoredBatchOperation claimed, P2B5SiteScopeDecision? scope)
     {
         using var db = Open();
         using var transaction = db.BeginTransaction(System.Data.IsolationLevel.Serializable);
@@ -436,11 +445,16 @@ internal sealed partial class Catalog
             var requested = JsonSerializer.Deserialize<BatchInventoryState>(item.RequestedJson)
                 ?? throw new InvalidOperationException("Batch request state is invalid.");
             if (current is null) conflicts.Add((item.DeviceId, "DEVICE_NOT_FOUND"));
-            else if (current.UpdatedMs != item.ExpectedRevision) conflicts.Add((item.DeviceId, "DEVICE_VERSION_CONFLICT"));
-            else if (ReadGroupSite(db, transaction, requested.GroupId ?? string.Empty) is null && requested.GroupId is not null) conflicts.Add((item.DeviceId, "GROUP_NOT_FOUND"));
-            else if (requested.GroupId is not null && !string.Equals(ReadGroupSite(db, transaction, requested.GroupId), requested.SiteId, StringComparison.Ordinal)) conflicts.Add((item.DeviceId, "GROUP_SITE_MISMATCH"));
-            else if (!SiteExists(db, requested.SiteId)) conflicts.Add((item.DeviceId, "SITE_NOT_FOUND"));
             else
+            {
+                DeviceSiteScope.Require(scope, current.SiteId);
+                DeviceSiteScope.Require(scope, requested.SiteId);
+            }
+            if (current is not null && current.UpdatedMs != item.ExpectedRevision) conflicts.Add((item.DeviceId, "DEVICE_VERSION_CONFLICT"));
+            if (current is not null && ReadGroupSite(db, transaction, requested.GroupId ?? string.Empty) is null && requested.GroupId is not null) conflicts.Add((item.DeviceId, "GROUP_NOT_FOUND"));
+            if (current is not null && requested.GroupId is not null && !string.Equals(ReadGroupSite(db, transaction, requested.GroupId), requested.SiteId, StringComparison.Ordinal)) conflicts.Add((item.DeviceId, "GROUP_SITE_MISMATCH"));
+            if (current is not null && !SiteExists(db, requested.SiteId)) conflicts.Add((item.DeviceId, "SITE_NOT_FOUND"));
+            if (current is not null && SiteExists(db, requested.SiteId))
             {
                 using var address = db.CreateCommand(); address.Transaction = transaction;
                 address.CommandText = "SELECT id FROM device_inventory WHERE site_id=$site AND management_ip=$ip AND id<>$id LIMIT 1";
@@ -484,6 +498,36 @@ internal sealed partial class Catalog
             new { correlationId = claimed.Id, kind = claimed.Kind, targetCount = claimed.Items.Count, safeChangedFields = ChangedFields(claimed.RequestJson), safeFailureReason = (string?)null });
         transaction.Commit();
         DeviceBatchCrashTestHooks.WaitFor("AFTER_COMMIT");
+    }
+
+    private static void EnsureBatchScope(SqliteConnection db, SqliteTransaction? transaction,
+        DeviceBatchOperationRequest request, P2B5SiteScopeDecision? scope)
+    {
+        if (scope is null) return;
+        foreach (var deviceId in request.DeviceIds)
+        {
+            var current = ReadBatchInventoryState(db, transaction, deviceId);
+            if (current is null) continue;
+            DeviceSiteScope.Require(scope, current.SiteId);
+            var requested = ApplyBatchRequest(current, request);
+            DeviceSiteScope.Require(scope, requested.SiteId);
+            if (requested.GroupId is not null)
+            {
+                var groupSite = ReadGroupSite(db, transaction, requested.GroupId);
+                if (groupSite is not null) DeviceSiteScope.Require(scope, groupSite);
+            }
+        }
+        if (request.Kind == "BATCH_SET_SITE" && request.SiteId is not null)
+            DeviceSiteScope.Require(scope, request.SiteId);
+    }
+
+    private static void EnsureBatchScope(SqliteConnection db, SqliteTransaction? transaction,
+        StoredBatchOperation operation, P2B5SiteScopeDecision? scope)
+    {
+        if (scope is null) return;
+        var request = JsonSerializer.Deserialize<DeviceBatchOperationRequest>(operation.RequestJson)
+            ?? throw new InvalidOperationException("Stored batch request is invalid.");
+        EnsureBatchScope(db, transaction, request, scope);
     }
 
     private void FinalizeBatchConflict(StoredBatchOperation claimed, IReadOnlyList<(string DeviceId, string Detail)> conflicts)

@@ -6,14 +6,14 @@ import { CircleCheck, Document, Filter, Monitor, Search, Upload, Warning } from 
 import NcLayout from '../components/NcLayout.vue'
 import {
   ApiRequestError, cancelDeviceBatch, commitDeviceImport, confirmDeviceBatch, createDevice, createDeviceBatch, createDeviceGroup,
-  getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, getTerminalDevices, previewDeviceImport, updateDevice,
+  getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, getDeviceSites, getTerminalDevices, previewDeviceImport, updateDevice,
   type DeviceBatchKind, type DeviceBatchOperation, type DeviceBatchRequest, type DeviceGroup, type DeviceImportPreview, type DeviceInventoryDetail,
-  type DeviceInventoryItem, type DeviceInventoryPage, type TerminalDevice,
+  type DeviceInventoryItem, type DeviceInventoryPage, type DeviceSite, type TerminalDevice,
 } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore()
-const result = ref<DeviceInventoryPage | null>(null); const groups = ref<DeviceGroup[]>([]); const profiles = ref<TerminalDevice[]>([])
+const result = ref<DeviceInventoryPage | null>(null); const sites = ref<DeviceSite[]>([]); const groups = ref<DeviceGroup[]>([]); const profiles = ref<TerminalDevice[]>([])
 const loading = ref(false); const saving = ref(false); const unsupported = ref(false); const page = ref(1); const pageSize = ref(20)
 const search = ref(String(route.query.q || '')); const status = ref(''); const vendor = ref(''); const deviceType = ref(''); const siteId = ref('local'); const groupId = ref('')
 const showEditor = ref(false); const showDetail = ref(false); const showGroup = ref(false); const showImport = ref(false)
@@ -26,7 +26,7 @@ const form = reactive({ id: '', name: '', managementIp: '', vendor: '', model: '
 const groupForm = reactive({ siteId: 'local', name: '', description: '' })
 const canWrite = computed(() => auth.user?.role === 'SUPERADMIN')
 const rows = computed(() => result.value?.items || [])
-const siteScopeLabel = computed(() => rows.value.find(row => row.siteId === siteId.value)?.site || siteId.value)
+const siteScopeLabel = computed(() => siteId.value ? sites.value.find(site => site.id === siteId.value)?.name || rows.value.find(row => row.siteId === siteId.value)?.site || siteId.value : '全部已授权局点')
 const selectedGroup = computed(() => groups.value.find(group => group.id === groupId.value))
 const vendorOptions = computed(() => Array.from(new Set(['H3C', 'ZTE', ...rows.value.map(row => row.vendor).filter(value => value && value !== '—')])).sort())
 const deviceTypeOptions = computed(() => Array.from(new Set(['NETWORK_DEVICE', 'SWITCH', 'ROUTER', 'AC', 'FAT_AP', ...rows.value.map(row => row.deviceType).filter(Boolean)])).sort())
@@ -39,6 +39,17 @@ const batchDialogKindLabel = computed(() => batchKindLabels[batchKind.value])
 const operationStateLabel = computed(() => ({ PENDING_CONFIRM: '待确认', RUNNING: '执行中', SUCCEEDED: '已完成', FAILED: '失败可重试', CONFLICT: '发生冲突', CANCELLED: '已取消', INTERRUPTED: '服务重启中断', PREVIEWED: '待确认' } as Record<string, string>)[batchOperation.value?.state || ''] || batchOperation.value?.state || '—')
 const summary = computed(() => result.value?.summary || { totalRecords: 0, validDevices: 0, invalidRecords: 0, enabledDevices: 0, disabledDevices: 0, onlineDevices: 0, offlineDevices: 0, unknownStatus: 0 })
 let refreshSequence = 0; let groupSequence = 0; let profileSequence = 0
+
+async function refreshSites(): Promise<void> {
+  try {
+    const next = await getDeviceSites()
+    sites.value = next
+    if (siteId.value && !next.some(site => site.id === siteId.value)) siteId.value = next[0]?.id || ''
+    if (!siteId.value && next.length) siteId.value = next[0].id
+    form.siteId = siteId.value || next[0]?.id || ''
+    groupForm.siteId = siteId.value || next[0]?.id || ''
+  } catch { sites.value = [] }
+}
 
 async function refresh(): Promise<void> {
   const sequence = ++refreshSequence
@@ -61,6 +72,13 @@ async function refreshProfiles(): Promise<void> {
   try { const next = await getTerminalDevices(); if (sequence === profileSequence) profiles.value = next } catch { if (sequence === profileSequence) profiles.value = [] }
 }
 function applyFilters(): void { page.value = 1; void refresh() }
+function selectSite(nextSiteId: string): void {
+  siteId.value = nextSiteId
+  groupId.value = ''
+  form.siteId = nextSiteId || sites.value[0]?.id || ''
+  groupForm.siteId = nextSiteId || sites.value[0]?.id || ''
+  void Promise.all([refresh(), refreshGroups()])
+}
 function selectScope(nextGroupId = ''): void { groupId.value = nextGroupId; applyFilters() }
 function clearFilters(): void { search.value = ''; status.value = ''; vendor.value = ''; deviceType.value = ''; groupId.value = ''; applyFilters() }
 function onSelectionChange(id: string, event: Event): void { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? Array.from(new Set([...selectedIds.value, id])) : selectedIds.value.filter(item => item !== id) }
@@ -82,7 +100,7 @@ async function cancelBatch(): Promise<void> { if (!batchOperation.value?.canCanc
 function formatTime(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function statusLabel(value: string): string { return ({ CONNECTED: '最近在线', DISCONNECTED: '最近离线', FAILED: '会话失败', CLOSED: '会话关闭', DISABLED: '已禁用', UNKNOWN: '状态未知' } as Record<string, string>)[value] || '未知' }
 function statusClass(value: string): string { return value === 'CONNECTED' ? 'good' : value === 'DISABLED' || value === 'FAILED' ? 'bad' : value === 'UNKNOWN' ? 'neutral' : 'warn' }
-function resetForm(): void { Object.assign(form, { id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: siteId.value || 'local', groupId: '', description: '', enabled: true, terminalProfileId: '' }) }
+function resetForm(): void { Object.assign(form, { id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: siteId.value || sites.value[0]?.id || 'local', groupId: '', description: '', enabled: true, terminalProfileId: '' }) }
 function openCreate(): void { resetForm(); showEditor.value = true }
 async function openEdit(row: DeviceInventoryItem): Promise<void> {
   try { selected.value = await getDeviceInventoryDetail(row.id); const item = selected.value.item; Object.assign(form, { id: item.id, name: item.name, managementIp: item.managementIp || item.managementAddress, vendor: item.vendor === '—' ? '' : item.vendor, model: item.model === '—' ? '' : item.model, deviceType: item.deviceType, siteId: item.siteId || 'local', groupId: item.groupId || '', description: selected.value.description, enabled: item.enabled, terminalProfileId: item.terminalProfileId || '' }); showEditor.value = true } catch { ElMessage.error('设备详情读取失败') }
@@ -108,7 +126,7 @@ function onFile(event: Event): void { const file = (event.target as HTMLInputEle
 async function previewImport(): Promise<void> { try { importPreview.value = await previewDeviceImport(importCsv.value); showImport.value = true } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : 'CSV 预览失败') } }
 async function commitImport(): Promise<void> { if (!importPreview.value || importPreview.value.conflictCount || importPreview.value.errorCount) return; try { const output = await commitDeviceImport(importPreview.value.previewId); ElMessage.success(`导入完成：新增 ${output.created}，更新 ${output.updated}`); showImport.value = false; importPreview.value = null; await refresh() } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '导入提交失败') } }
 function importFile(): void { document.getElementById('device-import-file')?.click() }
-onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await Promise.all([refresh(), refreshGroups(), refreshProfiles()]) })
+onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await refreshSites(); await Promise.all([refresh(), refreshGroups(), refreshProfiles()]) })
 </script>
 
 <template>
@@ -123,7 +141,8 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
       <div class="device-management-workspace" data-testid="device-management-workspace">
         <aside class="device-scope-panel card" aria-label="设备作用域导航">
           <div class="device-scope-panel__head"><div><span class="section-kicker">SCOPE</span><h2>设备作用域</h2></div><span class="scope-lock">授权</span></div>
-          <button class="scope-item scope-item--site" :class="{ 'is-active': !groupId }" type="button" @click="selectScope('')"><span><strong>{{ siteScopeLabel }}</strong><small class="mono">siteId: {{ siteId }}</small></span><b>{{ summary.totalRecords }}</b></button>
+          <label class="form-field scope-site-select"><span>授权局点</span><select v-model="siteId" @change="selectSite(siteId)"><option value="">全部已授权局点</option><option v-for="site in sites" :key="site.id" :value="site.id">{{ site.name }} · {{ site.id }}</option></select></label>
+          <button class="scope-item scope-item--site" :class="{ 'is-active': !groupId }" type="button" @click="selectScope('')"><span><strong>{{ siteScopeLabel }}</strong><small class="mono">siteId: {{ siteId || 'ALL_AUTHORIZED_SITES' }}</small></span><b>{{ summary.totalRecords }}</b></button>
           <div class="scope-divider"><span>分组</span><span>{{ groups.length }}</span></div>
           <button v-for="group in groups" :key="group.id" class="scope-item" :class="{ 'is-active': groupId === group.id }" type="button" @click="selectScope(group.id)"><span><strong>{{ group.name }}</strong><small>{{ group.description || '无描述' }}</small></span><b>{{ group.deviceCount }}</b></button>
           <div v-if="!groups.length" class="scope-empty">当前局点暂无服务端分组</div>
