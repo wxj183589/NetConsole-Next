@@ -33,6 +33,9 @@ Site claims、设备管理功能和安全回归保持通过；唯一未关闭门
 | Tests Release build | `PASS`；前一次并行构建的 DLL 文件占用冲突已串行重跑消除 |
 | Service harness | `PASS` |
 | Browser CRUD E2E | `PASS` |
+| 当前视觉夹具 1920×1080 | `PASS`；3 行设备、console/page error=0 |
+| 当前视觉夹具 2560×1440 | `PASS`；3 行设备、console/page error=0 |
+| 视觉夹具 125% simulated | `PASS` 仅表示布局回放；实际 DPR=1，不计入原生 125% |
 | `git diff --check` | `PASS` |
 
 ## 变更与边界
