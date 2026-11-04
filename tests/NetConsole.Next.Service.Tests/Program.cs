@@ -58,6 +58,8 @@ else if (args.Length > 0 && args[0] == "--h3c-fact-scope-tests")
     H3cFactScopeTests.Run();
 else if (args.Length > 0 && args[0] == "--h3c-task-fact-publication-tests")
     await H3cTaskFactPublicationTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
+    await ConcurrencyP1Tests.RunAsync();
 else
     await SchedulerTests.RunAsync();
 
@@ -205,6 +207,7 @@ internal static class SchedulerTests
         await InteractiveScopeTests.RunAsync();
         H3cFactScopeTests.Run();
         await H3cTaskFactPublicationTests.RunAsync();
+        await ConcurrencyP1Tests.RunAsync();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();
@@ -2787,7 +2790,9 @@ internal static class SchedulerTests
                 var runIds = new List<string>();
                 for (var index = 0; index < concurrency * 2; index++)
                 {
-                    Assert(scheduler.TrySchedule(Request("simulated-h3c-device", "display interface brief"), out var runId),
+                    // Use distinct targets to measure global parallelism; the
+                    // same-device mutex is covered by ConcurrencyP1Tests.
+                    Assert(scheduler.TrySchedule(Request("simulated-h3c-device-" + (index % concurrency), "display interface brief"), out var runId),
                         $"bounded simulated task admission failed at concurrency {concurrency}");
                     runIds.Add(runId);
                 }

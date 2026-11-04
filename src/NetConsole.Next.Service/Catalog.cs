@@ -1738,6 +1738,12 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         return result;
     }
 
+    public TaskRunSnapshot? GetTaskRun(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        return RecentTaskRuns(100).FirstOrDefault(item => item.Id == id);
+    }
+
     public RawCatalogCounts GetRawCounts()
     {
         using var db = Open();

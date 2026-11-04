@@ -44,6 +44,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private readonly ITaskScopeAuthorizer? _scopeAuthorizer;
     private readonly Channel<WorkItem> _queue;
     private readonly ConcurrentDictionary<string, WorkItem> _items = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _deviceGates = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private readonly object _gate = new();
@@ -144,6 +145,38 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         .OrderByDescending(item => item.SubmittedMs)
         .Take(Math.Clamp(limit, 1, CompletedHistoryLimit))
         .ToArray();
+
+    public bool TryRetryTaskRun(string runId, out string retryId, string? actorUserId = null)
+        => TryReplayTaskRun(runId, out retryId, actorUserId, resumeInterrupted: false);
+
+    public bool TryResumeInterruptedTaskRun(string runId, out string resumedId, string? actorUserId = null)
+        => TryReplayTaskRun(runId, out resumedId, actorUserId, resumeInterrupted: true);
+
+    private bool TryReplayTaskRun(string runId, out string newRunId, string? actorUserId, bool resumeInterrupted)
+    {
+        newRunId = string.Empty;
+        if (_catalog is null || string.IsNullOrWhiteSpace(runId)) return false;
+        var previous = _catalog.GetTaskRun(runId);
+        if (previous is null || previous.DefinitionId is null) return false;
+        if (resumeInterrupted ? previous.State != "INTERRUPTED" :
+            previous.State is not ("FAILED" or "TIMED_OUT" or "CANCELLED" or "INTERRUPTED")) return false;
+        try
+        {
+            var accepted = TryScheduleDefinition(previous.DefinitionId, out newRunId, actorUserId);
+            if (accepted)
+            {
+                _catalog.TryRecordDeviceAuditEvent(actorUserId ?? "collector", resumeInterrupted ? "TASK_RESUME_REQUESTED" : "TASK_RETRY_REQUESTED",
+                    "ACCEPTED", previous.Id, newRunId, Array.Empty<string>(), $"previousState={previous.State}");
+            }
+            return accepted;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or TaskScopeRevokedException)
+        {
+            _catalog.TryRecordDeviceAuditEvent(actorUserId ?? "collector", resumeInterrupted ? "TASK_RESUME_REQUESTED" : "TASK_RETRY_REQUESTED",
+                "DENIED", previous.Id, null, Array.Empty<string>(), ex.GetType().Name);
+            return false;
+        }
+    }
 
     public CollectionSchedulerSnapshot Status => new(
         Volatile.Read(ref _active), Volatile.Read(ref _queued), QueueCapacity, MaxConcurrency,
@@ -261,6 +294,20 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     }
 
     private async Task ExecuteAsync(WorkItem item)
+    {
+        var gate = _deviceGates.GetOrAdd(item.Request.Target, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(item.Cancellation.Token);
+        try
+        {
+            await ExecuteCoreAsync(item);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task ExecuteCoreAsync(WorkItem item)
     {
         IDeviceSession? session = null;
         string terminalState;
