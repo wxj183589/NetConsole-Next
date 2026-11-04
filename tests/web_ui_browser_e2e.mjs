@@ -1,19 +1,31 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
 import { workspacePath } from '../tools/workspace_paths.mjs'
 
-const root = new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url).pathname
+const root = fileURLToPath(new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url))
 const output = process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || workspacePath('build', 'web-ui-acceptance')
 mkdirSync(output, { recursive: true })
-const server = spawn('python3', ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
+// Windows commonly exposes Python as `python` while the `python3` app alias
+// cannot be launched by child_process.spawn. Keep the same fixture portable
+// across the Windows developer host and Linux CI.
+const python = process.platform === 'win32' ? 'python' : 'python3'
+const server = spawn(python, ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
 const base = 'http://127.0.0.1:4173'
 for (let attempt = 0; attempt < 40; attempt += 1) {
   try { if ((await fetch(`${base}/`)).ok) break } catch { /* server is starting */ }
   await new Promise((resolve) => setTimeout(resolve, 100))
 }
 
-const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
+const executablePath = process.env.CHROME_PATH || (process.platform === 'win32'
+  ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  : undefined)
+const browser = await chromium.launch({
+  headless: true,
+  ...(executablePath ? { executablePath } : {}),
+  args: ['--no-sandbox'],
+})
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 })
 let loggedIn = false
 await page.route('**/api/**', async (route) => {
@@ -55,9 +67,11 @@ try {
   await page.getByRole('heading', { name: '设备管理' }).waitFor()
   await page.screenshot({ path: `${output}/web-pr1-devices.png`, fullPage: true })
   await page.getByRole('button', { name: '终端控制台' }).click()
-  await page.getByRole('heading', { name: '终端控制台' }).waitFor()
+  // Terminal mode intentionally hides the page header to maximize console
+  // space, so assert the visible workbench instead of the hidden h1.
+  await page.locator('.terminal-workbench').waitFor()
   await page.screenshot({ path: `${output}/web-pr1-terminal.png`, fullPage: true })
-  await page.locator('.history-item').first().click()
+  await page.locator('[data-testid="terminal-history-row"]').first().getByRole('button', { name: '回放 / 导出' }).click()
   await page.getByText('会话历史 / 只读回放').waitFor()
   await page.screenshot({ path: `${output}/web-pr1-history-replay.png`, fullPage: true })
   await page.keyboard.press('Escape')
