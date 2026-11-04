@@ -1,6 +1,8 @@
 # R3-B0 AC/AP 身份模型合同
 
-状态：`PROPOSED_PENDING_APPROVAL`。本文件是设计合同，不是数据库迁移或运行时实现。
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。本文件是设计合同，不是数据库迁移或运行时实现。
+
+冻结更新：D01/D02 已按修订后的 `OPTION_A` 冻结；API 仍为设计，产品代码、schema 和 migration 均未修改。
 
 ## 1. 身份边界
 

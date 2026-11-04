@@ -2,6 +2,8 @@
 
 本矩阵是实现前测试设计，不表示本轮已执行。原有 35 个场景、12 个最小 fixture；本轮 amendment 增加至 57 个场景、17 个最小 fixture。真实 AC/AP、网络扫描和真实 task execution 均明确排除。
 
+冻结更新（2026-11-05）：`TEST_SCENARIOS=57`、`TEST_FIXTURES=17` 已纳入冻结基线，但当前执行状态仍为 `NOT_RUN_DOC_ONLY`；未来 gate 不能因决策冻结而自动变为 `PASS`。
+
 ## 1. 场景清单
 
 | ID | 场景 | 预期 | Fixture | Gate |

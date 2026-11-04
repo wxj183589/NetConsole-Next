@@ -2,6 +2,10 @@
 
 日期：2026-11-04
 
+## 2026-11-05 冻结更新
+
+七项 R3 业务决策已冻结，10 个 API gap 仍全部未实现。R3-B1 只准备 AC Domain、Typed AP Resource、Observation 和基础 Site claims 的只读接口；第一条 route 即过 P2B5 predicate，API-W09 不新增 route。产品实现、schema/migration 和无线 UI 均未开始。
+
 本计划依据当前源码和 R0-R1 task RFC 调整；本轮只记录顺序，不实施 R3 产品代码。
 
 ## 1. 缺口清单

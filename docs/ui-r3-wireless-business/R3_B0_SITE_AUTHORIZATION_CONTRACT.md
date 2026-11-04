@@ -1,7 +1,9 @@
 # R3-B0 无线 Site 授权合同（修订版）
 
 修订日期：2026-11-04
-状态：`PROPOSED_PENDING_APPROVAL`。R2 `P2B5SiteScopeStore` / claims 是唯一 Site authority；本文件不创建第二套无线权限表。
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。R2 `P2B5SiteScopeStore` / claims 是唯一 Site authority；本文件不创建第二套无线权限表。
+
+冻结更新：R3-B1 第一条无线 route 起即执行当前 Site claims predicate。`API-W09=INTERNAL_P2B5_SCOPE_PREDICATE_NO_NEW_ROUTE`，不新增 claims 暴露接口，也不允许 generic Task API 旁路。
 
 ## 1. Authority 与 predicate
 

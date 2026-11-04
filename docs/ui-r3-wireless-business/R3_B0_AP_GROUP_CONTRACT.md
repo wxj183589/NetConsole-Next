@@ -1,7 +1,9 @@
 # R3-B0 AP Group 合同（修订版）
 
 修订日期：2026-11-04
-状态：`PROPOSED_PENDING_APPROVAL`。AP group 在 B0 只定义只读业务合同；`AP_GROUP_WRITE=OUT_OF_SCOPE`。
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。AP group 在 B0 只定义只读业务合同；`AP_GROUP_WRITE=OUT_OF_SCOPE`。
+
+冻结更新：D04 为修订后的 `OPTION_A`。只有明确 domain-shared evidence 才可使用 Domain-owned key；否则必须使用 AC-owned key；同名 group 不合并，平台不写入。
 
 ## 1. 所有权与两层作用域
 

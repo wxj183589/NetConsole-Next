@@ -2,6 +2,10 @@
 
 日期：2026-11-04
 
+## 2026-11-05 当前冻结更新
+
+当前权威冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。7/7 决策已冻结，API design 已完成但 10 个 gap 仍未实现；B1 为 `DESIGN_COMPLETE_AUTHORIZATION_PENDING`，产品代码、schema、migration、无线 UI 和真实设备验证均未开始。下方 2026-11-04 的 readiness 数值保留为批准前历史记录，不能解释为冻结前已批准。
+
 ## 最终结果
 
 ```text

@@ -1,13 +1,28 @@
 {
   "project": "NetConsole-Next",
   "task": "NetConsole-Next-R3-B0-Wireless-Business-Decision-Review-And-API-Contract-Design",
-  "date": "2026-11-04",
-  "policy": "PROPOSED",
-  "status": "NEEDS_USER_DECISION",
+  "date": "2026-11-05",
+  "policy": "FROZEN",
+  "status": "APPROVED",
+  "frozenBaseline": "NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1",
+  "approval": {
+    "approvedAt": "2026-11-05",
+    "approvedBy": "user",
+    "statement": "同意按照修订后的 OPTION_A，正式批准并冻结 R3 的全部 7 项业务决策。",
+    "decisionRevision": "20261104-amended"
+  },
+  "implementationStatus": {
+    "businessDecision": "FROZEN",
+    "apiDesign": "DESIGNED",
+    "apiImplementation": "NOT_IMPLEMENTED",
+    "databaseMigration": "NOT_STARTED",
+    "databaseChangeAuthorized": false,
+    "r3Ui": "NOT_STARTED"
+  },
   "counts": {
     "decisionsIdentified": 7,
-    "decisionsAlreadyApproved": 0,
-    "decisionsPending": 7
+    "decisionsAlreadyApproved": 7,
+    "decisionsPending": 0
   },
   "amendment": {
     "task": "NetConsole-Next-R3-B0-Contract-Amendment-And-Decision-Approval-Preparation",
@@ -22,7 +37,8 @@
     "apiW09": "INTERNAL_P2B5_SCOPE_PREDICATE_NO_NEW_ROUTE",
     "r3B1MinimumSiteAuthorization": "REQUIRED_FROM_FIRST_WIRELESS_ROUTE",
     "r3B5AdvancedSiteAuthorization": "CROSS_AC_PARTIAL_COMPLEX_AGGREGATE_NO_LEAK",
-    "approvalStatus": "PROPOSED_PENDING_USER_DECISION"
+    "approvalStatus": "APPROVED_FROZEN",
+    "decisionRevision": "20261104-amended"
   },
   "decisions": [
     {
@@ -46,8 +62,10 @@
       "uiImpact": "Show domain navigation with links to source AC device IDs.",
       "testImpact": "Standalone, stack, cluster, one-plus-one, member conflict and partial domain fixtures.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_02",
@@ -70,8 +88,10 @@
       "uiImpact": "Display confirmed/candidate/conflict/unknown explicitly.",
       "testImpact": "Seven identity scenarios.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_03",
@@ -94,8 +114,10 @@
       "uiImpact": "Show scope summary and provenance only for visible facts.",
       "testImpact": "Single/multi-Site, no-authority, SUPERADMIN and cross-Site no-leak cases.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_04",
@@ -118,8 +140,11 @@
       "uiImpact": "Group is an AC child view with source shown.",
       "testImpact": "Cross-AC duplicate names, membership changes, empty groups and denial.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "amendmentApplied": true,
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_05",
@@ -142,8 +167,10 @@
       "uiImpact": "Separate online, offline, unknown, stale, conflict and partial scope.",
       "testImpact": "Eight required state scenes.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_06",
@@ -166,8 +193,11 @@
       "uiImpact": "Show creation scope, current scope and revoked/partial status.",
       "testImpact": "Eight task states plus claim revocation.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "amendmentApplied": true,
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     },
     {
       "decisionId": "R3_DECISION_07",
@@ -190,8 +220,10 @@
       "uiImpact": "Show provenance references, operator and safe reason codes only.",
       "testImpact": "Audit visibility, no-secret leakage, cross-Site denial and hash integrity.",
       "userApprovalRequired": true,
-      "approvalStatus": "NEEDS_USER_DECISION",
-      "status": "NEEDS_USER_DECISION"
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "approvalStatus": "APPROVED",
+      "status": "FROZEN"
     }
   ]
 }

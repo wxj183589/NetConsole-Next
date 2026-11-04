@@ -1,0 +1,101 @@
+{
+  "project": "NetConsole-Next",
+  "frozenBaseline": "NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1",
+  "frozenAt": "2026-11-05",
+  "policy": "FROZEN",
+  "approval": {
+    "approvedBy": "user",
+    "statement": "同意按照修订后的 OPTION_A，正式批准并冻结 R3 的全部 7 项业务决策。",
+    "decisionRevision": "20261104-amended"
+  },
+  "counts": {
+    "decisionsTotal": 7,
+    "decisionsApproved": 7,
+    "decisionsPending": 0,
+    "apiGapsTotal": 10,
+    "apiGapsAccountedFor": 10,
+    "apiGapsImplementedThisRound": 0,
+    "apiGapsRemaining": 10,
+    "testScenarios": 57,
+    "testFixtures": 17
+  },
+  "implementationStatus": {
+    "businessDecision": "FROZEN",
+    "contracts": "FROZEN",
+    "apiDesign": "DESIGNED",
+    "apiImplementation": "NOT_IMPLEMENTED",
+    "databaseSchema": "NO_CHANGE_THIS_ROUND",
+    "databaseMigration": "NOT_STARTED",
+    "databaseChangeAuthorized": false,
+    "r3B1ProductImplementation": "NOT_STARTED",
+    "r3WirelessUi": "NOT_STARTED"
+  },
+  "decisions": [
+    {
+      "decisionId": "R3_DECISION_01",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "status": "FROZEN",
+      "rule": "Explicit stable AcDomain.id references existing AC device IDs; topology kind requires member/HA/IRF/cluster evidence."
+    },
+    {
+      "decisionId": "R3_DECISION_02",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "status": "FROZEN",
+      "rule": "Serial and the complete normalized MAC set are exact identity evidence; missing or conflicting evidence remains candidate/conflict/unknown."
+    },
+    {
+      "decisionId": "R3_DECISION_03",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "status": "FROZEN",
+      "rule": "Return only the authorized observation subset and project AP summaries from visible observations."
+    },
+    {
+      "decisionId": "R3_DECISION_04",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "amendmentApplied": true,
+      "status": "FROZEN",
+      "rule": "AP groups are read-only AC/domain observations; Domain scope requires explicit domain-shared evidence, otherwise AC scope applies."
+    },
+    {
+      "decisionId": "R3_DECISION_05",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "status": "FROZEN",
+      "rule": "Preserve raw state and normalize master/backup/offline/unknown/stale/conflict; collection failure never means offline."
+    },
+    {
+      "decisionId": "R3_DECISION_06",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "amendmentApplied": true,
+      "status": "FROZEN",
+      "rule": "Effective targets are creation scope intersected with current authorized targets; current claims are rechecked at protected boundaries."
+    },
+    {
+      "decisionId": "R3_DECISION_07",
+      "selectedOption": "OPTION_A",
+      "optionRevision": "20261104-amended",
+      "status": "FROZEN",
+      "rule": "Audit stores safe provenance references and reason codes, never credentials or raw command output."
+    }
+  ],
+  "api": {
+    "apiW09": "INTERNAL_P2B5_SCOPE_PREDICATE_NO_NEW_ROUTE",
+    "firstB1RoutesRequireSiteClaims": true,
+    "implementedThisRound": 0
+  },
+  "evidenceBoundary": {
+    "realDeviceAccess": false,
+    "realDeviceLogin": false,
+    "networkScan": false,
+    "realTaskExecution": false,
+    "productionDataChanged": false,
+    "productCodeChanged": false,
+    "schemaChanged": false,
+    "migrationChanged": false
+  }
+}

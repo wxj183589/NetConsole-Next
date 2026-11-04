@@ -2,6 +2,10 @@
 
 日期：2026-11-04
 
+## 2026-11-05 冻结更新
+
+当前权威基线为 `NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。R2 claims 仍是唯一 Site authority；D03/D04/D06/D07 已冻结为修订后的 `OPTION_A` 语义。R3-B1 从第一条无线 route 开始执行当前 claims predicate，API-W09 只内部复用 P2B5，不新增 route。文档下方 2026-11-04 的待批准段落保留为历史上下文，不代表当前状态。
+
 ## 1. R2 已确认的 authority
 
 R2 的 Site authority 是 `web_user_site_memberships`，由 `P2B5SiteScopeStore.Resolve(CurrentIdentity)` 按 source + revision + validity + claim state 解析；冲突、过期、缺 authority 时 fail-closed，SUPERADMIN 才是 global scope。实现证据：`src/NetConsole.Next.Service/P2B5SiteScope.cs:20-144`。

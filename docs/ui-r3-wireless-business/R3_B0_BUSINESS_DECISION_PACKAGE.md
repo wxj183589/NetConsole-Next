@@ -1,24 +1,35 @@
 # R3-B0 无线业务正式决策包
 
-日期：2026-11-04  
+日期：2026-11-05
 项目：`NetConsole-Next`  
-政策：`PROPOSED`，不是 `APPROVED` 或 `FROZEN`
+政策：`FROZEN`
+冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`
+
+## 2026-11-05 冻结更新
+
+用户批准原文：
+
+> 同意按照修订后的 OPTION_A，正式批准并冻结 R3 的全部 7 项业务决策。
+
+七项当前选择均为 `selectedOption=OPTION_A`、`approvalStatus=APPROVED`、`status=FROZEN`，修订版本为 `20261104-amended`。D04 的修订是 Domain-owned AP Group 必须有明确 domain-shared evidence，否则使用 AC-owned；D06 的修订是有效执行目标取创建 scope snapshot 与当前授权目标的交集，并在受保护边界重检 claims。
+
+冻结只改变业务决策状态，不宣称实现完成：`API_DESIGN=DESIGNED`、`API_IMPLEMENTATION=NOT_IMPLEMENTED`、`DATABASE_MIGRATION=NOT_STARTED`、`R3_UI_IMPLEMENTATION=NOT_STARTED`。2026-11-04 的 amendment、approval sheet 和 readiness 报告仍是批准前历史记录。
 
 ## 使用说明
 
-本包把上一轮审计中真实列出的 7 项待决策事项稳定化为 `R3_DECISION_01..07`。本轮 amendment 只修订 AP Group scope、Task/Report claims 撤销语义和 R3-B1 最低授权门禁；没有自动批准任何决策。每项都有推荐方案，但在用户逐项确认前，状态均为 `NEEDS_USER_DECISION`。上一轮已确认的大方向继续有效：AC 使用普通设备库存稳定 ID；FIT-AP 不独立创建；无线以 AC 导航；R2 claims 是唯一 Site authority；SmartHub 仅作 clean-room UI 参考。
+本包把上一轮审计中真实列出的 7 项待决策事项稳定化为 `R3_DECISION_01..07`。2026-11-05 用户已按照修订后的 OPTION_A 正式批准并冻结全部 7 项；本包的 `selectedOption`、`APPROVAL_STATUS` 和 `STATUS` 是当前权威状态。上一轮已确认的大方向继续有效：AC 使用普通设备库存稳定 ID；FIT-AP 不独立创建；无线以 AC 导航；R2 claims 是唯一 Site authority；SmartHub 仅作 clean-room UI 参考。
 
 ## 决策总览
 
 | ID | 主题 | 推荐 | 状态 |
 | --- | --- | --- | --- |
-| `R3_DECISION_01` | AC domain key 与 topology kind | 显式稳定 `AcDomain.id`，引用已有 AC device ID；kind 只由成员/HA/IRF 证据确认 | `NEEDS_USER_DECISION` |
-| `R3_DECISION_02` | AP serial/MAC identity precedence | serial + 完整 MAC 集合 exact evidence；缺失/冲突进入 candidate/conflict，不猜 | `NEEDS_USER_DECISION` |
-| `R3_DECISION_03` | 多 AC 下 AP 可见性 | 授权 observation 子集 + provenance；AP 摘要只基于可见事实 | `NEEDS_USER_DECISION` |
-| `R3_DECISION_04` | AP group ownership/scope | 有明确 domain-shared evidence 才用 Domain key，否则 AC key；只读观察，写入 out of scope | `NEEDS_USER_DECISION` |
-| `R3_DECISION_05` | R/M、R/B、I 状态 | observation-level normalized state，失败不等同 I，stale/unknown/conflict 分离 | `NEEDS_USER_DECISION` |
-| `R3_DECISION_06` | Task/report Site scope | snapshot 只限制目标上限；执行、恢复、读取、下载、审计均 intersect 当前 claims | `NEEDS_USER_DECISION` |
-| `R3_DECISION_07` | Audit provenance | 只引用 Raw manifest/hash/source revision，不写命令输出、凭据或敏感原文 | `NEEDS_USER_DECISION` |
+| `R3_DECISION_01` | AC domain key 与 topology kind | 显式稳定 `AcDomain.id`，引用已有 AC device ID；kind 只由成员/HA/IRF 证据确认 | `FROZEN / OPTION_A` |
+| `R3_DECISION_02` | AP serial/MAC identity precedence | serial + 完整 MAC 集合 exact evidence；缺失/冲突进入 candidate/conflict，不猜 | `FROZEN / OPTION_A` |
+| `R3_DECISION_03` | 多 AC 下 AP 可见性 | 授权 observation 子集 + provenance；AP 摘要只基于可见事实 | `FROZEN / OPTION_A` |
+| `R3_DECISION_04` | AP group ownership/scope | 有明确 domain-shared evidence 才用 Domain key，否则 AC key；只读观察，写入 out of scope | `FROZEN / OPTION_A_AMENDED` |
+| `R3_DECISION_05` | R/M、R/B、I 状态 | observation-level normalized state，失败不等同 I，stale/unknown/conflict 分离 | `FROZEN / OPTION_A` |
+| `R3_DECISION_06` | Task/report Site scope | snapshot 只限制目标上限；执行、恢复、读取、下载、审计均 intersect 当前 claims | `FROZEN / OPTION_A_AMENDED` |
+| `R3_DECISION_07` | Audit provenance | 只引用 Raw manifest/hash/source revision，不写命令输出、凭据或敏感原文 | `FROZEN / OPTION_A` |
 
 ## R3_DECISION_01：AC domain key 与 topology kind
 
@@ -36,7 +47,7 @@
 - `UI_IMPACT`：无线导航显示 domain，但详情仍能回链 AC device IDs。
 - `TEST_IMPACT`：standalone/stack/cluster/1+1/member conflict/partial domain fixture。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_02：AP serial/MAC identity precedence
 
@@ -54,7 +65,7 @@
 - `UI_IMPACT`：显示 confirmed/candidate/conflict/unknown，禁止伪装成稳定 AP。
 - `TEST_IMPACT`：7 个 identity scenarios（同/异 serial-MAC、缺字段、更换、迁移）。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_03：多 AC 下 AP 可见性
 
@@ -72,7 +83,7 @@
 - `UI_IMPACT`：显示可见范围摘要和 provenance，不显示未授权 AC 名称/状态。
 - `TEST_IMPACT`：单 Site、多 Site、无授权、SUPERADMIN、跨 Site duplicate 和 aggregate no-leak。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_04：AP group ownership/scope
 
@@ -91,9 +102,9 @@
 - `TEST_IMPACT`：新增 SC-36..SC-41，覆盖同名、domain-owned/AC-owned、缺失来源、source key/name 变化、成员变化和跨 AC membership。
 - `SCHEMA_IMPACT`：`NO_B0_SCHEMA_CHANGE`；逻辑字段只作为未来实现输入。
 - `SECURITY_CONDITIONS`：`P2B5_FROM_FIRST_WIRELESS_ROUTE`、`NO_UNAUTHORIZED_GROUP_COUNT`、`NO_CLIENT_SCOPE_OVERRIDE`。
-- `APPROVAL_STATUS`：`NEEDS_USER_DECISION`。
+- `APPROVAL_STATUS`：`APPROVED`。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_05：R/M、R/B、I 状态
 
@@ -111,7 +122,7 @@
 - `UI_IMPACT`：区分在线、离线、未知、过期、冲突和部分授权。
 - `TEST_IMPACT`：任务要求的 8 个 SCENE 场景全部进入矩阵。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_06：Task/report Site scope
 
@@ -130,9 +141,9 @@
 - `TEST_IMPACT`：新增 SC-42..SC-53，覆盖创建前/执行前/执行中/完成后撤销、不可中断边界、新增授权不扩展、恢复、取消 race、revision-only change、generic bypass。
 - `SCHEMA_IMPACT`：`NO_B0_SCHEMA_CHANGE`；snapshot/item 字段只作为未来实现输入。
 - `SECURITY_CONDITIONS`：`CURRENT_CLAIMS_AT_EVERY_PROTECTED_BOUNDARY`、`NO_NEW_TARGET_EXPANSION`、`READ_DOWNLOAD_AUDIT_FAIL_CLOSED`。
-- `APPROVAL_STATUS`：`NEEDS_USER_DECISION`。
+- `APPROVAL_STATUS`：`APPROVED`。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## R3_DECISION_07：Audit provenance
 
@@ -150,26 +161,26 @@
 - `UI_IMPACT`：显示来源引用、时间、操作人和安全 reason code，不显示敏感原文。
 - `TEST_IMPACT`：audit visibility、no-secret leakage、cross-site denial、hash/reference integrity。
 - `USER_APPROVAL_REQUIRED`：是。
-- `STATUS`：`NEEDS_USER_DECISION`。
+- `STATUS`：`FROZEN`。
 
 ## 统一正式审批字段
 
-以下字段与 JSON 决策对象逐项对应；`APPROVAL_STATUS` 不是推荐结果，用户确认前不得改写：
+以下字段与 JSON 决策对象逐项对应；`selectedOption=OPTION_A` 是冻结后的正式选择，D04/D06 的修订语义见上文和冻结基线：
 
-| DECISION_ID | OPTION_C | SECURITY_CONDITIONS | SCHEMA_IMPACT | APPROVAL_STATUS |
+| DECISION_ID | SELECTED_OPTION | SECURITY_CONDITIONS | SCHEMA_IMPACT | APPROVAL_STATUS |
 | --- | --- | --- | --- | --- |
-| `R3_DECISION_01` | sorted device IDs deterministic domain key | domain Site 必须来自 authorized AC members | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_02` | serial global primary，MAC 变化自动更新 | identity lookup 先过 source AC Site predicate | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_03` | 任一未授权 observation 则隐藏整个 AP | 不返回全局摘要或未授权 provenance | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_04` | AC observed group + platform local alias | P2B5 from first group route；scope 不由客户端传入 | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_05` | 冲突统一 UNKNOWN，人工确认后恢复 | state aggregate 只使用当前授权 observations | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_06` | 不记录 Site scope，依赖 profile role | 不具备当前 claims recheck 和 revocation boundary | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
-| `R3_DECISION_07` | 只记录成功/失败，不保存 provenance reference | audit 不含 raw/credential，但可追溯性降低 | `NO_B0_SCHEMA_CHANGE` | `NEEDS_USER_DECISION` |
+| `R3_DECISION_01` | `OPTION_A` | domain Site 必须来自 authorized AC members | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_02` | `OPTION_A` | identity lookup 先过 source AC Site predicate | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_03` | `OPTION_A` | 不返回全局摘要或未授权 provenance | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_04` | `OPTION_A_AMENDED` | P2B5 from first group route；scope 不由客户端传入 | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_05` | `OPTION_A` | state aggregate 只使用当前授权 observations | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_06` | `OPTION_A_AMENDED` | current claims recheck 和 revocation boundary | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
+| `R3_DECISION_07` | `OPTION_A` | audit 不含 raw/credential，保留 provenance reference | `NO_B0_SCHEMA_CHANGE` | `APPROVED / FROZEN` |
 
 ## Amendment 同步规则
 
 - `R3_DECISION_04` 的推荐仍为 `OPTION_A`，但正式描述增加 Domain-owned/AC-owned 双层 scope、source key 和 evidence gate。
-- `R3_DECISION_06` 的推荐标记为 `OPTION_A_REQUIRES_REVISION`，增加 current claims intersection、撤销时序和不可安全中断边界。
+- `R3_DECISION_06` 的历史推荐标记为 `OPTION_A_REQUIRES_REVISION`；冻结选择是修订后的 `OPTION_A`，增加 current claims intersection、撤销时序和不可安全中断边界。
 - R3-B1 从第一条无线资源 API 即执行 P2B5 server-side authorization；R3-B5 只负责高级跨 AC/partial/no-leak 闭环。
 - API-W09 改为内部 P2B5 predicate，不新增 `/api/system/wireless/site-claims` route。
 
@@ -180,9 +191,9 @@
 | AC 继续使用普通设备库存稳定 ID | 已确认方向 | 本任务 Phase 3、R2 设备数据模型和上一轮审计 |
 | FIT-AP 不独立创建 | 已确认方向 | `DeviceManagement.cs:352,557`、R2 回归 `FIT_AP_CREATE_BLOCKED` |
 | R2 Site claims authority 不新建第二套 | 已确认方向 | P2B5/R2 31/31 回归 |
-| 7 项具体 identity/topology/visibility/group/state/task/audit 规则 | 未批准 | 没有用户逐项 A/B/C 确认记录 |
+| 7 项具体 identity/topology/visibility/group/state/task/audit 规则 | 已批准并冻结 | 2026-11-05 用户批准记录；冻结基线 `NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1` |
 
-## 用户一次性确认模板
+## 用户一次性确认模板（冻结前历史模板）
 
 ```text
 R3_DECISION_01=OPTION_A/B/C/DEFER
@@ -194,5 +205,5 @@ R3_DECISION_06=OPTION_A/B/C/DEFER
 R3_DECISION_07=OPTION_A/B/C/DEFER
 ```
 
-在用户回复前，7 项均保持 `NEEDS_USER_DECISION`。
+该模板记录冻结前的确认格式；当前 7 项均为 `OPTION_A`，状态为 `APPROVED/FROZEN`。历史批准前报告中的 `NEEDS_USER_DECISION` 数值保持原样，不在本文件之外回写。
 

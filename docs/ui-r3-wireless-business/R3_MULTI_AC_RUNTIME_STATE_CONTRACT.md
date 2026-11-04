@@ -1,6 +1,11 @@
 # R3 多 AC 运行状态合同
 
-日期：2026-11-04
+日期：2026-11-05
+
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`
+冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`
+
+冻结更新：D05 已冻结；本文件定义 raw/runtime state 与 Current/Recent10 边界，未新增运行时实现或 schema/migration。
 
 ## 1. 目标
 

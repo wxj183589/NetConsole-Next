@@ -1,7 +1,9 @@
 # R3-B0 API Gap 追踪矩阵（修订版）
 
 修订日期：2026-11-04
-状态：`DESIGN_ACCOUNTED_NOT_IMPLEMENTED`。上一轮确认有 10 个 gap；本轮为每个 gap 指定完整业务字段、合同、授权、测试和实施批次，但没有宣称 gap 已被产品代码关闭。
+状态：`FROZEN_DESIGN_ACCOUNTED_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。10 个 gap 均有业务字段、合同、授权、测试和实施批次追踪；没有 gap 被产品代码关闭。
+
+冻结更新：`API_GAPS_TOTAL=10`、`API_GAPS_ACCOUNTED_FOR=10`、`API_GAPS_IMPLEMENTED_THIS_ROUND=0`、`API_GAPS_REMAINING=10`。
 
 | GAP_ID | CAPABILITY | CURRENT_IMPLEMENTATION | PROPOSED_API | AUTHORIZATION | DATA_MODEL | BUSINESS_DECISION | TEST_CASES | IMPLEMENTATION_BATCH | STATUS |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -1,7 +1,9 @@
 # R3-B0 无线业务 API 合同规格（修订版）
 
 修订日期：2026-11-04
-状态：`PROPOSED_PENDING_APPROVAL`。本文件区分“已有可复用 API”“已有但缺无线语义”和“未来新 API”；不表示 endpoint 已实现。本轮 `API_GAPS_IMPLEMENTED_THIS_ROUND=0`。
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。本文件区分“已有可复用 API”“已有但缺无线语义”和“未来新 API”；不表示 endpoint 已实现。本轮 `API_GAPS_IMPLEMENTED_THIS_ROUND=0`。
+
+冻结更新：7 项业务决策已冻结，10 个 gap 仍为 `DESIGNED_NOT_IMPLEMENTED`；API-W09 只内部复用 P2B5 predicate，不新增 route。
 
 ## 1. 通用响应与授权合同
 

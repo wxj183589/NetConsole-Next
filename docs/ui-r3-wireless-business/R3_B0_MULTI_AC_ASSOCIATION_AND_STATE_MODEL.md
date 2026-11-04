@@ -1,6 +1,8 @@
 # R3-B0 多 AC 关联与 AP 运行状态模型
 
-状态：`PROPOSED_PENDING_APPROVAL`。本文件定义观察、可见性和状态投影，不实现采集或 schema。
+状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。本文件定义观察、可见性和状态投影，不实现采集或 schema。
+
+冻结更新：D03/D05 已按修订后的 `OPTION_A` 冻结；授权 observation 子集是唯一聚合输入，状态规范化不等于产品实现。
 
 ## 1. AC↔AP observation
 
