@@ -82,3 +82,5 @@
 - 2026-11-05 模拟器网络层复核：白名单四台均返回协议 banner（AC1/AC2/SW SSH、FIT-AP Telnet）；`C:\ProgramData\NetConsoleNext\data` 无 DPAPI vault、`h3c_device_profiles` 为空，未安装 Next 服务。自动认证、HA、切换和实时 AP 归属继续 BLOCKED；未猜测密码、未写设备、未访问白名单外地址。
 - 2026-11-05 Checkpoint K：当前 HEAD `6b96456`。A13 隔离 HTTP/API、完整 Service harness 与 Service-backed Browser smoke 复验 PASS；A27 collection manifest 列表/详情/source AC 过滤/UI 完成。Release build 0 warnings/0 errors、Vitest 5 files/10 tests、vue-tsc、Vite、R3 API fixture 11 项和无线浏览器 fixture 15 状态 PASS。四台模拟器仅协议 banner 可达，凭据 vault/profile 缺失，真实认证与双 AC HA 继续 BLOCKED；未 push/merge/release。
 - 2026-11-05 Checkpoint M：修复任务详情、取消、重试、恢复 API 仍受最近 100 条列表窗口限制的问题；改为 Catalog 按任务 ID 直接查询并沿用当前 Site scope 过滤。Service/Tests Release build 0 warnings / 0 errors、`CONCURRENCY_P1_TESTS=5/5 PASS`、完整 Service harness PASS、Vue typecheck PASS、Vitest 5 files/10 tests PASS、Vite build PASS。快速添加设备 onboarding API/UI 已落盘；DPAPI 凭据缺失，四台模拟器认证和双 AC HA 仍 BLOCKED。
+
+- 2026-11-05 凭据复核：四台白名单地址均确认由本机 HCL/VirtualBox 模拟器承载；HCL 项目设备配置仅提供用户身份与单向认证哈希，未发现明文凭据、SSH agent 可用身份或 Next DPAPI vault。未猜测、穷举或打印密码，未修改模拟器配置；自动认证、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED。

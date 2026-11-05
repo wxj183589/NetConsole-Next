@@ -42,5 +42,16 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "991aa74"
+  "lastRecoveryCommit": "991aa74",
+  "credentialAudit": {
+    "at": "2026-11-05",
+    "simulatorHost": "LOCAL_HCL_VIRTUALBOX",
+    "nextDpapiVaultPresent": false,
+    "deviceProfilesPresent": false,
+    "sshAgentIdentityAvailable": false,
+    "deviceConfigContainsRecoverableSecret": false,
+    "passwordGuessing": false,
+    "simulatorConfigChanged": false,
+    "status": "BLOCKED_UNTIL_LOCAL_DPAPI_REFERENCE_IS_SAVED"
+  }
 }
