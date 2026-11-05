@@ -27,3 +27,5 @@ Checkpoint H：交互会话复查当前角色/有效session；统一七路机器
 Checkpoint I：A24/A25修复事实Current回退、同修订覆盖与迁站重归属。八项实际最小SQLite case、原无线/runtime及完整Service harness PASS。capturedScope写入既有JSON，不迁移/补写真实数据；旧无归属事实保留全局诊断读取。详见AUTONOMOUS_FACT_REVISION_ACCEPTANCE.md。A23真实采集发布链继续审计与实现。
 
 Checkpoint J：成功单目标任务封存Raw后发布单命令facts，核验实际Raw bytes/manifest/hash/scope；失败投影不推翻Raw结果，独立任务不拼接物理AP身份，保留候选/STALE。A26冻结host/port和已引用命令，防止端点编辑后Raw重标。九项case PASS；无凭据、schema或真实数据写入。A23协调多命令Plan/Raw grouping仍待独立合同评审，不能宣称LIVE无线全链完成。
+
+Checkpoint K2：使用隔离测试根已有 DPAPI Credential Reference 逐台运行四个白名单连接测试。AC1/AC2 自动 SSH 登录、Host Key AUTO_UPDATE 与版本识别 PASS；SW SSH 认证成功但旧 HCL Exec 通道在设备信息命令阶段失败；FIT-AP Telnet 凭据被拒。连接测试增加设备信息命令边界和 Telnet 登录失败脱敏映射，并新增 TerminalCore 回归覆盖认证失败与认证后 Exec 异常的区分。未写入设备配置、未执行 HA 切换/恢复。

@@ -26,3 +26,5 @@
 | FD-P1-14 | Connection/Device UI | 快速添加设备：默认协议端口、自动 HostKey、Credential Reference 与一键测试 | P1 | DPAPI、现有 H3C Profile API | COMPLETED_LOCAL | onboarding API、vue-tsc、Vitest、Release build |
 | FD-P1-15 | Task Center | 历史任务超过最近 100 条仍可按 ID 重试/恢复 | P1 | task_runs persistence | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | FD-P1-16 | Task Center/UI | 固定只读多命令计划创建、执行和命令级报告入口 | P1 | H3C task-definition API、Site scope | COMPLETED_LOCAL | `web_auth_e2e.py` multi-command API + vue-tsc/Vitest/Vite |
+| FD-P1-17 | Connection | 连接测试区分认证失败与认证后 Exec/设备识别失败，并限制旧设备命令等待 | P1 | H3C session、DPAPI | COMPLETED_LOCAL | AC1/AC2 live login；TerminalCore boundary regression；Release build |
+| FD-P1-18 | Simulator | 四台白名单自动登录与双 AC HA/切换/恢复验收 | P1 | FIT-AP 正确凭据、SW Exec 兼容性 | PARTIAL_EXTERNAL | AC1/AC2 login PASS；SW partial；FIT-AP blocked；HA not run |

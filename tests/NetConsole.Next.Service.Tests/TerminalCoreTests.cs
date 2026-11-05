@@ -18,6 +18,7 @@ internal static class TerminalCoreTests
         await VerifiesRecordingPublicationSafetyAsync();
         await VerifiesRecordingCatalogBusyAndDiskFaultsAsync();
         await VerifiesSshHostKeyLifecycleAsync();
+        await VerifiesConnectionTestResultBoundariesAsync();
         VerifiesTerminalTextEncoding();
         VerifiesStreamingTerminalTextDecoder();
         await VerifiesLegacyV6SingleFileReadAsync();
@@ -455,6 +456,55 @@ internal static class TerminalCoreTests
             .Select(index => (byte)(seed + index)).ToArray()).TrimEnd('=');
     }
 
+    private static async Task VerifiesConnectionTestResultBoundariesAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-connection-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            var deviceId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(deviceId, "192.0.2.20", 22, "reader", "TEST_CREDENTIAL", "",
+                true, 0, 0, "AUTO_UPDATE", false));
+
+            var commandFailure = new H3cConnectionTestService(catalog,
+                new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
+                    () => Task.CompletedTask,
+                    (_, _) => Task.FromException<string>(new IOException("exec channel closed")))),
+                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+            var failedInfo = await commandFailure.TestAsync(deviceId, CancellationToken.None);
+            Assert(failedInfo is not null && failedInfo.Status == "CONNECTED" &&
+                   failedInfo.Message.Contains("设备信息识别失败", StringComparison.Ordinal),
+                "an authenticated SSH session with an Exec-channel failure must remain a connected, sanitized result");
+
+            var commandTimeout = new H3cConnectionTestService(catalog,
+                new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
+                    () => Task.CompletedTask,
+                    (_, _) => Task.FromException<string>(new OperationCanceledException()))),
+                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+            var timedOutInfo = await commandTimeout.TestAsync(deviceId, CancellationToken.None);
+            Assert(timedOutInfo is not null && timedOutInfo.Status == "CONNECTED" &&
+                   timedOutInfo.Message.Contains("设备信息识别超时", StringComparison.Ordinal),
+                "an authenticated SSH session with a bounded Exec timeout must remain connected");
+
+            var authenticationFailure = new H3cConnectionTestService(catalog,
+                new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
+                    () => Task.FromException(new H3cAuthenticationFailedException()),
+                    (_, _) => Task.FromResult("unused"))),
+                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+            var failedLogin = await authenticationFailure.TestAsync(deviceId, CancellationToken.None);
+            Assert(failedLogin is not null && failedLogin.Status == "AUTHENTICATION_FAILED",
+                "a failure during ConnectAsync must remain an authentication failure");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
     private static void VerifiesTerminalTextEncoding()
     {
         Assert(TerminalTextEncoding.IsSupported("AUTO") && TerminalTextEncoding.IsSupported("GB18030") &&
@@ -486,6 +536,20 @@ internal static class TerminalCoreTests
     private sealed class TerminalCoreFixedH3cCredentialProvider(string? value) : IH3cCredentialProvider
     {
         public string? GetPassword(string reference) => value;
+    }
+
+    private sealed class ConnectionTestFakeSessionFactory(Func<IDeviceSession> create) : IDeviceSessionFactory
+    {
+        public IDeviceSession Create(string target) => create();
+    }
+
+    private sealed class ConnectionTestFakeSession(
+        Func<Task> connect,
+        Func<string, CancellationToken, Task<string>> execute) : IDeviceSession
+    {
+        public Task ConnectAsync(CancellationToken cancellationToken) => connect();
+        public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken) => execute(command, cancellationToken);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class TerminalCoreFakeH3cSshTransportFactory(string? fingerprint) : IH3cSshTransportFactory

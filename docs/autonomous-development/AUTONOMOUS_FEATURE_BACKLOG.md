@@ -211,14 +211,14 @@ CURRENT_STATUS=审计发现
 USER_VALUE=保证运维结果可信、授权隔离和可用性
 SEVERITY=P1
 DEPENDENCIES=安全凭据
-EVIDENCE=R3 上轮仅 TCP 可达
+EVIDENCE=AC1/AC2 已取得 DPAPI 自动 SSH 登录与版本识别；SW Exec 兼容性和 FIT-AP 凭据仍阻断 HA/切换实测
 IMPLEMENTATION_SCOPE=仅四台白名单
 SECURITY_RISK=按当前 Site claims 和来源隔离；不增加外部目标
 DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
 PRIORITY=P1
-STATUS=BLOCKED
+STATUS=PARTIAL_BLOCKED
 
 ## A13 HTTP/API 与 Service harness 回归
 
