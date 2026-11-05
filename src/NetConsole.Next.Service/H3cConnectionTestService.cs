@@ -95,6 +95,7 @@ internal sealed class H3cConnectionTestService(
         H3cProtocolNegotiationException or H3cUnsupportedAlgorithmException => ("PROTOCOL_MISMATCH", "协议或算法不匹配"),
         SocketException => ("UNREACHABLE", "设备不可达"),
         IOException => ("UNREACHABLE", "设备不可达"),
+        InvalidDataException or PlatformNotSupportedException => ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"),
         ArgumentException => ("PROTOCOL_MISMATCH", "协议配置不匹配"),
         _ => ("CONNECTION_FAILED", "连接失败")
     };
