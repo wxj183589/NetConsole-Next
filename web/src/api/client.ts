@@ -1137,6 +1137,17 @@ export async function downloadArchive(id: string): Promise<Blob> {
 export function createH3cProfile(payload: Record<string, unknown>): Promise<TerminalDevice> {
   return request('/api/system/h3c/profiles', { method: 'POST', body: JSON.stringify(payload) })
 }
+export interface H3cOnboardRequest {
+  host: string
+  protocol?: 'SSH' | 'TELNET' | 'AUTO'
+  port?: number
+  username: string
+  credentialReference: string
+  allowTelnetFallback?: boolean
+}
+export function onboardH3cProfile(payload: H3cOnboardRequest): Promise<TerminalDevice> {
+  return request('/api/system/h3c/profiles/onboard', { method: 'POST', body: JSON.stringify(payload) })
+}
 export function testH3cConnection(profileId: string): Promise<H3cConnectionTestResult> {
   return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/test-connection`, { method: 'POST' })
 }

@@ -7,7 +7,7 @@ import NcLayout from '../components/NcLayout.vue'
 import {
   ApiRequestError, cancelDeviceBatch, commitDeviceImport, confirmDeviceBatch, createDevice, createDeviceBatch, createDeviceGroup,
   getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, getDeviceSites, getTerminalDevices, previewDeviceImport, updateDevice,
-  testH3cConnection,
+  onboardH3cProfile, testH3cConnection,
   type DeviceBatchKind, type DeviceBatchOperation, type DeviceBatchRequest, type DeviceGroup, type DeviceImportPreview, type DeviceInventoryDetail,
   type DeviceInventoryItem, type DeviceInventoryPage, type DeviceSite, type TerminalDevice,
 } from '../api/client'
@@ -18,6 +18,7 @@ const result = ref<DeviceInventoryPage | null>(null); const sites = ref<DeviceSi
 const loading = ref(false); const saving = ref(false); const unsupported = ref(false); const page = ref(1); const pageSize = ref(20)
 const search = ref(String(route.query.q || '')); const status = ref(''); const vendor = ref(''); const deviceType = ref(''); const siteId = ref('local'); const groupId = ref('')
 const showEditor = ref(false); const showDetail = ref(false); const showGroup = ref(false); const showImport = ref(false)
+const showOnboard = ref(false)
 const selected = ref<DeviceInventoryDetail | null>(null); const importPreview = ref<DeviceImportPreview | null>(null); const importCsv = ref('')
 const connectionTesting = ref(false); const connectionResult = ref<{ status: string; message: string; protocol: string; vendor?: string | null; version?: string | null; elapsedMs: number } | null>(null)
 const selectedIds = ref<string[]>([]); const showBatchDialog = ref(false); const showBatchPreview = ref(false)
@@ -25,6 +26,7 @@ const batchOperation = ref<DeviceBatchOperation | null>(null); const batchLoadin
 const batchKind = ref<DeviceBatchKind>('BATCH_ENABLE'); const batchSite = ref('local'); const batchGroup = ref('')
 const batchMetadata = reactive({ name: '', vendor: '', model: '', deviceType: '', description: '' })
 const form = reactive({ id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: 'local', groupId: '', description: '', enabled: true, terminalProfileId: '' })
+const onboardForm = reactive({ host: '', protocol: 'SSH' as 'SSH' | 'TELNET' | 'AUTO', port: 22, username: '', credentialReference: '', allowTelnetFallback: false, name: '', description: '' })
 const groupForm = reactive({ siteId: 'local', name: '', description: '' })
 const canWrite = computed(() => auth.user?.role === 'SUPERADMIN')
 const rows = computed(() => result.value?.items || [])
@@ -104,6 +106,35 @@ function statusLabel(value: string): string { return ({ CONNECTED: '最近在线
 function statusClass(value: string): string { return value === 'CONNECTED' ? 'good' : value === 'DISABLED' || value === 'FAILED' ? 'bad' : value === 'UNKNOWN' ? 'neutral' : 'warn' }
 function resetForm(): void { Object.assign(form, { id: '', name: '', managementIp: '', vendor: '', model: '', deviceType: 'NETWORK_DEVICE', siteId: siteId.value || sites.value[0]?.id || 'local', groupId: '', description: '', enabled: true, terminalProfileId: '' }) }
 function openCreate(): void { resetForm(); showEditor.value = true }
+function openOnboard(): void {
+  Object.assign(onboardForm, { host: '', protocol: 'SSH', port: 22, username: '', credentialReference: '', allowTelnetFallback: false, name: '', description: '' })
+  showOnboard.value = true
+}
+function updateOnboardProtocol(): void { onboardForm.port = onboardForm.protocol === 'TELNET' ? 23 : 22 }
+async function onboardDevice(): Promise<void> {
+  if (!canWrite.value) return
+  if (!onboardForm.host.trim() || !onboardForm.username.trim() || !onboardForm.credentialReference.trim()) {
+    ElMessage.warning('请填写地址、用户名和已保存的认证引用'); return
+  }
+  saving.value = true
+  try {
+    const profile = await onboardH3cProfile({ host: onboardForm.host.trim(), protocol: onboardForm.protocol, port: onboardForm.port, username: onboardForm.username.trim(), credentialReference: onboardForm.credentialReference.trim(), allowTelnetFallback: onboardForm.allowTelnetFallback })
+    let inventoryCreated = true
+    try {
+      await createDevice({
+        name: onboardForm.name.trim() || onboardForm.host.trim(), managementIp: onboardForm.host.trim(), vendor: 'H3C', model: '', deviceType: 'NETWORK_DEVICE',
+        siteId: siteId.value || 'local', groupId: null, description: onboardForm.description.trim(), enabled: true, terminalProfileId: profile.id,
+      })
+    } catch { inventoryCreated = false }
+    const test = await testH3cConnection(profile.id)
+    showOnboard.value = false
+    await Promise.all([refresh(), refreshProfiles()])
+    if (!inventoryCreated) ElMessage.warning(`连接资料已创建，设备库存未新增（可能已存在）：${test.message}`)
+    else if (test.status === 'CONNECTED') ElMessage.success('设备已添加，连接测试成功')
+    else ElMessage.warning(`设备已添加：${test.message}`)
+  } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '设备添加失败') }
+  finally { saving.value = false }
+}
 async function openEdit(row: DeviceInventoryItem): Promise<void> {
   try { selected.value = await getDeviceInventoryDetail(row.id); const item = selected.value.item; Object.assign(form, { id: item.id, name: item.name, managementIp: item.managementIp || item.managementAddress, vendor: item.vendor === '—' ? '' : item.vendor, model: item.model === '—' ? '' : item.model, deviceType: item.deviceType, siteId: item.siteId || 'local', groupId: item.groupId || '', description: selected.value.description, enabled: item.enabled, terminalProfileId: item.terminalProfileId || '' }); showEditor.value = true } catch { ElMessage.error('设备详情读取失败') }
 }
@@ -155,7 +186,7 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
 <template>
   <NcLayout title="设备管理" description="设备库存与终端连接档案分离；所有写操作经服务端权限、CSRF 与审计校验">
     <template #actions>
-      <el-button size="small" :loading="loading" @click="refresh">刷新</el-button><el-button size="small" @click="showGroup = true">分组管理</el-button><el-button size="small" @click="importFile"><el-icon><Upload /></el-icon>CSV 导入</el-button><el-button v-if="canWrite" type="primary" size="small" @click="openCreate">新增设备</el-button><input id="device-import-file" type="file" accept=".csv,text/csv" hidden @change="onFile" />
+      <el-button size="small" :loading="loading" @click="refresh">刷新</el-button><el-button size="small" @click="showGroup = true">分组管理</el-button><el-button size="small" @click="importFile"><el-icon><Upload /></el-icon>CSV 导入</el-button><el-button v-if="canWrite" type="primary" size="small" @click="openOnboard">快速添加设备</el-button><el-button v-if="canWrite" size="small" @click="openCreate">高级设备资料</el-button><input id="device-import-file" type="file" accept=".csv,text/csv" hidden @change="onFile" />
     </template>
     <div v-if="unsupported" class="card"><div class="empty-state"><div><el-icon><Monitor /></el-icon><strong>设备库存 API 尚未启用</strong><small>当前服务未提供设备查询能力；页面不会使用前端模拟数据。</small></div></div></div>
     <template v-else>
@@ -182,6 +213,7 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
       </div>
     </template>
     <div class="section-label">数据与安全口径</div><div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>设备库存与 h3c_device_profiles 分离，终端历史按原 profile ID 保留</span><span><el-icon><CircleCheck /></el-icon>启用状态由服务端同步到已关联终端档案</span><span><el-icon><Warning /></el-icon>CSV 不接受密码、凭据或私钥列，导入先预览再原子提交</span></div></div>
+    <el-dialog v-model="showOnboard" title="快速添加设备" width="620px"><div class="form-grid"><label class="form-field"><span>设备地址</span><input v-model="onboardForm.host" placeholder="192.168.56.2" required /></label><label class="form-field"><span>连接协议</span><select v-model="onboardForm.protocol" @change="updateOnboardProtocol"><option value="SSH">SSH</option><option value="TELNET">Telnet</option><option value="AUTO">自动协商</option></select></label><label class="form-field"><span>端口</span><input v-model.number="onboardForm.port" type="number" min="1" max="65535" /></label><label class="form-field"><span>用户名</span><input v-model="onboardForm.username" autocomplete="off" required /></label><label class="form-field"><span>认证引用</span><input v-model="onboardForm.credentialReference" placeholder="例如 H3C_AC1" autocomplete="off" required /><small class="form-hint">密码请使用本机 LocalManager 安全录入；密码不会进入浏览器、服务 API 或日志。</small></label><label v-if="onboardForm.protocol === 'AUTO'" class="form-field" style="align-items:center"><span>SSH 失败时尝试 Telnet</span><input v-model="onboardForm.allowTelnetFallback" type="checkbox" /></label><label class="form-field"><span>设备名称（可选）</span><input v-model="onboardForm.name" placeholder="留空使用设备地址" /></label><label class="form-field"><span>描述（可选）</span><input v-model="onboardForm.description" /></label></div><p class="muted">创建连接资料后会自动保存主机指纹策略并立即测试连接。当前局点：{{ siteScopeLabel }}</p><template #footer><el-button @click="showOnboard = false">取消</el-button><el-button type="primary" :loading="saving" @click="onboardDevice">添加并测试连接</el-button></template></el-dialog>
     <el-dialog v-model="showEditor" :title="form.id ? '编辑设备' : '新增设备'" width="660px"><div class="form-grid"><label class="form-field"><span>设备 ID</span><input v-model="form.id" :disabled="!!form.id" placeholder="留空自动生成" /></label><label class="form-field"><span>设备名称</span><input v-model="form.name" required /></label><label class="form-field"><span>管理 IP</span><input v-model="form.managementIp" placeholder="192.0.2.10" /></label><label class="form-field"><span>厂商</span><input v-model="form.vendor" list="device-vendor-options" /><datalist id="device-vendor-options"><option v-for="option in vendorOptions" :key="option" :value="option" /></datalist></label><label class="form-field"><span>型号</span><input v-model="form.model" /></label><label class="form-field"><span>设备类型</span><select v-model="form.deviceType"><option v-for="option in deviceTypeOptions" :key="option" :value="option">{{ option }}</option><option v-if="form.id && form.deviceType === 'FIT_AP'" value="FIT_AP">FIT_AP · 由 AC 管理</option></select><small class="form-hint">FIT-AP 必须由 AC 管理，本页不提供独立创建入口。</small></label><label class="form-field"><span>局点</span><input v-model="form.siteId" disabled /><small class="form-hint">当前授权作用域：{{ siteScopeLabel }}</small></label><label class="form-field"><span>分组</span><select v-model="form.groupId"><option value="">未分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label><label class="form-field"><span>终端档案 / 认证引用</span><select v-model="form.terminalProfileId"><option value="">不关联</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }} · {{ profile.username }}</option></select><small class="form-hint">仅引用服务端档案；密码不会进入浏览器、URL 或设备清单。</small></label><label class="form-field"><span>描述</span><input v-model="form.description" /></label><label class="form-field" style="align-items:center"><span>启用</span><input v-model="form.enabled" type="checkbox" /></label></div><template #footer><el-button @click="showEditor = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template></el-dialog>
     <el-dialog v-model="showDetail" title="设备详情 / 审计" width="800px"><template v-if="selected"><div class="detail-hero"><div><span class="section-kicker">DEVICE DETAIL</span><h2>{{ selected.item.name }}</h2><p class="mono">{{ selected.item.id }}</p></div><div class="detail-hero__badges"><span :class="['state-pill', statusClass(selected.item.connectionStatus)]">{{ statusLabel(selected.item.connectionStatus) }}</span><span class="scope-flag">{{ selected.item.site }} / {{ selected.item.group }}</span></div></div><section class="detail-section"><div class="detail-section__head"><h3>基础信息</h3><span class="muted">稳定身份与当前作用域</span></div><div class="detail-grid"><div><span>管理 IP</span><b class="mono">{{ selected.item.managementIp || selected.item.managementAddress }}</b></div><div><span>厂商 / 型号</span><b>{{ selected.item.vendor }} / {{ selected.item.model }}</b></div><div><span>设备类型</span><b>{{ selected.item.deviceType }}</b></div><div><span>局点 / 分组</span><b>{{ selected.item.site }} / {{ selected.item.group }}</b></div><div><span>认证引用</span><b>{{ selected.item.credentialConfigured ? '已配置（服务端引用）' : '未配置' }}</b></div><div><span>终端档案</span><b class="mono">{{ selected.terminalProfileId || '未关联' }}</b></div><div><span>创建时间</span><b>{{ formatTime(selected.createdMs) }}</b></div><div><span>更新时间</span><b>{{ formatTime(selected.updatedMs) }}</b></div></div><p class="muted">{{ selected.description || '无描述' }}</p></section><section class="detail-section"><div class="detail-section__head"><h3>关联能力</h3><span class="muted">只展示已有真实 API 的状态</span></div><div class="detail-capability-grid"><div><span>终端连接</span><b>{{ selected.terminalProfileId ? '已关联' : '未关联' }}</b><small>{{ selected.terminalProfileId ? '可从设备列表进入终端控制台' : '尚未绑定终端档案' }}</small></div><div><span>接口 / LLDP</span><b>未接入</b><small>当前版本没有对应设备详情 API</small></div><div><span>任务 / 事实</span><b>独立模块</b><small>通过任务中心或厂商事实页查看</small></div></div></section><div v-if="selected.item.qualityIssues.length" class="data-quality-note"><el-icon><Warning /></el-icon>{{ selected.item.qualityIssues.join(' / ') }}</div><section class="detail-section"><div class="detail-section__head"><h3>最近终端会话</h3><span class="muted">保留原 profile ID</span></div><div v-if="!selected.recentSessions.length" class="detail-empty">暂无持久化终端历史</div><div v-for="session in selected.recentSessions" :key="session.id" class="detail-event"><span>{{ formatTime(session.startedMs) }} · {{ session.protocol }}</span><span>{{ session.state }} · {{ session.recordingStatus }}</span></div></section><section class="detail-section"><div class="detail-section__head"><h3>审计记录</h3><span class="muted">服务端写入结果</span></div><div v-if="!selected.auditEvents.length" class="detail-empty">暂无审计记录</div><div v-for="audit in selected.auditEvents" :key="audit.id" class="detail-event"><span>{{ formatTime(audit.atMs) }} · {{ audit.action }}</span><span>{{ audit.outcome }}</span></div></section></template></el-dialog>
     <el-dialog v-model="showGroup" title="设备分组管理" width="520px"><div class="form-grid"><label class="form-field"><span>局点</span><input v-model="groupForm.siteId" disabled /><small class="form-hint">只能在当前授权局点创建分组。</small></label><label class="form-field"><span>分组名称</span><input v-model="groupForm.name" /></label><label class="form-field"><span>描述</span><input v-model="groupForm.description" /></label></div><div class="overview-footer" style="margin-top:16px"><span v-for="group in groups" :key="group.id">{{ group.name }} · {{ group.deviceCount }} 台</span></div><template #footer><el-button @click="showGroup = false">关闭</el-button><el-button v-if="canWrite" type="primary" @click="createGroup">新增分组</el-button></template></el-dialog>
