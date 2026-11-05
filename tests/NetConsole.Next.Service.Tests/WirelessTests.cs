@@ -7,6 +7,7 @@ internal static class WirelessTests
     {
         ProjectsSamePhysicalApAcrossDualAcWithoutDuplicateIdentity();
         PreservesSerialMacConflictWithoutAutoMerge();
+        MergesPartialExactEvidenceWithoutUsingNames();
         DoesNotUseApNameAsIdentity();
         KeepsSameNamedGroupsAcScoped();
         RejectsMalformedMacEvidence();
@@ -66,6 +67,27 @@ internal static class WirelessTests
         Assert(result.ApResources.Count == 2, "same serial with different MAC must not auto-merge");
         Assert(result.ApResources.All(item => item.IdentityStatus == "CONFLICT" && item.ConflictReason is not null),
             "serial/MAC conflict must be explicit");
+    }
+
+    private static void MergesPartialExactEvidenceWithoutUsingNames()
+    {
+        var serialOnly = Observation("AC1", "AP-A", null, "R/M", "RUNNING_MASTER", 100, serial: "SN-PARTIAL");
+        var complete = Observation("AC2", "different-name", "4c6f-d608-0400", "R/B", "RUNNING_BACKUP", 101, serial: "SN-PARTIAL");
+        var serialResult = new WirelessProjectionEngine().Project(
+            new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-a") },
+            new[] { serialOnly, complete }, Array.Empty<WirelessTopologyEvidence>(), new("FULL", "fixture-claims"));
+        Assert(serialResult.ApResources.Count == 2 && serialResult.ApResources.Any(item => item.IdentityStatus == "CANDIDATE") &&
+               serialResult.ApResources.Any(item => item.IdentityStatus == "CONFIRMED"),
+            "a serial-only observation must remain a candidate until complete MAC evidence is available");
+
+        var macOnly = Observation("AC1", "AP-A", "4c6f-d608-0400", "R/M", "RUNNING_MASTER", 100, serial: null);
+        var completeForMac = Observation("AC2", "different-name", "4c6f-d608-0400", "R/B", "RUNNING_BACKUP", 101, serial: "SN-MAC-PARTIAL");
+        var macResult = new WirelessProjectionEngine().Project(
+            new[] { Ac("AC1", "192.168.56.2", "site-a"), Ac("AC2", "192.168.56.5", "site-a") },
+            new[] { macOnly, completeForMac }, Array.Empty<WirelessTopologyEvidence>(), new("FULL", "fixture-claims"));
+        Assert(macResult.ApResources.Count == 1 && macResult.ApResources.Single().IdentityStatus == "CANDIDATE" &&
+               macResult.ApResources.Single().Observations.Count == 2,
+            "a MAC-only observation must join one unique exact MAC identity without treating a missing serial as a conflict");
     }
 
     private static void DoesNotUseApNameAsIdentity()

@@ -216,11 +216,31 @@ internal sealed class WirelessProjectionEngine
         var bySerial = observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence) && item.Seed.NormalizedMacSet.Count > 0)
             .GroupBy(item => item.Seed.SerialEvidence!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Select(item => MacKey(item.Seed.NormalizedMacSet)).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
-        var byMac = observations.Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence)).SelectMany(item => item.Seed.NormalizedMacSet.Select(mac => (mac, item)))
+        // A missing serial is incomplete evidence, not a conflicting serial. Only
+        // distinct non-empty serials make a MAC ambiguous. This lets a MAC-only
+        // observation join one exact serial+MAC group while still refusing a
+        // MAC shared by two different serials. Serial-only observations remain
+        // candidates because a serial without a hardware address is incomplete.
+        var byMac = observations.SelectMany(item => item.Seed.NormalizedMacSet
+                .Select(mac => (mac, Serial: item.Seed.SerialEvidence ?? string.Empty)))
+            .Where(item => item.Serial.Length > 0)
             .GroupBy(item => item.mac, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Select(item => item.item.Seed.SerialEvidence ?? string.Empty).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+            .ToDictionary(group => group.Key, group => group.Select(item => item.Serial).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
-        var grouped = observations.GroupBy(item => IdentityKey(item.Seed), StringComparer.Ordinal);
+        var exactGroups = observations
+            .Where(item => !string.IsNullOrWhiteSpace(item.Seed.SerialEvidence) && item.Seed.NormalizedMacSet.Count > 0)
+            .GroupBy(item => IdentityKey(item.Seed), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var exactByMac = exactGroups.Values
+            .SelectMany(item => item.Seed.NormalizedMacSet.Select(mac => (mac, Key: IdentityKey(item.Seed))))
+            .GroupBy(item => item.mac, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(item => item.Key).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+
+        // Merge incomplete observations only when their exact evidence resolves
+        // to one and only one established group. Ambiguous evidence keeps its
+        // own candidate resource and is surfaced below as CONFLICT.
+        var grouped = observations
+            .GroupBy(item => ResolveIdentityGroupKey(item, exactByMac), StringComparer.Ordinal);
         var resources = new List<WirelessApResourceView>();
         foreach (var group in grouped)
         {
@@ -229,7 +249,8 @@ internal sealed class WirelessProjectionEngine
             var macs = items.SelectMany(item => item.Seed.NormalizedMacSet).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var conflict = (serial is not null && bySerial.TryGetValue(serial, out var serialMacs) && serialMacs.Length > 1) ||
                            macs.Any(mac => byMac.TryGetValue(mac, out var macSerials) && macSerials.Length > 1);
-            var identityStatus = conflict ? "CONFLICT" : serial is not null && macs.Length > 0 ? "CONFIRMED" : serial is not null || macs.Length > 0 ? "CANDIDATE" : "UNKNOWN";
+            var incompleteEvidence = items.Any(item => string.IsNullOrWhiteSpace(item.Seed.SerialEvidence) || item.Seed.NormalizedMacSet.Count == 0);
+            var identityStatus = conflict ? "CONFLICT" : serial is not null && macs.Length > 0 && !incompleteEvidence ? "CONFIRMED" : serial is not null || macs.Length > 0 ? "CANDIDATE" : "UNKNOWN";
             var sourceObservationIds = items.Select(item => ObservationId(item.Seed, item.DomainId)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var resourceId = "ap-resource:" + Fingerprint(new[] { group.Key });
             if (identityStatus == "UNKNOWN") resourceId = "ap-candidate:" + Fingerprint(sourceObservationIds);
@@ -261,6 +282,31 @@ internal sealed class WirelessProjectionEngine
                     ? "MULTI_SOURCE_MASTER" : conflictingIds.Count > 0 ? "SAME_REVISION_STATE_CONFLICT" : null));
         }
         return resources.OrderBy(item => item.DisplayName, StringComparer.Ordinal).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
+    }
+
+    private static string ResolveIdentityGroupKey(
+        (WirelessObservationSeed Seed, string DomainId) item,
+        IReadOnlyDictionary<string, string[]> exactByMac)
+    {
+        var seed = item.Seed;
+        if (!string.IsNullOrWhiteSpace(seed.SerialEvidence) && seed.NormalizedMacSet.Count > 0)
+            return IdentityKey(seed);
+
+        if (seed.NormalizedMacSet.Count > 0)
+        {
+            var matching = seed.NormalizedMacSet
+                .Where(exactByMac.ContainsKey)
+                .SelectMany(mac => exactByMac[mac])
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (matching.Length == 1) return matching[0];
+        }
+
+        if (!string.IsNullOrWhiteSpace(seed.SerialEvidence))
+            return "serial|" + seed.SerialEvidence;
+        if (seed.NormalizedMacSet.Count > 0)
+            return "mac|" + MacKey(seed.NormalizedMacSet);
+        return "unknown|" + ObservationId(seed, item.DomainId);
     }
 
     private static IReadOnlyList<WirelessApGroupView> BuildGroups(
