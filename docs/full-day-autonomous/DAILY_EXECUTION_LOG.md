@@ -84,3 +84,10 @@
 - 2026-11-05 Checkpoint M：修复任务详情、取消、重试、恢复 API 仍受最近 100 条列表窗口限制的问题；改为 Catalog 按任务 ID 直接查询并沿用当前 Site scope 过滤。Service/Tests Release build 0 warnings / 0 errors、`CONCURRENCY_P1_TESTS=5/5 PASS`、完整 Service harness PASS、Vue typecheck PASS、Vitest 5 files/10 tests PASS、Vite build PASS。快速添加设备 onboarding API/UI 已落盘；DPAPI 凭据缺失，四台模拟器认证和双 AC HA 仍 BLOCKED。
 
 - 2026-11-05 凭据复核：四台白名单地址均确认由本机 HCL/VirtualBox 模拟器承载；HCL 项目设备配置仅提供用户身份与单向认证哈希，未发现明文凭据、SSH agent 可用身份或 Next DPAPI vault。未猜测、穷举或打印密码，未修改模拟器配置；自动认证、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED。
+
+## 2026-11-05 自动登录验收增量
+
+- 使用隔离测试根已有 DPAPI Credential Reference，逐台测试四个授权地址；AC1/AC2 SSH 自动认证与 `display version` 通过（H3C Comware 7.1.064）。
+- SW SSH 认证与 Host Key 通过，但旧 HCL Exec 通道在设备信息命令阶段断开/超时；现在返回“连接成功，但设备信息识别失败”，不再冒泡 HTTP 500。
+- FIT-AP Telnet banner 可达；使用既有文档记录的 `h3capadmin` 建立隔离档案后，设备仍拒绝引用凭据，状态为 `AUTHENTICATION_FAILED`。密码未猜测、未重试穷举。
+- 配置写入、重启、主备切换、恢复和实时 AP 归属验证均未执行；详见 `docs/autonomous-development/AUTO_LOGIN_SIMULATOR_ACCEPTANCE_20261105.md`。

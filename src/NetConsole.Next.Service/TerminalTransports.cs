@@ -279,6 +279,7 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
         var text = new StringBuilder();
         var buffer = new byte[4096];
+        var passwordAttempts = 0;
         while (DateTime.UtcNow < deadline)
         {
             var stream = _stream!;
@@ -293,8 +294,13 @@ internal sealed class TelnetTerminalTransport(H3cDeviceProfileSnapshot profile, 
             var chunk = Encoding.UTF8.GetString(normalized);
             text.Append(chunk);
             var lower = text.ToString().ToLowerInvariant();
+            if (lower.Contains("login failed") || lower.Contains("authentication failed") ||
+                lower.Contains("invalid password") || lower.Contains("invalid username"))
+                throw new H3cAuthenticationFailedException();
             if (lower.Contains("password") || lower.Contains("密码") || lower.Contains("passcode"))
             {
+                if (passwordAttempts++ > 0)
+                    throw new H3cAuthenticationFailedException();
                 await SendSecretAsync(_password, cancellationToken).ConfigureAwait(false);
                 text.Clear();
             }

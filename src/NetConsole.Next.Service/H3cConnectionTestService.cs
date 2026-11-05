@@ -25,6 +25,12 @@ internal sealed class H3cConnectionTestService(
     IDeviceSessionFactory sessions,
     IH3cCredentialProvider credentials)
 {
+    // A connection check must remain a bounded login probe.  Some older HCL
+    // images accept SSH authentication but never close an exec channel for
+    // `display version`; the long collection deadline must not make the UI
+    // wait for minutes in that case.
+    private static readonly TimeSpan DeviceInfoTimeout = TimeSpan.FromSeconds(15);
+
     public async Task<H3cConnectionTestResult?> TestAsync(string deviceId, CancellationToken cancellationToken)
     {
         var profile = catalog.GetH3cDeviceProfile(deviceId);
@@ -37,10 +43,32 @@ internal sealed class H3cConnectionTestService(
 
             await using var session = sessions.Create(deviceId);
             await session.ConnectAsync(cancellationToken).ConfigureAwait(false);
-            var versionOutput = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, cancellationToken)
-                .ConfigureAwait(false);
-            var version = H3cComwareParser.ParseVersion(versionOutput);
-            return Success(profile, started, "SSH", version);
+            using var deviceInfoTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deviceInfoTimeout.CancelAfter(DeviceInfoTimeout);
+            try
+            {
+                var versionOutput = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, deviceInfoTimeout.Token)
+                    .ConfigureAwait(false);
+                var version = H3cComwareParser.ParseVersion(versionOutput);
+                return Success(profile, started, "SSH", version);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Authentication and host-key handling already succeeded.  A
+                // device-info command timeout is a useful, bounded result and
+                // must not be reported as an HTTP 500 or a failed login.
+                return ConnectedWithoutDeviceInfo(profile, started,
+                    "连接成功，但设备信息识别超时");
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The SSH handshake and password authentication have already
+                // completed.  Older HCL images may close or stall an Exec
+                // channel; preserve the useful login result and keep the
+                // device-info failure separate from credential failures.
+                return ConnectedWithoutDeviceInfo(profile, started,
+                    "连接成功，但设备信息识别失败");
+            }
         }
         catch (H3cProtocolNegotiationException) when (
             string.Equals(profile.TerminalProtocol, "AUTO", StringComparison.OrdinalIgnoreCase) &&
@@ -53,6 +81,14 @@ internal sealed class H3cConnectionTestService(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return Failure(profile, started, ProtocolFor(profile), MapFailure(ex));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Telnet login uses a short internal read window.  Translate that
+            // timeout to the same safe connection result as SSH instead of
+            // letting the request pipeline emit an unhandled 500.
+            return Failure(profile, started, ProtocolFor(profile),
+                ("CONNECT_TIMEOUT", "连接超时"));
         }
     }
 
@@ -77,6 +113,11 @@ internal sealed class H3cConnectionTestService(
             version.Recognized ? version.Vendor : null,
             version.Recognized ? version.Version : null,
             null, ElapsedMs(started));
+
+    private static H3cConnectionTestResult ConnectedWithoutDeviceInfo(
+        H3cDeviceProfileSnapshot profile, long started, string message) =>
+        new(profile.Id, profile.Host, profile.Port, "SSH", "CONNECTED", message,
+            null, null, null, ElapsedMs(started));
 
     private static H3cConnectionTestResult Failure(H3cDeviceProfileSnapshot profile, long started,
         string protocol, (string Code, string Message) failure) =>
