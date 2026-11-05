@@ -28,3 +28,4 @@
 | FD-P1-16 | Task Center/UI | 固定只读多命令计划创建、执行和命令级报告入口 | P1 | H3C task-definition API、Site scope | COMPLETED_LOCAL | `web_auth_e2e.py` multi-command API + vue-tsc/Vitest/Vite |
 | FD-P1-17 | Connection | 连接测试区分认证失败与认证后 Exec/设备识别失败，并限制旧设备命令等待 | P1 | H3C session、DPAPI | COMPLETED_LOCAL | AC1/AC2 live login；TerminalCore boundary regression；Release build |
 | FD-P1-18 | Simulator | 四台白名单自动登录与双 AC HA/切换/恢复验收 | P1 | FIT-AP 正确凭据、SW Exec 兼容性 | PARTIAL_EXTERNAL | AC1/AC2 login PASS；SW partial；FIT-AP blocked；HA not run |
+| FD-P1-19 | Task Center | 多目标 H3C 父计划、子任务快照、状态聚合和取消 | P1 | BoundedCollectionScheduler、TaskSiteScope | COMPLETED_LOCAL | `TASK_PLAN_PERSISTENCE_TESTS=PASS`；Service build |

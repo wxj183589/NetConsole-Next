@@ -60,6 +60,8 @@ else if (args.Length > 0 && args[0] == "--h3c-task-fact-publication-tests")
     await H3cTaskFactPublicationTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
     await ConcurrencyP1Tests.RunAsync();
+else if (args.Length > 0 && args[0] == "--task-plan-tests")
+    TaskPlanTests.Run();
 else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")

@@ -62,6 +62,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
         sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
     }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
+builder.Services.AddSingleton<H3cBatchTaskService>();
 builder.Services.AddSingleton<ConfigBackupService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
@@ -1238,6 +1239,44 @@ if (settings.H3cEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapPost("/api/system/h3c/task-plans", (HttpContext context, H3cTaskPlanCreateRequest request,
+        Catalog rawCatalog, H3cBatchTaskService plans) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_PLAN_PERMISSION_DENIED", request.Id ?? "new");
+        try
+        {
+            var plan = plans.CreateAndSchedule(request, CurrentIdentity(context).UserId);
+            return Results.Created($"/api/system/h3c/task-plans/{plan.Id}", plan);
+        }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapGet("/api/system/h3c/task-plans/{id}", (HttpContext context, string id,
+        Catalog rawCatalog, H3cBatchTaskService plans) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_PLAN_READ_PERMISSION_DENIED", id);
+        try { return Results.Ok(plans.GetVisible(id, CurrentIdentity(context).UserId)); }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+    });
+    app.MapGet("/api/system/h3c/task-plans/{id}/report", (HttpContext context, string id,
+        Catalog rawCatalog, H3cBatchTaskService plans) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_PLAN_REPORT_PERMISSION_DENIED", id);
+        try { return Results.Ok(plans.GetReport(id, CurrentIdentity(context).UserId)); }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+    });
+    app.MapPost("/api/system/h3c/task-plans/{id}/cancel", (HttpContext context, string id,
+        Catalog rawCatalog, H3cBatchTaskService plans) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_PLAN_CANCEL_PERMISSION_DENIED", id);
+        try { return Results.Ok(plans.Cancel(id, CurrentIdentity(context).UserId)); }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
     });
 }
 app.MapGet("/api/system/zte/profiles", (HttpContext context, ZteCollectionService zte, P2B5SiteScopeStore scopes) =>

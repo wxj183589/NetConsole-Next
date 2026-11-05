@@ -6,10 +6,10 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_O_PARTIAL_AP_IDENTITY_ASSOCIATION",
+  "phase": "CHECKPOINT_P1_MULTI_TARGET_TASK_PLAN",
   "activeWorkstreams": [
-    "formal AP identity candidate/replacement lifecycle review",
-    "multi-target Plan/Report contract review"
+    "multi-target H3C parent plan and report contract",
+    "formal AP identity candidate/replacement lifecycle review"
   ],
   "completedAtStart": [
     "AP runtime history",
@@ -30,23 +30,24 @@
     "task detail/cancel/retry/resume API direct-ID scope lookup",
     "connection onboarding HTTP regression",
     "fixed read-only multi-command plan UI and HTTP submission regression",
-    "controlled unique-MAC partial-evidence AP association"
+    "controlled unique-MAC partial-evidence AP association",
+    "multi-target H3C parent plan, child run linkage, aggregate status and claims-protected report"
   ],
   "nextTasks": [
-    "secure credential reference and four-simulator authentication",
-    "R3 live dual-AC HA evidence",
-    "multi-command Plan/Report and formal identity lifecycle review"
+    "formal AP identity candidate/replacement lifecycle review",
+    "cross-AC live collection and HA evidence when secure credential reference is saved",
+    "complete module workbench integration"
   ],
   "externalBlockers": [
     "credentials unavailable",
     "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available",
-    "formal AP replacement/candidate lifecycle and multi-target identity/report contract review pending"
+    "formal AP replacement/candidate lifecycle and Domain/group lifecycle contract pending"
   ],
   "realDataChanged": false,
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "8735d55",
+  "lastRecoveryCommit": "WORKING_TREE_PENDING_COMMIT",
   "credentialAudit": {
     "at": "2026-11-05",
     "simulatorHost": "LOCAL_HCL_VIRTUALBOX",

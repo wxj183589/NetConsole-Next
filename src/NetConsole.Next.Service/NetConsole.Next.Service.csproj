@@ -30,6 +30,7 @@
     <EmbeddedResource Include="../../storage/schema_v17.sql" LogicalName="schema_v17.sql" />
     <EmbeddedResource Include="../../storage/schema_v18.sql" LogicalName="schema_v18.sql" />
     <EmbeddedResource Include="../../storage/schema_v19.sql" LogicalName="schema_v19.sql" />
+    <EmbeddedResource Include="../../storage/schema_v20.sql" LogicalName="schema_v20.sql" />
     <EmbeddedResource Include="../../storage/schema_p2b5_site_scope.sql" LogicalName="schema_p2b5_site_scope.sql" />
     <EmbeddedResource Include="../../storage/schema_p2b5_export.sql" LogicalName="schema_p2b5_export.sql" />
     <EmbeddedResource Include="../../storage/schema_p2b5_rail_reference.sql" LogicalName="schema_p2b5_rail_reference.sql" />
