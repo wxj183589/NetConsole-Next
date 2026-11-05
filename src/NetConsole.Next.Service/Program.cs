@@ -1078,7 +1078,7 @@ if (settings.H3cEnabled)
         if (protocol is null) return Results.BadRequest(new { error = "protocol must be SSH, TELNET or AUTO." });
         var port = request.Port ?? (protocol == "TELNET" ? 23 : 22);
         if (port is < 1 or > 65535) return Results.BadRequest(new { error = "port must be between 1 and 65535." });
-        var id = "h3c-" + Guid.NewGuid().ToString("N");
+        var id = Guid.NewGuid().ToString("N");
         try
         {
             rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),

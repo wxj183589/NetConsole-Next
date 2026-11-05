@@ -121,7 +121,30 @@ def main():
                        "enabled": True, "hostKeyUpdatePolicy": "AUTO_UPDATE"}
             assert admin_a.request("/api/system/h3c/profiles", "POST", profile)[0] == 403
             assert superadmin.request("/api/system/h3c/profiles", "POST", profile)[0] == 201
+            # The simplified onboarding route accepts only a DPAPI reference,
+            # never a password.  It supplies SSH's default port and returns
+            # the same redacted profile view as the explicit route.
+            onboard_request = {
+                "host": "192.0.2.12", "username": "reader",
+                "credentialReference": "E2E_ONBOARD", "protocol": "SSH"
+            }
+            assert admin_a.request("/api/system/h3c/profiles/onboard", "POST", onboard_request)[0] == 403
+            onboard_status, onboard = superadmin.request("/api/system/h3c/profiles/onboard", "POST", onboard_request)
+            assert onboard_status == 201, (onboard_status, onboard)
+            assert onboard["port"] == 22 and onboard["terminalProtocol"] == "SSH"
+            assert onboard["hostKeyUpdatePolicy"] == "AUTO_UPDATE"
+            assert "credentialReference" not in onboard and "hostKeySha256" not in onboard
+            test_status, test_result = superadmin.request(
+                f"/api/system/h3c/profiles/{onboard['id']}/test-connection", "POST", {})
+            assert test_status == 200 and test_result["status"] == "CREDENTIAL_UNAVAILABLE", (test_status, test_result)
+            telnet_status, telnet = superadmin.request("/api/system/h3c/profiles/onboard", "POST", {
+                "host": "192.0.2.13", "username": "reader",
+                "credentialReference": "E2E_TELNET", "protocol": "TELNET"
+            })
+            assert telnet_status == 201 and telnet["port"] == 23 and telnet["terminalProtocol"] == "TELNET"
             profiles_status, profiles = admin_a.request("/api/system/h3c/profiles")
+            assert profiles_status == 403 and "P2B_SITE_SCOPE_UNAVAILABLE" in profiles
+            profiles_status, profiles = superadmin.request("/api/system/h3c/profiles")
             assert profiles_status == 200 and profiles and all(
                 "credentialReference" not in item and "hostKeySha256" not in item for item in profiles
             )
