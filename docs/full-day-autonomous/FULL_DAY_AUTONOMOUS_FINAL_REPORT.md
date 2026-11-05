@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`991aa74`。未 push、未 merge、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`eeb6427`。未 push、未 merge、未 release。
 
 ## 结论
 
@@ -10,7 +10,7 @@
 | 单任务多命令 | PASS（隔离 fixture） | 命令计划、schema v16、H3C fact tests `11/11 PASS` |
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
 | 一键测试连接与快速添加 | PASS（API/UI/HTTP 回归） | onboarding endpoint、SSH/Telnet 默认端口、设备列表按钮、`web_auth_e2e.py` |
-| SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport） | 连接工作流构建与 harness |
+| SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport；AC1/AC2 live login） | 连接工作流构建、harness 与 AC1/AC2 Host Key AUTO_UPDATE |
 | Ping/TCP/DNS/LLDP 批量诊断 | PASS（隔离 fixture/API/UI） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；LLDP captured scope 证据 |
 | LLDP 关系、变化历史和 Site claims | PASS（离线 fixture/API/UI） | `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；关系不伪造删除 |
 | Ping/TCP/DNS/LLDP 批量诊断重启历史 | PASS（隔离 fixture） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；服务对象重建后恢复终态批次 |
@@ -46,3 +46,8 @@
 - A13 隔离 HTTP/API、完整 Service harness 与 Service-backed Browser smoke 复验通过。
 - A27 跨 AC collection manifest 列表/详情、source AC 过滤、Site claims 聚合与无线页采集记录完成。
 - 四台模拟器完整业务验收仍未完成；连接测试已能区分认证失败和认证后设备信息/Exec 失败，并保留脱敏结果。
+
+## Checkpoint K2 增量
+
+- 当前 HEAD：`eeb6427`；新增 TerminalCore TcpListener 回归，验证 Telnet `Login failed` 映射为 `AUTHENTICATION_FAILED`。
+- 完整 Service harness 与 Release build 继续通过；A12 状态为 `PARTIAL_BLOCKED`，外部 Gate 仍为 FIT-AP 凭据、SW Exec 兼容性及双 AC HA/切换/恢复。
