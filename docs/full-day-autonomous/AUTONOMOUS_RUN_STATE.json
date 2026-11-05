@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_N_ONBOARDING_HTTP_REGRESSION",
+  "phase": "CHECKPOINT_O_MULTI_COMMAND_PLAN_UI",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -25,7 +25,8 @@
     "secure connection onboarding API/UI",
     "historical task lookup by ID",
     "task detail/cancel/retry/resume API direct-ID scope lookup",
-    "connection onboarding HTTP regression"
+    "connection onboarding HTTP regression",
+    "fixed read-only multi-command plan UI and HTTP submission regression"
   ],
   "nextTasks": [
     "secure credential reference and four-simulator authentication",
@@ -41,5 +42,5 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "440a84f"
+  "lastRecoveryCommit": "991aa74"
 }

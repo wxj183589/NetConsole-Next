@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`440a84f`。未 push、未 merge、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`991aa74`。未 push、未 merge、未 release。
 
 ## 结论
 
@@ -38,6 +38,7 @@
 - 收口回归证据：R3 API fixture、无线投影/runtime、任务并发、Raw→Facts、LLDP、Service/Tests build、Vitest、vue-tsc、Vite 和无线浏览器 fixture 均通过；HTTP service-backed gate 仍受既有单实例 Mutex 与模拟器凭据缺口限制。
 - collection manifest 回归新增 source AC 详情过滤与未授权来源不泄露断言；该能力仍是隔离 fixture/Catalog 证据，不替代四台模拟器实时采集。
 - 本轮新增连接 onboarding HTTP 回归：只接收 Credential Reference；默认 SSH/Telnet 端口为 22/23；响应不返回 credential reference 或 host key；未配置 DPAPI 凭据时返回 `CREDENTIAL_UNAVAILABLE`。
+- 本轮新增任务中心固定只读多命令计划入口；支持选择 H3C 设备、顺序命令和单条超时，提交后复用既有 task-definition/run、Raw→Facts 和 Site scope 合同。
 
 ## Checkpoint K 增量
 
