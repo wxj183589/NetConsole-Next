@@ -95,6 +95,7 @@ internal sealed record RawSegmentInspection(long RecordCount, long FirstReceived
     long BytesRead, long BytesHashed, string SourceId = "syslog-local", string? DeviceHost = null,
     string? TaskRunId = null, string CaptureStatus = "COMPLETE");
 internal sealed record RawMaintenanceAuditResult(string RelativePath, string Outcome, string Detail);
+internal sealed record ModuleStateSnapshot(string Key, string Label, bool Enabled, bool IsCore, long UpdatedMs, string UpdatedBy);
 
 internal sealed partial class Catalog(RuntimeSettings settings)
 {
@@ -168,6 +169,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV12Migration(db);
         ApplyV15Migration(db);
         ApplyV16Migration(db);
+        ApplyV17Migration(db);
         ZteCollectionSchema.Apply(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
@@ -424,6 +426,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v16.sql")
             ?? throw new InvalidOperationException("Embedded schema_v16.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV17Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v17.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v17.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

@@ -13,3 +13,4 @@
 | Device management | P2A batch and CSV contracts | baseline pass | current UI integration and connection test |
 | Diagnostics/backup/topology | Ping/TCP/DNS diagnostics with restart-durable history, versioned redacted config backup/diff/download, LLDP relation/history/claims API and UI | PASS (isolated fixture/API/UI) | four-simulator credential-backed evidence |
 | UI/UX | device test-connection action, task command detail and task actions | PASS (1920/2560 offline browser + 1920 service-backed smoke) | service-backed mutation/browser gate |
+| Module governance | schema v17 persisted module registry, SUPERADMIN enable/disable API, core-module protection, restart persistence, shell status overlay | PASS (isolated service/API/UI) | settings management UI and capability-level route gates |

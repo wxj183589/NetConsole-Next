@@ -29,6 +29,15 @@ export interface HealthSnapshot {
   instanceId?: string
 }
 
+export interface ModuleState {
+  key: string
+  label: string
+  enabled: boolean
+  isCore: boolean
+  updatedMs: number
+  updatedBy: string
+}
+
 export interface DeviceInventorySummary {
   totalRecords: number
   validDevices: number
@@ -832,6 +841,10 @@ export function changePassword(payload: { currentPassword?: string; newPassword:
 }
 
 export function getHealth(): Promise<HealthSnapshot> { return request('/api/system/health') }
+export function getModuleStates(): Promise<ModuleState[]> { return request('/api/system/modules') }
+export function updateModuleState(key: string, enabled: boolean): Promise<ModuleState> {
+  return request(`/api/system/modules/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+}
 export function getDeviceInventory(params: { page?: number; pageSize?: number; search?: string; status?: string; siteId?: string; groupId?: string; vendor?: string; deviceType?: string } = {}): Promise<DeviceInventoryPage> {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)) })

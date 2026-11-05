@@ -310,6 +310,15 @@ app.MapGet("/api/system/health", (RuntimeSettings runtime, IngressStats ingress,
         ,instanceId = auth.InstanceIdOrUnknown
     });
 });
+app.MapGet("/api/system/modules", (Catalog catalog) => Results.Ok(catalog.ListModuleStates()));
+app.MapPut("/api/system/modules/{key}", (HttpContext context, string key, ModuleStateWriteRequest request, Catalog catalog) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    try { return Results.Ok(catalog.SetModuleEnabled(key, request.Enabled, CurrentIdentity(context).Username)); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
 app.MapGet("/api/system/device-sites", (HttpContext context, Catalog rawCatalog) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
@@ -1692,6 +1701,7 @@ internal static class WebCookieNames
 }
 
 internal sealed record WebLoginRequest(string Username, string Password);
+internal sealed record ModuleStateWriteRequest(bool Enabled);
 internal sealed record WebPasswordRequest(string NewPassword, string? CurrentPassword = null, string? Username = null);
 internal sealed record DeviceGroupRequest(string SiteId, string Name, string? Description = null);
 internal sealed record RawIssueQuarantineRequest(string Detail);

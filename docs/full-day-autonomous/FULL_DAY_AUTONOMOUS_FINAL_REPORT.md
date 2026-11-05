@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；集成提交：`c1d1215`。未 push、已本地合并、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；集成提交：待本批次提交。未 push、已本地合并、未 release。
 
 ## 结论
 
@@ -15,7 +15,7 @@
 | LLDP 关系、变化历史和 Site claims | PASS（离线 fixture/API/UI） | `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；关系不伪造删除 |
 | Ping/TCP/DNS/LLDP 批量诊断重启历史 | PASS（隔离 fixture） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；服务对象重建后恢复终态批次 |
 | 配置备份、版本历史、差异和下载 | PASS（隔离 fixture/API/UI） | `CONFIG_BACKUP_TESTS=1/1 PASS`；敏感字段脱敏、Raw 校验和 Site claims |
-| 模块 registry、导航状态和错误页 | PASS（前端离线验证） | registry `2/2 PASS`；Vitest `5 files/9 tests`、`vue-tsc`、Vite build；未知路由与异步加载错误均有显式页面 |
+| 模块 registry、导航状态和错误页 | PASS（服务端/前端隔离验证） | schema v17 持久化、SUPERADMIN 启停 API、核心模块保护、重启保留；普通 ADMIN 403；前端 shell 使用服务端状态覆盖 |
 | 任务中心取消、重试、恢复 | PASS（隔离调度/API/UI） | 三条受 SUPERADMIN + Site scope 保护的 task action route；Vitest `5 files/10 tests`；1920/2560 fixture 实际点击重试 |
 | Service-backed 浏览器 smoke | PASS（隔离真实 Service） | 真实登录、概览、设备、任务、工具、文件页面；1920×1080 |
 | 四台模拟器真实认证、双 AC HA | BLOCKED | 缺安全凭据；仅有 TCP/协议可达证据 |

@@ -61,3 +61,4 @@
 - 2026-11-05 收口：全天候 workstream 已合入当前 R3 分支，集成提交 `db8120e`。Release Service build（0 warnings/0 errors）、完整 Service harness、Vue typecheck、Vitest 5 files/10 tests、Web UI contract、Web PR2 contract、R3 wireless API fixture（含 filter scope）均 PASS。四台模拟器凭据仍不可用，实时认证与双 AC HA 继续 BLOCKED。
 - 白名单连接性复核：`192.168.56.2:22`、`192.168.56.5:22`、`192.168.56.3:22`、`192.168.56.4:23` 均 TCP 可达；这只证明端口可达，不等同于凭据认证或双 AC HA 验收。
 - Service-backed browser smoke：真实隔离 Service 在发布输出目录启动，浏览器完成登录并访问概览、设备、任务、工具、文件页面，`1920×1080 PASS`；首次发现并修复了测试脚本错误地以仓库根作为 ASP.NET content root 的问题，随后复验通过。
+- 2026-11-05 模块治理：新增 schema v17 `module_registry`，服务端提供 `/api/system/modules` 与 SUPERADMIN-only 启停 API；核心模块禁止停用，状态重启后保留，AppShell 使用服务端状态覆盖导航。`module_registry_e2e.py` 的 ADMIN 403、核心保护、重启持久化全部 PASS。四台模拟器凭据仍不可用，未访问真实设备。

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Bell, DataLine, Guide, Operation, Search, UserFilled } from '@element-plus/icons-vue'
-import { getDeviceInventory, getHealth, type HealthSnapshot } from '../api/client'
+import { getDeviceInventory, getHealth, getModuleStates, type HealthSnapshot, type ModuleState } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
 import { moduleRegistry } from '../moduleRegistry'
@@ -17,14 +17,23 @@ const deviceCount = ref<number | null>(null)
 const dark = ref(document.documentElement.dataset.theme === 'dark')
 const globalSearch = ref('')
 const sidebarCollapsed = ref(false)
+const moduleStates = ref<ModuleState[]>([])
 
-const nav = moduleRegistry
+const nav = computed(() => moduleRegistry.map(item => {
+  const persisted = moduleStates.value.find(state => state.key === item.key)
+  if (!persisted) return item
+  return {
+    ...item,
+    status: persisted.enabled && item.status === 'READY' ? 'READY' as const : 'DISABLED' as const,
+    disabledReason: persisted.enabled ? item.disabledReason : '模块已由管理员停用',
+  }
+}))
 const currentLabel = computed(() => String(route.meta.label || '运行总览'))
 const isTerminal = computed(() => route.path === '/terminal')
 const healthLabel = computed(() => health.value?.healthState === 'HEALTHY' ? '服务正常' : health.value?.healthState === 'DEGRADED' ? '服务降级' : '服务状态')
 const queueLabel = computed(() => health.value?.collectionState === 'running' ? '队列状态正常' : health.value?.collectionState || '队列待命')
 
-async function navigate(item: typeof nav[number]): Promise<void> {
+async function navigate(item: (typeof moduleRegistry)[number]): Promise<void> {
   if (item.status === 'DISABLED') { ElMessage.info(item.disabledReason || `${item.label}尚未接入真实业务 API`); return }
   workspace.open(item.path, item.label)
   await router.push(item.path)
@@ -47,6 +56,7 @@ async function submitGlobalSearch(): Promise<void> {
 async function refreshShell(): Promise<void> {
   try {
     health.value = await getHealth()
+    moduleStates.value = await getModuleStates()
     const inventory = await getDeviceInventory({ page: 1, pageSize: 1 })
     deviceCount.value = inventory.summary.totalRecords
   } catch { /* keep the shell usable while a service is starting */ }
