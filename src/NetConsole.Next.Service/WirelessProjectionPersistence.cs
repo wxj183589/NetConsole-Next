@@ -136,8 +136,56 @@ internal sealed partial class Catalog
             command.Parameters.AddWithValue("$updated", now);
             command.ExecuteNonQuery();
         }
+        var observations = snapshot.ApResources.SelectMany(item => item.Observations).ToArray();
+        var manifestId = "wireless-collection:" + snapshot.SourceRevision;
+        var firstCaptured = observations.Length == 0 ? snapshot.AsOf : observations.Min(item => item.CapturedMs);
+        var lastCaptured = observations.Length == 0 ? snapshot.AsOf : observations.Max(item => item.CapturedMs);
+        using (var manifest = db.CreateCommand())
+        {
+            manifest.Transaction = transaction;
+            manifest.CommandText = """
+                INSERT INTO wireless_collection_manifests
+                    (id,source_revision,scope_status,source_ac_device_ids_json,first_captured_ms,last_captured_ms,observation_count,status,created_ms)
+                VALUES($id,$revision,$scope,$sources,$first,$last,$count,'PUBLISHED',$created)
+                ON CONFLICT(source_revision) DO UPDATE SET scope_status=excluded.scope_status,
+                    source_ac_device_ids_json=excluded.source_ac_device_ids_json,first_captured_ms=excluded.first_captured_ms,
+                    last_captured_ms=excluded.last_captured_ms,observation_count=excluded.observation_count,status=excluded.status
+                """;
+            manifest.Parameters.AddWithValue("$id", manifestId);
+            manifest.Parameters.AddWithValue("$revision", snapshot.SourceRevision);
+            manifest.Parameters.AddWithValue("$scope", snapshot.Scope.Status);
+            manifest.Parameters.AddWithValue("$sources", JsonSerializer.Serialize(observations.Select(item => item.SourceAcDeviceId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)));
+            manifest.Parameters.AddWithValue("$first", firstCaptured);
+            manifest.Parameters.AddWithValue("$last", lastCaptured);
+            manifest.Parameters.AddWithValue("$count", observations.Length);
+            manifest.Parameters.AddWithValue("$created", now);
+            manifest.ExecuteNonQuery();
+        }
+        foreach (var observation in observations)
+        {
+            using var item = db.CreateCommand();
+            item.Transaction = transaction;
+            item.CommandText = """
+                INSERT INTO wireless_collection_manifest_items
+                    (manifest_id,observation_id,source_ac_device_id,source_ac_domain_id,source_site_id,raw_manifest_ref,source_revision,captured_ms,outcome)
+                VALUES($manifest,$observation,$sourceAc,$domain,$site,$raw,$revision,$captured,$outcome)
+                ON CONFLICT(manifest_id,observation_id) DO UPDATE SET source_ac_device_id=excluded.source_ac_device_id,
+                    source_ac_domain_id=excluded.source_ac_domain_id,source_site_id=excluded.source_site_id,
+                    raw_manifest_ref=excluded.raw_manifest_ref,source_revision=excluded.source_revision,
+                    captured_ms=excluded.captured_ms,outcome=excluded.outcome
+                """;
+            item.Parameters.AddWithValue("$manifest", manifestId);
+            item.Parameters.AddWithValue("$observation", observation.Id);
+            item.Parameters.AddWithValue("$sourceAc", observation.SourceAcDeviceId);
+            item.Parameters.AddWithValue("$domain", observation.SourceAcDomainId);
+            item.Parameters.AddWithValue("$site", observation.SourceSiteId);
+            item.Parameters.AddWithValue("$raw", observation.RawManifestRef);
+            item.Parameters.AddWithValue("$revision", observation.SourceRevision);
+            item.Parameters.AddWithValue("$captured", observation.CapturedMs);
+            item.Parameters.AddWithValue("$outcome", observation.NormalizedState is "UNKNOWN" or "CONFLICT" ? "AMBIGUOUS" : "OBSERVED");
+            item.ExecuteNonQuery();
+        }
         transaction.Commit();
-        return new(snapshot.AcDomains.Count, snapshot.ApResources.Count,
-            snapshot.ApResources.Sum(item => item.Observations.Count), snapshot.ApGroups.Count);
+        return new(snapshot.AcDomains.Count, snapshot.ApResources.Count, observations.Length, snapshot.ApGroups.Count);
     }
 }

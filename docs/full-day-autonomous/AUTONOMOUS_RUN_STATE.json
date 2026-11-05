@@ -5,7 +5,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "NEXT_TASK_CROSS_AC_COLLECTION_MANIFEST",
+  "phase": "NEXT_TASK_SETTINGS_UI_AND_LIVE_EVIDENCE",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -19,7 +19,6 @@
     "diagnostic restart history"
   ],
   "nextTasks": [
-    "multi-device cross-AC collection manifest",
     "settings UI for module governance",
     "four-simulator credential-backed login",
     "R3 live dual-AC HA evidence"

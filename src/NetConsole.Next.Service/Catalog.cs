@@ -171,6 +171,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV16Migration(db);
         ApplyV17Migration(db);
         ApplyV18Migration(db);
+        ApplyV19Migration(db);
         ZteCollectionSchema.Apply(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
@@ -453,6 +454,19 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v18.sql")
             ?? throw new InvalidOperationException("Embedded schema_v18.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV19Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v19.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v19.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

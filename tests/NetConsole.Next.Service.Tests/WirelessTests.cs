@@ -211,11 +211,12 @@ internal static class WirelessTests
             {
                 db.Open();
                 using var projectionQuery = db.CreateCommand();
-                projectionQuery.CommandText = "SELECT (SELECT COUNT(*) FROM wireless_ac_domains),(SELECT COUNT(*) FROM wireless_ap_resources),(SELECT COUNT(*) FROM wireless_ap_observations),(SELECT COUNT(*) FROM wireless_ap_groups)";
+                projectionQuery.CommandText = "SELECT (SELECT COUNT(*) FROM wireless_ac_domains),(SELECT COUNT(*) FROM wireless_ap_resources),(SELECT COUNT(*) FROM wireless_ap_observations),(SELECT COUNT(*) FROM wireless_ap_groups),(SELECT COUNT(*) FROM wireless_collection_manifests),(SELECT COUNT(*) FROM wireless_collection_manifest_items)";
                 using var row = projectionQuery.ExecuteReader();
                 Assert(row.Read() && row.GetInt64(0) == persistedSnapshot.AcDomains.Count && row.GetInt64(1) == persistedSnapshot.ApResources.Count &&
-                    row.GetInt64(2) == persistedSnapshot.ApResources.Sum(item => item.Observations.Count) && row.GetInt64(3) == persistedSnapshot.ApGroups.Count,
-                    "global wireless projection must persist one stable row per domain/resource/observation/group");
+                    row.GetInt64(2) == persistedSnapshot.ApResources.Sum(item => item.Observations.Count) && row.GetInt64(3) == persistedSnapshot.ApGroups.Count &&
+                    row.GetInt64(4) == 1 && row.GetInt64(5) == persistedSnapshot.ApResources.Sum(item => item.Observations.Count),
+                    "global wireless projection must persist one stable row per domain/resource/observation/group and one collection manifest");
             }
             var restartedCatalog = new Catalog(settings);
             restartedCatalog.Initialize();

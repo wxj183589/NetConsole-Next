@@ -20,6 +20,7 @@
 | Service-backed 浏览器 smoke | PASS（隔离真实 Service） | 真实登录、概览、设备、任务、工具、文件页面；1920×1080 |
 | 四台模拟器真实认证、双 AC HA | BLOCKED | 缺安全凭据；仅有 TCP/协议可达证据 |
 | R3 无线身份持久化 | PASS（隔离 Catalog） | schema v18、事务 upsert、稳定 AP ID、跨 AC Observation、重启恢复；未替代实时模拟器证据 |
+| 跨 AC collection manifest | PASS（隔离 Catalog） | schema v19 source revision manifest、逐 Observation provenance、Raw manifest ref 和重启恢复；未替代实时采集证据 |
 | Site 权限 | PASS（既有合同） | scope guard 与服务端复核 |
 
 密码仍只通过 DPAPI 引用读取；未进入浏览器、URL、SQLite、日志、Git 或报告。真实数据未修改。
