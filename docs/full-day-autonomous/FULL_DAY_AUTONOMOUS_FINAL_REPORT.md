@@ -18,7 +18,7 @@
 | 模块 registry、导航状态、设置页和错误页 | PASS（服务端/前端隔离验证） | schema v17 持久化、SUPERADMIN 启停 API、核心模块保护、重启保留；普通 ADMIN 403；设置页可读取并启停非核心模块；前端 shell 使用服务端状态覆盖 |
 | 任务中心取消、重试、恢复 | PASS（隔离调度/API/UI） | 三条受 SUPERADMIN + Site scope 保护的 task action route；Vitest `5 files/10 tests`；1920/2560 fixture 实际点击重试 |
 | Service-backed 浏览器 smoke | PASS（隔离真实 Service） | 真实登录、概览、设备、任务、工具、文件页面；1920×1080 |
-| 四台模拟器真实认证、双 AC HA | BLOCKED | 缺安全凭据；仅有 TCP/协议可达证据 |
+| 四台模拟器真实认证、双 AC HA | PARTIAL | AC1/AC2 自动 SSH 登录与版本识别 PASS；SW 认证后 Exec 失败；FIT-AP 凭据拒绝；HA 未执行 |
 | R3 无线身份持久化 | PASS（隔离 Catalog） | schema v18、事务 upsert、稳定 AP ID、跨 AC Observation、重启恢复；未替代实时模拟器证据 |
 | 跨 AC collection manifest | PASS（隔离 Catalog） | schema v19 source revision manifest、逐 Observation provenance、Raw manifest ref 和重启恢复；未替代实时采集证据 |
 | AP Group 只读详情、成员和 provenance | PASS（隔离 API/UI） | AC/domain 组列表、组详情、成员 route；当前 Site claims 过滤；R3 fixture 与浏览器点击验收 |
@@ -33,7 +33,7 @@
 - 此前 UI 提交 `1c54d38`：SUPERADMIN 设置页读取模块状态、启停非核心模块并禁用核心模块操作；Service-backed 浏览器 smoke 新增“系统设置/模块开放状态”检查，`1920×1080 PASS`。
 - 串行 Service Tests Release build：0 warnings / 0 errors；完整 C# Service harness：PASS，包含 schema v19、无线投影、跨 AC manifest、任务并发、SQLite、诊断、归档和性能场景。
 - 前端既有 `vue-tsc`、Vitest（5 files / 10 tests）和 Vite build 证据保持有效；发布输出已更新并纳入版本控制。
-- 四台模拟器已取得白名单协议 banner 可达证据；默认 Next 数据根没有 DPAPI vault 且 `h3c_device_profiles` 为空，凭据引用不可用，真实认证、HA 切换/恢复和实时 AP 归属仍为 BLOCKED。
+- 最新隔离测试根已有 DPAPI 引用并完成逐台连接：AC1/AC2 自动 SSH 登录和版本识别 PASS；SW SSH 认证成功但 Exec 设备信息识别失败；FIT-AP Telnet 凭据被拒。双 AC HA、切换/恢复和实时 AP 归属仍未执行。
 - 本轮补齐 AP Group 详情/成员/provenance 只读合同；不提供组写回，不把离线 fixture 当作实时模拟器证据。
 - 收口回归证据：R3 API fixture、无线投影/runtime、任务并发、Raw→Facts、LLDP、Service/Tests build、Vitest、vue-tsc、Vite 和无线浏览器 fixture 均通过；HTTP service-backed gate 仍受既有单实例 Mutex 与模拟器凭据缺口限制。
 - collection manifest 回归新增 source AC 详情过滤与未授权来源不泄露断言；该能力仍是隔离 fixture/Catalog 证据，不替代四台模拟器实时采集。
@@ -45,4 +45,4 @@
 - 当前 HEAD：`440a84f`。
 - A13 隔离 HTTP/API、完整 Service harness 与 Service-backed Browser smoke 复验通过。
 - A27 跨 AC collection manifest 列表/详情、source AC 过滤、Site claims 聚合与无线页采集记录完成。
-- 四台模拟器仅协议 banner 可达；默认 Next DPAPI vault/profile 缺失，真实认证、HA、切换/恢复继续 BLOCKED。
+- 四台模拟器完整业务验收仍未完成；连接测试已能区分认证失败和认证后设备信息/Exec 失败，并保留脱敏结果。
