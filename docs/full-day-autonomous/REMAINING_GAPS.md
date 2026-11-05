@@ -8,7 +8,7 @@
 ## Contract / implementation
 
 - 单命令与多命令 Raw 已可独立封存；多命令按设备批量子任务和跨 AC collection 仍需继续集成。
-- 正式 AP identity/replacement、Domain/group 生命周期和多目标 Report 需要独立持久合同评审。
+- AP identity 已增加唯一完整 MAC 对已有 exact identity 的受控部分证据关联；正式 replacement、候选裁决、冲突审核、Domain/group 生命周期和多目标 Report 仍需独立持久合同评审。
 - 完整模块工作台仍待推进；配置备份、LLDP 关系与变化历史、诊断批次重启历史已完成离线/API/UI 验证。
 
 ## 本轮新增证据
@@ -21,4 +21,5 @@
 ## Verification boundary
 
 - 离线 fixture、Fake transport、隔离 SQLite 证据不得写成模拟器实时验收。
+- 部分身份证据关联仅表示候选/来源关联，不表示 AP 已完成正式生命周期确认或实时归属验收。
 - 1920×1080 和 2560×1440 是本阶段 UI 视口；125% 不作为本阶段阻断。

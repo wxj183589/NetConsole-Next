@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`69bbcac`。未 push、未 merge、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`8735d55`。未 push、未 merge、未 release。
 
 ## 结论
 
@@ -19,7 +19,7 @@
 | 任务中心取消、重试、恢复 | PASS（隔离调度/API/UI） | 三条受 SUPERADMIN + Site scope 保护的 task action route；Vitest `5 files/10 tests`；1920/2560 fixture 实际点击重试 |
 | Service-backed 浏览器 smoke | PASS（隔离真实 Service） | 真实登录、概览、设备、任务、工具、文件页面；1920×1080 |
 | 四台模拟器真实认证、双 AC HA | PARTIAL | AC1/AC2 自动 SSH 登录与版本识别 PASS；SW 认证后 Exec 失败；FIT-AP 凭据拒绝；HA 未执行 |
-| R3 无线身份持久化 | PASS（隔离 Catalog） | schema v18、事务 upsert、稳定 AP ID、跨 AC Observation、重启恢复；未替代实时模拟器证据 |
+| R3 无线身份持久化 | PARTIAL（隔离 Catalog） | schema v18、事务 upsert、稳定 AP ID、跨 AC Observation、唯一 MAC 部分证据受控关联、重启恢复；正式 replacement/candidate lifecycle 和实时模拟器证据仍缺 |
 | 跨 AC collection manifest | PASS（隔离 Catalog） | schema v19 source revision manifest、逐 Observation provenance、Raw manifest ref 和重启恢复；未替代实时采集证据 |
 | AP Group 只读详情、成员和 provenance | PASS（隔离 API/UI） | AC/domain 组列表、组详情、成员 route；当前 Site claims 过滤；R3 fixture 与浏览器点击验收 |
 | AC Domain AP association 与 observation provenance | PASS（隔离 API） | API-W04 返回 source AC/domain/Site、identity、revision 和 Raw manifest reference；支持来源 AC 过滤 |

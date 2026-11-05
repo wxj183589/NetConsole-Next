@@ -6,8 +6,11 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_P_MULTI_COMMAND_RAW_COMPLETENESS",
-  "activeWorkstreams": [],
+  "phase": "CHECKPOINT_O_PARTIAL_AP_IDENTITY_ASSOCIATION",
+  "activeWorkstreams": [
+    "formal AP identity candidate/replacement lifecycle review",
+    "multi-target Plan/Report contract review"
+  ],
   "completedAtStart": [
     "AP runtime history",
     "task scope",
@@ -26,7 +29,8 @@
     "historical task lookup by ID",
     "task detail/cancel/retry/resume API direct-ID scope lookup",
     "connection onboarding HTTP regression",
-    "fixed read-only multi-command plan UI and HTTP submission regression"
+    "fixed read-only multi-command plan UI and HTTP submission regression",
+    "controlled unique-MAC partial-evidence AP association"
   ],
   "nextTasks": [
     "secure credential reference and four-simulator authentication",
@@ -36,13 +40,13 @@
   "externalBlockers": [
     "credentials unavailable",
     "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available",
-    "formal multi-command identity/report contract review pending"
+    "formal AP replacement/candidate lifecycle and multi-target identity/report contract review pending"
   ],
   "realDataChanged": false,
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "69bbcac",
+  "lastRecoveryCommit": "8735d55",
   "credentialAudit": {
     "at": "2026-11-05",
     "simulatorHost": "LOCAL_HCL_VIRTUALBOX",

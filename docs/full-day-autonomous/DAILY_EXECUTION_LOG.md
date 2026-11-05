@@ -1,5 +1,13 @@
 # 全天候自主开发日志
 
+## 2026-11-05 Checkpoint O
+
+- 当前 HEAD：`8735d55`，分支：`codex-A/netconsole-next-r3-dual-ac`；工作树在文档更新前干净，未 push、未 merge、未 release。
+- R3 AP 身份投影补强：当某来源只提供完整 MAC、且该 MAC 唯一指向一个已有 Serial+MAC exact group 时，观察会加入同一物理 AP 资源；只要任一观察缺 Serial 或 MAC，资源仍保持 `CANDIDATE`，不把不完整证据提升为确认身份。
+- MAC 对应多个不同 Serial 时继续保留冲突，不按名称、首条记录或部分地址合并；原始 Observation、source AC、revision 和 provenance 均保留。
+- 定向回归：`WIRELESS_PROJECTION_TESTS=PASS`、`WIRELESS_RUNTIME_TESTS=13/13 PASS`；Release Service Tests build 0 warnings / 0 errors；完整 Service harness PASS；`git diff --check` PASS。
+- 四台授权模拟器外部状态不变：AC1/AC2 登录证据可用，SW Exec 识别和 FIT-AP 凭据仍阻断；未猜测密码、未写设备、未触碰真实数据。
+
 ## 2026-11-05 Checkpoint N
 
 - 当前 HEAD：`440a84f`。快速添加设备 onboarding 已完成 HTTP 回归：管理员 403，SUPERADMIN SSH/Telnet 创建成功，默认端口 22/23，响应脱敏；缺少 DPAPI 凭据时测试连接返回 `CREDENTIAL_UNAVAILABLE`。

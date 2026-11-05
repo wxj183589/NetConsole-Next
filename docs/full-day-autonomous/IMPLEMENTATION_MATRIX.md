@@ -7,7 +7,7 @@
 | Retry/cancel/recovery | bounded cancellation and startup recovery; task-center cancel/retry/resume routes and UI | PASS (isolated fixture) | real device restart/recovery evidence |
 | SSH auto-trust | host-key check/commit/history fixture plus AC1/AC2 live Host Key AUTO_UPDATE | PASS (local + live AC1/AC2) | changed-key live rotation on simulator |
 | Connection simplification | profile APIs, one-click test API, device list action and bounded result mapping | PARTIAL (AC1/AC2 live; SW/FIT-AP external gaps) | credential-backed four-device outcome |
-| AP identity / dual AC | offline projection and runtime fixtures | partial | simulator login and HA/failover evidence |
+| AP identity / dual AC | exact Serial+MAC projection, unique MAC partial-evidence association, conflict-preserving observations and runtime fixtures | partial | formal replacement/candidate review plus simulator login and HA/failover evidence |
 | Raw→Facts→Current | single and multi-command publication with collection provenance; incomplete success manifest rejected | PASS (isolated fixture) | four-simulator live collection |
 | Site authorization | current scope guards across task/files/terminal/wireless | baseline pass | task center and diagnostics every read/write |
 | Device management | P2A batch and CSV contracts | baseline pass | current UI integration and connection test |

@@ -7,7 +7,7 @@
 | FD-P1-02 | Scheduler | 单任务多命令顺序、命令级状态、独立 Raw | P1 | Raw manifest 合同 | COMPLETED_LOCAL | 13/13 H3C fact tests；成功终态缺 manifest fail-closed |
 | FD-P1-03 | Connection | SSH 首次自动信任、指纹轮换、并发原子更新 | P1 | DPAPI、host-key history | COMPLETED_LOCAL | 服务/隔离 transport |
 | FD-P1-04 | Connection | 一键测试连接和友好错误映射 | P1 | profile/credential/session | COMPLETED_LOCAL | API + device list action |
-| FD-P1-05 | Wireless | 双 AC/AP identity、Observation、group 和 runtime | P1 | 已完成 R3 projection | PARTIAL_EXTERNAL | fixture + four simulator evidence |
+| FD-P1-05 | Wireless | 双 AC/AP identity、Observation、group 和 runtime | P1 | 已完成 R3 projection | PARTIAL_EXTERNAL | fixture + four simulator evidence；partial exact-evidence association 已补强 |
 | FD-P1-06 | Facts | 多命令 collection manifest 与 Raw→Facts→Current | P1 | FD-P1-02 | COMPLETED_LOCAL | coherent isolated fixture；13/13 publication tests |
 | FD-P1-07 | Task UI | 任务中心按业务语言展示进度、设备明细、重试/取消 | P1 | FD-P1-01/02 | COMPLETED_LOCAL | command detail API/UI typecheck |
 | FD-P1-08 | Device UI | 新增设备默认协议/端口、当前 Site、测试连接 | P1 | FD-P1-04 | COMPLETED_LOCAL | device list quick test + typecheck |
