@@ -47,7 +47,7 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "WORKING_TREE_PENDING_COMMIT",
+  "lastRecoveryCommit": "e3c3054",
   "credentialAudit": {
     "at": "2026-11-05",
     "simulatorHost": "LOCAL_HCL_VIRTUALBOX",
