@@ -1,4 +1,5 @@
 using NetConsole.Next.Service;
+using Microsoft.Data.Sqlite;
 
 internal static class WirelessTests
 {
@@ -205,6 +206,22 @@ internal static class WirelessTests
                 preserved.Warnings!.Contains("AP_COLLECTION_FAILED_PREVIOUS_EVIDENCE_PRESERVED"), "failed collection must preserve the previous valid AP evidence");
             var runtimeService = new WirelessReadModelService(catalog);
             var physicalId = runtimeService.GetSnapshot(global).ApResources.Single().Id;
+            var persistedSnapshot = runtimeService.GetSnapshot(global);
+            using (var db = new SqliteConnection($"Data Source={Path.Combine(root, "catalog.db")}"))
+            {
+                db.Open();
+                using var projectionQuery = db.CreateCommand();
+                projectionQuery.CommandText = "SELECT (SELECT COUNT(*) FROM wireless_ac_domains),(SELECT COUNT(*) FROM wireless_ap_resources),(SELECT COUNT(*) FROM wireless_ap_observations),(SELECT COUNT(*) FROM wireless_ap_groups)";
+                using var row = projectionQuery.ExecuteReader();
+                Assert(row.Read() && row.GetInt64(0) == persistedSnapshot.AcDomains.Count && row.GetInt64(1) == persistedSnapshot.ApResources.Count &&
+                    row.GetInt64(2) == persistedSnapshot.ApResources.Sum(item => item.Observations.Count) && row.GetInt64(3) == persistedSnapshot.ApGroups.Count,
+                    "global wireless projection must persist one stable row per domain/resource/observation/group");
+            }
+            var restartedCatalog = new Catalog(settings);
+            restartedCatalog.Initialize();
+            var restartedSnapshot = new WirelessReadModelService(restartedCatalog).GetSnapshot(global);
+            Assert(restartedSnapshot.ApResources.Single().Id == physicalId && restartedSnapshot.ApResources.Single().Observations.Count == 1,
+                "wireless projection IDs and observation links must survive service restart");
             var failedRuntime = runtimeService.GetRuntimeState(physicalId, global, nowMs: 2500)!;
             Assert(failedRuntime.NormalizedState == "STALE" && failedRuntime.Sources.Single().LatestOutcome == "UNSUPPORTED" &&
                 failedRuntime.Sources.Single().Current?.NormalizedState == "RUNNING_MASTER", "runtime API projection must preserve valid state after a failed command fact");

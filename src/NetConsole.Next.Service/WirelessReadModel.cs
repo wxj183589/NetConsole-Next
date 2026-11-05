@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service;
 
@@ -452,6 +453,14 @@ internal sealed partial class WirelessReadModelService
         var catalog = _catalog.QueryWirelessCatalog(scope);
         var projected = _engine.Project(catalog.Acs, catalog.Observations, catalog.TopologyEvidence,
             scope.IsGlobal ? new("FULL", ClaimsRevision(scope)) : new("PARTIAL_SCOPE", ClaimsRevision(scope)));
+        if (scope.IsGlobal)
+        {
+            try { _catalog.PersistWirelessProjection(projected); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or SqliteException)
+            {
+                projected = projected with { Warnings = projected.Warnings.Append("WIRELESS_PROJECTION_PERSISTENCE_FAILED").Distinct(StringComparer.Ordinal).ToArray() };
+            }
+        }
         return projected with { Warnings = projected.Warnings.Concat(catalog.Warnings ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray() };
     }
 
