@@ -17,4 +17,5 @@
 | FD-P3-01 | UI | 1920/2560 任务/设备/无线交互验收 | P3 | UI workstream | COMPLETED_LOCAL | Chrome `1920/2560` fixture |
 | FD-P3-02 | Integration | module registry/navigation and error states | P3 | frontend build | COMPLETED_LOCAL | typecheck/browser |
 | FD-P2-04 | Integration/Security | 服务端模块状态持久化、SUPERADMIN 启停 API、核心模块保护 | P2 | Catalog schema v17、WebAuth | COMPLETED_LOCAL | module registry API/restart e2e |
+| FD-P1-09 | Wireless/Facts | R3 AP identity、AC Domain、跨 AC Observation、AP Group 持久化 | P1 | Wireless projection、schema v18 | COMPLETED_LOCAL | dual-AC isolated persistence/restart |
 | FD-P3-03 | Docs | 全天候 16 项交付报告、矩阵、回执、handoff | P3 | all workstreams | IN_PROGRESS | 本轮交接继续更新 |

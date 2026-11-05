@@ -14,3 +14,4 @@
 | Diagnostics/backup/topology | Ping/TCP/DNS diagnostics with restart-durable history, versioned redacted config backup/diff/download, LLDP relation/history/claims API and UI | PASS (isolated fixture/API/UI) | four-simulator credential-backed evidence |
 | UI/UX | device test-connection action, task command detail and task actions | PASS (1920/2560 offline browser + 1920 service-backed smoke) | service-backed mutation/browser gate |
 | Module governance | schema v17 persisted module registry, SUPERADMIN enable/disable API, core-module protection, restart persistence, shell status overlay and API capability gates | PASS (isolated service/API/UI) | settings management UI |
+| R3 wireless persistence | schema v18 AC domains, AP resources, per-AC observations and AC-owned groups; full-scope transactional upsert and stable IDs | PASS (isolated Catalog/restart) | live AC/AP collection and HA evidence |

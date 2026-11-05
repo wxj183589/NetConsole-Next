@@ -5,7 +5,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "NEXT_TASK_R3_PERSISTENCE_AND_COLLECTION_MANIFEST",
+  "phase": "NEXT_TASK_CROSS_AC_COLLECTION_MANIFEST",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -19,10 +19,10 @@
     "diagnostic restart history"
   ],
   "nextTasks": [
-    "R3 AP identity/domain/group persistence contract",
     "multi-device cross-AC collection manifest",
+    "settings UI for module governance",
     "four-simulator credential-backed login",
-    "settings UI for module governance"
+    "R3 live dual-AC HA evidence"
   ],
   "externalBlockers": [
     "credentials unavailable",
@@ -32,5 +32,5 @@
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "654950f"
+  "lastRecoveryCommit": "fe124b1"
 }
