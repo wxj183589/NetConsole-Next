@@ -1,6 +1,6 @@
 # 最终交接
 
-工作树：`D:\study\NetConsole-Next-Workspace\NetConsole-Next`。Branch：`codex-A/netconsole-next-r3-dual-ac`。最新产品提交：`6b96456`（集成全天候任务、诊断、备份与无线验收改动）；未 push、未 merge、未 release。
+工作树：`D:\study\NetConsole-Next-Workspace\NetConsole-Next`。Branch：`codex-A/netconsole-next-r3-dual-ac`。最新产品提交：`440a84f`（连接 onboarding HTTP 回归与 Profile ID 兼容修复）；未 push、未 merge、未 release。
 
 恢复顺序：读取 `AUTONOMOUS_RUN_STATE.json` → 检查 `git status` → 先取得模拟器安全凭据 → 运行 connection test → 再做双 AC 只读采集与 HA 证据；随后推进 service-backed browser gate 与 R3 双 AC live evidence。不得访问旧 NetConsole 数据根，不得复制整个真实 Site，不得把离线 fixture 当作实时验收。
 

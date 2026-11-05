@@ -1,5 +1,12 @@
 # 全天候自主开发日志
 
+## 2026-11-05 Checkpoint N
+
+- 当前 HEAD：`440a84f`。快速添加设备 onboarding 已完成 HTTP 回归：管理员 403，SUPERADMIN SSH/Telnet 创建成功，默认端口 22/23，响应脱敏；缺少 DPAPI 凭据时测试连接返回 `CREDENTIAL_UNAVAILABLE`。
+- 任务详情、取消、重试、恢复 API 已改为按 ID 查询并沿用 Site scope 过滤，历史任务不再受最近 100 条列表窗口限制。
+- Release Service build 0 warnings / 0 errors、完整 Service harness PASS、`CONCURRENCY_P1_TESTS=5/5 PASS`、`web_auth_e2e.py` PASS、`WEB_PR2_CONTRACT=PASS`、Vue typecheck PASS、Vitest 5 files/10 tests PASS、Vite build PASS。
+- 四台模拟器仍只有协议 banner 可达，DPAPI vault/profile 缺失；真实认证、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED。未 push、未 merge、未 release，真实数据未修改。
+
 ## 2026-11-05 07:05 CST
 
 - 集成 `614bbd4` 设备/UI 工作流，产品提交 `7b667da`。

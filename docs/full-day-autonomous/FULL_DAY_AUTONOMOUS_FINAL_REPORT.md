@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`6b96456`。未 push、已本地合并、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`440a84f`。未 push、未 merge、未 release。
 
 ## 结论
 
@@ -9,7 +9,7 @@
 | 多设备并行、并发上限、同设备互斥 | PASS（隔离 fixture） | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | 单任务多命令 | PASS（隔离 fixture） | 命令计划、schema v16、H3C fact tests `11/11 PASS` |
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
-| 一键测试连接 | PASS（API/UI 接入） | profile test endpoint、设备列表按钮 |
+| 一键测试连接与快速添加 | PASS（API/UI/HTTP 回归） | onboarding endpoint、SSH/Telnet 默认端口、设备列表按钮、`web_auth_e2e.py` |
 | SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport） | 连接工作流构建与 harness |
 | Ping/TCP/DNS/LLDP 批量诊断 | PASS（隔离 fixture/API/UI） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；LLDP captured scope 证据 |
 | LLDP 关系、变化历史和 Site claims | PASS（离线 fixture/API/UI） | `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；关系不伪造删除 |
@@ -37,10 +37,11 @@
 - 本轮补齐 AP Group 详情/成员/provenance 只读合同；不提供组写回，不把离线 fixture 当作实时模拟器证据。
 - 收口回归证据：R3 API fixture、无线投影/runtime、任务并发、Raw→Facts、LLDP、Service/Tests build、Vitest、vue-tsc、Vite 和无线浏览器 fixture 均通过；HTTP service-backed gate 仍受既有单实例 Mutex 与模拟器凭据缺口限制。
 - collection manifest 回归新增 source AC 详情过滤与未授权来源不泄露断言；该能力仍是隔离 fixture/Catalog 证据，不替代四台模拟器实时采集。
+- 本轮新增连接 onboarding HTTP 回归：只接收 Credential Reference；默认 SSH/Telnet 端口为 22/23；响应不返回 credential reference 或 host key；未配置 DPAPI 凭据时返回 `CREDENTIAL_UNAVAILABLE`。
 
 ## Checkpoint K 增量
 
-- 当前 HEAD：`6b96456`。
+- 当前 HEAD：`440a84f`。
 - A13 隔离 HTTP/API、完整 Service harness 与 Service-backed Browser smoke 复验通过。
 - A27 跨 AC collection manifest 列表/详情、source AC 过滤、Site claims 聚合与无线页采集记录完成。
 - 四台模拟器仅协议 banner 可达；默认 Next DPAPI vault/profile 缺失，真实认证、HA、切换/恢复继续 BLOCKED。
