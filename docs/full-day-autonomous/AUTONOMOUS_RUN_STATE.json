@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_L_CONNECTION_ONBOARDING_AND_TASK_LOOKUP",
+  "phase": "CHECKPOINT_M_TASK_API_HISTORY_SCOPE",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -23,7 +23,8 @@
     "collection manifest read API/UI",
     "simulator protocol banner and credential-vault audit",
     "secure connection onboarding API/UI",
-    "historical task lookup by ID"
+    "historical task lookup by ID",
+    "task detail/cancel/retry/resume API direct-ID scope lookup"
   ],
   "nextTasks": [
     "secure credential reference and four-simulator authentication",
@@ -39,5 +40,5 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "5e0b2a0"
+  "lastRecoveryCommit": "bc55cb4"
 }
