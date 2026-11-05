@@ -78,13 +78,13 @@ R3_WIRELESS_UI_IMPLEMENTATION=NOT_STARTED
 ### R3-C04 AP Group
 
 - `SOURCE_FILE`：`Phase9VendorParsers.cs:160-161,186-197`。
-- `EXISTING_API`：无 AP group API；只有 parser 输出 `Group` 字段。
-- `DATA_MODEL`：组目前是 AP observation 的字符串属性，不是有稳定 ID/归属/成员 revision 的资源。
-- `AUTHORIZATION_MODEL`：无法定义 AC Site 与 AP group 的授权来源。
-- `TEST_EVIDENCE`：parser fixture PASS；无组查询/多 AC 组隔离测试。
-- `IMPLEMENTATION_STATUS`：`IMPLEMENTED_PARTIAL`。
-- `CONTRACT_STATUS`：原始字段可复用，业务合同未实现。
-- `MISSING_FIELDS`：group ID/source AC/domain、membership validity、group state、revision、pagination。
+- `EXISTING_API`：已提供 AC/domain 组分页、组详情/provenance 和可见成员只读 API。
+- `DATA_MODEL`：`wireless_ap_groups` 保存稳定组 ID、AC/domain scope、成员 resource IDs、source revision 和 scope status。
+- `AUTHORIZATION_MODEL`：三条 API 均复用服务端无线 Site claims predicate；详情和成员只从当前可见投影返回。
+- `TEST_EVIDENCE`：`R3_DUAL_AC_GROUP_SCOPE=PASS`、`R3_DUAL_AC_GROUP_DETAIL_PROVENANCE=PASS`，并有无线浏览器组详情点击验收。
+- `IMPLEMENTATION_STATUS`：`IMPLEMENTED_READ_ONLY`。
+- `CONTRACT_STATUS`：只读业务合同已接入，写回能力仍禁止。
+- `MISSING_FIELDS`：长期审计事件和无线任务 subject 仍属于 G09/G10，不由 AP Group 详情接口补齐。
 - `RISKS`：同名组跨 AC 混淆；组名变化造成历史成员漂移。
 - `NEXT_ACTION`：依附 AC domain 建模，禁止全局 group name join。
 

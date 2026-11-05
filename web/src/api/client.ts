@@ -646,6 +646,23 @@ export interface WirelessApGroup {
   scopeStatus: string
 }
 
+export interface WirelessApGroupDetail {
+  group: WirelessApGroup
+  members: WirelessApResource[]
+  total: number
+  asOf: number
+  scope: WirelessScope
+  sourceRevision: string
+  warnings: string[]
+  provenance: {
+    sourceAcDeviceId: string
+    sourceAcDomainId: string
+    sourceRevision: string
+    scopeStatus: string
+    groupScope: string
+  }
+}
+
 export interface WirelessPage<T> {
   items: T[]
   page: number
@@ -667,6 +684,26 @@ export interface WirelessTopology {
   confirmed: boolean
   revision: string
   asOf: number
+}
+
+export interface WirelessApAssociation {
+  resourceId: string
+  displayName: string
+  identityStatus: string
+  observationId: string
+  sourceAcDeviceId: string
+  sourceAcDomainId: string
+  sourceSiteId: string
+  observedApName: string
+  serialEvidence?: string | null
+  normalizedMacSet: string[]
+  apGroup?: string | null
+  rawState: string
+  normalizedState: string
+  capturedMs: number
+  rawManifestRef: string
+  sourceRevision: string
+  relationStatus: string
 }
 
 export interface WirelessEffectiveState {
@@ -907,8 +944,14 @@ export function getWirelessApObservations(id: string, params: { page?: number; p
 export function getWirelessTopology(domainId: string): Promise<WirelessTopology> {
   return request(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/topology`)
 }
+export function getWirelessApAssociations(domainId: string, params: { sourceAcId?: string } = {}): Promise<{ items: WirelessApAssociation[]; total: number; domainId: string; asOf: number; scope: WirelessScope; sourceRevision: string; warnings: string[] }> {
+  return request(queryPath(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/ap-associations`, params))
+}
 export function getWirelessApGroups(domainId: string, params: { page?: number; pageSize?: number } = {}): Promise<WirelessPage<WirelessApGroup>> {
   return request(queryPath(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/ap-groups`, params))
+}
+export function getWirelessApGroup(id: string): Promise<WirelessApGroupDetail> {
+  return request(`/api/system/wireless/ap-groups/${encodeURIComponent(id)}`)
 }
 function queryPath(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams()

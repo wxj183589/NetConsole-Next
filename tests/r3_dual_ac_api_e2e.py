@@ -85,8 +85,21 @@ def main():
 
             status, topology = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/topology", token)
             assert status == 200 and topology["confirmed"] is True
+            status, associations = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-associations", token)
+            assert status == 200 and associations["total"] == 2
+            assert {item["sourceAcDeviceId"] for item in associations["items"]} == {"ac-device-1", "ac-device-2"}
+            status, ac1_associations = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-associations?sourceAcId=ac-device-1", token)
+            assert status == 200 and ac1_associations["total"] == 1
+            assert ac1_associations["items"][0]["rawManifestRef"].startswith("fixture:ac1:")
             status, groups = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-groups", token)
             assert status == 200 and groups["total"] == 2, (status, groups)
+            group_id = groups["items"][0]["id"]
+            status, group_detail = request(base, f"/api/system/wireless/ap-groups/{group_id}", token)
+            assert status == 200 and group_detail["group"]["id"] == group_id
+            assert group_detail["provenance"]["sourceAcDeviceId"] == group_detail["group"]["sourceAcDeviceId"]
+            assert group_detail["total"] == len(group_detail["members"])
+            status, _ = request(base, "/api/system/wireless/ap-groups/not-visible", token)
+            assert status == 404
             resource_id = resource["id"]
             status, filtered = request(base, "/api/system/wireless/ap-resources?sourceAcId=missing-ac&page=1&pageSize=10", token)
             assert status == 200 and filtered["total"] == 0 and filtered["items"] == [], (status, filtered)
@@ -104,7 +117,9 @@ def main():
             print("R3_DUAL_AC_IDENTITY_DEDUP=PASS")
             print("R3_DUAL_AC_OBSERVATION_PROVENANCE=PASS")
             print("R3_DUAL_AC_TOPOLOGY_EVIDENCE=PASS")
+            print("R3_DUAL_AC_ASSOCIATION_PROVENANCE=PASS")
             print("R3_DUAL_AC_GROUP_SCOPE=PASS")
+            print("R3_DUAL_AC_GROUP_DETAIL_PROVENANCE=PASS")
             print("R3_WIRELESS_FILTER_SCOPE=PASS")
             print("R3_WIRELESS_AUTH_GUARD=PASS")
         finally:

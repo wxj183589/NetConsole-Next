@@ -41,11 +41,11 @@ R3-B1 从 API-W01/W02/W03 的第一条无线 route 开始复用 P2B5 Site claims
 | API-W01 | GET `/api/system/wireless/ac-domains` | AC domain + members + topology | R3-B1 P2B5 AC scope | `DESIGNED_NOT_IMPLEMENTED` | G01 |
 | API-W02 | GET `/api/system/wireless/ap-resources` | typed AP resource + visible identity | visible observation predicate | `DESIGNED_NOT_IMPLEMENTED` | G02/G04 |
 | API-W03 | GET `/api/system/wireless/ap-resources/{id}` | identity evidence + visible observations | opaque ID + source predicate | `DESIGNED_NOT_IMPLEMENTED` | G02/G03/G04 |
-| API-W04 | GET `/api/system/wireless/ac-domains/{id}/ap-associations` | relation + source/revision | source AC/domain Site claim | `DESIGNED_NOT_IMPLEMENTED` | G03 |
+| API-W04 | GET `/api/system/wireless/ac-domains/{id}/ap-associations` | relation + source/revision | source AC/domain Site claim | `IMPLEMENTED_READ_ONLY` | G03 |
 | API-W05 | GET `/api/system/wireless/ap-resources/{id}/runtime-state` | raw/normalized/freshness/conflict | visible observations only | `DESIGNED_NOT_IMPLEMENTED` | G05 |
 | API-W06 | GET `/api/system/wireless/ac-domains/{id}/topology` | members, HA/IRF evidence | domain member scope | `DESIGNED_NOT_IMPLEMENTED` | G06 |
-| API-W07 | GET `/api/system/wireless/ac-domains/{id}/ap-groups` | AC/domain-scoped groups | group source Site claim | `DESIGNED_NOT_IMPLEMENTED` | G07 |
-| API-W08 | GET `/api/system/wireless/ap-groups/{id}/members` | visible AP members | group + AP predicate | `DESIGNED_NOT_IMPLEMENTED` | G07 |
+| API-W07 | GET `/api/system/wireless/ac-domains/{id}/ap-groups` | AC/domain-scoped groups | group source Site claim | `IMPLEMENTED_READ_ONLY` | G07 |
+| API-W08 | GET `/api/system/wireless/ap-groups/{id}` and `/members` | group detail/provenance and visible AP members | group + AP predicate | `IMPLEMENTED_READ_ONLY` | G07 |
 | API-W09 | INTERNAL `P2B5_SCOPE_PREDICATE`; 不新增 route | 当前身份授权摘要只供服务端 predicate 使用 | P2B5 authority；client claims forbidden | `REUSE_EXISTING_AUTHORITY_NO_NEW_ROUTE` | G08 |
 | API-W10 | GET `/api/system/wireless/tasks/{id}` | scope snapshot/current authorization | current claims at read | `DESIGNED_NOT_IMPLEMENTED` | G09 |
 | API-W11 | POST `/api/system/wireless/tasks` | plan/task accepted, no implicit write | creation scope + current claims | `DESIGNED_NOT_IMPLEMENTED` | G09 |

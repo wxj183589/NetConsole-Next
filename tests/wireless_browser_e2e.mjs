@@ -48,6 +48,11 @@ await page.route('**/api/**', async route => {
  if (pathname === '/api/auth/me') body = { username: 'fixture-operator', role: currentRole }
  else if (pathname === '/api/auth/csrf') body = { csrfToken: 'synthetic-fixture-csrf' }
  else if (pathname === '/api/system/health') body = { status: 'running', healthState: 'HEALTHY', collectionState: 'running', resources: {} }
+ else if (pathname === '/api/system/modules') body = [
+   { key: 'devices', label: '设备管理', enabled: true, isCore: true, updatedMs: 1000, updatedBy: 'fixture' },
+   { key: 'wireless', label: '无线业务', enabled: true, isCore: false, updatedMs: 1000, updatedBy: 'fixture' },
+   { key: 'files', label: '文件管理', enabled: true, isCore: false, updatedMs: 1000, updatedBy: 'fixture' },
+ ]
  else if (pathname === '/api/system/devices') body = { items: [], total: 0, summary: {} }
  else if (pathname === '/api/system/files/roots') {
    fileRootRequests++
@@ -77,6 +82,14 @@ await page.route('**/api/**', async route => {
        body.sources.forEach(item => { item.historyStatus = 'PARTIAL_SCAN_LIMIT' })
        body.warnings.push('RUNTIME_HISTORY_INCOMPLETE')
      }
+   }
+ } else if (pathname.includes('/wireless/ap-groups/') && !pathname.endsWith('/members')) {
+   const groupId = decodeURIComponent(pathname.split('/').at(-1))
+   const group = snapshot.apGroups.find(item => item.id === groupId)
+   if (!group) { status = 404; body = { error: 'WIRELESS_RESOURCE_NOT_VISIBLE' } }
+   else {
+     const members = allResources.filter(resource => group.memberResourceIds.includes(resource.id))
+     body = { group, members, total: members.length, asOf: snapshot.asOf, scope: snapshot.scope, sourceRevision: 'fixture-revision', warnings: ['OFFLINE_FIXTURE_EVIDENCE'], provenance: { sourceAcDeviceId: group.sourceAcDeviceId, sourceAcDomainId: group.sourceAcDomainId, sourceRevision: group.sourceRevision, scopeStatus: group.scopeStatus, groupScope: group.groupScope } }
    }
  } else if (pathname.endsWith('/ap-groups')) {
    if (mode === 'group-error') { status = 503; body = { error: 'fixture group unavailable' } }
@@ -116,6 +129,8 @@ try {
  await page.getByLabel('搜索 AP').fill('')
  await page.locator('.wireless-tree__member').first().click()
  await expect(page.locator('.wireless-group-row')).toHaveCount(1)
+ await page.locator('.wireless-group-row').first().click()
+ await expect(page.locator('.wireless-group-detail')).toContainText('来源 AC')
  await expect(page.locator('.wireless-observation')).toHaveCount(1)
  await expect(page.locator('.wireless-source-history')).toHaveCount(1)
  await expect(page.locator('.wireless-source-history')).toContainText('ac-device-1')

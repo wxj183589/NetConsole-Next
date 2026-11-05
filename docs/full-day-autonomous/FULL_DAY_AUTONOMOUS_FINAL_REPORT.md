@@ -21,6 +21,8 @@
 | 四台模拟器真实认证、双 AC HA | BLOCKED | 缺安全凭据；仅有 TCP/协议可达证据 |
 | R3 无线身份持久化 | PASS（隔离 Catalog） | schema v18、事务 upsert、稳定 AP ID、跨 AC Observation、重启恢复；未替代实时模拟器证据 |
 | 跨 AC collection manifest | PASS（隔离 Catalog） | schema v19 source revision manifest、逐 Observation provenance、Raw manifest ref 和重启恢复；未替代实时采集证据 |
+| AP Group 只读详情、成员和 provenance | PASS（隔离 API/UI） | AC/domain 组列表、组详情、成员 route；当前 Site claims 过滤；R3 fixture 与浏览器点击验收 |
+| AC Domain AP association 与 observation provenance | PASS（隔离 API） | API-W04 返回 source AC/domain/Site、identity、revision 和 Raw manifest reference；支持来源 AC 过滤 |
 | Site 权限 | PASS（既有合同） | scope guard 与服务端复核 |
 
 密码仍只通过 DPAPI 引用读取；未进入浏览器、URL、SQLite、日志、Git 或报告。真实数据未修改。
@@ -31,3 +33,5 @@
 - 串行 Service Tests Release build：0 warnings / 0 errors；完整 C# Service harness：PASS，包含 schema v19、无线投影、跨 AC manifest、任务并发、SQLite、诊断、归档和性能场景。
 - 前端既有 `vue-tsc`、Vitest（5 files / 10 tests）和 Vite build 证据保持有效；发布输出已更新并纳入版本控制。
 - 四台模拟器仍只有白名单端口可达证据；凭据引用不可用，真实认证、HA 切换/恢复和实时 AP 归属仍为 BLOCKED。
+- 本轮补齐 AP Group 详情/成员/provenance 只读合同；不提供组写回，不把离线 fixture 当作实时模拟器证据。
+- 收口回归证据：R3 API fixture、无线投影/runtime、任务并发、Raw→Facts、LLDP、Service/Tests build、Vitest、vue-tsc、Vite 和无线浏览器 fixture 均通过；HTTP service-backed gate 仍受既有单实例 Mutex 与模拟器凭据缺口限制。

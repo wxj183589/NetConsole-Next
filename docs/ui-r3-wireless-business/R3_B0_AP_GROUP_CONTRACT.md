@@ -72,13 +72,13 @@ visibility: FULL | PARTIAL | NONE
 
 ## 4. 建议只读 API
 
-以下是未来 endpoint 合同，不代表本轮已经存在：
+以下只读 endpoint 已接入当前无线读模型；它们仍不提供 AP Group 写回能力：
 
 | Method | Endpoint | 目的 | 权限 | 状态 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/system/wireless/ac-domains/{domainId}/ap-groups` | 分页列出可见 Domain/AC groups | source AC/domain Site claim | `DESIGNED_NOT_IMPLEMENTED` |
-| GET | `/api/system/wireless/ap-groups/{groupId}` | 组详情和 provenance | group source Site claim | `DESIGNED_NOT_IMPLEMENTED` |
-| GET | `/api/system/wireless/ap-groups/{groupId}/members` | 可见 AP 成员 | group + AP observation predicate | `DESIGNED_NOT_IMPLEMENTED` |
+| GET | `/api/system/wireless/ac-domains/{domainId}/ap-groups` | 分页列出可见 Domain/AC groups | source AC/domain Site claim | `IMPLEMENTED_READ_ONLY` |
+| GET | `/api/system/wireless/ap-groups/{groupId}` | 组详情和 provenance | group source Site claim | `IMPLEMENTED_READ_ONLY` |
+| GET | `/api/system/wireless/ap-groups/{groupId}/members` | 可见 AP 成员 | group + AP observation predicate | `IMPLEMENTED_READ_ONLY` |
 
 响应必须返回 `group_scope`、`group_identity_key`、`source_ac_device_id`、`source_ac_domain_id`、`source_group_key`、`source_revision`、`membership_revision`、`scope_status` 和 `as_of`。不能只返回 name/member count 造成无法审计的聚合。
 
@@ -101,3 +101,5 @@ visibility: FULL | PARTIAL | NONE
 - `src/NetConsole.Next.Service/Program.cs:596-610`：现有平台 device group route 不能直接复用为无线 AC group。
 - `D:\study\NetConsole-Next-Workspace\architecture-replanning\R0-R1-20261101\04_DEVICE_AND_AC_DOMAIN_MODEL.md:9-35`：AC domain/observation 分层原则。
 - `docs/ui-r3-wireless-business/R3_B0_BUSINESS_DECISION_PACKAGE.md`：`R3_DECISION_04`。
+
+当前实现证据：`src/NetConsole.Next.Service/Program.cs` 的三条只读 AP Group route、`tests/r3_dual_ac_api_e2e.py` 的 group scope/detail/provenance 断言，以及 `tests/wireless_browser_e2e.mjs` 的组详情点击验收。

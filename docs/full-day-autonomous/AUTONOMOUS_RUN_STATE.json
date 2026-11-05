@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_UI_COMMITTED_LIVE_EVIDENCE_BLOCKED",
+  "phase": "CHECKPOINT_R3_API_ACCEPTED_LIVE_EVIDENCE_BLOCKED",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -33,5 +33,5 @@
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "1c54d38"
+  "lastRecoveryCommit": "f1cc851"
 }

@@ -20,3 +20,5 @@
 | FD-P1-09 | Wireless/Facts | R3 AP identity、AC Domain、跨 AC Observation、AP Group 持久化 | P1 | Wireless projection、schema v18 | COMPLETED_LOCAL | dual-AC isolated persistence/restart |
 | FD-P1-10 | Wireless/Facts | 跨 AC collection manifest 与 observation provenance 绑定 | P1 | FD-P1-09、Raw manifest | COMPLETED_LOCAL | schema v19 manifest/restart e2e |
 | FD-P3-03 | Docs | 全天候 16 项交付报告、矩阵、回执、handoff | P3 | all workstreams | IN_PROGRESS | 本轮交接继续更新 |
+| FD-P1-11 | Wireless/Facts | AP Group 详情、成员与 provenance 只读 API/UI | P1 | FD-P1-09、Site claims | COMPLETED_LOCAL | group scope/detail API、浏览器点击验收 |
+| FD-P1-12 | Wireless/Facts | AC Domain AP association 与 observation provenance 只读 API | P1 | FD-P1-09、Site claims | COMPLETED_LOCAL | API-W04 fixture/filter 验收 |

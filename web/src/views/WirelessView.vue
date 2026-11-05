@@ -4,11 +4,13 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
   getWirelessAcDomains,
+  getWirelessApGroup,
   getWirelessApGroups,
   getWirelessApResources,
   getWirelessRuntimeState,
   type WirelessAcDomain,
   type WirelessApGroup,
+  type WirelessApGroupDetail,
   type WirelessApResource,
   type WirelessRuntimeState,
 } from '../api/client'
@@ -23,6 +25,9 @@ const selectedResourceId = ref('')
 const search = ref('')
 const error = ref('')
 const groupError = ref('')
+const groupDetail = ref<WirelessApGroupDetail | null>(null)
+const groupDetailLoading = ref(false)
+const groupDetailError = ref('')
 const warnings = ref<string[]>([])
 const page = ref(1)
 const pageSize = 20
@@ -34,6 +39,7 @@ let runtimeGeneration = 0
 let runtimeController: AbortController | null = null
 let refreshGeneration = 0
 let groupGeneration = 0
+let groupDetailGeneration = 0
 
 const selectedDomain = computed(() => domains.value.find(domain => domain.id === selectedDomainId.value) || domains.value[0] || null)
 const visibleResources = computed(() => resources.value.filter(resource => {
@@ -51,6 +57,7 @@ function viewObservations(resource: WirelessApResource) {
   return resource.observations.filter(item => (!selectedDomain.value || item.sourceAcDomainId === selectedDomain.value.id) && (!selectedAcId.value || item.sourceAcDeviceId === selectedAcId.value))
 }
 watch([search, stateFilter, selectedDomainId, selectedAcId], () => { page.value = 1; selectedResourceId.value = '' })
+watch([selectedDomainId, selectedAcId], () => { groupDetail.value = null; groupDetailError.value = ''; ++groupDetailGeneration })
 watch([() => selectedResource.value?.id, () => selectedResource.value?.projectionRevision, selectedDomainId, selectedAcId], () => { void loadRuntime() })
 
 async function loadRuntime(): Promise<void> {
@@ -110,11 +117,27 @@ async function loadGroups(domainId: string): Promise<void> {
   const generation = ++groupGeneration
   groups.value = []
   groupError.value = ''
+  groupDetail.value = null
+  groupDetailError.value = ''
   try {
     const result = await readAll(params => getWirelessApGroups(domainId, params))
     if (generation === groupGeneration) groups.value = result
   } catch (cause) {
     if (generation === groupGeneration) groupError.value = cause instanceof Error ? cause.message : 'AP 组读取失败'
+  }
+}
+async function selectGroup(group: WirelessApGroup): Promise<void> {
+  const generation = ++groupDetailGeneration
+  groupDetail.value = null
+  groupDetailError.value = ''
+  groupDetailLoading.value = true
+  try {
+    const result = await getWirelessApGroup(group.id)
+    if (generation === groupDetailGeneration) groupDetail.value = result
+  } catch (cause) {
+    if (generation === groupDetailGeneration) groupDetailError.value = cause instanceof Error ? cause.message : 'AP 组详情读取失败'
+  } finally {
+    if (generation === groupDetailGeneration) groupDetailLoading.value = false
   }
 }
 async function refresh(): Promise<void> {
@@ -126,6 +149,9 @@ async function refresh(): Promise<void> {
   loading.value = true
   error.value = ''
   groupError.value = ''
+  groupDetail.value = null
+  groupDetailError.value = ''
+  ++groupDetailGeneration
   warnings.value = []
   try {
     const [domainItems, resourceItems] = await Promise.all([
@@ -208,7 +234,7 @@ onMounted(() => { void refresh() })
 
           <el-pagination v-if="visibleResources.length > pageSize" v-model:current-page="page" :page-size="pageSize" :total="visibleResources.length" layout="total, prev, pager, next" />
           <div class="wireless-bottom-grid">
-            <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="visibleGroups.length" class="wireless-group-list"><div v-for="group in visibleGroups" :key="group.id" class="wireless-group-row"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></div></div><div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '按来源 AC 保留 AP 组。' }}</small></div></div></section>
+            <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="visibleGroups.length" class="wireless-group-list"><button v-for="group in visibleGroups" :key="group.id" class="wireless-group-row" :class="{ selected: groupDetail?.group.id === group.id }" type="button" @click="selectGroup(group)"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></button></div><div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '按来源 AC 保留 AP 组。' }}</small></div></div><div v-if="groupDetailLoading" class="wireless-group-detail muted-text">正在读取组详情…</div><div v-else-if="groupDetailError" class="wireless-group-detail bad-text">{{ groupDetailError }}</div><div v-else-if="groupDetail" class="wireless-group-detail"><div class="card__header"><h3>{{ groupDetail.group.displayName }}</h3><span class="state-pill info">{{ groupDetail.provenance.groupScope }}</span></div><div class="wireless-group-detail__meta"><span>来源 AC <code>{{ groupDetail.provenance.sourceAcDeviceId }}</code></span><span>Domain <code>{{ groupDetail.provenance.sourceAcDomainId }}</code></span><span>Revision <code>{{ groupDetail.provenance.sourceRevision }}</code></span></div><small>可见成员 {{ groupDetail.total }} 个；成员列表经过当前 Site claims 过滤。</small></div></section>
             <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
           </div>
           <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
@@ -273,10 +299,17 @@ onMounted(() => { void refresh() })
 .wireless-toolbar input { width: 190px; border: 1px solid var(--nc-border); border-radius: 5px; padding: 6px 8px; color: var(--nc-text); background: var(--nc-surface); font-size: 11px; }
 .source-tag { display: inline-block; margin: 1px 3px 1px 0; border-radius: 4px; padding: 2px 4px; color: var(--nc-primary); background: var(--nc-primary-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
 .wireless-group-list, .wireless-observation-list { padding: 0 14px 14px; }
-.wireless-group-row, .wireless-observation { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--nc-border); padding: 10px 2px; color: var(--nc-text-secondary); font-size: 11px; }
+.wireless-group-row, .wireless-observation { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; border-bottom: 1px solid var(--nc-border); padding: 10px 2px; color: var(--nc-text-secondary); background: transparent; font: inherit; font-size: 11px; text-align: left; }
+.wireless-group-row { cursor: pointer; }
+.wireless-group-row:hover, .wireless-group-row.selected { background: var(--nc-primary-soft); }
 .wireless-group-row:last-child, .wireless-observation:last-child { border-bottom: 0; }
 .wireless-group-row strong, .wireless-group-row small, .wireless-observation strong, .wireless-observation small { display: block; }
 .wireless-group-row small { margin-top: 3px; color: var(--nc-text-muted); }
+.wireless-group-detail { margin: 0 14px 14px; border: 1px solid var(--nc-border); border-radius: 7px; padding: 12px; color: var(--nc-text-secondary); font-size: 11px; }
+.wireless-group-detail .card__header { padding: 0 0 8px; }
+.wireless-group-detail h3 { margin: 0; color: var(--nc-text); font-size: 13px; }
+.wireless-group-detail__meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 7px; }
+.wireless-group-detail code { color: var(--nc-text); font-size: 10px; }
 .wireless-observation > div { display: flex; align-items: center; gap: 7px; }
 .wireless-observation small { margin-top: 3px; color: var(--nc-text-muted); }
 .wireless-runtime { min-width: 0; }
