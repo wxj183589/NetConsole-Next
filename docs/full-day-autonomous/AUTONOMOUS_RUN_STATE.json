@@ -5,14 +5,34 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "INTEGRATED_SERVICE_AND_UI_REGRESSION",
-  "activeWorkstreams": [],
-  "completedAtStart": ["AP runtime history", "task scope", "interactive files authority", "fact revision/site provenance", "single-command Raw publication", "bounded network diagnostics batch", "configuration backup", "LLDP topology relations", "diagnostic restart history"],
-  "nextTasks": ["four-simulator credential-backed login", "service-backed browser gate", "R3 dual-AC live evidence"],
-  "externalBlockers": ["credentials unavailable", "existing service mutex for HTTP gate"],
+  "phase": "NEXT_GAP_MODULE_GOVERNANCE",
+  "activeWorkstreams": [
+    "module-registry-backend-governance"
+  ],
+  "completedAtStart": [
+    "AP runtime history",
+    "task scope",
+    "interactive files authority",
+    "fact revision/site provenance",
+    "single-command Raw publication",
+    "bounded network diagnostics batch",
+    "configuration backup",
+    "LLDP topology relations",
+    "diagnostic restart history"
+  ],
+  "nextTasks": [
+    "module registry backend persistence and enable/disable API",
+    "R3 AP identity/domain/group persistence contract",
+    "multi-device cross-AC collection manifest",
+    "four-simulator credential-backed login"
+  ],
+  "externalBlockers": [
+    "credentials unavailable",
+    "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available"
+  ],
   "realDataChanged": false,
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "db8120e"
+  "lastRecoveryCommit": "c1d1215"
 }
