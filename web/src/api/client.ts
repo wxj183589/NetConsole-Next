@@ -1077,6 +1077,20 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export interface H3cTaskDefinitionRequest {
+  id: string
+  profileId: string
+  command: string
+  commands?: string[]
+  timeoutMs?: number
+  enabled?: boolean
+}
+export function createH3cTaskDefinition(payload: H3cTaskDefinitionRequest): Promise<Record<string, unknown>> {
+  return request('/api/system/h3c/task-definitions', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function startH3cTaskDefinition(definitionId: string): Promise<{ runId: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(definitionId)}/runs`, { method: 'POST', body: JSON.stringify({}) })
+}
 export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
 }

@@ -4,6 +4,7 @@
 
 - 当前 HEAD：`440a84f`。快速添加设备 onboarding 已完成 HTTP 回归：管理员 403，SUPERADMIN SSH/Telnet 创建成功，默认端口 22/23，响应脱敏；缺少 DPAPI 凭据时测试连接返回 `CREDENTIAL_UNAVAILABLE`。
 - 任务详情、取消、重试、恢复 API 已改为按 ID 查询并沿用 Site scope 过滤，历史任务不再受最近 100 条列表窗口限制。
+- 任务中心新增固定只读多命令计划入口；页面通过现有 task-definition/run API 创建顺序计划，服务端仍执行命令白名单、Raw 独立封存和 Site scope 校验。
 - Release Service build 0 warnings / 0 errors、完整 Service harness PASS、`CONCURRENCY_P1_TESTS=5/5 PASS`、`web_auth_e2e.py` PASS、`WEB_PR2_CONTRACT=PASS`、Vue typecheck PASS、Vitest 5 files/10 tests PASS、Vite build PASS。
 - 四台模拟器仍只有协议 banner 可达，DPAPI vault/profile 缺失；真实认证、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED。未 push、未 merge、未 release，真实数据未修改。
 

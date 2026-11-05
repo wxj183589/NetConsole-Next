@@ -9,6 +9,7 @@
 - Browser：1920×1080、2560×1440 登录、主题、设备、终端、任务重试、工具、文件、未知路由、禁用模块 fixture PASS。
 - Web contract：`4 checks PASS`；任务取消/重试/恢复 API 的 SUPERADMIN 与 Site scope 静态边界 PASS。
 - Connection onboarding HTTP：管理员写入 403；SUPERADMIN SSH/Telnet onboarding、默认端口、敏感字段脱敏和无 DPAPI 凭据错误映射 PASS（`web_auth_e2e.py`）。
+- Multi-command plan HTTP/UI：SUPERADMIN 只读命令计划创建、顺序命令列表持久化和运行提交 PASS（`web_auth_e2e.py`）；任务页面入口通过 vue-tsc/Vitest/Vite。
 - Service-backed browser smoke：真实隔离 Service、真实登录、概览/设备/任务/工具/文件页面，1920×1080 PASS；临时数据根与服务进程已清理。
 - Module registry API：隔离服务中普通 ADMIN 写入 403、SUPERADMIN 启停成功、核心模块停用 409、停用模块直接 API 404、重启后状态保留 PASS。
 - R3 wireless persistence：schema v18、AC Domain/AP resource/Observation/AP Group 事务 upsert、稳定 ID、重复投影幂等和 Catalog 重启恢复 PASS。

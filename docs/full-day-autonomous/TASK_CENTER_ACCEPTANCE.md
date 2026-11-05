@@ -8,4 +8,4 @@
 
 验证：Service build、Tests build、完整 Service harness、Vitest `5 files / 10 tests`、Vue typecheck、Web contract `4 checks`、1920/2560 浏览器 fixture 均 PASS。真实设备任务仍受模拟器凭据阻断。
 
-状态：PASS（API/UI本地）。`/api/system/tasks/{runId}/commands` 返回命令级状态、Raw/parse 状态和错误；任务页面按业务语言显示并可打开命令明细。取消、重试、恢复由既有服务端接口继续负责。浏览器 service-backed gate 仍受已有 Mutex 影响。
+状态：PASS（API/UI本地）。任务中心提供固定只读命令计划入口，按顺序创建并执行 H3C 多命令任务；`/api/system/tasks/{runId}/commands` 返回命令级状态、Raw/parse 状态和错误。任务页面可打开命令明细，取消、重试、恢复按任务 ID 直接查询并由既有服务端 Site scope/SUPERADMIN 门禁保护。`web_auth_e2e.py` 已验证多命令计划创建与执行提交；浏览器 service-backed gate 仍受已有 Mutex 影响。

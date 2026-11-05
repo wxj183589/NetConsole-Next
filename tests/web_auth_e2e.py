@@ -158,6 +158,13 @@ def main():
                     "command": "display version", "timeoutMs": 1000, "enabled": True}
             assert admin_a.request("/api/system/h3c/task-definitions", "POST", task)[0] == 403
             assert admin_a.request("/api/system/tasks/web-auth-h3c-task/runs", "POST", {})[0] == 403
+            multi_task = {"id": "web-auth-h3c-multi-task", "profileId": "00000000000000000000000000000011",
+                          "command": "display version", "commands": ["display version", "display device"],
+                          "timeoutMs": 1000, "enabled": True}
+            multi_status, multi_definition = superadmin.request("/api/system/h3c/task-definitions", "POST", multi_task)
+            assert multi_status == 201 and multi_definition["commandPlan"] == ["display version", "display device"]
+            run_status, run_result = superadmin.request("/api/system/tasks/web-auth-h3c-multi-task/runs", "POST", {})
+            assert run_status == 202 and run_result["runId"]
 
             # Cookie writes require both Origin and CSRF.
             assert admin_b.request("/api/auth/password", "POST", {"currentPassword": "admin", "newPassword": "admin-temp-123"}, csrf=False)[0] == 403
