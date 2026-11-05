@@ -62,6 +62,8 @@ else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
     await ConcurrencyP1Tests.RunAsync();
 else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
+    H3cLldpTopologyTests.Run();
 else
     await SchedulerTests.RunAsync();
 

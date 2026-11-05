@@ -484,6 +484,33 @@ export interface H3cFact {
   freshness?: string
 }
 
+export interface H3cLldpRelation {
+  profileId: string
+  localDeviceId: string
+  localInterface: string
+  neighborDevice: string
+  neighborPort?: string | null
+  neighborManagementAddress?: string | null
+  neighborChassisId?: string | null
+  siteId: string
+  source: string
+  capturedMs: number
+  factRevision: string
+  relationKey: string
+  changeKind: string
+}
+
+export interface H3cLldpClaims {
+  profileId: string
+  scopeState: string
+  isGlobal: boolean
+  claimsRevision?: string | null
+  allowedSiteReferences: string[]
+  factCount: number
+  relationCount: number
+  relations: H3cLldpRelation[]
+}
+
 export interface WirelessScope {
   status: string
   claimsRevision: string
@@ -783,6 +810,12 @@ export function getZteFacts(id: string, params: { kind?: string; history?: boole
 }
 export function getH3cFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<H3cFact[]> {
   return request(queryPath(`/api/system/h3c/profiles/${encodeURIComponent(id)}/facts`, params))
+}
+export function getH3cLldpRelations(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpRelation[]> {
+  return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-relations?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
+}
+export function getH3cLldpClaims(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpClaims> {
+  return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-claims?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
 }
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))

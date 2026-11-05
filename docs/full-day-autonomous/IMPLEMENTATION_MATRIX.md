@@ -11,5 +11,5 @@
 | Raw→Facts→Current | single and multi-command publication with collection provenance | PASS (isolated fixture) | four-simulator live collection |
 | Site authorization | current scope guards across task/files/terminal/wireless | baseline pass | task center and diagnostics every read/write |
 | Device management | P2A batch and CSV contracts | baseline pass | current UI integration and connection test |
-| Diagnostics/backup/topology | Ping/TCP/DNS bounded diagnostic batch, LLDP verified-Facts read, progress/cancel API and Tools UI | PASS (isolated fixture/API/UI) | four-simulator credential-backed evidence; restart-durable diagnostics history |
+| Diagnostics/backup/topology | Ping/TCP/DNS bounded diagnostic batch, LLDP verified-Facts read, LLDP relation/history/claims API and H3C UI | PASS (isolated fixture/API/UI) | four-simulator credential-backed evidence; restart-durable diagnostics history |
 | UI/UX | device test-connection action and task command detail | PASS (typecheck/Vitest) | service-backed browser gate |

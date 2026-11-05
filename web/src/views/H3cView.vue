@@ -2,11 +2,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
-import { getH3cFacts, getH3cProfiles, type H3cFact, type TerminalDevice } from '../api/client'
+import { getH3cFacts, getH3cLldpClaims, getH3cLldpRelations, getH3cProfiles, type H3cFact, type H3cLldpClaims, type H3cLldpRelation, type TerminalDevice } from '../api/client'
 
 const profiles = ref<TerminalDevice[]>([])
 const selected = ref<TerminalDevice | null>(null)
 const facts = ref<H3cFact[]>([])
+const relations = ref<H3cLldpRelation[]>([])
+const claims = ref<H3cLldpClaims | null>(null)
 const history = ref(false)
 const loading = ref(false)
 let selectionGeneration = 0
@@ -24,13 +26,17 @@ const statusLabel = (fact: H3cFact): string => ({
 } as Record<string, string>)[fact.dataState || fact.status] || fact.status
 
 async function loadFacts(profileId = selected.value?.id, generation = selectionGeneration): Promise<void> {
-  if (!profileId) { facts.value = []; return }
+  if (!profileId) { facts.value = []; relations.value = []; claims.value = null; return }
   const requestGeneration = ++factsRequestGeneration
   loading.value = true
   try {
-    const nextFacts = await getH3cFacts(profileId, { history: history.value, limit: history.value ? 500 : 100 })
+    const [nextFacts, nextRelations, nextClaims] = await Promise.all([
+      getH3cFacts(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
+      getH3cLldpRelations(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
+      getH3cLldpClaims(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
+    ])
     if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
-      facts.value = nextFacts
+      { facts.value = nextFacts; relations.value = nextRelations; claims.value = nextClaims }
   } catch (error) {
     if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
       ElMessage.error(error instanceof Error ? error.message : 'H3C 事实读取失败')
@@ -68,6 +74,8 @@ onMounted(() => { void refresh().catch(() => ElMessage.error('H3C profile 读取
       <section class="card"><div class="card__header"><h2>设备身份 / Mesh Profile</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>事实</th><th>状态</th><th>时间</th><th>来源</th><th>数据</th></tr></thead><tbody><tr v-for="fact in [...of('device.identity'), ...of('mesh.profile')]" :key="fact.id"><td>{{ fact.kind }}</td><td>{{ statusLabel(fact) }}</td><td>{{ time(fact.capturedMs) }}</td><td>{{ fact.source }}</td><td class="mono">{{ JSON.stringify(decode(fact)) }}</td></tr><tr v-if="!of('device.identity').length && !of('mesh.profile').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
       <section class="card"><div class="card__header"><h2>Radio</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>接口</th><th>状态</th><th>模式</th><th>信道</th><th>时间 / 来源</th></tr></thead><tbody><tr v-for="fact in of('radio')" :key="fact.id"><td>{{ decode(fact).interfaceName }}</td><td>{{ decode(fact).linkStatus }}</td><td>{{ decode(fact).radioMode || '—' }}</td><td>{{ decode(fact).channel || '—' }}</td><td>{{ time(fact.capturedMs) }} · {{ fact.source }}</td></tr><tr v-if="!of('radio').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
       <section class="card"><div class="card__header"><h2>接口 / LLDP / Mesh Peer</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>类型</th><th>稳定键</th><th>状态</th><th>关键字段</th><th>时间 / 来源</th></tr></thead><tbody><tr v-for="fact in [...of('interface'), ...of('lldp.neighbor'), ...of('mesh.peer')]" :key="fact.id"><td>{{ fact.kind }}</td><td class="mono">{{ fact.identityKey }}</td><td>{{ statusLabel(fact) }}</td><td class="mono">{{ JSON.stringify(decode(fact)) }}</td><td>{{ time(fact.capturedMs) }} · {{ fact.source }}</td></tr><tr v-if="!of('interface').length && !of('lldp.neighbor').length && !of('mesh.peer').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
+      <section class="card"><div class="card__header"><h2>LLDP 关系与变化历史</h2><span class="state-pill">{{ relations.length }} 条</span></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>本地设备 / 接口</th><th>邻居设备 / 端口</th><th>Site</th><th>变化</th><th>时间 / 来源</th><th>Fact revision</th></tr></thead><tbody><tr v-for="relation in relations" :key="relation.factRevision"><td class="mono">{{ relation.localDeviceId }} / {{ relation.localInterface }}</td><td>{{ relation.neighborDevice }} / {{ relation.neighborPort || '—' }}</td><td>{{ relation.siteId }}</td><td>{{ relation.changeKind }}</td><td>{{ time(relation.capturedMs) }} · {{ relation.source }}</td><td class="mono">{{ relation.factRevision }}</td></tr><tr v-if="!relations.length"><td colspan="6" class="muted">没有带 Site scope 的 LLDP 关系事实</td></tr></tbody></table></div></section>
+      <section class="card"><div class="card__header"><h2>LLDP Site claims</h2><span class="state-pill">{{ claims?.scopeState || '—' }}</span></div><div class="card__body"><p class="data-quality-note">当前作用域：{{ claims?.isGlobal ? '全局' : claims?.allowedSiteReferences.join('、') || '无授权 Site' }} · claims revision {{ claims?.claimsRevision || '—' }}</p></div></section>
     </template>
   </NcLayout>
 </template>

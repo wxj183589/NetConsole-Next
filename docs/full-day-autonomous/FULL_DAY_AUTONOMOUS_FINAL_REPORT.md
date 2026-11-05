@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-autonomous-full-feature`；HEAD：`83e550a`。本地提交，未 push、merge、release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-autonomous-full-feature`；HEAD：本轮 FD-P2-03 本地提交。本地提交，未 push、merge、release。
 
 ## 结论
 
@@ -11,7 +11,7 @@
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
 | 一键测试连接 | PASS（API/UI 接入） | profile test endpoint、设备列表按钮 |
 | SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport） | 连接工作流构建与 harness |
-| Ping/TCP/DNS/LLDP 批量诊断 | PASS（隔离 fixture/API/UI） | `NETWORK_DIAGNOSTICS_TESTS=3/3 PASS`；LLDP captured scope 证据 |
+| Ping/TCP/DNS/LLDP 批量诊断 | PASS（隔离 fixture/API/UI） | `NETWORK_DIAGNOSTICS_TESTS=3/3 PASS`；LLDP captured scope 证据 |`n| LLDP 关系、变化历史和 Site claims | PASS（离线 fixture/API/UI） | `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；关系不伪造删除 |
 | 四台模拟器真实认证、双 AC HA | BLOCKED | 缺安全凭据；仅有 TCP/协议可达证据 |
 | Site 权限 | PASS（既有合同） | scope guard 与服务端复核 |
 

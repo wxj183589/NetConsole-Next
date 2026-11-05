@@ -1016,6 +1016,34 @@ if (settings.H3cEnabled)
         var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
         return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit, scope));
     });
+    app.MapGet("/api/system/h3c/profiles/{id}/lldp-relations", (HttpContext context, string id,
+        HttpRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail },
+                statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        return Results.Ok(rawCatalog.QueryH3cLldpRelations(id, history, limit, scope));
+    });
+    app.MapGet("/api/system/h3c/profiles/{id}/lldp-claims", (HttpContext context, string id,
+        HttpRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail },
+                statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        var facts = rawCatalog.QueryH3cFacts(id, "lldp.neighbor", history, Math.Clamp(limit, 1, 1000), scope,
+            requireCapturedScope: true);
+        var relations = H3cLldpTopologyProjection.Project(id, facts);
+        return Results.Ok(new H3cLldpClaimsView(id, scope.State, scope.IsGlobal, scope.ClaimsRevision,
+            scope.AllowedSiteReferences.Order(StringComparer.Ordinal).ToArray(), facts.Count, relations.Count, relations));
+    });
     app.MapPost("/api/system/h3c/profiles/{id}/offline-replay", (HttpContext context, string id,
         H3cOfflineReplayRequest request, Catalog rawCatalog) =>
     {

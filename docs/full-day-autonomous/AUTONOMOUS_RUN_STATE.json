@@ -5,14 +5,14 @@
   "baseCommit": "2343e6b",
   "branch": "codex-A/netconsole-next-autonomous-full-feature",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\worktrees\\next-autonomous-full-feature",
-  "phase": "DIAGNOSTICS_BATCH_AND_UI",
+  "phase": "LLDP_TOPOLOGY_RELATIONS",
   "activeWorkstreams": ["concurrency", "connection", "device_ui", "integration"],
   "completedAtStart": ["AP runtime history", "task scope", "interactive files authority", "fact revision/site provenance", "single-command Raw publication", "bounded network diagnostics batch"],
-  "nextTasks": ["four-simulator credential-backed login", "configuration backup and LLDP topology history", "full-day acceptance artifacts", "service-backed browser gate"],
+  "nextTasks": ["four-simulator credential-backed login", "configuration backup", "full-day acceptance artifacts", "service-backed browser gate"],
   "externalBlockers": ["credentials unavailable", "existing service mutex for HTTP gate"],
   "realDataChanged": false,
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "83e550a"
+  "lastRecoveryCommit": "pending-fd-p2-03-local-commit"
 }
