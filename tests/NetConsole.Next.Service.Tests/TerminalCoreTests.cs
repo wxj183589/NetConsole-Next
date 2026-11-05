@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -12,6 +13,7 @@ internal static class TerminalCoreTests
     {
         VerifiesRestrictedReadonlyPolicy();
         VerifiesTelnetNegotiation();
+        await VerifiesTelnetLoginFailureAsync();
         VerifiesOneTimeTicket();
         await VerifiesSessionSchemaAndRecordingAsync();
         await VerifiesSegmentedRecordingIntegrityAndRecoveryAsync();
@@ -43,6 +45,41 @@ internal static class TerminalCoreTests
         Assert(Encoding.ASCII.GetString(payload) == "RE", "Telnet IAC bytes must not leak into terminal output");
         Assert(negotiator.Replies.Span.SequenceEqual(new byte[] { 255, 253, 1, 255, 252, 42 }),
             "Telnet negotiation must accept echo and refuse unsupported terminal options deterministically");
+    }
+
+    private static async Task VerifiesTelnetLoginFailureAsync()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var server = Task.Run(async () =>
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                await using var stream = client.GetStream();
+                var initial = new byte[256];
+                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                _ = await stream.ReadAsync(initial, readTimeout.Token);
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("Password: "), readTimeout.Token);
+                await stream.FlushAsync(readTimeout.Token);
+                var secret = new byte[256];
+                _ = await stream.ReadAsync(secret, readTimeout.Token);
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("Login failed.\r\n"), readTimeout.Token);
+                await stream.FlushAsync(readTimeout.Token);
+            });
+            var profile = new H3cDeviceProfileSnapshot("telnet-test", "127.0.0.1", port,
+                "admin", "TEST_CREDENTIAL", "", true, 0, 0, TerminalProtocol: "TELNET");
+            await using var transport = new TelnetTerminalTransport(profile, "synthetic");
+            try
+            {
+                await transport.ConnectAsync(CancellationToken.None);
+                throw new InvalidOperationException("Telnet login failure should be surfaced");
+            }
+            catch (H3cAuthenticationFailedException) { }
+            await server;
+        }
+        finally { listener.Stop(); }
     }
 
     private static void VerifiesOneTimeTicket()
