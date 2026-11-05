@@ -34,11 +34,35 @@ internal static class CredentialTests
                 string.Empty, true, 0, 0, Password: "first-secret"));
             catalog.CreateH3cDeviceProfile(new(secondId, "192.0.2.11", 22, "reader", sharedReference,
                 string.Empty, true, 0, 0, Password: "second-secret"));
+            Assert(catalog.GetNetmikoVendor(firstId) == "h3c", "legacy H3C inventory selects H3C");
+            using (var inventoryDb = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(root, "catalog.db"), Pooling = false
+            }.ToString()))
+            {
+                inventoryDb.Open();
+                using var update = inventoryDb.CreateCommand();
+                update.CommandText = "UPDATE device_inventory SET vendor='Cisco',device_type='IOS_XE' WHERE terminal_profile_id=$id";
+                update.Parameters.AddWithValue("$id", firstId);
+                update.ExecuteNonQuery();
+                Assert(catalog.GetNetmikoVendor(firstId) == "cisco_ios_xe", "Cisco platform must select its explicit mapping");
+                update.CommandText = "UPDATE device_inventory SET vendor='Cisco',device_type='SWITCH' WHERE terminal_profile_id=$id";
+                update.ExecuteNonQuery();
+                Assert(catalog.GetNetmikoVendor(firstId) == "", "unspecified Cisco platform must not guess a driver");
+                update.CommandText = "UPDATE device_inventory SET vendor='unknown-vendor' WHERE terminal_profile_id=$id";
+                update.ExecuteNonQuery();
+                Assert(catalog.GetNetmikoVendor(firstId) == "unknown-vendor", "unknown vendor must reach worker for rejection");
+            }
             var provider = new DeviceRecordH3cCredentialProvider(catalog);
             Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) == "first-secret",
                 "device credentials must be resolved by profile id even when references are shared");
             Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(secondId)!) == "second-secret",
                 "each device must retain its own password");
+            catalog.UpdateH3cCredential(firstId, "", false);
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) == "first-secret",
+                "an empty credential update must retain the existing password");
+            Assert(catalog.QueryManagedDeviceInventory().Items.Single(item => item.TerminalProfileId == firstId).CredentialConfigured,
+                "inventory must report an actually stored password");
             catalog.CreateH3cDeviceProfile(new(firstId, "192.0.2.10", 22, "reader", sharedReference,
                 string.Empty, true, 0, 0));
             Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) == "first-secret",
@@ -47,6 +71,8 @@ internal static class CredentialTests
                 string.Empty, true, 0, 0, Password: null, ClearPassword: true));
             Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) is null,
                 "an explicit clear operation must remove only the selected device password");
+            Assert(!catalog.QueryManagedDeviceInventory().Items.Single(item => item.TerminalProfileId == firstId).CredentialConfigured,
+                "inventory must not report a cleared password as configured");
             Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(secondId)!) == "second-secret",
                 "clearing one device must not affect another device sharing a reference");
 
@@ -70,6 +96,29 @@ internal static class CredentialTests
             Assert(catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinA) &&
                    H3cHostKeyFingerprint.Matches(pinA, catalog.GetSiteSshJumpHost("site-b")!.HostKeySha256),
                 "Jump Host fingerprint refresh must update only the selected Site");
+            var beforeRotation = catalog.GetSiteSshJumpHost("site-b")!;
+            Assert(catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinB, beforeRotation),
+                "a changed Jump Host key should be accepted after authentication");
+            Assert(catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinB, beforeRotation),
+                "concurrent probes observing the same key should both succeed");
+            Assert(!catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinA, beforeRotation),
+                "a stale probe must not overwrite a newer Jump Host key");
+            var staleConfig = catalog.GetSiteSshJumpHost("site-b")!;
+            catalog.UpsertSiteSshJumpHost(staleConfig with { Host = "192.0.2.22" });
+            Assert(!catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinA, staleConfig),
+                "a probe must not attach the old endpoint key to a changed configuration");
+            using (var auditDb = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(root, "catalog.db"), Pooling = false
+            }.ToString()))
+            {
+                auditDb.Open();
+                using var audit = auditDb.CreateCommand();
+                audit.CommandText = "SELECT detail_json FROM audit_events WHERE action='SITE_JUMP_HOST_KEY_UPDATED' ORDER BY at_ms DESC LIMIT 1";
+                var detail = (string)audit.ExecuteScalar()!;
+                Assert(detail.Contains("oldFingerprint") && detail.Contains("newFingerprint") && !detail.Contains("jump-secret"),
+                    "rotation audit must include both keys and omit credentials");
+            }
             Assert(!H3cHostKeyFingerprint.Matches(pinA, pinB),
                 "unknown or changed Jump Host fingerprints must fail closed");
             Assert(!new NetmikoWorkerH3cSshTransport(

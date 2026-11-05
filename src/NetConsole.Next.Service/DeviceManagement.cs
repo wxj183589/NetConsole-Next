@@ -63,6 +63,28 @@ internal sealed record DeviceImportCommitReceipt(string Actor, DeviceImportCommi
 
 internal sealed partial class Catalog
 {
+    internal string GetNetmikoVendor(string profileId)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT vendor,device_type FROM device_inventory WHERE terminal_profile_id=$profile LIMIT 2";
+        command.Parameters.AddWithValue("$profile", profileId);
+        using var reader = command.ExecuteReader();
+        // Legacy H3C profiles can exist without an inventory projection.
+        if (!reader.Read()) return "h3c";
+        var vendor = reader.GetString(0).Trim().ToLowerInvariant();
+        var type = reader.GetString(1).Trim().ToLowerInvariant();
+        if (reader.Read()) throw new InvalidOperationException("设备连接档案关联多个设备，无法选择驱动。");
+        return vendor switch
+        {
+            "cisco" when type is "ios" or "cisco_ios" => "cisco_ios",
+            "cisco" when type is "ios-xe" or "ios_xe" or "cisco_ios_xe" => "cisco_ios_xe",
+            "cisco" when type is "nx-os" or "nxos" or "cisco_nxos" => "cisco_nxos",
+            "cisco" => "",
+            _ => vendor
+        };
+    }
+
     private const int MaximumDeviceImportBytes = 2 * 1024 * 1024;
     private const int MaximumDeviceImportRows = 10_000;
     private const int MaximumDeviceImportCellCharacters = 4_096;
@@ -122,7 +144,8 @@ internal sealed partial class Catalog
             SELECT d.id,d.name,d.management_ip,d.vendor,d.model,d.device_type,d.site_id,d.group_id,
                 COALESCE(NULLIF(st.name,''),'—'),COALESCE(NULLIF(g.name,''),'—'),d.enabled,d.created_ms,d.updated_ms,
                 p.id,p.host,p.port,p.username,p.credential_reference,p.host_key_update_policy,p.terminal_encoding,p.terminal_protocol,
-                s.state,s.started_ms,s.disconnect_reason,d.description,ps.site_id
+                s.state,s.started_ms,s.disconnect_reason,d.description,ps.site_id,
+                CASE WHEN p.credential_password IS NOT NULL AND p.credential_password<>'' THEN 1 ELSE 0 END
             FROM device_inventory d
             LEFT JOIN sites st ON st.id=d.site_id
             LEFT JOIN device_groups g ON g.id=d.group_id
@@ -499,7 +522,7 @@ internal sealed partial class Catalog
         var profileHost = reader.IsDBNull(14) ? null : reader.GetString(14);
         var port = reader.IsDBNull(15) ? 0 : reader.GetInt32(15);
         var username = reader.IsDBNull(16) ? "—" : reader.GetString(16);
-        var credential = reader.IsDBNull(17) ? string.Empty : reader.GetString(17);
+        var credentialConfigured = reader.GetInt32(26) != 0;
         var policy = reader.IsDBNull(18) ? "—" : reader.GetString(18);
         var encoding = reader.IsDBNull(19) ? "—" : reader.GetString(19);
         var protocol = reader.IsDBNull(20) ? "—" : reader.GetString(20);
@@ -508,7 +531,7 @@ internal sealed partial class Catalog
             profileHost = null;
             port = 0;
             username = "—";
-            credential = string.Empty;
+            credentialConfigured = false;
             policy = "—";
             encoding = "—";
             protocol = "—";
@@ -528,7 +551,7 @@ internal sealed partial class Catalog
             string.IsNullOrWhiteSpace(type) ? "NETWORK_DEVICE" : type,
             string.IsNullOrWhiteSpace(protocol) ? "—" : protocol,
             reader.GetString(8), reader.GetString(9), enabled, state,
-            reader.IsDBNull(22) ? null : reader.GetInt64(22), !string.IsNullOrWhiteSpace(credential),
+            reader.IsDBNull(22) ? null : reader.GetInt64(22), credentialConfigured,
             string.IsNullOrWhiteSpace(policy) ? "—" : policy, string.IsNullOrWhiteSpace(encoding) ? "—" : encoding,
             reader.IsDBNull(23) ? null : reader.GetString(23), issues.Count == 0, issues,
             id, ip, reader.GetString(6), reader.IsDBNull(7) ? "" : reader.GetString(7), reader.GetString(24),

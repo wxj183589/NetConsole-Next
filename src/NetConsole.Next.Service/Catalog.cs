@@ -1149,8 +1149,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using (var existing = db.CreateCommand())
         {
             existing.Transaction = transaction;
-            existing.CommandText = @"SELECT host,port,username,credential_reference,host_key_sha256,credential_password
-                FROM h3c_device_profiles WHERE id=$id";
+            existing.CommandText = @"SELECT profile.host,profile.port,profile.username,profile.credential_reference,profile.host_key_sha256,profile.credential_password,source.site_id
+                FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=$id";
             existing.Parameters.AddWithValue("$id", profile.Id);
             using var reader = existing.ExecuteReader();
             string? existingPassword = null;
@@ -1161,6 +1161,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                     (!string.IsNullOrEmpty(fingerprint) && (reader.IsDBNull(4) || reader.GetString(4) != fingerprint)))
                     throw new InvalidOperationException("H3C connection identity is immutable; create a new profile id for host, credential-reference or host-key changes.");
                 existingPassword = reader.IsDBNull(5) ? null : reader.GetString(5);
+                profile = profile with { SiteId = reader.GetString(6) };
             }
             profile = profile with
             {
@@ -1172,9 +1173,10 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         {
             source.Transaction = transaction;
             source.CommandText = @"INSERT INTO collection_sources(id,site_id,kind,label,enabled)
-                VALUES($source,'local','H3C_SSH',$label,$enabled)
+                VALUES($source,$site,'H3C_SSH',$label,$enabled)
                 ON CONFLICT(id) DO UPDATE SET label=excluded.label,enabled=excluded.enabled";
             source.Parameters.AddWithValue("$source", sourceId);
+            source.Parameters.AddWithValue("$site", profile.SiteId);
             source.Parameters.AddWithValue("$label", $"H3C {profile.Host}:{profile.Port}");
             source.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
             source.ExecuteNonQuery();
@@ -1234,9 +1236,10 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             inventory.Transaction = transaction;
             inventory.CommandText = @"INSERT OR IGNORE INTO device_inventory
                 (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
-                SELECT $id,$name,$host,'H3C','', 'H3C_TERMINAL','local','Created from terminal profile', $enabled,$created,$updated,$id
-                WHERE NOT EXISTS(SELECT 1 FROM device_inventory WHERE site_id='local' AND management_ip=$host)";
+                SELECT $id,$name,$host,'H3C','', 'H3C_TERMINAL',$site,'Created from terminal profile', $enabled,$created,$updated,$id
+                WHERE NOT EXISTS(SELECT 1 FROM device_inventory WHERE site_id=$site AND management_ip=$host)";
             inventory.Parameters.AddWithValue("$id", profile.Id);
+            inventory.Parameters.AddWithValue("$site", profile.SiteId);
             inventory.Parameters.AddWithValue("$name", profile.Id);
             inventory.Parameters.AddWithValue("$host", profile.Host);
             inventory.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
@@ -1333,17 +1336,42 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         return command.ExecuteNonQuery() == 1;
     }
 
-    public bool UpdateSiteSshJumpHostFingerprint(string siteId, string fingerprint)
+    internal bool UpdateSiteSshJumpHostFingerprint(string siteId, string fingerprint, SiteSshJumpHostSnapshot? expected = null)
     {
         if (string.IsNullOrWhiteSpace(siteId)) throw new ArgumentException("Jump Host site is required.", nameof(siteId));
         var normalized = H3cHostKeyFingerprint.Normalize(fingerprint);
         using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using var read = db.CreateCommand();
+        read.Transaction = transaction;
+        read.CommandText = "SELECT host_key_sha256 FROM site_ssh_jump_hosts WHERE site_id=$site";
+        read.Parameters.AddWithValue("$site", siteId.Trim());
+        var previous = read.ExecuteScalar() as string;
         using var command = db.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "UPDATE site_ssh_jump_hosts SET host_key_sha256=$fingerprint,updated_ms=$updated WHERE site_id=$site";
+        if (expected is not null)
+        {
+            // A probe must not publish an old endpoint's key after the user
+            // edits or disables the Site configuration while it is connecting.
+            command.CommandText += " AND host=$host AND port=$port AND username=$user AND enabled=$enabled AND credential_reference=$reference AND credential_password IS $password AND (COALESCE(host_key_sha256,'')=$old OR host_key_sha256=$fingerprint)";
+            command.Parameters.AddWithValue("$host", expected.Host);
+            command.Parameters.AddWithValue("$port", expected.Port);
+            command.Parameters.AddWithValue("$user", expected.Username);
+            command.Parameters.AddWithValue("$enabled", expected.Enabled ? 1 : 0);
+            command.Parameters.AddWithValue("$reference", expected.CredentialReference);
+            command.Parameters.AddWithValue("$password", (object?)expected.Password ?? DBNull.Value);
+            command.Parameters.AddWithValue("$old", expected.HostKeySha256);
+        }
         command.Parameters.AddWithValue("$fingerprint", normalized);
         command.Parameters.AddWithValue("$updated", UtcNowMs());
         command.Parameters.AddWithValue("$site", siteId.Trim());
-        return command.ExecuteNonQuery() == 1;
+        if (command.ExecuteNonQuery() != 1) return false;
+        if (!string.Equals(previous, normalized, StringComparison.Ordinal))
+            InsertDeviceAudit(db, transaction, "SYSTEM", "SITE_JUMP_HOST_KEY_UPDATED", siteId.Trim(),
+                new { oldFingerprint = previous, newFingerprint = normalized, host = expected?.Host, port = expected?.Port });
+        transaction.Commit();
+        return true;
     }
 
     public void UpdateH3cCredential(string id, string? password, bool clearPassword)
@@ -1351,8 +1379,9 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (!clearPassword && password is { Length: > 4096 }) throw new ArgumentException("Device password is too long.", nameof(password));
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "UPDATE h3c_device_profiles SET credential_password=$password,updated_ms=$now WHERE id=$id";
+        command.CommandText = "UPDATE h3c_device_profiles SET credential_password=CASE WHEN $clear=1 THEN NULL WHEN $password IS NULL OR $password='' THEN credential_password ELSE $password END,updated_ms=$now WHERE id=$id";
         command.Parameters.AddWithValue("$password", clearPassword ? DBNull.Value : (object?)password ?? DBNull.Value);
+        command.Parameters.AddWithValue("$clear", clearPassword ? 1 : 0);
         command.Parameters.AddWithValue("$now", UtcNowMs());
         command.Parameters.AddWithValue("$id", id);
         if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException("H3C device profile was not found.");

@@ -2,21 +2,24 @@
 
 ## External
 
-- 四台模拟器缺少可用凭据；自动登录授权已存在，但不得猜测、穷举、记录密码。TCP/协议可达不等于认证或 HA 已验证。
+- 模拟器自动登录授权已存在，隔离测试根的 DPAPI 引用可用：AC1/AC2 SSH 自动认证和版本识别 PASS；SW SSH 认证成功但旧 HCL Exec/设备识别为 PARTIAL；FIT-AP Telnet 凭据被设备拒绝，仍 BLOCKED。不得猜测、穷举或记录密码。
+- 双 AC 1+1 的主备、切换、恢复和实时 AP 归属仍未执行；AC1/AC2 登录成功不等于 HA 验收。
 - HTTP/Service-backed Gate 受已有单实例 Mutex 影响；不终止用户服务、不绕过 Mutex。
 
 ## Contract / implementation
 
-- 单命令与多命令 Raw 已可独立封存；多目标 H3C 父计划已建立子任务快照、状态聚合和取消 API，但跨 AC collection manifest 与报告下载仍需继续集成。
+- 单命令与多命令 Raw 已可独立封存；多目标 H3C 父计划已建立子任务快照、状态聚合和取消 API；跨 AC collection manifest 查询、详情和采集记录 UI 已完成隔离验收，实时多 AC 采集与报告下载仍需继续集成。
+- Netmiko worker、显式 driver mapping、profile-scoped credential resolution、SSH HostKey 自动信任/轮换，以及 Site Jump Host probe/显式 fingerprint refresh 已完成离线或隔离服务边界；真实设备互操作和 Web Shell worker channel 集成仍待验证。
 - AP identity 已增加唯一完整 MAC 对已有 exact identity 的受控部分证据关联；正式 replacement、候选裁决、冲突审核、Domain/group 生命周期和多目标 Report 仍需独立持久合同评审。
 - 完整模块工作台仍待推进；配置备份、LLDP 关系与变化历史、诊断批次重启历史已完成离线/API/UI 验证。
 
 ## 本轮新增证据
 
-- 产品 HEAD：`e3c3054`；H3C 多命令 fixture `H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS`；成功终态缺少完整 Raw manifest 时 fail closed；LLDP topology `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；诊断 fixture `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；配置备份 `CONFIG_BACKUP_TESTS=1/1 PASS`。
+- 产品 HEAD：`5c60016`（完整 SHA：`5c600162a46932dc7064d0e2e34d9ed0dac01396`）；Netmiko worker tests `2/2 PASS`；Release build `0 warnings / 0 errors`；H3C 多命令 fixture `H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS`；成功终态缺少完整 Raw manifest 时 fail closed；LLDP topology `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；诊断 fixture `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；配置备份 `CONFIG_BACKUP_TESTS=1/1 PASS`。
 - 单命令/全量 Service harness 在本轮改动前后均通过；前端 `vue-tsc --noEmit` 与 Vitest `4 files / 7 tests` 通过。
 - 设备列表已提供“测试连接”，服务端沿用 DPAPI 引用、自动 HostKey 与 Telnet 回退；不会在浏览器或日志接触密码。
 - 网络诊断已提供 Ping/TCP/DNS/LLDP 批量任务；目标限定为当前 Site 可见的已登记设备，LLDP 仅读取带 captured scope 的 H3C Facts。
+- 当前并行工作树复跑完整 Service harness 在 `ConcurrencyP1Tests.FailedTaskCanBeRetriedAsANewRun` 处失败；该失败已记录，不能用旧 harness PASS 覆盖，待并行 worker 变更收敛后重跑。
 
 ## Verification boundary
 

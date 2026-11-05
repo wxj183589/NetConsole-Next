@@ -51,8 +51,22 @@ CREATE TABLE IF NOT EXISTS zte_facts(
  captured_ms INTEGER NOT NULL, payload_json TEXT NOT NULL, is_current INTEGER NOT NULL CHECK(is_current IN (0,1)));
 CREATE UNIQUE INDEX IF NOT EXISTS ux_zte_current_fact ON zte_facts(profile_id,kind) WHERE is_current=1;
 CREATE INDEX IF NOT EXISTS ix_zte_fact_history ON zte_facts(profile_id,kind,captured_ms DESC);
+CREATE TABLE IF NOT EXISTS zte_host_key_events(
+ id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES zte_device_profiles(id),
+ old_sha256 TEXT NOT NULL, new_sha256 TEXT NOT NULL, key_type TEXT NOT NULL, observed_ms INTEGER NOT NULL);
 ";
         command.ExecuteNonQuery();
+        using var info = db.CreateCommand();
+        info.CommandText = "PRAGMA table_info(zte_device_profiles)";
+        var hasPassword = false;
+        using (var reader = info.ExecuteReader())
+            while (reader.Read()) hasPassword |= reader.GetString(1) == "credential_password";
+        if (!hasPassword)
+        {
+            using var alter = db.CreateCommand();
+            alter.CommandText = "ALTER TABLE zte_device_profiles ADD COLUMN credential_password TEXT";
+            alter.ExecuteNonQuery();
+        }
     }
 }
 
@@ -61,26 +75,38 @@ internal sealed class ZteSshDeviceSession : IAsyncDisposable
     private readonly ZteDeviceProfileSnapshot _profile;
     private readonly IH3cCredentialProvider _credentials;
     private readonly IH3cSshTransportFactory _transportFactory;
+    private readonly Catalog _catalog;
     private IH3cSshTransport? _transport;
 
     public ZteSshDeviceSession(ZteDeviceProfileSnapshot profile, IH3cCredentialProvider credentials,
-        IH3cSshTransportFactory transportFactory)
+        IH3cSshTransportFactory transportFactory, Catalog catalog)
     {
         _profile = profile;
         _credentials = credentials;
         _transportFactory = transportFactory;
+        _catalog = catalog;
     }
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
-        var password = _credentials.GetPassword(_profile.Id, _profile.CredentialReference);
+        var password = _catalog.GetZteCredentialPassword(_profile.Id) ?? _credentials.GetPassword(_profile.CredentialReference);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         var h3cProfile = new H3cDeviceProfileSnapshot(_profile.Id, _profile.Host, _profile.Port, _profile.Username,
             _profile.CredentialReference, _profile.HostKeySha256, _profile.Enabled, _profile.CreatedMs, _profile.UpdatedMs,
             _profile.HostKeyUpdatePolicy, _profile.AllowLegacyAlgorithms, _profile.TerminalEncoding, "SSH", false,
-            DeviceType: "zte_zxros");
+            DeviceType: "zte_zxros", SiteId: _profile.SiteId);
         _transport = _transportFactory.Create(h3cProfile, password);
-        await _transport.ConnectAsync((_, fingerprint) => H3cHostKeyFingerprint.Matches(_profile.HostKeySha256, fingerprint), cancellationToken);
+        string? keyType = null, fingerprint = null;
+        await _transport.ConnectAsync((type, presented) =>
+        {
+            if (string.IsNullOrWhiteSpace(type) || type.Length > 128 || type.Any(char.IsWhiteSpace) || type.Any(char.IsControl)) return false;
+            try { fingerprint = H3cHostKeyFingerprint.Normalize(presented ?? string.Empty); }
+            catch (ArgumentException) { return false; }
+            keyType = type;
+            return true;
+        }, cancellationToken);
+        if (fingerprint is null || keyType is null || !_catalog.CommitZteHostKey(_profile, keyType, fingerprint))
+            throw new H3cHostKeyMismatchException();
     }
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
@@ -122,7 +148,7 @@ internal sealed class ZteCollectionService
     {
         _catalog = catalog;
         _credentials = credentials;
-        _transportFactory = transportFactory ?? new NetmikoWorkerH3cSshTransportFactory();
+        _transportFactory = transportFactory ?? new NetmikoWorkerH3cSshTransportFactory(catalog);
     }
 
     public IReadOnlyList<ZteProfileView> Profiles(P2B5SiteScopeDecision scope, int limit = 100) =>
@@ -211,7 +237,7 @@ internal sealed class ZteCollectionService
             dequeued = true;
             _catalog.MarkZteCollectionRunRunning(runId, started);
             _runs[runId] = new(runId, profile.Id, "RUNNING", started, null, null, statuses);
-            await using var session = new ZteSshDeviceSession(profile, _credentials, _transportFactory);
+            await using var session = new ZteSshDeviceSession(profile, _credentials, _transportFactory, _catalog);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
             timeout.CancelAfter(TimeSpan.FromMinutes(10));
             await session.ConnectAsync(timeout.Token);
@@ -287,16 +313,16 @@ internal sealed partial class Catalog
         ZteCollectionSchema.Apply(db);
     }
 
-    public void CreateZteDeviceProfile(ZteDeviceProfileSnapshot profile)
+    public void CreateZteDeviceProfile(ZteDeviceProfileSnapshot profile, string? password = null, bool clearPassword = false)
     {
         if (!Guid.TryParseExact(profile.Id, "N", out _)) throw new ArgumentException("ZTE profile id must be a 32-character GUID.", nameof(profile));
         if (string.IsNullOrWhiteSpace(profile.Host) || Uri.CheckHostName(profile.Host) == UriHostNameType.Unknown) throw new ArgumentException("ZTE host is invalid.", nameof(profile));
         if (profile.Port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(profile));
         if (!H3cCredentialReference.IsValid(profile.CredentialReference)) throw new ArgumentException("Credential reference is invalid.", nameof(profile));
-        if (profile.HostKeyUpdatePolicy is not "STRICT") throw new ArgumentException("ZTE profiles require STRICT host-key verification.", nameof(profile));
+        if (profile.HostKeyUpdatePolicy is not ("STRICT" or "AUTO_UPDATE")) throw new ArgumentException("Host-key policy is invalid.", nameof(profile));
+        if (password is { Length: > 4096 }) throw new ArgumentException("Device password is too long.", nameof(password));
         if (!TerminalTextEncoding.IsSupported(profile.TerminalEncoding)) throw new ArgumentException("Terminal encoding is invalid.", nameof(profile));
         var fingerprint = string.IsNullOrWhiteSpace(profile.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
-        if (profile.HostKeyUpdatePolicy == "STRICT" && fingerprint.Length == 0) throw new ArgumentException("STRICT ZTE profile requires a host-key fingerprint.", nameof(profile));
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         using var db = Open();
         using (var existing = db.CreateCommand())
@@ -309,7 +335,7 @@ internal sealed partial class Catalog
                 var same = string.Equals(reader.GetString(0), profile.Host, StringComparison.OrdinalIgnoreCase) &&
                     reader.GetInt32(1) == profile.Port && string.Equals(reader.GetString(2), profile.Username, StringComparison.Ordinal) &&
                     string.Equals(reader.GetString(3), profile.CredentialReference, StringComparison.Ordinal) &&
-                    string.Equals(reader.GetString(4), fingerprint, StringComparison.Ordinal) &&
+                    (fingerprint.Length == 0 || string.Equals(reader.GetString(4), fingerprint, StringComparison.Ordinal)) &&
                     string.Equals(reader.GetString(5), profile.SiteId, StringComparison.Ordinal);
                 if (!same) throw new InvalidOperationException("ZTE profile identity is immutable; create a new profile ID for a different target or credential.");
             }
@@ -317,7 +343,48 @@ internal sealed partial class Catalog
         using var tx = db.BeginTransaction();
         using (var source = db.CreateCommand()) { source.Transaction = tx; source.CommandText = "INSERT INTO collection_sources(id,site_id,kind,label,enabled) VALUES($id,$site,'ZTE_SSH',$label,$enabled) ON CONFLICT(id) DO UPDATE SET label=excluded.label,enabled=excluded.enabled"; source.Parameters.AddWithValue("$id", "zte-" + profile.Id); source.Parameters.AddWithValue("$site", profile.SiteId); source.Parameters.AddWithValue("$label", $"ZTE {profile.Host}:{profile.Port}"); source.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0); source.ExecuteNonQuery(); }
         using var insert = db.CreateCommand(); insert.Transaction = tx; insert.CommandText = @"INSERT INTO zte_device_profiles(id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,site_id) VALUES($id,$source,$host,$port,$user,$credential,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$site) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,updated_ms=excluded.updated_ms,host_key_update_policy=excluded.host_key_update_policy,allow_legacy_algorithms=excluded.allow_legacy_algorithms,terminal_encoding=excluded.terminal_encoding";
-        insert.Parameters.AddWithValue("$id", profile.Id); insert.Parameters.AddWithValue("$source", "zte-" + profile.Id); insert.Parameters.AddWithValue("$host", profile.Host); insert.Parameters.AddWithValue("$port", profile.Port); insert.Parameters.AddWithValue("$user", profile.Username); insert.Parameters.AddWithValue("$credential", profile.CredentialReference); insert.Parameters.AddWithValue("$fingerprint", fingerprint); insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0); insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now); insert.Parameters.AddWithValue("$updated", now); insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy); insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0); insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding); insert.Parameters.AddWithValue("$site", profile.SiteId); insert.ExecuteNonQuery(); tx.Commit();
+        insert.Parameters.AddWithValue("$id", profile.Id); insert.Parameters.AddWithValue("$source", "zte-" + profile.Id); insert.Parameters.AddWithValue("$host", profile.Host); insert.Parameters.AddWithValue("$port", profile.Port); insert.Parameters.AddWithValue("$user", profile.Username); insert.Parameters.AddWithValue("$credential", profile.CredentialReference); insert.Parameters.AddWithValue("$fingerprint", fingerprint); insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0); insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now); insert.Parameters.AddWithValue("$updated", now); insert.Parameters.AddWithValue("$policy", profile.HostKeyUpdatePolicy); insert.Parameters.AddWithValue("$legacy", profile.AllowLegacyAlgorithms ? 1 : 0); insert.Parameters.AddWithValue("$encoding", profile.TerminalEncoding); insert.Parameters.AddWithValue("$site", profile.SiteId); insert.ExecuteNonQuery();
+        if (clearPassword || !string.IsNullOrEmpty(password))
+        {
+            using var credential = db.CreateCommand(); credential.Transaction = tx;
+            credential.CommandText = "UPDATE zte_device_profiles SET credential_password=$password WHERE id=$id";
+            credential.Parameters.AddWithValue("$id", profile.Id);
+            credential.Parameters.AddWithValue("$password", clearPassword ? DBNull.Value : (object)password!);
+            credential.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    internal string? GetZteCredentialPassword(string id)
+    {
+        using var db = Open(); using var command = db.CreateCommand();
+        command.CommandText = "SELECT credential_password FROM zte_device_profiles WHERE id=$id";
+        command.Parameters.AddWithValue("$id", id);
+        return command.ExecuteScalar() is string value && value.Length > 0 ? value : null;
+    }
+
+    internal bool CommitZteHostKey(ZteDeviceProfileSnapshot profile, string keyType, string fingerprint)
+    {
+        using var db = Open(); using var tx = db.BeginTransaction(); using var update = db.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText = @"UPDATE zte_device_profiles SET host_key_sha256=$new,updated_ms=$now
+          WHERE id=$id AND host=$host AND port=$port AND username=$user AND site_id=$site AND credential_reference=$reference AND enabled=1
+          AND (host_key_sha256=$old OR host_key_sha256=$new)";
+        update.Parameters.AddWithValue("$id", profile.Id); update.Parameters.AddWithValue("$host", profile.Host);
+        update.Parameters.AddWithValue("$port", profile.Port); update.Parameters.AddWithValue("$user", profile.Username);
+        update.Parameters.AddWithValue("$site", profile.SiteId); update.Parameters.AddWithValue("$old", profile.HostKeySha256);
+        update.Parameters.AddWithValue("$reference", profile.CredentialReference);
+        update.Parameters.AddWithValue("$new", fingerprint); update.Parameters.AddWithValue("$now", UtcNowMs());
+        if (update.ExecuteNonQuery() != 1) return false;
+        if (!H3cHostKeyFingerprint.Matches(profile.HostKeySha256, fingerprint))
+        {
+            using var history = db.CreateCommand(); history.Transaction = tx;
+            history.CommandText = "INSERT INTO zte_host_key_events(id,profile_id,old_sha256,new_sha256,key_type,observed_ms) VALUES($id,$profile,$old,$new,$type,$now)";
+            history.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N")); history.Parameters.AddWithValue("$profile", profile.Id);
+            history.Parameters.AddWithValue("$old", profile.HostKeySha256); history.Parameters.AddWithValue("$new", fingerprint);
+            history.Parameters.AddWithValue("$type", keyType); history.Parameters.AddWithValue("$now", UtcNowMs()); history.ExecuteNonQuery();
+        }
+        tx.Commit(); return true;
     }
 
     public ZteDeviceProfileSnapshot? GetZteDeviceProfile(string id) { using var db = Open(); using var c = db.CreateCommand(); c.CommandText = "SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,site_id FROM zte_device_profiles WHERE id=$id"; c.Parameters.AddWithValue("$id", id); using var r = c.ExecuteReader(); return r.Read() ? new(r.GetString(0),r.GetString(1),r.GetInt32(2),r.GetString(3),r.GetString(4),r.GetString(5),r.GetInt32(6)!=0,r.GetInt64(7),r.GetInt64(8),r.GetString(9),r.GetInt32(10)!=0,r.GetString(11),r.GetString(12)) : null; }

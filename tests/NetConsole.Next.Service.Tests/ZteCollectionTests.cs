@@ -20,8 +20,17 @@ internal static class ZteCollectionTests
             catalog.Initialize();
             var profileId = Guid.NewGuid().ToString("N");
             catalog.CreateZteDeviceProfile(new ZteDeviceProfileSnapshot(profileId, "192.0.2.22", 22,
-                "reader", "TEST_CREDENTIAL", "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", true, 0, 0));
+                "reader", "TEST_CREDENTIAL", "", true, 0, 0), "synthetic");
             Assert(catalog.GetZteDeviceProfile(profileId)?.Host == "192.0.2.22", "ZTE profile must round-trip through SQLite");
+            var initial = catalog.GetZteDeviceProfile(profileId)!;
+            catalog.CreateZteDeviceProfile(initial, "");
+            Assert(catalog.GetZteCredentialPassword(profileId) == "synthetic", "blank password must retain the stored password");
+            await using (var rejected = new ZteSshDeviceSession(initial, new UnavailableH3cCredentialProvider(), new FixtureTransportFactory(true), catalog))
+            {
+                try { await rejected.ConnectAsync(CancellationToken.None); throw new InvalidOperationException("authentication failure must propagate"); }
+                catch (H3cAuthenticationFailedException) { }
+            }
+            Assert(catalog.GetZteDeviceProfile(profileId)!.HostKeySha256 == "", "failed authentication must not persist a host key");
             try
             {
                 catalog.CreateZteDeviceProfile(new ZteDeviceProfileSnapshot(profileId, "192.0.2.23", 22,
@@ -29,7 +38,7 @@ internal static class ZteCollectionTests
                 throw new InvalidOperationException("ZTE profile identity changes must be rejected");
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("identity is immutable", StringComparison.Ordinal)) { }
-            var service = new ZteCollectionService(catalog, new FixedCredentials(), new FixtureTransportFactory());
+            var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), new FixtureTransportFactory());
             var visibleProfile = service.Profiles(P2B5SiteScopeDecision.Global).Single();
             var visibleJson = JsonSerializer.Serialize(visibleProfile);
             Assert(!visibleJson.Contains("credential", StringComparison.OrdinalIgnoreCase) &&
@@ -91,6 +100,14 @@ internal static class ZteCollectionTests
                 if (liveRun is not null && liveRun.State is not ("QUEUED" or "RUNNING")) break;
             }
             Assert(liveRun?.State == "SUCCEEDED", "ZTE runtime fixture session must complete all five read-only commands");
+            var trusted = catalog.GetZteDeviceProfile(profileId)!;
+            Assert(trusted.HostKeySha256 == "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA", "first authenticated connection must store the host key");
+            const string rotated = "SHA256:AgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICE";
+            Assert(catalog.CommitZteHostKey(trusted, "ssh-ed25519", rotated), "changed key must update automatically");
+            Assert(!catalog.CommitZteHostKey(initial, "ssh-ed25519", trusted.HostKeySha256), "stale session must not overwrite a newer key");
+            Assert(catalog.GetZteDeviceProfile(profileId)!.HostKeySha256 == rotated, "rotated key must persist");
+            catalog.CreateZteDeviceProfile(catalog.GetZteDeviceProfile(profileId)!, clearPassword: true);
+            Assert(catalog.GetZteCredentialPassword(profileId) is null, "explicit clear must remove the stored password");
             Assert(catalog.QueryZteFacts(profileId, "optical", false, 10).Count == 1 &&
                    catalog.QueryZteFacts(profileId, "lldp", false, 10).Count == 1,
                 "ZTE runtime fixture session must persist optical and LLDP current facts");
@@ -104,23 +121,23 @@ internal static class ZteCollectionTests
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    private sealed class FixedCredentials : IH3cCredentialProvider
+    private sealed class FixtureTransportFactory(bool failAuthentication = false) : IH3cSshTransportFactory
     {
-        public string? GetPassword(string reference) => reference == "TEST_CREDENTIAL" ? "synthetic" : null;
+        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password)
+        {
+            Assert(password == "synthetic", "session must use its device-bound password");
+            return new FixtureTransport(failAuthentication);
+        }
     }
 
-    private sealed class FixtureTransportFactory : IH3cSshTransportFactory
-    {
-        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) => new FixtureTransport();
-    }
-
-    private sealed class FixtureTransport : IH3cSshTransport
+    private sealed class FixtureTransport(bool failAuthentication) : IH3cSshTransport
     {
         public bool IsConnected { get; private set; }
         public Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
         {
             if (!verifyHostKey("ssh-ed25519", "SHA256:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"))
                 throw new H3cHostKeyMismatchException();
+            if (failAuthentication) throw new H3cAuthenticationFailedException();
             IsConnected = true;
             return Task.CompletedTask;
         }

@@ -6,10 +6,11 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_P1_MULTI_TARGET_TASK_PLAN",
+  "phase": "CHECKPOINT_L_NETMIKO_CONNECTION_AND_SIMULATOR_GATES",
   "activeWorkstreams": [
-    "multi-target H3C parent plan and report contract",
-    "formal AP identity candidate/replacement lifecycle review"
+    "Netmiko worker interactive/driver mapping and connection boundary",
+    "formal AP identity candidate/replacement lifecycle review",
+    "simulator connection evidence and HA gate"
   ],
   "completedAtStart": [
     "AP runtime history",
@@ -31,32 +32,77 @@
     "connection onboarding HTTP regression",
     "fixed read-only multi-command plan UI and HTTP submission regression",
     "controlled unique-MAC partial-evidence AP association",
-    "multi-target H3C parent plan, child run linkage, aggregate status and claims-protected report"
+    "multi-target H3C parent plan, child run linkage, aggregate status and claims-protected report",
+    "Netmiko CPython worker and explicit driver mapping",
+    "profile-scoped credential storage and resolution",
+    "SSH HostKey automatic first trust and rotation audit",
+    "Site Jump Host probe and explicit fingerprint refresh",
+    "historical task lookup by ID and direct-ID recovery actions"
   ],
   "nextTasks": [
     "formal AP identity candidate/replacement lifecycle review",
-    "cross-AC live collection and HA evidence when secure credential reference is saved",
-    "complete module workbench integration"
+    "cross-AC live collection, AP ownership and dual-AC HA evidence",
+    "complete module workbench integration",
+    "re-run full Service harness after concurrent worker changes settle"
   ],
   "externalBlockers": [
-    "credentials unavailable",
-    "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available",
-    "formal AP replacement/candidate lifecycle and Domain/group lifecycle contract pending"
+    "FIT-AP Telnet credential is rejected by the simulator and must be replaced through the local secure channel",
+    "SW SSH authentication succeeds but the legacy HCL Exec/device-identification path remains partial",
+    "dual-AC HA, failover/recovery and real AP ownership evidence remain pending",
+    "formal AP replacement/candidate and Domain/group lifecycle contract remains pending"
   ],
   "realDataChanged": false,
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "e3c3054",
+  "lastRecoveryCommit": "5c600162a46932dc7064d0e2e34d9ed0dac01396",
   "credentialAudit": {
     "at": "2026-11-05",
     "simulatorHost": "LOCAL_HCL_VIRTUALBOX",
-    "nextDpapiVaultPresent": false,
-    "deviceProfilesPresent": false,
+    "credentialRoot": "test-data/simulator-live-20261105",
+    "nextDpapiVaultPresent": true,
+    "deviceProfilesPresent": true,
+    "credentialReferencePresent": true,
     "sshAgentIdentityAvailable": false,
     "deviceConfigContainsRecoverableSecret": false,
     "passwordGuessing": false,
     "simulatorConfigChanged": false,
-    "status": "BLOCKED_UNTIL_LOCAL_DPAPI_REFERENCE_IS_SAVED"
+    "status": "PARTIAL_AC1_AC2_PASS_SW_EXEC_PARTIAL_FIT_AP_AUTH_FAILED"
+  },
+  "currentHead": "5c600162a46932dc7064d0e2e34d9ed0dac01396",
+  "currentHeadShort": "5c60016",
+  "simulatorEvidence": {
+    "AC1": {
+      "endpoint": "192.168.56.2:22",
+      "protocol": "SSH",
+      "status": "PASS",
+      "detail": "automatic credential authentication and device-version identification"
+    },
+    "AC2": {
+      "endpoint": "192.168.56.5:22",
+      "protocol": "SSH",
+      "status": "PASS",
+      "detail": "automatic credential authentication and device-version identification"
+    },
+    "SW": {
+      "endpoint": "192.168.56.3:22",
+      "protocol": "SSH",
+      "status": "PARTIAL",
+      "detail": "SSH authentication succeeded; legacy Exec/device identification failed"
+    },
+    "FIT-AP": {
+      "endpoint": "192.168.56.4:23",
+      "protocol": "TELNET",
+      "status": "BLOCKED",
+      "detail": "banner reachable; saved credential rejected"
+    },
+    "dualAcHa": "PENDING_NOT_RUN",
+    "configurationWrites": 0
+  },
+  "verification": {
+    "netmikoWorkerTests": "2/2 PASS",
+    "releaseBuild": "PASS: 0 warnings / 0 errors",
+    "fullServiceHarnessCurrent": "FAILED at ConcurrencyP1Tests.FailedTaskCanBeRetriedAsANewRun; rerun after concurrent worker changes settle",
+    "sourceChangesByThisCheckpoint": "none"
   }
 }

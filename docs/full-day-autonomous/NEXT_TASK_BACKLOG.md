@@ -5,7 +5,7 @@
 | FD-P0-01 | Security | 凭据、密码、HostKey、Site 权限无泄漏 | P0 | 现有 DPAPI/claims | COMPLETED_BASELINE | 定向安全回归 |
 | FD-P1-01 | Scheduler | 多设备批量子任务、并发上限、同设备互斥 | P1 | 现有 BoundedCollectionScheduler | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | FD-P1-02 | Scheduler | 单任务多命令顺序、命令级状态、独立 Raw | P1 | Raw manifest 合同 | COMPLETED_LOCAL | 13/13 H3C fact tests；成功终态缺 manifest fail-closed |
-| FD-P1-03 | Connection | SSH 首次自动信任、指纹轮换、并发原子更新 | P1 | DPAPI、host-key history | COMPLETED_LOCAL | 服务/隔离 transport |
+| FD-P1-03 | Connection | SSH 首次自动信任、指纹轮换、并发原子更新 | P1 | DPAPI、host-key history | COMPLETED_LOCAL | HostKey AUTO_TRUST/AUTO_UPDATE、审计历史与隔离 transport；AC1/AC2 live AUTO_UPDATE |
 | FD-P1-04 | Connection | 一键测试连接和友好错误映射 | P1 | profile/credential/session | COMPLETED_LOCAL | API + device list action |
 | FD-P1-05 | Wireless | 双 AC/AP identity、Observation、group 和 runtime | P1 | 已完成 R3 projection | PARTIAL_EXTERNAL | fixture + four simulator evidence；partial exact-evidence association 已补强 |
 | FD-P1-06 | Facts | 多命令 collection manifest 与 Raw→Facts→Current | P1 | FD-P1-02 | COMPLETED_LOCAL | coherent isolated fixture；13/13 publication tests |
@@ -27,5 +27,9 @@
 | FD-P1-15 | Task Center | 历史任务超过最近 100 条仍可按 ID 重试/恢复 | P1 | task_runs persistence | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | FD-P1-16 | Task Center/UI | 固定只读多命令计划创建、执行和命令级报告入口 | P1 | H3C task-definition API、Site scope | COMPLETED_LOCAL | `web_auth_e2e.py` multi-command API + vue-tsc/Vitest/Vite |
 | FD-P1-17 | Connection | 连接测试区分认证失败与认证后 Exec/设备识别失败，并限制旧设备命令等待 | P1 | H3C session、DPAPI | COMPLETED_LOCAL | AC1/AC2 live login；TerminalCore boundary regression；Release build |
-| FD-P1-18 | Simulator | 四台白名单自动登录与双 AC HA/切换/恢复验收 | P1 | FIT-AP 正确凭据、SW Exec 兼容性 | PARTIAL_EXTERNAL | AC1/AC2 login PASS；SW partial；FIT-AP blocked；HA not run |
+| FD-P1-18 | Simulator | 四台白名单自动登录与双 AC HA/切换/恢复验收 | P1 | FIT-AP 正确凭据、SW Exec 兼容性 | PARTIAL_EXTERNAL | AC1/AC2 login PASS；SW Exec partial；FIT-AP auth failed；HA/failover/recovery pending |
 | FD-P1-19 | Task Center | 多目标 H3C 父计划、子任务快照、状态聚合和取消 | P1 | BoundedCollectionScheduler、TaskSiteScope | COMPLETED_LOCAL | `TASK_PLAN_PERSISTENCE_TESTS=PASS`；Service build |
+| FD-P1-20 | Connection/Netmiko | CPython Netmiko worker、显式 driver mapping 与分页准备 | P1 | Netmiko 4.7.0、离线 Python | COMPLETED_LOCAL | `python -m unittest tests/netmiko_worker_test.py`：2/2 PASS；真实设备互操作仍 pending |
+| FD-P1-21 | Security/Connection | Profile-scoped credential resolution 与自动连接复用 | P1 | H3C/ZTE profile、credential provider | COMPLETED_LOCAL | profile ID 绑定、密码不进 API/Raw/日志；AC1/AC2 自动认证 PASS |
+| FD-P1-22 | Connection/Security | Site Jump Host 持久化、worker probe、HostKey fail-closed 与显式 refresh | P1 | Netmiko worker、Site claims、HostKey history | COMPLETED_LOCAL | `/ssh-jump-host/test` 与 `/refresh-fingerprint`；Telnet 不套用 Jump Host |
+| FD-P1-23 | Connection/Terminal | Netmiko interactive worker channel 与 Web Shell 接入回归 | P1 | Netmiko worker、TerminalSessionManager | IN_PROGRESS | worker channel tests pending integration rerun |

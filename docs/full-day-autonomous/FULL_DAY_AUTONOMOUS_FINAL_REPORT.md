@@ -1,6 +1,8 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`8735d55`。未 push、未 merge、未 release。
+2026-11-06 后续增量及当前边界见 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md`；下方记录保留当时证据，不代表后续版本的最终验收。
+
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；当前 HEAD：`5c600162a46932dc7064d0e2e34d9ed0dac01396`。未 push、未 merge、未 release。
 
 ## 结论
 
@@ -11,6 +13,10 @@
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
 | 一键测试连接与快速添加 | PASS（API/UI/HTTP 回归） | onboarding endpoint、SSH/Telnet 默认端口、设备列表按钮、`web_auth_e2e.py` |
 | SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport；AC1/AC2 live login） | 连接工作流构建、harness 与 AC1/AC2 Host Key AUTO_UPDATE |
+| Netmiko worker 与 driver mapping | PASS（离线 worker contract） | CPython JSON-lines worker、已安装 driver allowlist、分页准备；`netmiko_worker_test.py` 2/2 PASS；真实设备互操作仍 pending |
+| Profile-scoped credential resolution | PASS（隔离服务/连接证据） | 按 profile ID 读取凭据，API/Raw/日志不回显密码；AC1/AC2 自动认证 PASS |
+| Site Jump Host probe/refresh | PASS（隔离服务/API） | Site 持久化、脱敏查询、worker probe、指纹变化 fail-closed、显式 refresh；Telnet 不套用 Jump Host |
+| 历史任务按 ID 查询与恢复 | PASS（隔离回归） | 直接 ID 查询支持详情、重试和恢复，不依赖最近 100 条窗口 |
 | Ping/TCP/DNS/LLDP 批量诊断 | PASS（隔离 fixture/API/UI） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；LLDP captured scope 证据 |
 | LLDP 关系、变化历史和 Site claims | PASS（离线 fixture/API/UI） | `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；关系不伪造删除 |
 | Ping/TCP/DNS/LLDP 批量诊断重启历史 | PASS（隔离 fixture） | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；服务对象重建后恢复终态批次 |
@@ -31,7 +37,7 @@
 ## 2026-11-05 最终复核补充
 
 - 此前 UI 提交 `1c54d38`：SUPERADMIN 设置页读取模块状态、启停非核心模块并禁用核心模块操作；Service-backed 浏览器 smoke 新增“系统设置/模块开放状态”检查，`1920×1080 PASS`。
-- 串行 Service Tests Release build：0 warnings / 0 errors；完整 C# Service harness：PASS，包含 schema v19、无线投影、跨 AC manifest、任务并发、SQLite、诊断、归档和性能场景。
+- 串行 Service Tests Release build：0 warnings / 0 errors；既有完整 C# Service harness 证据保持有效；本次在并行 worker 改动存在时复跑，于 `ConcurrencyP1Tests.FailedTaskCanBeRetriedAsANewRun` 失败，需收敛并行改动后重跑。
 - 前端既有 `vue-tsc`、Vitest（5 files / 10 tests）和 Vite build 证据保持有效；发布输出已更新并纳入版本控制。
 - 最新隔离测试根已有 DPAPI 引用并完成逐台连接：AC1/AC2 自动 SSH 登录和版本识别 PASS；SW SSH 认证成功但 Exec 设备信息识别失败；FIT-AP Telnet 凭据被拒。双 AC HA、切换/恢复和实时 AP 归属仍未执行。
 - 本轮补齐 AP Group 详情/成员/provenance 只读合同；不提供组写回，不把离线 fixture 当作实时模拟器证据。
@@ -39,6 +45,13 @@
 - collection manifest 回归新增 source AC 详情过滤与未授权来源不泄露断言；该能力仍是隔离 fixture/Catalog 证据，不替代四台模拟器实时采集。
 - 本轮新增连接 onboarding HTTP 回归：只接收 Credential Reference；默认 SSH/Telnet 端口为 22/23；响应不返回 credential reference 或 host key；未配置 DPAPI 凭据时返回 `CREDENTIAL_UNAVAILABLE`。
 - 本轮新增任务中心固定只读多命令计划入口；支持选择 H3C 设备、顺序命令和单条超时，提交后复用既有 task-definition/run、Raw→Facts 和 Site scope 合同。
+
+## Checkpoint L 增量
+
+- 当前 HEAD：`5c600162a46932dc7064d0e2e34d9ed0dac01396`；Branch：`codex-A/netconsole-next-r3-dual-ac`；本 checkpoint 仅更新交接文档，未 push、merge 或 release。
+- Netmiko CPython worker、显式 driver mapping、profile-scoped credential resolution、SSH HostKey 自动首次信任/轮换，以及 Site Jump Host 一次性探测与显式 fingerprint refresh 已纳入完成矩阵；Web Shell interactive worker channel 仍在进行集成验证。
+- 模拟器证据保持分级：AC1 `192.168.56.2:22` PASS、AC2 `192.168.56.5:22` PASS；SW `192.168.56.3:22` SSH 认证成功但 Exec/设备识别 PARTIAL；FIT-AP `192.168.56.4:23` Telnet 凭据认证失败 BLOCKED；双 AC HA、切换、恢复和实时 AP 归属 PENDING。
+- 当前定向验证：`python -m unittest tests/netmiko_worker_test.py` 2/2 PASS；Release build 0 warnings/0 errors。完整 Service harness 当前复跑在并发重试断言失败，保留为未解决验证项，不覆盖既有隔离 PASS 证据。
 
 ## Checkpoint K 增量
 

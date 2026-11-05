@@ -136,6 +136,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
     private readonly object _startGate = new();
     private Task? _lifecycle;
     private ITerminalTransport? _transport;
+    private readonly TaskCompletionSource<bool> _transportReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
     public TerminalSessionSnapshot Snapshot { get; private set; }
@@ -181,11 +182,14 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         await transport.SendControlAsync(control, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken)
+    public async Task ResizeAsync(int columns, int rows, CancellationToken cancellationToken)
     {
         if (columns is < 1 or > 500 || rows is < 1 or > 300)
             throw new ArgumentOutOfRangeException(nameof(columns), "Terminal dimensions are outside the supported range.");
-        return (_transport ?? throw new InvalidOperationException("Terminal session is not connected.")).ResizeAsync(columns, rows, cancellationToken);
+        if (!await _transportReady.Task.WaitAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Terminal session is not connected.");
+        await (_transport ?? throw new InvalidOperationException("Terminal session is not connected."))
+            .ResizeAsync(columns, rows, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunAsync()
@@ -197,11 +201,11 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             {
                 await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
             }
-            catch (H3cProtocolNegotiationException) when (_allowProtocolFallback &&
+            catch (Exception ex) when ((ex is H3cProtocolNegotiationException or H3cConnectionTimeoutException) && _allowProtocolFallback &&
                 _profile?.TerminalProtocol == "AUTO" && _profile.AllowTelnetFallback && Snapshot.Protocol == "SSH")
             {
                 await _transport.DisposeAsync().ConfigureAwait(false);
-                _transport = new TelnetTerminalTransport(_profile, _credentials.GetPassword(_profile) ?? string.Empty);
+                _transport = new NetmikoTerminalTransport(_profile with { TerminalProtocol = "TELNET" }, _credentials.GetPassword(_profile) ?? string.Empty, _catalog);
                 await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
                 _catalog.UpdateTerminalProtocol(Snapshot.Id, _transport.Protocol);
                 Snapshot = Snapshot with { Protocol = _transport.Protocol };
@@ -217,6 +221,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
                     warning = "Automatic host-key acceptance is not independent device identity verification."
                 }));
             Snapshot = Snapshot with { State = "CONNECTED", ConnectionResult = "CONNECTED", NegotiatedAlgorithm = _transport.NegotiatedAlgorithm };
+            _transportReady.TrySetResult(true);
             await ReadLoopAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -245,6 +250,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             Snapshot = Snapshot with { State = "FAILED", ConnectionResult = reason, DisconnectReason = ex.Message };
             await CloseAsync(reason, "FAILED").ConfigureAwait(false);
         }
+        finally { _transportReady.TrySetResult(false); }
     }
 
     private async Task ReadLoopAsync()
@@ -286,8 +292,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         return Snapshot.Protocol switch
         {
-                "SSH" => new SshTerminalTransport(profile, password, _catalog),
-            "TELNET" => new TelnetTerminalTransport(profile, password),
+            "SSH" or "TELNET" => new NetmikoTerminalTransport(profile with { TerminalProtocol = Snapshot.Protocol }, password, _catalog),
             _ => throw new InvalidOperationException("Unsupported terminal protocol.")
         };
     }

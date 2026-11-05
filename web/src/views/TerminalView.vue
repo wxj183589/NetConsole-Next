@@ -98,7 +98,7 @@ async function openDevice(device: TerminalDevice, protocol: string): Promise<voi
 function isCurrentSocket(tab: TerminalTab, socket: WebSocket, generation: number): boolean { const current = liveSockets.get(tab.id); return current?.socket === socket && current.generation === generation && tab.socketGeneration === generation }
 function installSocketHandlers(tab: TerminalTab, socket: WebSocket, generation: number): void {
   socket.binaryType = 'arraybuffer'
-  socket.onopen = () => { if (!isCurrentSocket(tab, socket, generation)) return; tab.connected = true; tab.fit?.fit(); tab.terminal?.writeln('\x1b[32m已连接\x1b[0m') }
+  socket.onopen = () => { if (!isCurrentSocket(tab, socket, generation)) return; tab.connected = true; tab.fit?.fit(); if (tab.terminal) sendSocket(tab, { type: 'resize', columns: tab.terminal.cols, rows: tab.terminal.rows }); tab.terminal?.writeln('\x1b[32m已连接\x1b[0m') }
   socket.onmessage = async (event) => {
     if (!isCurrentSocket(tab, socket, generation)) return
     if (typeof event.data === 'string') {
@@ -156,8 +156,9 @@ function playReplay(): void { stopReplay(); if (replayIndex.value >= replayEntri
 async function exportSession(format: string): Promise<void> { if (!historySession.value) return; try { const blob = await downloadExport(historySession.value.id, format); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${historySession.value.id}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href) } catch { ElMessage.error('导出失败') } }
 function closeHistory(): void { stopReplay(); historyDialog.value = false }
 async function refreshAll(): Promise<void> { loading.value = true; try { devices.value = await getTerminalDevices(); if (!activeDeviceId.value && devices.value[0]) selectDevice(devices.value[0]); await refreshHistory() } catch { devices.value = []; sessions.value = []; ElMessage.info('当前服务未提供可用终端设备，页面保留真实空状态') } finally { loading.value = false } }
-onMounted(async () => { await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) } })
-onBeforeUnmount(() => { stopReplay(); tabs.forEach((tab) => { const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose() }) })
+function handleWindowResize(): void { void fitVisibleTerminals() }
+onMounted(async () => { window.addEventListener('resize', handleWindowResize); await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) } })
+onBeforeUnmount(() => { window.removeEventListener('resize', handleWindowResize); stopReplay(); tabs.forEach((tab) => { const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose() }) })
 </script>
 
 <template>

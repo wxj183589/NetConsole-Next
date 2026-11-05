@@ -1,6 +1,6 @@
 # 自主开发任务池
 
-日期：2026-11-05；起点：27ebfb8；冻结基线：NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1。
+日期：2026-11-05；当前 HEAD：5c60016；分支：codex-A/netconsole-next-r3-dual-ac；冻结基线：NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1。
 
 最新附件已授权产品编码/无线UI/四台模拟器测试；旧文档的 authorization pending 为历史，不再作为本轮审批阻断。Schema 未授权应用到真实数据。
 
@@ -19,6 +19,78 @@ SECURITY_RISK=按当前 Site claims 和来源隔离；不增加外部目标
 DATABASE_IMPACT=本轮不修改真实数据或正式 schema
 TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
 ESTIMATED_EFFORT=按证据逐批实施
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A28 Netmiko worker 与显式 driver mapping
+
+TASK_ID=A28
+MODULE=Connection/Netmiko
+FEATURE=CPython Netmiko worker、显式已安装 driver mapping、分页准备与有界输出
+CURRENT_STATUS=Checkpoint L 已完成离线实现和 worker contract 回归
+USER_VALUE=复用统一连接边界，避免设备厂商/协议静默错配，减少人工登录操作
+SEVERITY=P1
+DEPENDENCIES=离线 CPython、netmiko==4.7.0
+EVIDENCE=tools/netmiko_worker.py；tests/netmiko_worker_test.py；`python -m unittest tests/netmiko_worker_test.py` 2/2 PASS
+IMPLEMENTATION_SCOPE=worker process only; .NET retains task/site/credential/HostKey/Raw authority
+SECURITY_RISK=密码仅通过本机 stdin/管道；未知 driver 拒绝，不静默回退
+DATABASE_IMPACT=无 schema 或真实数据修改
+TESTABILITY=Python unit tests；真实 H3C/ZTE/Cisco/Huawei 互操作另行验收
+ESTIMATED_EFFORT=已完成
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A29 Profile-scoped credential 与 SSH HostKey 自动信任/轮换
+
+TASK_ID=A29
+MODULE=Connection/Security
+FEATURE=profile ID 凭据解析、HostKey 首次自动信任和轮换审计
+CURRENT_STATUS=Checkpoint L 已完成本地/隔离服务边界，并取得 AC1/AC2 自动登录证据
+USER_VALUE=设备添加后直接连接，免重复输入和确认弹窗
+SEVERITY=P1
+DEPENDENCIES=DPAPI Credential Reference、HostKey history
+EVIDENCE=profile-scoped provider、HostKey Catalog；AC1/AC2 SSH 自动认证和 AUTO_UPDATE PASS
+IMPLEMENTATION_SCOPE=profile credential/HostKey boundary; no password in browser/URL/Raw/log/Git
+SECURITY_RISK=不得猜测密码；HostKey rotation requires service audit and atomic commit
+DATABASE_IMPACT=不修改真实数据；隔离测试根仅读现有 DPAPI 引用
+TESTABILITY=Credential/HostKey tests；白名单模拟器连接测试
+ESTIMATED_EFFORT=已完成
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A30 Site Jump Host 探测与显式指纹刷新
+
+TASK_ID=A30
+MODULE=Connection/Security
+FEATURE=Site 级 Jump Host 持久化、Netmiko probe、指纹变化 fail-closed 与显式 refresh
+CURRENT_STATUS=Checkpoint L 已完成隔离服务/API闭环
+USER_VALUE=支持可信内网跳板连接，同时保留双 HostKey 审计边界
+SEVERITY=P1
+DEPENDENCIES=Netmiko worker、Site claims、Jump Host credential boundary
+EVIDENCE=POST `/api/system/sites/{siteId}/ssh-jump-host/test`；POST `/refresh-fingerprint`；Telnet 不套用 Jump Host
+IMPLEMENTATION_SCOPE=Jump Host only; target device identity remains separate
+SECURITY_RISK=密码不入 API view/日志；已保存指纹变化 fail-closed，只有显式 refresh 才更新
+DATABASE_IMPACT=增量 schema 已提交；真实数据未修改
+TESTABILITY=CredentialTests/worker probe；live bastion evidence pending
+ESTIMATED_EFFORT=已完成
+PRIORITY=P1
+STATUS=COMPLETED
+
+## A31 历史任务按 ID 查询与恢复
+
+TASK_ID=A31
+MODULE=Task Center
+FEATURE=历史任务直接按 ID 查询，支持详情/重试/恢复不受最近 100 条窗口限制
+CURRENT_STATUS=Checkpoint L 已完成实现和定向回归
+USER_VALUE=长期任务记录可追溯，失败设备可单独恢复
+SEVERITY=P1
+DEPENDENCIES=task_runs persistence
+EVIDENCE=Catalog direct-ID query；`CONCURRENCY_P1_TESTS=5/5 PASS`（既有隔离证据）
+IMPLEMENTATION_SCOPE=task detail/retry/resume lookup
+SECURITY_RISK=继续复核当前 Site claims；不扩大原始目标集合
+DATABASE_IMPACT=增量查询修复，无真实数据重写
+TESTABILITY=超过 100 条历史任务回归；完整 harness 需在并行变更收敛后复跑
+ESTIMATED_EFFORT=已完成
 PRIORITY=P1
 STATUS=COMPLETED
 

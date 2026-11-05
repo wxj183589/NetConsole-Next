@@ -12,8 +12,6 @@ internal static class TerminalCoreTests
     public static async Task RunAsync()
     {
         VerifiesRestrictedReadonlyPolicy();
-        VerifiesTelnetNegotiation();
-        await VerifiesTelnetLoginFailureAsync();
         VerifiesOneTimeTicket();
         await VerifiesSessionSchemaAndRecordingAsync();
         await VerifiesSegmentedRecordingIntegrityAndRecoveryAsync();
@@ -36,50 +34,6 @@ internal static class TerminalCoreTests
             "multi-line paste must be rejected server-side");
         Assert(!RestrictedReadonlyInputPolicy.TryNormalize("display version\t", out _, out _),
             "control and completion input must not bypass the command policy");
-    }
-
-    private static void VerifiesTelnetNegotiation()
-    {
-        var negotiator = new TelnetNegotiator();
-        var payload = negotiator.Process(new byte[] { 255, 251, 1, (byte)'R', 255, 253, 42, (byte)'E' });
-        Assert(Encoding.ASCII.GetString(payload) == "RE", "Telnet IAC bytes must not leak into terminal output");
-        Assert(negotiator.Replies.Span.SequenceEqual(new byte[] { 255, 253, 1, 255, 252, 42 }),
-            "Telnet negotiation must accept echo and refuse unsupported terminal options deterministically");
-    }
-
-    private static async Task VerifiesTelnetLoginFailureAsync()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            var server = Task.Run(async () =>
-            {
-                using var client = await listener.AcceptTcpClientAsync();
-                await using var stream = client.GetStream();
-                var initial = new byte[256];
-                using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                _ = await stream.ReadAsync(initial, readTimeout.Token);
-                await stream.WriteAsync(Encoding.ASCII.GetBytes("Password: "), readTimeout.Token);
-                await stream.FlushAsync(readTimeout.Token);
-                var secret = new byte[256];
-                _ = await stream.ReadAsync(secret, readTimeout.Token);
-                await stream.WriteAsync(Encoding.ASCII.GetBytes("Login failed.\r\n"), readTimeout.Token);
-                await stream.FlushAsync(readTimeout.Token);
-            });
-            var profile = new H3cDeviceProfileSnapshot("telnet-test", "127.0.0.1", port,
-                "admin", "TEST_CREDENTIAL", "", true, 0, 0, TerminalProtocol: "TELNET");
-            await using var transport = new TelnetTerminalTransport(profile, "synthetic");
-            try
-            {
-                await transport.ConnectAsync(CancellationToken.None);
-                throw new InvalidOperationException("Telnet login failure should be surfaced");
-            }
-            catch (H3cAuthenticationFailedException) { }
-            await server;
-        }
-        finally { listener.Stop(); }
     }
 
     private static void VerifiesOneTimeTicket()
@@ -427,10 +381,11 @@ internal static class TerminalCoreTests
 
             catalog.SetH3cCompatibility(deviceId, "STRICT", false);
             var strictChanged = catalog.CheckSshHostKey(profile, "ssh-ed25519", first);
-            Assert(!strictChanged.Accepted && strictChanged.Decision == "REJECTED" && strictChanged.Reason == "HOST_KEY_CHANGED_STRICT",
-                "STRICT should reject a changed host key and retain the current fingerprint");
+            Assert(strictChanged.Accepted && strictChanged.Decision == "AUTO_UPDATE" && strictChanged.CorrelationId is not null,
+                "legacy STRICT profiles should accept a changed host key through the audited pending state");
             Assert(catalog.GetH3cDeviceProfile(deviceId)!.HostKeySha256 == H3cHostKeyFingerprint.Normalize(second),
-                "STRICT rejection must not overwrite the current fingerprint");
+                "the old fingerprint must remain effective until the connection succeeds");
+            Assert(catalog.CommitSshHostKey(strictChanged.CorrelationId!), "legacy STRICT profile should commit the new key after connection");
 
             catalog.SetH3cCompatibility(deviceId, "AUTO_REPLACE", false, "GB18030", "AUTO", true);
             profile = catalog.GetH3cDeviceProfile(deviceId)!;

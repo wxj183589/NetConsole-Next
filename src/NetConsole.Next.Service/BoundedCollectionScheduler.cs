@@ -201,8 +201,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 if (item.Snapshot.State == "QUEUED")
                 {
                     var reason = scopeReason is null ? null : scopeReason + ";CANCEL_REQUESTED";
-                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs(), Error = reason };
                     PersistState(item, "CANCELLED", reason);
+                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs(), Error = reason };
                 }
                 if (scopeReason is not null && item.Scope is not null)
                     _catalog!.TryRecordDeviceAuditEvent(item.Scope.ActorUserId, "TASK_SCOPE_REVOKED", "DENIED",
@@ -232,8 +232,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 if (cancel) item.CancelRequested = true;
                 if (item.Snapshot.State == "QUEUED")
                 {
-                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
                     PersistState(item, "CANCELLED", null);
+                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
                 }
             }
             if (cancel) item.Cancellation.Cancel();
@@ -524,9 +524,9 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 result = null;
                 error = "Collection request exceeded its timeout.";
             }
+            if (item.Persisted && !stateAlreadyPersisted) PersistState(item, state, error);
             item.Snapshot = item.Snapshot with { State = state, Result = result, Error = error, EndedMs = UtcNowMs() };
         }
-        if (item.Persisted && !stateAlreadyPersisted) PersistState(item, state, error);
         lock (_gate) PruneCompletedHistory();
     }
 

@@ -1065,6 +1065,8 @@ if (settings.H3cEnabled)
     app.MapPost("/api/system/h3c/profiles/onboard", (HttpContext context, H3cOnboardRequest request, Catalog rawCatalog) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Host);
+        var siteId = string.IsNullOrWhiteSpace(request.SiteId) ? "local" : request.SiteId.Trim();
+        if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
         if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username))
             return Results.BadRequest(new { error = "host and username are required." });
         var protocol = request.Protocol?.Trim().ToUpperInvariant() switch
@@ -1083,7 +1085,7 @@ if (settings.H3cEnabled)
             rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),
                 string.Empty, string.Empty, true, 0, 0,
                 H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback,
-                request.Password));
+                request.Password, SiteId: siteId));
             return rawCatalog.GetH3cDeviceProfile(id) is { } profile
                 ? Results.Created($"/api/system/h3c/profiles/{id}", profile.ToView())
                 : Results.NotFound();
@@ -1306,8 +1308,9 @@ app.MapPost("/api/system/zte/profiles", (HttpContext context, ZteProfileRequest 
     try
     {
         catalog.CreateZteDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
-            request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0, request.HostKeyUpdatePolicy,
-            request.AllowLegacyAlgorithms, request.TerminalEncoding, request.SiteId));
+            string.IsNullOrWhiteSpace(request.CredentialReference) ? "ZTE_" + request.Id.ToUpperInvariant() : request.CredentialReference,
+            request.HostKeySha256, request.Enabled, 0, 0, request.HostKeyUpdatePolicy,
+            request.AllowLegacyAlgorithms, request.TerminalEncoding, request.SiteId), request.Password, request.ClearPassword);
         return Results.Created($"/api/system/zte/profiles/{request.Id}", zte.Profile(request.Id));
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -1354,10 +1357,8 @@ app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/test", async (HttpContext 
     try
     {
         var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(jump.HostKeySha256) &&
-            !H3cHostKeyFingerprint.Matches(jump.HostKeySha256, result.HostKeySha256))
-            return Results.Conflict(new { error = "JUMP_HOST_KEY_MISMATCH", detail = "Jump Host fingerprint changed; refresh was not applied." });
-        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256)) return Results.NotFound();
+        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256, jump))
+            return Results.Conflict(new { error = "JUMP_HOST_CONFIGURATION_CHANGED" });
         return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
     }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -1375,7 +1376,8 @@ app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/refresh-fingerprint", asyn
     try
     {
         var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
-        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256)) return Results.NotFound();
+        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256, jump))
+            return Results.Conflict(new { error = "JUMP_HOST_CONFIGURATION_CHANGED" });
         return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
     }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -2001,7 +2003,7 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false, string? Password = null, bool ClearPassword = false);
 internal sealed record H3cOnboardRequest(string Host, string Username, string? CredentialReference = null,
-    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false, string? Password = null);
+    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false, string? Password = null, string? SiteId = null);
 internal sealed record H3cCredentialRequest(string? Password = null, bool ClearPassword = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
@@ -2010,9 +2012,9 @@ internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, str
 internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
-    string CredentialReference, string HostKeySha256, bool Enabled = true,
+    string CredentialReference = "", string HostKeySha256 = "", bool Enabled = true,
     string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
-    string TerminalEncoding = "AUTO", string SiteId = "local");
+    string TerminalEncoding = "AUTO", string SiteId = "local", string? Password = null, bool ClearPassword = false);
 internal sealed record SiteSshJumpHostRequest(string Host, int Port, string Username,
     string CredentialReference, string? Password = null, string? HostKeySha256 = null,
     bool Enabled = true, bool ClearPassword = false);

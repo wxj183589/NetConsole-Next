@@ -98,7 +98,7 @@ internal sealed class H3cConnectionTestService(
         var password = credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password))
             return Failure(profile, started, "TELNET", ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"));
-        await using var transport = new TelnetTerminalTransport(profile, password);
+        await using var transport = new NetmikoTerminalTransport(profile with { TerminalProtocol = "TELNET" }, password, catalog);
         await transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
         // Telnet's login handshake is the connection check.  Avoid storing or
         // returning the initial prompt because it may contain device details.

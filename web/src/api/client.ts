@@ -1153,6 +1153,7 @@ export function createH3cProfile(payload: Record<string, unknown>): Promise<Term
 }
 export interface H3cOnboardRequest {
   host: string
+  siteId?: string
   protocol?: 'SSH' | 'TELNET' | 'AUTO'
   port?: number
   username: string

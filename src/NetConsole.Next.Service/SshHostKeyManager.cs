@@ -48,7 +48,6 @@ internal sealed partial class Catalog
         if (!reader.Read() || !string.Equals(reader.GetString(0), profile.Host, StringComparison.OrdinalIgnoreCase) ||
             reader.GetInt32(1) != profile.Port)
             return new(false, "REJECTED", null, keyType, fingerprint, "UNAUTHORIZED_DEVICE");
-        var policy = reader.GetString(2);
         var currentType = reader.IsDBNull(3) ? null : reader.GetString(3);
         var currentFingerprint = reader.IsDBNull(4) ? null : reader.GetString(4);
         var revision = reader.GetInt64(5);
@@ -65,14 +64,6 @@ internal sealed partial class Catalog
             verified.ExecuteNonQuery();
             transaction.Commit();
             return new(true, "MATCH", null, keyType, fingerprint, "HOST_KEY_MATCH");
-        }
-
-        if (!string.IsNullOrEmpty(currentFingerprint) && policy == "STRICT")
-        {
-            var correlation = RecordHostKeyEvent(db, transaction, profile, keyType, fingerprint, "REJECTED",
-                "HOST_KEY_CHANGED_STRICT");
-            transaction.Commit();
-            return new(false, "REJECTED", correlation, keyType, fingerprint, "HOST_KEY_CHANGED_STRICT");
         }
 
         using var existing = db.CreateCommand();

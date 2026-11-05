@@ -34,7 +34,7 @@ internal sealed class NetmikoJumpHostProbe
             var script = FindWorkerScript();
             var start = new ProcessStartInfo
             {
-                FileName = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_NETMIKO_PYTHON") ?? "python",
+                FileName = NetmikoWorkerPaths.FindPython(),
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -111,14 +111,6 @@ internal sealed class NetmikoJumpHostProbe
 
     private static string FindWorkerScript()
     {
-        var configured = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_NETMIKO_WORKER");
-        var candidates = new[]
-        {
-            configured,
-            Path.Combine(AppContext.BaseDirectory, "tools", "netmiko_worker.py"),
-            Path.Combine(Directory.GetCurrentDirectory(), "tools", "netmiko_worker.py")
-        }.Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => Path.GetFullPath(path!));
-        return candidates.FirstOrDefault(File.Exists)
-            ?? throw new FileNotFoundException("Netmiko worker script was not found.");
+        return NetmikoWorkerPaths.FindScript();
     }
 }
