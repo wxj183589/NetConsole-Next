@@ -30,10 +30,23 @@ def test_auth_does_not_expose_local_token_to_vue():
     assert "NETCONSOLE_NEXT_WEB_LAN" in (SERVICE / "RuntimeSettings.cs").read_text(encoding="utf-8")
 
 
+def test_task_center_actions_are_guarded_and_connected():
+    program = (SERVICE / "Program.cs").read_text(encoding="utf-8")
+    client = (WEB / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+    view = (WEB / "src" / "views" / "TasksView.vue").read_text(encoding="utf-8")
+    for action in ("cancel", "retry", "resume"):
+        assert f'"/api/system/tasks/{{runId}}/{action}"' in program
+        assert f'function {action}Task' in client
+    assert "IsSuperAdmin(context)" in program
+    assert "DeviceSiteScopeGuard(context)" in program
+    assert "runAction(task" in view
+
+
 if __name__ == "__main__":
     for check in (test_next_owns_the_frontend_scaffold,
                   test_unsupported_pages_are_explicitly_disabled,
-                  test_auth_does_not_expose_local_token_to_vue):
+                  test_auth_does_not_expose_local_token_to_vue,
+                  test_task_center_actions_are_guarded_and_connected):
         check()
-    print("web UI contract: PASS (3 checks)")
+    print("web UI contract: PASS (4 checks)")
 

@@ -1,0 +1,922 @@
+{
+  "acs": [
+    {
+      "deviceId": "ac-device-1",
+      "displayName": "AC1",
+      "siteId": "site-a",
+      "managementIp": "192.168.56.2",
+      "vendor": "H3C",
+      "model": "WX3510H",
+      "connectionStatus": "CONNECTED",
+      "terminalProfileId": "profile-ac1",
+      "version": "V7.1.070",
+      "enabled": true
+    },
+    {
+      "deviceId": "ac-device-2",
+      "displayName": "AC2",
+      "siteId": "site-a",
+      "managementIp": "192.168.56.5",
+      "vendor": "H3C",
+      "model": "WX3510H",
+      "connectionStatus": "CONNECTED",
+      "terminalProfileId": "profile-ac2",
+      "version": "V7.1.070",
+      "enabled": true
+    }
+  ],
+  "observations": [
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceAcName": "AC1",
+      "sourceSiteId": "site-a",
+      "sourceAcModel": "WX3510H",
+      "sourceAcVersion": "V7.1.070",
+      "apName": "FIT-AP-R3-001",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "apModel": "WA6320-HCL",
+      "apGroup": "default-group",
+      "rawState": "R/M",
+      "normalizedState": "RUNNING_MASTER",
+      "stateConfidence": "HIGH",
+      "capturedMs": 1793836800000,
+      "rawManifestRef": "fixture:ac1:manifest-001",
+      "parserRevision": "fixture.h3c.ap.v1",
+      "sourceRevision": "fixture:ac1:revision-001"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceAcName": "AC2",
+      "sourceSiteId": "site-a",
+      "sourceAcModel": "WX3510H",
+      "sourceAcVersion": "V7.1.070",
+      "apName": "FIT-AP-R3-001",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "apModel": "WA6320-HCL",
+      "apGroup": "default-group",
+      "rawState": "R/B",
+      "normalizedState": "RUNNING_BACKUP",
+      "stateConfidence": "HIGH",
+      "capturedMs": 1793836801000,
+      "rawManifestRef": "fixture:ac2:manifest-001",
+      "parserRevision": "fixture.h3c.ap.v1",
+      "sourceRevision": "fixture:ac2:revision-001"
+    }
+  ],
+  "topologyEvidence": [
+    {
+      "domainId": "domain-ac1-ac2",
+      "domainKind": "ONE_PLUS_ONE",
+      "topologyStatus": "CONFIRMED",
+      "memberDeviceIds": [
+        "ac-device-1",
+        "ac-device-2"
+      ],
+      "sourceEvidenceRefs": [
+        "fixture:ha-members",
+        "fixture:ha-roles"
+      ],
+      "confirmed": true
+    }
+  ],
+  "runtimeSamples": [
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836789000,
+      "sourceRevision": "fixture:ac-device-1:state:0:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:0:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836789001,
+      "sourceRevision": "fixture:ac-device-1:state:0:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:0:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836790000,
+      "sourceRevision": "fixture:ac-device-1:state:1:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:1:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836790001,
+      "sourceRevision": "fixture:ac-device-1:state:1:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:1:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836791000,
+      "sourceRevision": "fixture:ac-device-1:state:2:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:2:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836791001,
+      "sourceRevision": "fixture:ac-device-1:state:2:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:2:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836792000,
+      "sourceRevision": "fixture:ac-device-1:state:3:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:3:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836792001,
+      "sourceRevision": "fixture:ac-device-1:state:3:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:3:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836793000,
+      "sourceRevision": "fixture:ac-device-1:state:4:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:4:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836793001,
+      "sourceRevision": "fixture:ac-device-1:state:4:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:4:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836794000,
+      "sourceRevision": "fixture:ac-device-1:state:5:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:5:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836794001,
+      "sourceRevision": "fixture:ac-device-1:state:5:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:5:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836795000,
+      "sourceRevision": "fixture:ac-device-1:state:6:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:6:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836795001,
+      "sourceRevision": "fixture:ac-device-1:state:6:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:6:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836796000,
+      "sourceRevision": "fixture:ac-device-1:state:7:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:7:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836796001,
+      "sourceRevision": "fixture:ac-device-1:state:7:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:7:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836797000,
+      "sourceRevision": "fixture:ac-device-1:state:8:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:8:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836797001,
+      "sourceRevision": "fixture:ac-device-1:state:8:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:8:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836798000,
+      "sourceRevision": "fixture:ac-device-1:state:9:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:9:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836798001,
+      "sourceRevision": "fixture:ac-device-1:state:9:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:9:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836799000,
+      "sourceRevision": "fixture:ac-device-1:state:10:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:10:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836799001,
+      "sourceRevision": "fixture:ac-device-1:state:10:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:10:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836800000,
+      "sourceRevision": "fixture:ac-device-1:state:11:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:11:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836800001,
+      "sourceRevision": "fixture:ac-device-1:state:11:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:11:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836801000,
+      "sourceRevision": "fixture:ac-device-1:state:12:0",
+      "rawManifestRef": "fixture:ac-device-1:manifest:12:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-1",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4c6f-d608-0400"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836801001,
+      "sourceRevision": "fixture:ac-device-1:state:12:1",
+      "rawManifestRef": "fixture:ac-device-1:manifest:12:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836789000,
+      "sourceRevision": "fixture:ac-device-2:state:0:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:0:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836789001,
+      "sourceRevision": "fixture:ac-device-2:state:0:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:0:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836790000,
+      "sourceRevision": "fixture:ac-device-2:state:1:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:1:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836790001,
+      "sourceRevision": "fixture:ac-device-2:state:1:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:1:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836791000,
+      "sourceRevision": "fixture:ac-device-2:state:2:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:2:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836791001,
+      "sourceRevision": "fixture:ac-device-2:state:2:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:2:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836792000,
+      "sourceRevision": "fixture:ac-device-2:state:3:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:3:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836792001,
+      "sourceRevision": "fixture:ac-device-2:state:3:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:3:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836793000,
+      "sourceRevision": "fixture:ac-device-2:state:4:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:4:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836793001,
+      "sourceRevision": "fixture:ac-device-2:state:4:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:4:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836794000,
+      "sourceRevision": "fixture:ac-device-2:state:5:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:5:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836794001,
+      "sourceRevision": "fixture:ac-device-2:state:5:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:5:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836795000,
+      "sourceRevision": "fixture:ac-device-2:state:6:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:6:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836795001,
+      "sourceRevision": "fixture:ac-device-2:state:6:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:6:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836796000,
+      "sourceRevision": "fixture:ac-device-2:state:7:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:7:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836796001,
+      "sourceRevision": "fixture:ac-device-2:state:7:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:7:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836797000,
+      "sourceRevision": "fixture:ac-device-2:state:8:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:8:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836797001,
+      "sourceRevision": "fixture:ac-device-2:state:8:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:8:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836798000,
+      "sourceRevision": "fixture:ac-device-2:state:9:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:9:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836798001,
+      "sourceRevision": "fixture:ac-device-2:state:9:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:9:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836799000,
+      "sourceRevision": "fixture:ac-device-2:state:10:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:10:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836799001,
+      "sourceRevision": "fixture:ac-device-2:state:10:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:10:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836800000,
+      "sourceRevision": "fixture:ac-device-2:state:11:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:11:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/M",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836800001,
+      "sourceRevision": "fixture:ac-device-2:state:11:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:11:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836801000,
+      "sourceRevision": "fixture:ac-device-2:state:12:0",
+      "rawManifestRef": "fixture:ac-device-2:manifest:12:0",
+      "parserRevision": "fixture.h3c.ap.v1"
+    },
+    {
+      "sourceAcDeviceId": "ac-device-2",
+      "sourceSiteId": "site-a",
+      "serialEvidence": "SN-R3-001",
+      "normalizedMacSet": [
+        "4C:6F:D6:08:04:00"
+      ],
+      "rawState": "R/B",
+      "outcome": "SUCCESS",
+      "verificationLevel": "OFFLINE_FIXTURE",
+      "stateProfileVerified": true,
+      "capturedMs": 1793836801001,
+      "sourceRevision": "fixture:ac-device-2:state:12:1",
+      "rawManifestRef": "fixture:ac-device-2:manifest:12:1",
+      "parserRevision": "fixture.h3c.ap.v1"
+    }
+  ]
+}

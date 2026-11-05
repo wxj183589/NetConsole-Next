@@ -98,6 +98,11 @@ button { cursor: pointer; }
 .empty-state { display: grid; place-items: center; min-height: 160px; padding: 22px; color: var(--nc-text-secondary); text-align: center; }
 .empty-state strong { display: block; margin-bottom: 6px; color: var(--nc-text); }
 .empty-state small { max-width: 430px; line-height: 1.6; }
+.route-error-state { min-height: 300px; }
+.route-error-state > div { display: grid; justify-items: center; gap: 10px; }
+.route-error-state__path { max-width: min(720px, 90vw); overflow-wrap: anywhere; color: var(--nc-text-secondary); }
+.route-error-state details { max-width: min(720px, 90vw); color: var(--nc-danger); font-size: 12px; }
+.route-error-state code { display: block; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .table-wrap { overflow: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .data-table th { color: var(--nc-text-secondary); background: var(--nc-surface-muted); font-weight: 600; text-align: left; }

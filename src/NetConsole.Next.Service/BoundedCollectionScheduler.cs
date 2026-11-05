@@ -41,8 +41,10 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private readonly Catalog? _catalog;
     private readonly Action<Exception>? _persistenceFailure;
     private readonly ITaskResultSink? _resultSink;
+    private readonly ITaskScopeAuthorizer? _scopeAuthorizer;
     private readonly Channel<WorkItem> _queue;
     private readonly ConcurrentDictionary<string, WorkItem> _items = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _deviceGates = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private readonly object _gate = new();
@@ -53,7 +55,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private long _rejected;
 
     public BoundedCollectionScheduler(IDeviceSessionFactory sessionFactory, int maxConcurrency, int queueCapacity,
-        Catalog? catalog = null, Action<Exception>? persistenceFailure = null, ITaskResultSink? resultSink = null)
+        Catalog? catalog = null, Action<Exception>? persistenceFailure = null, ITaskResultSink? resultSink = null,
+        ITaskScopeAuthorizer? scopeAuthorizer = null)
     {
         if (maxConcurrency is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
         if (queueCapacity is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(queueCapacity));
@@ -61,6 +64,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         _catalog = catalog;
         _persistenceFailure = persistenceFailure;
         _resultSink = resultSink;
+        _scopeAuthorizer = scopeAuthorizer;
         MaxConcurrency = maxConcurrency;
         QueueCapacity = queueCapacity;
         _queue = Channel.CreateBounded<WorkItem>(new BoundedChannelOptions(queueCapacity)
@@ -79,7 +83,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     public bool TrySchedule(DeviceCollectionRequest request, out string id)
         => TryScheduleCore(request, null, out id);
 
-    public bool TryScheduleDefinition(string definitionId, out string id)
+    public bool TryScheduleDefinition(string definitionId, out string id, string? actorUserId = null)
     {
         if (_catalog is null) throw new InvalidOperationException("A Catalog is required for persisted task definitions.");
         var definition = _catalog.GetTaskDefinition(definitionId)
@@ -88,10 +92,12 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         if (definition.RestartPolicy != "NEVER") throw new InvalidOperationException("Unsupported task restart policy.");
         var request = new DeviceCollectionRequest(definition.Target, definition.Command,
             TimeSpan.FromMilliseconds(definition.TimeoutMs));
-        return TryScheduleCore(request, definition, out id);
+        var scope = definition.TaskType == "H3C_SSH_READONLY" ? _scopeAuthorizer?.CaptureExecution(definition, actorUserId) : null;
+        return TryScheduleCore(request, definition, out id, scope);
     }
 
-    private bool TryScheduleCore(DeviceCollectionRequest request, TaskDefinitionSnapshot? definition, out string id)
+    private bool TryScheduleCore(DeviceCollectionRequest request, TaskDefinitionSnapshot? definition, out string id,
+        TaskExecutionScope? scope = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -112,8 +118,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 return false;
             }
 
-            id = definition is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definition);
-            var item = new WorkItem(id, request, submittedMs, definition, definition is not null);
+            id = definition is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definition, scope?.ActorUserId);
+            var item = new WorkItem(id, request, submittedMs, definition, definition is not null, scope);
 
             PruneCompletedHistory();
             _items[id] = item;
@@ -140,12 +146,50 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         .Take(Math.Clamp(limit, 1, CompletedHistoryLimit))
         .ToArray();
 
+    public bool TryRetryTaskRun(string runId, out string retryId, string? actorUserId = null)
+        => TryReplayTaskRun(runId, out retryId, actorUserId, resumeInterrupted: false);
+
+    public bool TryResumeInterruptedTaskRun(string runId, out string resumedId, string? actorUserId = null)
+        => TryReplayTaskRun(runId, out resumedId, actorUserId, resumeInterrupted: true);
+
+    private bool TryReplayTaskRun(string runId, out string newRunId, string? actorUserId, bool resumeInterrupted)
+    {
+        newRunId = string.Empty;
+        if (_catalog is null || string.IsNullOrWhiteSpace(runId)) return false;
+        var previous = _catalog.GetTaskRun(runId);
+        if (previous is null || previous.DefinitionId is null) return false;
+        if (resumeInterrupted ? previous.State != "INTERRUPTED" :
+            previous.State is not ("FAILED" or "TIMED_OUT" or "CANCELLED" or "INTERRUPTED")) return false;
+        try
+        {
+            var accepted = TryScheduleDefinition(previous.DefinitionId, out newRunId, actorUserId);
+            if (accepted)
+            {
+                _catalog.TryRecordDeviceAuditEvent(actorUserId ?? "collector", resumeInterrupted ? "TASK_RESUME_REQUESTED" : "TASK_RETRY_REQUESTED",
+                    "ACCEPTED", previous.Id, newRunId, Array.Empty<string>(), $"previousState={previous.State}");
+            }
+            return accepted;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or TaskScopeRevokedException)
+        {
+            _catalog.TryRecordDeviceAuditEvent(actorUserId ?? "collector", resumeInterrupted ? "TASK_RESUME_REQUESTED" : "TASK_RETRY_REQUESTED",
+                "DENIED", previous.Id, null, Array.Empty<string>(), ex.GetType().Name);
+            return false;
+        }
+    }
+
     public CollectionSchedulerSnapshot Status => new(
         Volatile.Read(ref _active), Volatile.Read(ref _queued), QueueCapacity, MaxConcurrency,
         Interlocked.Read(ref _accepted), Interlocked.Read(ref _rejected));
 
     public bool Cancel(string id)
     {
+        string? scopeReason = null;
+        if (_items.TryGetValue(id, out var candidate) && candidate.Scope is not null)
+        {
+            try { _scopeAuthorizer!.Require(candidate.Scope, candidate.Request.Target, "CANCEL_BOUNDARY"); }
+            catch (TaskScopeRevokedException ex) { scopeReason = ex.Reason; }
+        }
         lock (_gate)
         {
             if (_disposed || !_items.TryGetValue(id, out var item)) return false;
@@ -153,11 +197,16 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 if (IsTerminal(item.Snapshot.State) || item.CommitStarted) return false;
                 item.CancelRequested = true;
+                item.ScopeCancellationReason = scopeReason;
                 if (item.Snapshot.State == "QUEUED")
                 {
-                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs() };
-                    PersistState(item, "CANCELLED", null);
+                    var reason = scopeReason is null ? null : scopeReason + ";CANCEL_REQUESTED";
+                    item.Snapshot = item.Snapshot with { State = "CANCELLED", EndedMs = UtcNowMs(), Error = reason };
+                    PersistState(item, "CANCELLED", reason);
                 }
+                if (scopeReason is not null && item.Scope is not null)
+                    _catalog!.TryRecordDeviceAuditEvent(item.Scope.ActorUserId, "TASK_SCOPE_REVOKED", "DENIED",
+                        item.Snapshot.Id, item.Definition?.Id, Array.Empty<string>(), scopeReason + ";CANCEL_REQUESTED");
                 item.Cancellation.Cancel();
                 return true;
             }
@@ -246,28 +295,63 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
 
     private async Task ExecuteAsync(WorkItem item)
     {
+        var gate = _deviceGates.GetOrAdd(item.Request.Target, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(item.Cancellation.Token);
+        try
+        {
+            await ExecuteCoreAsync(item);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task ExecuteCoreAsync(WorkItem item)
+    {
         IDeviceSession? session = null;
         string terminalState;
         string? result = null;
         string? error = null;
-        var captureStatus = "COMPLETE";
+        var commandOutputs = new List<(string Command, string Output, int Index, string CaptureStatus)>();
+        var currentCommandIndex = 0;
+        var commandPlan = item.Definition?.CommandPlan ?? [item.Request.Command];
         var resultPersistedAtomically = false;
+        var operationStarted = false;
         using var timeout = new CancellationTokenSource(item.Request.Timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, item.Cancellation.Token, timeout.Token);
 
         try
         {
+            if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_CONNECT");
             session = _sessionFactory.Create(item.Request.Target);
+            if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_CONNECT");
+            operationStarted = true;
             await session.ConnectAsync(linked.Token);
+            if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_COMMAND");
             SetState(item, "RUNNING");
-            result = await session.ExecuteAsync(item.Request.Command, linked.Token);
+            for (currentCommandIndex = 0; currentCommandIndex < commandPlan.Count; currentCommandIndex++)
+            {
+                var command = commandPlan[currentCommandIndex];
+                var output = await session.ExecuteAsync(command, linked.Token);
+                commandOutputs.Add((command, ConfigBackupSanitizer.Sanitize(command, output), currentCommandIndex, "COMPLETE"));
+            }
+            result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
+            if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "AFTER_COMMAND");
             terminalState = "SUCCEEDED";
+        }
+        catch (TaskScopeRevokedException ex)
+        {
+            terminalState = "CANCELLED";
+            error = operationStarted ? "REVOKED_AFTER_START:" + ex.Reason : ex.Reason;
         }
         catch (H3cPartialOutputException ex)
         {
             H3cCollectionMetrics.RecordFailure(ex);
-            result = ex.Output;
-            captureStatus = "PARTIAL";
+            if (!string.IsNullOrEmpty(ex.Output))
+                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ConfigBackupSanitizer.Sanitize(commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output),
+                    Math.Min(currentCommandIndex, commandPlan.Count - 1), "PARTIAL"));
+            result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             terminalState = ex.IsCancellation ? timeout.IsCancellationRequested ? "TIMED_OUT" : "CANCELLED" : "FAILED";
             error = ex.FailureCode;
         }
@@ -311,18 +395,63 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             }
         }
 
-        if (result is not null && item.Definition?.TaskType == "H3C_SSH_READONLY")
+        if (item.Scope is not null)
+        {
+            try { _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_RESULT_COMMIT"); }
+            catch (TaskScopeRevokedException ex)
+            {
+                terminalState = "CANCELLED";
+                var reason = operationStarted ? "REVOKED_AFTER_START:" + ex.Reason : ex.Reason;
+                if (!IsScopeReason(error)) error = error is null ? reason : reason + ";PRIOR_OUTCOME=" + error;
+            }
+            if (IsScopeReason(error))
+                _catalog!.TryRecordDeviceAuditEvent(item.Scope.ActorUserId, "TASK_SCOPE_REVOKED", "DENIED",
+                    item.Snapshot.Id, item.Definition?.Id, Array.Empty<string>(), error);
+        }
+
+        // Any command output attached to a non-successful run is evidence of a
+        // partial collection boundary. Preserve it independently, but never let
+        // it enter the complete-facts publication path.
+        if (terminalState != "SUCCEEDED" && commandOutputs.Count > 0)
+            commandOutputs = commandOutputs.Select(item => (item.Command, item.Output, item.Index, "PARTIAL")).ToList();
+
+        if (commandOutputs.Count > 0 && item.Definition?.TaskType == "H3C_SSH_READONLY")
         {
             try
             {
                 if (_resultSink is null)
                     throw new InvalidOperationException("H3C task cannot complete without a durable Raw result sink.");
                 BeginRawCommit(item, timeout, ref terminalState, ref error);
-                var manifest = await _resultSink.PersistAsync(item.Snapshot.Id, item.Definition, result, captureStatus);
+                var manifests = new List<H3cRawOutputManifest>(commandOutputs.Count);
+                foreach (var commandOutput in commandOutputs)
+                {
+                    var manifest = await _resultSink.PersistCommandAsync(item.Snapshot.Id, item.Definition,
+                        commandOutput.Command, commandOutput.Output, commandOutput.CaptureStatus, commandOutput.Index);
+                    manifests.Add(manifest);
+                }
                 var sqliteStarted = Stopwatch.GetTimestamp();
-                _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifest, terminalState, error);
+                if (item.Definition.CommandPlan.Count == 1 && manifests.Count == 1)
+                    _catalog!.CompleteTaskRunWithRawOutput(item.Snapshot.Id, manifests[0], terminalState, error);
+                else
+                    _catalog!.CompleteTaskRunWithRawOutputs(item.Snapshot.Id, manifests, terminalState, error);
                 H3cCollectionMetrics.RecordSqliteCommit(Stopwatch.GetElapsedTime(sqliteStarted));
                 resultPersistedAtomically = true;
+                if (terminalState == "SUCCEEDED")
+                {
+                    try
+                    {
+                        if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_FACT_PUBLICATION");
+                        var publication = _catalog.PublishH3cTaskFacts(item.Snapshot.Id);
+                        _catalog.TryRecordDeviceAuditEvent(item.Scope?.ActorUserId ?? "collector", "H3C_FACT_PUBLICATION",
+                            publication.Status, item.Snapshot.Id, item.Definition.Id, Array.Empty<string>(), "facts=" + publication.FactCount);
+                    }
+                    catch (Exception ex)
+                    {
+                        _catalog.TryRecordDeviceAuditEvent(item.Scope?.ActorUserId ?? "collector", "H3C_FACT_PUBLICATION",
+                            ex is TaskScopeRevokedException ? "SCOPE_REVOKED" : "REPAIR_REQUIRED",
+                            item.Snapshot.Id, item.Definition.Id, Array.Empty<string>(), ex.GetType().Name);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -350,7 +479,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             if (item.CancelRequested || _shutdown.IsCancellationRequested)
             {
                 terminalState = "CANCELLED";
-                error = "Cancelled after command capture; output is being durably recorded.";
+                error ??= item.ScopeCancellationReason;
+                error = IsScopeReason(error) ? error + ";CANCEL_REQUESTED" : "Cancelled after command capture; output is being durably recorded.";
             }
             else if (timeout.IsCancellationRequested && terminalState == "SUCCEEDED")
             {
@@ -385,7 +515,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 state = "CANCELLED";
                 result = null;
-                error = null;
+                error ??= item.ScopeCancellationReason;
+                error = IsScopeReason(error) ? error + ";CANCEL_REQUESTED" : null;
             }
             else if (timeoutRequested && state == "SUCCEEDED")
             {
@@ -409,7 +540,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private void PersistState(WorkItem item, string state, string? reason)
     {
         if (!item.Persisted || _catalog is null) return;
-        try { _catalog.TransitionTaskRun(item.Snapshot.Id, state, reason); }
+        try { _catalog.TransitionTaskRun(item.Snapshot.Id, state, reason, (long)item.Request.Timeout.TotalMilliseconds); }
         catch (Exception ex)
         {
             try { _persistenceFailure?.Invoke(ex); }
@@ -439,18 +570,22 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     }
 
     private static bool IsTerminal(string state) => state is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED";
+    private static bool IsScopeReason(string? reason) => reason is not null &&
+        (reason.StartsWith("TASK_", StringComparison.Ordinal) || reason.StartsWith("REVOKED_AFTER_START:", StringComparison.Ordinal));
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private sealed class WorkItem(string id, DeviceCollectionRequest request, long submittedMs,
-        TaskDefinitionSnapshot? definition, bool persisted)
+        TaskDefinitionSnapshot? definition, bool persisted, TaskExecutionScope? scope)
     {
         public object Gate { get; } = new();
         public CancellationTokenSource Cancellation { get; } = new();
         public DeviceCollectionRequest Request { get; } = request;
         public TaskDefinitionSnapshot? Definition { get; } = definition;
         public bool Persisted { get; } = persisted;
+        public TaskExecutionScope? Scope { get; } = scope;
         public bool CancelRequested { get; set; }
         public bool CommitStarted { get; set; }
+        public string? ScopeCancellationReason { get; set; }
         public DeviceCollectionSnapshot Snapshot { get; set; } = new(id, request.Target, request.Command, "QUEUED", null, null, submittedMs, null, null);
     }
 }

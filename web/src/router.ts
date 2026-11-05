@@ -2,6 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 import AppShell from './components/AppShell.vue'
 import LoginView from './views/LoginView.vue'
+import RouteErrorView from './views/RouteErrorView.vue'
+import { lastNavigationError } from './navigationState'
+import { moduleRegistry, moduleToRouteRecord } from './moduleRegistry'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -10,18 +13,9 @@ const router = createRouter({
     {
       path: '/', component: AppShell,
       children: [
-        { path: '', component: () => import('./views/DashboardView.vue'), name: 'dashboard', meta: { label: '运行总览' } },
-        { path: 'devices', component: () => import('./views/DevicesView.vue'), name: 'devices', meta: { label: '设备管理' } },
-        { path: 'zte', component: () => import('./views/ZteView.vue'), name: 'zte', meta: { label: 'ZTE 采集' } },
-        { path: 'h3c', component: () => import('./views/H3cView.vue'), name: 'h3c', meta: { label: 'H3C 事实回放' } },
-        { path: 'network-planning', component: () => import('./views/NetworkPlanningView.vue'), name: 'network-planning', meta: { label: '网络规划' } },
-        { path: 'terminal', component: () => import('./views/TerminalView.vue'), name: 'terminal', meta: { label: '终端控制台' } },
-        { path: 'tasks', component: () => import('./views/TasksView.vue'), name: 'tasks', meta: { label: '任务中心' } },
-        { path: 'wireless', component: () => import('./views/WirelessView.vue'), name: 'wireless', meta: { label: '无线业务' } },
-        { path: 'rail', component: () => import('./views/DisabledView.vue'), name: 'rail', meta: { label: '轨道交通' } },
-        { path: 'tools', component: () => import('./views/ToolsView.vue'), name: 'tools', meta: { label: '工具集' } },
-        { path: 'files', component: () => import('./views/FilesView.vue'), name: 'files', meta: { label: '文件管理' } },
-        { path: 'settings', component: () => import('./views/SettingsView.vue'), name: 'settings', meta: { label: '系统设置' } },
+        ...moduleRegistry.map(moduleToRouteRecord),
+        { path: 'navigation-error', component: RouteErrorView, name: 'navigation-error', meta: { label: '导航错误' } },
+        { path: ':pathMatch(.*)*', component: RouteErrorView, name: 'not-found', meta: { label: '页面不存在' } },
       ],
     },
   ],
@@ -32,7 +26,13 @@ router.beforeEach(async (to) => {
   await auth.hydrate()
   if (to.meta.public && auth.isAuthenticated) return '/'
   if (!to.meta.public && !auth.isAuthenticated) return { path: '/login', query: { redirect: to.fullPath } }
+  if (to.name !== 'navigation-error') lastNavigationError.value = null
   return true
+})
+
+router.onError((error, to) => {
+  lastNavigationError.value = { path: to?.fullPath || window.location.pathname, message: error instanceof Error ? error.message : String(error), at: Date.now() }
+  if (to?.name !== 'navigation-error') void router.replace({ name: 'navigation-error', query: { path: to?.fullPath || window.location.pathname } })
 })
 
 export default router

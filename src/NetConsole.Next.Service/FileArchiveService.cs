@@ -14,6 +14,7 @@ internal sealed class FileArchiveService : BackgroundService
     private readonly FileManagerService _files;
     private readonly RuntimeSettings _settings;
     private readonly IArchiveDiskSpaceProvider _diskSpace;
+    private readonly Func<string, string, bool>? _authorize;
     private readonly Channel<string> _queue;
     private readonly ConcurrentDictionary<string, ArchiveJob> _jobs = new(StringComparer.Ordinal);
     private readonly object _admissionGate = new();
@@ -26,11 +27,13 @@ internal sealed class FileArchiveService : BackgroundService
     public FileArchiveService(FileManagerService files, RuntimeSettings settings)
         : this(files, settings, new DriveInfoArchiveDiskSpaceProvider()) { }
 
-    public FileArchiveService(FileManagerService files, RuntimeSettings settings, IArchiveDiskSpaceProvider diskSpace)
+    public FileArchiveService(FileManagerService files, RuntimeSettings settings, IArchiveDiskSpaceProvider diskSpace,
+        Func<string, string, bool>? authorize = null)
     {
         _files = files;
         _settings = settings;
         _diskSpace = diskSpace;
+        _authorize = authorize;
         _queue = Channel.CreateBounded<string>(new BoundedChannelOptions(settings.ArchiveMaxQueuedJobs)
         {
             SingleReader = true,
@@ -42,6 +45,7 @@ internal sealed class FileArchiveService : BackgroundService
 
     public ArchiveJobSnapshot Create(ArchiveRequest request, WebUserIdentity owner, CancellationToken cancellationToken = default)
     {
+        EnsureAuthorized(owner.UserId, owner.SessionId, "ADMISSION");
         CleanupExpired();
         var reservation = ReserveAdmission(owner);
         ArchiveJob? job = null;
@@ -107,6 +111,7 @@ internal sealed class FileArchiveService : BackgroundService
 
     public ArchiveJobSnapshot? Get(string id, WebUserIdentity owner)
     {
+        if (!IsAuthorized(owner.UserId, owner.SessionId)) return null;
         if (!_jobs.TryGetValue(id, out var job) || !job.IsOwner(owner)) return null;
         return job.Snapshot();
     }
@@ -128,6 +133,7 @@ internal sealed class FileArchiveService : BackgroundService
 
     public ArchiveDownload? OpenDownload(string id, WebUserIdentity owner)
     {
+        if (!IsAuthorized(owner.UserId, owner.SessionId)) return null;
         if (!_jobs.TryGetValue(id, out var job) || !job.IsOwner(owner)) return null;
         return job.OpenDownload();
     }
@@ -179,6 +185,7 @@ internal sealed class FileArchiveService : BackgroundService
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, job.CancellationToken);
             var token = linked.Token;
+            EnsureAuthorized(job.UserId, job.SessionId, "START");
             job.ThrowIfCancelled(token);
             EnsureAvailableDisk();
             await using (var file = new FileStream(partPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
@@ -189,6 +196,7 @@ internal sealed class FileArchiveService : BackgroundService
                 foreach (var item in job.Files)
                 {
                     job.ThrowIfCancelled(token);
+                    EnsureAuthorized(job.UserId, job.SessionId, "BEFORE_FILE");
                     job.SetCurrent(item.EntryName);
                     var resolved = _files.Resolve(item.File.RootId, item.File.RelativePath, true);
                     if (resolved.IsDirectory || !string.Equals(resolved.FullPath, item.File.FullPath, StringComparison.OrdinalIgnoreCase))
@@ -208,6 +216,7 @@ internal sealed class FileArchiveService : BackgroundService
             }
 
             job.ThrowIfCancelled(token);
+            EnsureAuthorized(job.UserId, job.SessionId, "BEFORE_PUBLISH");
             EnsureAvailableDisk();
             File.Move(partPath, finalPath);
             partPath = string.Empty;
@@ -291,6 +300,13 @@ internal sealed class FileArchiveService : BackgroundService
             }
         }
         finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
+    private bool IsAuthorized(string userId, string sessionId) => _authorize?.Invoke(userId, sessionId) ?? true;
+    private void EnsureAuthorized(string userId, string sessionId, string boundary)
+    {
+        if (!IsAuthorized(userId, sessionId))
+            throw new ArchiveRejectedException("ARCHIVE_SCOPE_REVOKED", "File authority is no longer available at " + boundary + ".", StatusCodes.Status403Forbidden);
     }
 
     private AdmissionReservation ReserveAdmission(WebUserIdentity owner)

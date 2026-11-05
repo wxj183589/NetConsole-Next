@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import subprocess
 import tempfile
 import time
@@ -38,8 +39,12 @@ def main():
     dll = Path(os.environ.get("R3_SERVICE_DLL", repo / "src" / "NetConsole.Next.Service" / "bin" / "Release" / "net10.0" / "NetConsole.Next.Service.dll"))
     if not dll.is_file():
         raise RuntimeError("Run dotnet build -c Release before this isolated API test")
+    sys.path.insert(0, str(repo))
+    from tools.workspace_paths import workspace_path
+    test_root = workspace_path("test-data")
+    test_root.mkdir(parents=True, exist_ok=True)
     fixture = repo / "tests" / "NetConsole.Next.Service.Tests" / "fixtures" / "r3_dual_ac_wireless.json"
-    with tempfile.TemporaryDirectory(prefix="netconsole-next-r3-dual-ac-") as temp:
+    with tempfile.TemporaryDirectory(prefix="netconsole-next-r3-dual-ac-", dir=test_root) as temp:
         port = unused_port()
         env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(Path(temp) / "data"),
                    NETCONSOLE_NEXT_WEB_PORT=str(port), NETCONSOLE_NEXT_SYSLOG_PORT="0",
@@ -54,7 +59,11 @@ def main():
             for _ in range(120):
                 if service.poll() is not None:
                     raise RuntimeError("service exited before health became ready")
-                status, _ = request(base, "/api/system/health")
+                try:
+                    status, _ = request(base, "/api/system/health")
+                except (urllib.error.URLError, ConnectionError, TimeoutError):
+                    time.sleep(0.1)
+                    continue
                 if status == 200:
                     break
                 time.sleep(0.1)
@@ -78,6 +87,15 @@ def main():
             assert status == 200 and topology["confirmed"] is True
             status, groups = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-groups", token)
             assert status == 200 and groups["total"] == 2, (status, groups)
+            resource_id = resource["id"]
+            status, filtered = request(base, "/api/system/wireless/ap-resources?sourceAcId=missing-ac&page=1&pageSize=10", token)
+            assert status == 200 and filtered["total"] == 0 and filtered["items"] == [], (status, filtered)
+            status, _ = request(base, "/api/system/wireless/ap-resources?mac=not-a-mac", token)
+            assert status == 400
+            status, _ = request(base, f"/api/system/wireless/ap-resources/{resource_id}/runtime-state?sourceAcId=missing-ac", token)
+            assert status == 404
+            status, hidden_observations = request(base, f"/api/system/wireless/ap-resources/{resource_id}/observations?sourceAcId=missing-ac", token)
+            assert status == 200 and hidden_observations["total"] == 0 and hidden_observations["items"] == [], (status, hidden_observations)
             status, _ = request(base, "/api/system/wireless/ap-resources/not-visible", token)
             assert status == 404
             status, _ = request(base, "/api/system/wireless/ap-resources")
@@ -87,6 +105,7 @@ def main():
             print("R3_DUAL_AC_OBSERVATION_PROVENANCE=PASS")
             print("R3_DUAL_AC_TOPOLOGY_EVIDENCE=PASS")
             print("R3_DUAL_AC_GROUP_SCOPE=PASS")
+            print("R3_WIRELESS_FILTER_SCOPE=PASS")
             print("R3_WIRELESS_AUTH_GUARD=PASS")
         finally:
             if service.poll() is None:

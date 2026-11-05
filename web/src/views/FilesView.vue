@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
-import { ApiRequestError, cancelArchiveJob, createArchiveJob, downloadArchive, downloadFile, getArchiveJob, getFileRoots, listFiles, openHostDirectory, type ArchiveJob, type FileEntry, type FileRoot } from '../api/client'
+import { ApiRequestError, clearCsrfToken, cancelArchiveJob, createArchiveJob, downloadArchive, downloadFile, getArchiveJob, getFileRoots, listFiles, openHostDirectory, type ArchiveJob, type FileEntry, type FileRoot } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -21,19 +21,46 @@ const creatingArchive = ref(false)
 const cancellingJob = ref(false)
 let poller: ReturnType<typeof setInterval> | undefined
 const isSuperAdmin = computed(() => auth.user?.role === 'SUPERADMIN')
+const permissionDenied = ref(false)
+const sessionExpired = ref(false)
+const canManageFiles = computed(() => isSuperAdmin.value && !permissionDenied.value)
+let viewGeneration = 0
+let fileGeneration = 0
+let jobGeneration = 0
 const currentRootLabel = computed(() => roots.value.find(root => root.id === currentRoot.value)?.label || currentRoot.value)
 
+function clearFileView(): void {
+  ++viewGeneration; ++fileGeneration; ++jobGeneration
+  roots.value = []; entries.value = []; selected.value = []; job.value = null
+  currentRoot.value = ''; currentPath.value = ''; total.value = 0; hasMore.value = false; loading.value = false
+  stopPolling()
+  for (const key of ['root', 'path', 'search', 'archive-job']) sessionStorage.removeItem('netconsole-files-' + key)
+}
+function denied(cause: unknown): boolean {
+  if (!(cause instanceof ApiRequestError) || ![401, 403].includes(cause.status)) return false
+  sessionExpired.value = cause.status === 401
+  if (sessionExpired.value) { auth.user = null; clearCsrfToken() }
+  permissionDenied.value = true; clearFileView(); return true
+}
+watch(isSuperAdmin, value => { if (!value) clearFileView() }, { immediate: true })
 async function loadRoots(): Promise<void> {
-  roots.value = await getFileRoots()
-  if (!currentRoot.value || !roots.value.some(root => root.id === currentRoot.value)) currentRoot.value = roots.value[0]?.id || ''
-  await loadFiles()
+  if (!canManageFiles.value) return
+  const generation = viewGeneration
+  try {
+    const result = await getFileRoots()
+    if (!canManageFiles.value || generation !== viewGeneration) return
+    roots.value = result
+    if (!currentRoot.value || !roots.value.some(root => root.id === currentRoot.value)) currentRoot.value = roots.value[0]?.id || ''
+    await loadFiles()
+  } catch (cause) { if (!denied(cause)) ElMessage.error(cause instanceof Error ? cause.message : '文件目录读取失败') }
 }
 async function loadFiles(): Promise<void> {
-  if (!currentRoot.value) return
+  if (!canManageFiles.value || !currentRoot.value) return
+  const generation = ++fileGeneration
   loading.value = true; selected.value = []
-  try { const result = await listFiles({ rootId: currentRoot.value, path: currentPath.value, search: search.value, sort: 'name', direction: 'asc', page: page.value, pageSize: 100 }); entries.value = result.items; total.value = result.total; hasMore.value = result.hasMore; currentPath.value = result.relativePath; sessionStorage.setItem('netconsole-files-path', currentPath.value); sessionStorage.setItem('netconsole-files-search', search.value); sessionStorage.setItem('netconsole-files-root', currentRoot.value) }
-  catch (cause) { entries.value = []; ElMessage.error(cause instanceof Error ? cause.message : '文件列表读取失败') }
-  finally { loading.value = false }
+  try { const result = await listFiles({ rootId: currentRoot.value, path: currentPath.value, search: search.value, sort: 'name', direction: 'asc', page: page.value, pageSize: 100 }); if (!canManageFiles.value || generation !== fileGeneration) return; entries.value = result.items; total.value = result.total; hasMore.value = result.hasMore; currentPath.value = result.relativePath; sessionStorage.setItem('netconsole-files-path', currentPath.value); sessionStorage.setItem('netconsole-files-search', search.value); sessionStorage.setItem('netconsole-files-root', currentRoot.value) }
+  catch (cause) { entries.value = []; total.value = 0; hasMore.value = false; if (!denied(cause)) ElMessage.error(cause instanceof Error ? cause.message : '文件列表读取失败') }
+  finally { if (generation === fileGeneration) loading.value = false }
 }
 function chooseRoot(root: FileRoot): void { currentRoot.value = root.id; sessionStorage.setItem('netconsole-files-root', root.id); currentPath.value = ''; page.value = 1; loadFiles() }
 function openFolder(entry: FileEntry): void { if (entry.kind !== 'DIRECTORY') return; currentPath.value = entry.relativePath; page.value = 1; loadFiles() }
@@ -42,16 +69,20 @@ function toggle(entry: FileEntry): void { selected.value = selected.value.includ
 function formatSize(size: number): string { if (!size) return '—'; const units = ['B', 'KB', 'MB', 'GB']; let value = size; let unit = 0; while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ } return value.toFixed(unit ? 1 : 0) + ' ' + units[unit] }
 function formatTime(ms: number): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function saveBlob(blob: Blob, name: string): void { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url) }
-async function downloadOne(entry: FileEntry): Promise<void> { try { saveBlob(await downloadFile(currentRoot.value, entry.relativePath), entry.name) } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '下载失败') } }
+async function downloadOne(entry: FileEntry): Promise<void> { try { saveBlob(await downloadFile(currentRoot.value, entry.relativePath), entry.name) } catch (cause) { if (!denied(cause)) ElMessage.error(cause instanceof Error ? cause.message : '下载失败') } }
 async function archiveSelection(): Promise<void> {
   if (!selected.value.length) { ElMessage.info('请选择文件或文件夹'); return }
   if (creatingArchive.value) return
   creatingArchive.value = true
+  const generation = ++jobGeneration
   try {
-    job.value = await createArchiveJob([{ rootId: currentRoot.value, paths: selected.value }])
+    const result = await createArchiveJob([{ rootId: currentRoot.value, paths: selected.value }])
+    if (!canManageFiles.value || generation !== jobGeneration) return
+    job.value = result
     sessionStorage.setItem('netconsole-files-archive-job', job.value.id)
     startPolling()
   } catch (cause) {
+    if (denied(cause)) return
     const message = cause instanceof ApiRequestError && cause.status === 429
       ? (cause.message.includes('ARCHIVE_USER_LIMIT') ? '当前账号的文件打包任务已达上限，请等待已有任务完成。' : '当前文件打包任务较多，请等待已有任务完成后重试。')
       : cause instanceof ApiRequestError && cause.message.includes('ARCHIVE_DISK_SPACE_LOW')
@@ -63,19 +94,21 @@ async function archiveSelection(): Promise<void> {
   } finally { creatingArchive.value = false }
 }
 async function refreshJob(): Promise<void> {
-  if (!job.value) return
-  try { job.value = await getArchiveJob(job.value.id); if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.value.state)) stopPolling() } catch { sessionStorage.removeItem('netconsole-files-archive-job'); job.value = null; stopPolling() }
+  if (!canManageFiles.value || !job.value) return
+  const generation = ++jobGeneration
+  try { const result = await getArchiveJob(job.value.id); if (!canManageFiles.value || generation !== jobGeneration) return; job.value = result; if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(job.value.state)) stopPolling() } catch (cause) { denied(cause); sessionStorage.removeItem('netconsole-files-archive-job'); job.value = null; stopPolling() }
 }
 function startPolling(): void { stopPolling(); poller = setInterval(refreshJob, 1500) }
 function stopPolling(): void { if (poller) clearInterval(poller); poller = undefined }
-async function cancelJob(): Promise<void> { if (!job.value || cancellingJob.value) return; cancellingJob.value = true; try { await cancelArchiveJob(job.value.id); await refreshJob() } catch { ElMessage.error('取消归档失败') } finally { cancellingJob.value = false } }
-async function downloadJob(): Promise<void> { if (!job.value) return; try { saveBlob(await downloadArchive(job.value.id), job.value.downloadName || 'netconsole-archive.zip') } catch (cause) { ElMessage.error(cause instanceof ApiRequestError && cause.status === 404 ? 'ZIP 已过期或已清理，请重新打包。' : 'ZIP 下载失败') } }
-async function openDirectory(): Promise<void> { try { const result = await openHostDirectory(currentRoot.value, currentPath.value); ElMessage[result.status === 'LAUNCHED' ? 'success' : 'warning'](result.detail || result.status) } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '宿主机目录打开失败') } }
+async function cancelJob(): Promise<void> { if (!job.value || cancellingJob.value) return; cancellingJob.value = true; try { await cancelArchiveJob(job.value.id); await refreshJob() } catch (cause) { if (!denied(cause)) ElMessage.error('取消归档失败') } finally { cancellingJob.value = false } }
+async function downloadJob(): Promise<void> { if (!job.value) return; try { saveBlob(await downloadArchive(job.value.id), job.value.downloadName || 'netconsole-archive.zip') } catch (cause) { if (!denied(cause)) ElMessage.error(cause instanceof ApiRequestError && cause.status === 404 ? 'ZIP 已过期或已清理，请重新打包。' : 'ZIP 下载失败') } }
+async function openDirectory(): Promise<void> { try { const result = await openHostDirectory(currentRoot.value, currentPath.value); ElMessage[result.status === 'LAUNCHED' ? 'success' : 'warning'](result.detail || result.status) } catch (cause) { if (!denied(cause)) ElMessage.error(cause instanceof Error ? cause.message : '宿主机目录打开失败') } }
 async function restoreJob(): Promise<void> {
   const id = sessionStorage.getItem('netconsole-files-archive-job')
-  if (!id) return
-  try { job.value = await getArchiveJob(id); if (job.value.canCancel) startPolling() }
-  catch { sessionStorage.removeItem('netconsole-files-archive-job') }
+  if (!canManageFiles.value || !id) return
+  const generation = ++jobGeneration
+  try { const result = await getArchiveJob(id); if (!canManageFiles.value || generation !== jobGeneration) return; job.value = result; if (job.value.canCancel) startPolling() }
+  catch (cause) { denied(cause); sessionStorage.removeItem('netconsole-files-archive-job') }
 }
 onMounted(async () => { await loadRoots(); await restoreJob() })
 onBeforeUnmount(stopPolling)
@@ -83,8 +116,9 @@ onBeforeUnmount(stopPolling)
 
 <template>
   <NcLayout title="文件管理" description="服务端隔离数据目录浏览、单文件下载与后台 ZIP 归档">
-    <template #actions><el-button size="small" @click="loadFiles">刷新</el-button><el-button size="small" :disabled="!isSuperAdmin" @click="openDirectory">在宿主机打开目录</el-button></template>
-    <div class="file-layout">
+    <template #actions><el-button size="small" :disabled="!canManageFiles" @click="loadFiles">刷新</el-button><el-button size="small" :disabled="!canManageFiles" @click="openDirectory">在宿主机打开目录</el-button></template>
+    <div v-if="!canManageFiles" class="card empty-state"><div><strong>{{ sessionExpired ? '登录已失效' : '文件管理需要全局管理员权限' }}</strong><small>{{ sessionExpired ? '请重新登录后访问文件；旧目录和任务信息已清空。' : '这些目录包含跨局点数据；请从有权限的设备或终端业务入口导出。' }}</small></div></div>
+    <div v-else class="file-layout">
       <aside class="card file-roots"><div class="card__header"><h2>逻辑目录</h2></div><button v-for="root in roots" :key="root.id" :class="['root-item', { active: root.id === currentRoot }]" type="button" @click="chooseRoot(root)"><span>{{ root.label }}</span><span class="status-chip">{{ root.exists ? '可用' : '空' }}</span></button><div class="card__body muted" style="font-size:11px">数据库、令牌、凭据和 reparse point 永远不属于可下载目录。</div></aside>
       <section class="card file-main">
         <div class="card__header"><div><h2>{{ currentRootLabel }}</h2><small class="mono">/{{ currentPath }}</small></div><div class="toolbar"><input v-model="search" placeholder="搜索当前目录" @keydown.enter="page = 1; loadFiles()" /><el-button size="small" :disabled="!currentPath" @click="up">上级</el-button><el-button size="small" :disabled="!selected.length || creatingArchive" @click="archiveSelection">{{ creatingArchive ? '提交中…' : `ZIP 归档（${selected.length}）` }}</el-button></div></div>
@@ -92,6 +126,6 @@ onBeforeUnmount(stopPolling)
         <div class="toolbar" style="justify-content:flex-end;margin-top:12px"><span class="muted">共 {{ total }} 项</span><el-button size="small" :disabled="page <= 1" @click="page--; loadFiles()">上一页</el-button><el-button size="small" :disabled="!hasMore" @click="page++; loadFiles()">下一页</el-button></div>
       </section>
     </div>
-    <div v-if="job" class="card archive-card"><div class="card__header"><h2>后台 ZIP 任务</h2><span :class="['state-pill', job.state === 'COMPLETED' ? 'good' : job.state === 'FAILED' || job.state === 'CANCELLED' ? 'bad' : 'warn']">{{ job.state }}</span></div><div class="toolbar"><span>{{ job.processedCount }} / {{ job.selectedCount }} 文件</span><span>{{ formatSize(job.processedBytes) }} / {{ formatSize(job.totalBytes || 0) }}</span><span class="muted">{{ job.current || '等待处理' }}</span><div style="flex:1" /><el-button v-if="job.canCancel" size="small" :disabled="cancellingJob" @click="cancelJob">{{ cancellingJob ? '取消中…' : '取消' }}</el-button><el-button v-if="job.canDownload" size="small" type="primary" @click="downloadJob">下载 ZIP</el-button></div><small v-if="job.state === 'CANCELLED'" class="bad-text">任务已取消，未完成的临时文件已清理。</small><small v-else-if="job.error" class="bad-text">{{ job.errorCode ? `${job.errorCode}: ` : '' }}{{ job.error }}</small><small v-else-if="job.state === 'COMPLETED'" class="good-text">打包完成，ZIP 文件在保留期内可下载。</small></div>
+    <div v-if="canManageFiles && job" class="card archive-card"><div class="card__header"><h2>后台 ZIP 任务</h2><span :class="['state-pill', job.state === 'COMPLETED' ? 'good' : job.state === 'FAILED' || job.state === 'CANCELLED' ? 'bad' : 'warn']">{{ job.state }}</span></div><div class="toolbar"><span>{{ job.processedCount }} / {{ job.selectedCount }} 文件</span><span>{{ formatSize(job.processedBytes) }} / {{ formatSize(job.totalBytes || 0) }}</span><span class="muted">{{ job.current || '等待处理' }}</span><div style="flex:1" /><el-button v-if="job.canCancel" size="small" :disabled="cancellingJob" @click="cancelJob">{{ cancellingJob ? '取消中…' : '取消' }}</el-button><el-button v-if="job.canDownload" size="small" type="primary" @click="downloadJob">下载 ZIP</el-button></div><small v-if="job.state === 'CANCELLED'" class="bad-text">任务已取消，未完成的临时文件已清理。</small><small v-else-if="job.error" class="bad-text">{{ job.errorCode ? `${job.errorCode}: ` : '' }}{{ job.error }}</small><small v-else-if="job.state === 'COMPLETED'" class="good-text">打包完成，ZIP 文件在保留期内可下载。</small></div>
   </NcLayout>
 </template>

@@ -170,7 +170,14 @@ internal sealed partial class Catalog
         return result;
     }
 
-    public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query)
+    public bool TerminalSessionIsInScope(string sessionId, P2B5SiteScopeDecision scope)
+    {
+        var session = GetTerminalSession(sessionId);
+        return session is not null && (scope.IsGlobal || scope.IsAuthorized &&
+            session.Protocol is "SSH" or "TELNET" && H3cProfileIsInScope(session.TargetId, scope));
+    }
+
+    public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query, P2B5SiteScopeDecision? scope = null)
     {
         var where = new List<string>();
         using var db = Open();
@@ -187,6 +194,13 @@ internal sealed partial class Catalog
         {
             Add("(target_name LIKE $keyword OR id LIKE $keyword OR EXISTS (SELECT 1 FROM terminal_events e WHERE e.session_id=terminal_sessions.id AND e.detail_json LIKE $keyword))",
                 "$keyword", "%" + query.Keyword + "%");
+        }
+        if (scope is not null && !scope.IsGlobal)
+        {
+            var scopeParameters = new List<(string Name, object? Value)>();
+            var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
+            where.Add($"protocol IN ('SSH','TELNET') AND EXISTS (SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=terminal_sessions.target_id AND {scopeFilter})");
+            DeviceSiteScope.AddParameters(command, scopeParameters);
         }
         var filter = where.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", where);
         using var count = db.CreateCommand();

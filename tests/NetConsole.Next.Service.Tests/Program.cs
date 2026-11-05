@@ -29,8 +29,43 @@ else if (args.Length > 0 && args[0] == "--archive-tests")
     await SchedulerTests.RunArchiveTestsAsync();
 else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
     SchedulerTests.RunPhase11H3cFactReplay();
+else if (args.Length > 0 && args[0] == "--wireless-fixture-json")
+{
+    var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    var snapshot = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"));
+    Console.WriteLine(JsonSerializer.Serialize(snapshot with { Warnings = new[] { "OFFLINE_FIXTURE_EVIDENCE" } }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+}
+else if (args.Length > 0 && args[0] == "--wireless-runtime-fixture-json")
+{
+    var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    var resource = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims")).ApResources.Single();
+    if (args.Length > 2) resource = resource with { Observations = resource.Observations.Where(item => item.SourceAcDeviceId == args[2]).ToArray() };
+    var samples = fixture.RuntimeSamples ?? throw new InvalidDataException("Runtime fixture must include history samples.");
+    var state = new WirelessRuntimeStateProjection().Project(resource, new(samples, false, new HashSet<string>()),
+        new("FULL", "fixture-claims"), samples.Max(item => item.CapturedMs) + 1000, new());
+    Console.WriteLine(JsonSerializer.Serialize(state, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+}
 else if (args.Length > 0 && args[0] == "--wireless-tests")
+{
     WirelessTests.Run();
+    WirelessRuntimeTests.Run();
+}
+else if (args.Length > 0 && args[0] == "--task-site-scope-tests")
+    await TaskSiteScopeTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--interactive-scope-tests")
+    await InteractiveScopeTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-fact-scope-tests")
+    H3cFactScopeTests.Run();
+else if (args.Length > 0 && args[0] == "--h3c-task-fact-publication-tests")
+    await H3cTaskFactPublicationTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
+    await ConcurrencyP1Tests.RunAsync();
+else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
+    await NetworkDiagnosticsTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
+    H3cLldpTopologyTests.Run();
+else if (args.Length > 0 && args[0] == "--config-backup-tests")
+    await ConfigBackupTests.RunAsync();
 else
     await SchedulerTests.RunAsync();
 
@@ -172,6 +207,13 @@ internal static class SchedulerTests
         P2B1ContractTests.Run();
         P2B2SchemaV13Tests.Run();
         P2B5SiteScopeTests.Run();
+        WirelessTests.Run();
+        WirelessRuntimeTests.Run();
+        await TaskSiteScopeTests.RunAsync();
+        await InteractiveScopeTests.RunAsync();
+        H3cFactScopeTests.Run();
+        await H3cTaskFactPublicationTests.RunAsync();
+        await ConcurrencyP1Tests.RunAsync();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();
@@ -777,8 +819,8 @@ internal static class SchedulerTests
 
         Assert(H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayWlanApAll) &&
                H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayTransceiverDiagnosisInterface) &&
-               !H3cCommandPolicy.IsAllowed("display current-configuration"),
-            "H3C policy must expose only the Phase 9 read-only allowlist");
+               H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayCurrentConfiguration),
+             "H3C policy must expose the read-only allowlist, including configuration backup");
         Assert(ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowVersion) &&
                ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowLldpEntry) &&
                !ZteCommandPolicy.IsAllowed("show running-config"),
@@ -1621,8 +1663,8 @@ internal static class SchedulerTests
             finally { await noSecretSession.DisposeAsync(); }
             Assert(noSecretTransport.LastTransport is null,
                 "an unavailable credential must fail before creating or opening an SSH transport");
-            AssertThrows<ArgumentException>(() => catalog.CreateTaskDefinition("h3c-denied", "H3C_SSH_READONLY",
-                profileId, "display current-configuration", TimeSpan.FromSeconds(10)));
+            catalog.CreateTaskDefinition("h3c-backup", "H3C_SSH_READONLY", profileId,
+                H3cCommandPolicy.DisplayCurrentConfiguration, TimeSpan.FromSeconds(10));
             catalog.CreateTaskDefinition("h3c-version", "H3C_SSH_READONLY", profileId,
                 H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(10));
 
@@ -2063,7 +2105,7 @@ internal static class SchedulerTests
         catch (IOException) { }
         try
         {
-            await reset.ExecuteAsync("display current-configuration", CancellationToken.None);
+            await reset.ExecuteAsync("reboot", CancellationToken.None);
             throw new InvalidOperationException("commands outside the SSH read-only allowlist must be rejected");
         }
         catch (ArgumentException) { }
@@ -2754,7 +2796,9 @@ internal static class SchedulerTests
                 var runIds = new List<string>();
                 for (var index = 0; index < concurrency * 2; index++)
                 {
-                    Assert(scheduler.TrySchedule(Request("simulated-h3c-device", "display interface brief"), out var runId),
+                    // Use distinct targets to measure global parallelism; the
+                    // same-device mutex is covered by ConcurrencyP1Tests.
+                    Assert(scheduler.TrySchedule(Request("simulated-h3c-device-" + (index % concurrency), "display interface brief"), out var runId),
                         $"bounded simulated task admission failed at concurrency {concurrency}");
                     runIds.Add(runId);
                 }

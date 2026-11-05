@@ -19,12 +19,15 @@ builder.Services.AddSingleton<Catalog>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
+builder.Services.AddSingleton<TaskSiteScopeAuthorizer>();
+builder.Services.AddSingleton<ITaskScopeAuthorizer>(sp => sp.GetRequiredService<TaskSiteScopeAuthorizer>());
 builder.Services.AddSingleton<WirelessReadModelService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
 builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
+builder.Services.AddSingleton<InteractiveScopeAuthorizer>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
 IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
     ? new EnvironmentH3cCredentialProvider(enabled: true)
@@ -42,7 +45,9 @@ builder.Services.AddSingleton<HostToolRegistry>();
 builder.Services.AddSingleton<HostToolLaunchService>();
 builder.Services.AddSingleton<FileManagerService>();
 builder.Services.AddSingleton<IArchiveDiskSpaceProvider, DriveInfoArchiveDiskSpaceProvider>();
-builder.Services.AddSingleton<FileArchiveService>();
+builder.Services.AddSingleton(sp => new FileArchiveService(sp.GetRequiredService<FileManagerService>(),
+    sp.GetRequiredService<RuntimeSettings>(), sp.GetRequiredService<IArchiveDiskSpaceProvider>(),
+    sp.GetRequiredService<InteractiveScopeAuthorizer>().CanUseGlobalFiles));
 builder.Services.AddSingleton<IDeviceSessionFactory, H3cSshDeviceSessionFactory>();
 builder.Services.AddSingleton<ITaskResultSink>(sp => new H3cTaskRawResultSink(
     sp.GetRequiredService<Catalog>(), ex =>
@@ -56,7 +61,9 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
     {
         sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
-    }, sp.GetRequiredService<ITaskResultSink>()));
+    }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
+builder.Services.AddSingleton<ConfigBackupService>();
+builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
@@ -149,6 +156,8 @@ app.Lifetime.ApplicationStopping.Register(() =>
     try { app.Services.GetRequiredService<TerminalSessionManager>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     catch { }
     try { app.Services.GetRequiredService<ZteCollectionService>().DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+    catch { }
+    try { app.Services.GetRequiredService<NetworkDiagnosticsService>().Dispose(); }
     catch { }
 });
 RollingFileLoggerProvider? fileLoggerProvider = null;
@@ -658,7 +667,118 @@ app.MapPost("/api/system/devices/import/commit", (HttpContext context, DeviceImp
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "FAILED", request.PreviewId, null, Array.Empty<string>(), "PREVIEW_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_IMPORT_COMMIT_FAILED", "CONFLICT", request.PreviewId, null, Array.Empty<string>(), "IMPORT_VERSION_OR_SCOPE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/tasks", (Catalog rawCatalog) => Results.Ok(rawCatalog.RecentTaskRuns()));
+app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return Results.Ok(rawCatalog.RecentTaskRuns(scope: CurrentSiteScope(context)));
+});
+app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string runId, Catalog rawCatalog) =>
+{
+    var scope = CurrentSiteScope(context);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, scope).Any(item => item.Id == runId)) return Results.NotFound();
+    return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
+});
+app.MapPost("/api/system/tasks/{runId}/cancel", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_CANCEL_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.Cancel(runId)
+        ? Results.Ok(new { cancelled = true, runId })
+        : Results.Conflict(new { error = "TASK_NOT_CANCELLABLE" });
+});
+app.MapPost("/api/system/tasks/{runId}/retry", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_RETRY_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.TryRetryTaskRun(runId, out var retryId, CurrentIdentity(context).UserId)
+        ? Results.Accepted("/api/system/tasks", new { runId = retryId, previousRunId = runId, action = "RETRY" })
+        : Results.Conflict(new { error = "TASK_NOT_RETRYABLE_OR_SCOPE_REVOKED" });
+});
+app.MapPost("/api/system/tasks/{runId}/resume", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_RESUME_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.TryResumeInterruptedTaskRun(runId, out var resumedId, CurrentIdentity(context).UserId)
+        ? Results.Accepted("/api/system/tasks", new { runId = resumedId, previousRunId = runId, action = "RESUME" })
+        : Results.Conflict(new { error = "TASK_NOT_INTERRUPTED_OR_SCOPE_REVOKED" });
+});
+app.MapPost("/api/system/diagnostics/runs", (HttpContext context, NetworkDiagnosticBatchRequest request,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var run = diagnostics.Start(request, CurrentIdentity(context).UserId, CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/diagnostics/runs/{run.Id}", run);
+    }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
+});
+app.MapGet("/api/system/diagnostics/runs/{id}", (HttpContext context, string id,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return diagnostics.Get(id, CurrentSiteScope(context)) is { } run ? Results.Ok(run) : Results.NotFound();
+});
+app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, string id,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var identity = CurrentIdentity(context);
+    return diagnostics.Cancel(id, identity.UserId, identity.Role, CurrentSiteScope(context))
+        ? Results.Ok(new { cancelled = true })
+        : Results.NotFound(new { error = "DIAGNOSTIC_RUN_NOT_VISIBLE_OR_TERMINAL" });
+});
+app.MapPost("/api/system/config-backups", (HttpContext context, ConfigBackupRequest request,
+    ConfigBackupService backups) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var batch = backups.Start(request.ProfileIds ?? Array.Empty<string>(), CurrentIdentity(context), CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/config-backups/batches/{batch.Id}", batch);
+    }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
+app.MapGet("/api/system/config-backups/batches/{id}", (HttpContext context, string id, ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return backups.GetBatch(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } batch
+        ? Results.Ok(batch) : Results.NotFound();
+});
+app.MapGet("/api/system/config-backups", (HttpContext context, string profileId,
+    ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return Results.Ok(backups.List(profileId, CurrentSiteScope(context)));
+});
+app.MapGet("/api/system/config-backups/{id}/download", (HttpContext context, string id,
+    ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var result = backups.OpenDownload(id, CurrentSiteScope(context));
+    return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "text/plain; charset=utf-8",
+        result.Value.Name, enableRangeProcessing: true);
+});
+app.MapGet("/api/system/config-backups/{baseId}/diff/{targetId}", (HttpContext context, string baseId,
+    string targetId, ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var diff = backups.Diff(baseId, targetId, CurrentSiteScope(context));
+    return diff is null ? Results.NotFound() : Results.Ok(diff);
+});
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
 {
@@ -685,8 +805,12 @@ app.MapPost("/api/system/host-tools/open-directory", async (HttpContext context,
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/roots", (FileManagerService files) => Results.Ok(files.Roots()));
-app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService files) =>
+var globalFileRoutes = app.MapGroup("/api/system/files");
+globalFileRoutes.AddEndpointFilter(async (invocation, next) =>
+    invocation.HttpContext.RequestServices.GetRequiredService<InteractiveScopeAuthorizer>().RequireGlobalFiles(invocation.HttpContext)
+        is { } denied ? denied : await next(invocation));
+globalFileRoutes.MapGet("/roots", (FileManagerService files) => Results.Ok(files.Roots()));
+globalFileRoutes.MapGet("/list", (HttpRequest request, FileManagerService files) =>
 {
     try
     {
@@ -698,7 +822,7 @@ app.MapGet("/api/system/files/list", (HttpRequest request, FileManagerService fi
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerService files) =>
+globalFileRoutes.MapGet("/download", (HttpRequest request, FileManagerService files) =>
 {
     try
     {
@@ -708,7 +832,7 @@ app.MapGet("/api/system/files/download", (HttpRequest request, FileManagerServic
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
+globalFileRoutes.MapPost("/archive-jobs", (HttpContext context, ArchiveRequest request, FileArchiveService archives) =>
 {
     try
     {
@@ -720,17 +844,27 @@ app.MapPost("/api/system/files/archive-jobs", (HttpContext context, ArchiveReque
     catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or KeyNotFoundException or FileNotFoundException or InvalidOperationException)
     { return Results.BadRequest(new { error = ex.Message }); }
 });
-app.MapGet("/api/system/files/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapGet("/archive-jobs/{id}", (HttpContext context, string id, FileArchiveService archives) =>
     archives.Get(id, CurrentIdentity(context)) is { } job ? Results.Ok(job) : Results.NotFound());
-app.MapPost("/api/system/files/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapPost("/archive-jobs/{id}/cancel", (HttpContext context, string id, FileArchiveService archives) =>
     archives.Cancel(id, CurrentIdentity(context)) ? Results.Ok(new { cancelled = true }) : Results.NotFound());
-app.MapGet("/api/system/files/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
+globalFileRoutes.MapGet("/archive-jobs/{id}/download", (HttpContext context, string id, FileArchiveService archives) =>
 {
     var result = archives.OpenDownload(id, CurrentIdentity(context));
     return result is null ? Results.NotFound() : Results.File(result.Stream, "application/zip", result.Name, enableRangeProcessing: true);
 });
 if (settings.TerminalEnabled)
 {
+    var sessionRoutes = app.MapGroup("/api/system/terminal/sessions");
+    sessionRoutes.AddEndpointFilter(async (invocation, next) =>
+    {
+        var context = invocation.HttpContext;
+        if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+        if (context.Request.RouteValues["sessionId"] is string sessionId &&
+            !context.RequestServices.GetRequiredService<Catalog>().TerminalSessionIsInScope(sessionId, CurrentSiteScope(context)))
+            return Results.NotFound();
+        return await next(invocation);
+    });
     app.MapGet("/api/system/terminal/devices", (HttpContext context, Catalog rawCatalog, TerminalSessionManager manager) =>
     {
         if (DeviceSiteScopeGuard(context) is { } denied) return denied;
@@ -751,34 +885,34 @@ if (settings.TerminalEnabled)
         if (runtime.TerminalDevelopmentSimulationEnabled) ports = ports.Append("SIMULATED-COM1");
         return Results.Ok(ports.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
     });
-    app.MapGet("/api/system/terminal/sessions", (HttpRequest request, Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("", (HttpContext context, HttpRequest request, Catalog rawCatalog) =>
+        Results.Ok(rawCatalog.QueryTerminalSessions(TerminalSessionQuery.FromQuery(request.Query), CurrentSiteScope(context))));
+    sessionRoutes.MapGet("/{sessionId}", (string sessionId, Catalog rawCatalog) =>
     {
         var session = rawCatalog.GetTerminalSession(sessionId);
         return session is null ? Results.NotFound() : Results.Ok(session);
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
+    sessionRoutes.MapGet("/{sessionId}/events", (string sessionId, Catalog rawCatalog, int? limit) =>
         Results.Ok(rawCatalog.TerminalEvents(sessionId, Math.Clamp(limit ?? 500, 1, 5000))));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("/{sessionId}/recording/segments", (string sessionId, Catalog rawCatalog) =>
         Results.Ok(rawCatalog.TerminalRecordingSegments(sessionId)));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/integrity", (string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/recording/integrity", (string sessionId,
         TerminalRecordingService recordings) =>
     {
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/recording/verify", (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/recording/verify", (string sessionId,
         TerminalRecordingService recordings) =>
     {
         try { return Results.Ok(recordings.Verify(sessionId)); }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
+    sessionRoutes.MapGet("/{sessionId}/exports", (string sessionId, Catalog rawCatalog) =>
         Results.Ok(rawCatalog.TerminalExports(sessionId)));
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/export", async (HttpContext context, string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/export", async (HttpContext context, string sessionId,
         string? format, Catalog rawCatalog, TerminalRecordingService recordings, TerminalExportService exports) =>
     {
         var session = rawCatalog.GetTerminalSession(sessionId);
@@ -792,7 +926,7 @@ if (settings.TerminalEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/recording/replay", (string sessionId,
+    sessionRoutes.MapGet("/{sessionId}/recording/replay", (string sessionId,
         long? offset, int? limit, long? fromMs, long? toMs, TerminalRecordingService recordings) =>
     {
         try
@@ -814,8 +948,11 @@ if (settings.TerminalEnabled)
         catch (InvalidDataException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (FileNotFoundException) { return Results.NotFound(); }
     });
-    app.MapPost("/api/system/terminal/sessions", (TerminalSessionRequest request, TerminalSessionManager manager) =>
+    sessionRoutes.MapPost("", (HttpContext context, TerminalSessionRequest request, TerminalSessionManager manager, Catalog rawCatalog) =>
     {
+        var scope = CurrentSiteScope(context);
+        if (!scope.IsGlobal && (string.Equals(request.Protocol, "SERIAL", StringComparison.OrdinalIgnoreCase) ||
+            !rawCatalog.H3cProfileIsInScope(request.TargetId, scope))) return Results.NotFound();
         try
         {
             var sessionId = manager.Create(request);
@@ -827,19 +964,19 @@ if (settings.TerminalEnabled)
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (IOException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/ticket", (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/ticket", (string sessionId,
         TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
         if (manager.Get(sessionId) is null) return Results.NotFound();
         return Results.Ok(tickets.Issue(sessionId));
     });
-    app.MapPost("/api/system/terminal/sessions/{sessionId}/close", async (string sessionId,
+    sessionRoutes.MapPost("/{sessionId}/close", async (string sessionId,
         TerminalSessionManager manager) =>
     {
         if (!await manager.CloseAsync(sessionId)) return Results.NotFound();
         return Results.Ok(new { sessionId, state = "CLOSED" });
     });
-    app.MapGet("/api/system/terminal/sessions/{sessionId}/stream", async (HttpContext context,
+    sessionRoutes.MapGet("/{sessionId}/stream", async (HttpContext context,
         string sessionId, TerminalSessionManager manager, TerminalTicketStore tickets) =>
     {
         var expectedOrigins = new[] { $"http://127.0.0.1:{settings.WebPort}", $"http://localhost:{settings.WebPort}", $"http://[::1]:{settings.WebPort}" };
@@ -863,8 +1000,12 @@ if (settings.TerminalEnabled)
         }
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-        var send = SendTerminalOutputAsync(socket, session, cancellation.Token);
-        var receive = ReceiveTerminalInputAsync(socket, session, cancellation.Token);
+        bool StillAuthorized()
+        {
+            return context.RequestServices.GetRequiredService<InteractiveScopeAuthorizer>().CanUseTerminal(CurrentIdentity(context), sessionId);
+        }
+        var send = SendTerminalOutputAsync(socket, session, StillAuthorized, cancellation.Token);
+        var receive = ReceiveTerminalInputAsync(socket, session, StillAuthorized, cancellation.Token);
         await Task.WhenAny(send, receive).ConfigureAwait(false);
         cancellation.Cancel();
         try { await Task.WhenAll(send, receive).ConfigureAwait(false); } catch { }
@@ -876,8 +1017,11 @@ if (settings.TerminalEnabled)
 }
 if (settings.H3cEnabled)
 {
-    app.MapGet("/api/system/h3c/profiles", (Catalog rawCatalog) =>
-        Results.Ok(rawCatalog.RecentH3cDeviceProfiles().Select(profile => profile.ToView())));
+    app.MapGet("/api/system/h3c/profiles", (HttpContext context, Catalog rawCatalog) =>
+    {
+        if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+        return Results.Ok(rawCatalog.RecentH3cDeviceProfiles(scope: CurrentSiteScope(context)).Select(profile => profile.ToView()));
+    });
     app.MapPost("/api/system/h3c/profiles/{id}/test-connection", async (HttpContext context, string id,
         Catalog rawCatalog, H3cConnectionTestService tests, P2B5SiteScopeStore scopes) =>
     {
@@ -941,7 +1085,35 @@ if (settings.H3cEnabled)
         var kind = request.Query["kind"].ToString();
         var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
         var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
-        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit));
+        return Results.Ok(rawCatalog.QueryH3cFacts(id, kind, history, limit, scope));
+    });
+    app.MapGet("/api/system/h3c/profiles/{id}/lldp-relations", (HttpContext context, string id,
+        HttpRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail },
+                statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        return Results.Ok(rawCatalog.QueryH3cLldpRelations(id, history, limit, scope));
+    });
+    app.MapGet("/api/system/h3c/profiles/{id}/lldp-claims", (HttpContext context, string id,
+        HttpRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized)
+            return Results.Json(new { error = "P2B_SITE_SCOPE_DENIED", detail = scope.Detail },
+                statusCode: StatusCodes.Status403Forbidden);
+        if (!rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        var history = string.Equals(request.Query["history"], "true", StringComparison.OrdinalIgnoreCase);
+        var limit = int.TryParse(request.Query["limit"], out var value) ? value : 100;
+        var facts = rawCatalog.QueryH3cFacts(id, "lldp.neighbor", history, Math.Clamp(limit, 1, 1000), scope,
+            requireCapturedScope: true);
+        var relations = H3cLldpTopologyProjection.Project(id, facts);
+        return Results.Ok(new H3cLldpClaimsView(id, scope.State, scope.IsGlobal, scope.ClaimsRevision,
+            scope.AllowedSiteReferences.Order(StringComparer.Ordinal).ToArray(), facts.Count, relations.Count, relations));
     });
     app.MapPost("/api/system/h3c/profiles/{id}/offline-replay", (HttpContext context, string id,
         H3cOfflineReplayRequest request, Catalog rawCatalog) =>
@@ -965,21 +1137,27 @@ if (settings.H3cEnabled)
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = ex.Message }); }
+        catch (H3cFactRevisionConflictException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
-    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog) =>
+    app.MapPost("/api/system/h3c/task-definitions", (HttpContext context, H3cTaskDefinitionRequest request, Catalog rawCatalog,
+        TaskSiteScopeAuthorizer taskScopes) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_TASK_DEFINITION_PERMISSION_DENIED", request.Id);
         if (request.TimeoutMs is < 100 or > 600000)
             return Results.BadRequest(new { error = "timeoutMs must be between 100 and 600000." });
         try
         {
+            var snapshot = taskScopes.CaptureDefinition(request.ProfileId, CurrentIdentity(context).UserId);
             rawCatalog.CreateTaskDefinition(request.Id, "H3C_SSH_READONLY", request.ProfileId,
-                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled);
+                request.Command, TimeSpan.FromMilliseconds(request.TimeoutMs), request.Enabled, scopeSnapshot: snapshot,
+                commands: request.Commands);
             return Results.Created($"/api/system/tasks/definitions/{request.Id}",
                 rawCatalog.GetTaskDefinition(request.Id));
         }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         {
             return Results.Conflict(new { error = $"Task definition could not be saved ({ex.GetType().Name})." });
@@ -995,10 +1173,11 @@ if (settings.H3cEnabled)
         {
             if (rawCatalog.GetTaskDefinition(definitionId)?.TaskType != "H3C_SSH_READONLY")
                 return Results.NotFound();
-            if (!scheduler.TryScheduleDefinition(definitionId, out var runId))
+            if (!scheduler.TryScheduleDefinition(definitionId, out var runId, CurrentIdentity(context).UserId))
                 return Results.Problem("The bounded collection queue is full or shutting down.", statusCode: StatusCodes.Status429TooManyRequests);
             return Results.Accepted("/api/system/tasks", new { runId });
         }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
@@ -1128,6 +1307,20 @@ app.MapGet("/api/system/wireless/ap-resources/{id}", (HttpContext context, strin
         var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
         var item = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
         return item is null ? WirelessResourceNotVisible() : Results.Ok(item);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/runtime-state", (HttpContext context, HttpRequest request, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var state = wireless.GetRuntimeState(id, CurrentSiteScope(context), context.RequestAborted,
+            sourceAcId: QueryValue(request, "sourceAcId"), domainId: QueryValue(request, "domainId"));
+        return state is null ? WirelessResourceNotVisible() : Results.Ok(state);
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
     { return WirelessAuthorityUnavailable(ex); }
@@ -1432,21 +1625,25 @@ static CookieOptions WebCookieOptions(bool httpOnly) => new()
     MaxAge = TimeSpan.FromHours(12),
 };
 
-static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
 {
+    if (!isAuthorized()) return;
     var status = JsonSerializer.SerializeToUtf8Bytes(new { type = "status", session = session.Snapshot });
     await socket.SendAsync(status, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
     await foreach (var output in session.Output.ReadAllAsync(cancellationToken))
+    {
+        if (!isAuthorized()) return;
         await socket.SendAsync(output, WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
+    }
 }
 
-static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRuntime session, CancellationToken cancellationToken)
+static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
 {
     var buffer = new byte[64 * 1024];
     while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
     {
         var result = await socket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
-        if (result.MessageType == WebSocketMessageType.Close) return;
+        if (result.MessageType == WebSocketMessageType.Close || !isAuthorized()) return;
         if (result.MessageType != WebSocketMessageType.Text || !result.EndOfMessage || result.Count > buffer.Length)
         {
             await socket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "structured text messages only", cancellationToken).ConfigureAwait(false);
@@ -1505,7 +1702,8 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
-    long TimeoutMs = 30000, bool Enabled = true);
+    long TimeoutMs = 30000, bool Enabled = true, IReadOnlyList<string>? Commands = null);
+internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,

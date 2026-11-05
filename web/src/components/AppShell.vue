@@ -2,13 +2,11 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import {
-  Bell, Connection, DataLine, FolderOpened, Guide, House, List, Monitor,
-  Operation, Search, Setting, Tools, TrendCharts, UserFilled, Share,
-} from '@element-plus/icons-vue'
+import { Bell, DataLine, Guide, Operation, Search, UserFilled } from '@element-plus/icons-vue'
 import { getDeviceInventory, getHealth, type HealthSnapshot } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
+import { moduleRegistry } from '../moduleRegistry'
 
 const auth = useAuthStore()
 const workspace = useWorkspaceStore()
@@ -20,27 +18,14 @@ const dark = ref(document.documentElement.dataset.theme === 'dark')
 const globalSearch = ref('')
 const sidebarCollapsed = ref(false)
 
-const nav = [
-  { path: '/', label: '运行总览', icon: House },
-  { path: '/devices', label: '设备管理', icon: Monitor },
-  { path: '/zte', label: 'ZTE 采集', icon: Connection },
-  { path: '/h3c', label: 'H3C 事实回放', icon: Connection },
-  { path: '/network-planning', label: '网络规划', icon: Share },
-  { path: '/terminal', label: '终端控制台', icon: Connection },
-  { path: '/tasks', label: '任务中心', icon: List },
-  { path: '/wireless', label: '无线业务', icon: TrendCharts },
-  { path: '/rail', label: '轨道交通', icon: DataLine, disabled: true },
-  { path: '/tools', label: '工具集', icon: Tools },
-  { path: '/files', label: '文件管理', icon: FolderOpened },
-  { path: '/settings', label: '系统设置', icon: Setting },
-]
+const nav = moduleRegistry
 const currentLabel = computed(() => String(route.meta.label || '运行总览'))
 const isTerminal = computed(() => route.path === '/terminal')
 const healthLabel = computed(() => health.value?.healthState === 'HEALTHY' ? '服务正常' : health.value?.healthState === 'DEGRADED' ? '服务降级' : '服务状态')
 const queueLabel = computed(() => health.value?.collectionState === 'running' ? '队列状态正常' : health.value?.collectionState || '队列待命')
 
 async function navigate(item: typeof nav[number]): Promise<void> {
-  if (item.disabled) { ElMessage.info(`${item.label}尚未接入真实业务 API`); return }
+  if (item.status === 'DISABLED') { ElMessage.info(item.disabledReason || `${item.label}尚未接入真实业务 API`); return }
   workspace.open(item.path, item.label)
   await router.push(item.path)
 }
@@ -85,9 +70,9 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
       </div>
       <div class="nav-group">
         <p class="nav-group__title">工作台</p>
-        <button v-for="item in nav" :key="item.path" :class="['nav-item', { active: route.path === item.path, disabled: item.disabled }]" type="button" :title="item.label" @click="navigate(item)">
+        <button v-for="item in nav" :key="item.path" :class="['nav-item', { active: route.path === item.path, disabled: item.status === 'DISABLED' }]" type="button" :title="item.label" @click="navigate(item)">
           <span class="nav-item__content"><el-icon class="nav-item__icon"><component :is="item.icon" /></el-icon><span class="nav-item__label">{{ item.label }}</span></span>
-          <span v-if="item.disabled" class="status-chip">未开放</span>
+          <span v-if="item.status === 'DISABLED'" class="status-chip">未开放</span>
         </button>
       </div>
       <div class="sidebar-footer"><div class="sidebar-footer__line"><span class="sidebar-dot" />本机服务</div><span class="mono sidebar-instance">{{ health?.instanceId || 'instance-id pending' }}</span></div>

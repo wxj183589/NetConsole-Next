@@ -1,27 +1,45 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { chromium } from '../web/node_modules/playwright/index.mjs'
 import { workspacePath } from '../tools/workspace_paths.mjs'
 
-const root = new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url).pathname
+const root = fileURLToPath(new URL('../src/NetConsole.Next.Service/wwwroot/', import.meta.url))
 const output = process.env.NETCONSOLE_NEXT_UI_ARTIFACTS || workspacePath('build', 'web-ui-acceptance')
 mkdirSync(output, { recursive: true })
-const server = spawn('python3', ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
+// Windows commonly exposes Python as `python` while the `python3` app alias
+// cannot be launched by child_process.spawn. Keep the same fixture portable
+// across the Windows developer host and Linux CI.
+const python = process.platform === 'win32' ? 'python' : 'python3'
+const server = spawn(python, ['-m', 'http.server', '4173', '--directory', root], { stdio: 'ignore' })
 const base = 'http://127.0.0.1:4173'
 for (let attempt = 0; attempt < 40; attempt += 1) {
   try { if ((await fetch(`${base}/`)).ok) break } catch { /* server is starting */ }
   await new Promise((resolve) => setTimeout(resolve, 100))
 }
 
-const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
-const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 })
+const executablePath = process.env.CHROME_PATH || (process.platform === 'win32'
+  ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  : undefined)
+const viewportWidth = Number(process.env.NETCONSOLE_NEXT_UI_WIDTH || 1920)
+const viewportHeight = Number(process.env.NETCONSOLE_NEXT_UI_HEIGHT || 1080)
+const browser = await chromium.launch({
+  headless: true,
+  ...(executablePath ? { executablePath } : {}),
+  args: ['--no-sandbox'],
+})
+const page = await browser.newPage({ viewport: { width: viewportWidth, height: viewportHeight }, deviceScaleFactor: 1 })
 let loggedIn = false
+const taskActions = []
+const fixtureTasks = [{ id: 'fixture-task-failed', sourceId: 'fixture-source-01', taskType: 'H3C_SSH_READONLY', state: 'FAILED', queuedMs: 1792771200000, startedMs: 1792771200100, endedMs: 1792771260000, failureReason: 'H3cConnectionTimeoutException', definitionId: 'fixture-definition-01', captureStatus: 'PARTIAL', parseStatus: 'PARTIAL' }]
 await page.route('**/api/**', async (route) => {
   const request = route.request(); const url = new URL(request.url())
   if (url.pathname === '/api/auth/me') return route.fulfill({ status: loggedIn ? 200 : 401, body: loggedIn ? JSON.stringify({ username: 'admin', role: 'ADMIN' }) : '' , headers: { 'content-type': 'application/json' } })
   if (url.pathname === '/api/auth/login') { loggedIn = true; return route.fulfill({ status: 200, body: JSON.stringify({ user: { username: 'admin', role: 'ADMIN' }, csrfToken: 'fixture-csrf' }), headers: { 'content-type': 'application/json' } }) }
   if (url.pathname === '/api/system/health') return route.fulfill({ status: 200, body: JSON.stringify({ status: 'RUNNING', serviceState: 'RUNNING', healthState: 'HEALTHY', collectionState: 'LISTENING', h3cCollectionEnabled: true, syslogEnabled: true, rawWriteAvailable: true, rawSegments: { finalized: 12, incomplete: 0, missing: 0 }, udpReceived: 1842, rawFlushedRecords: 1842, h3cMetrics: { activeSshSessions: 1, collectionFailures: 0 }, resources: { workingSetBytes: 73400320, threadCount: 18 }, instanceId: 'fixture-instance-01' }), headers: { 'content-type': 'application/json' } })
-  if (url.pathname === '/api/system/tasks') return route.fulfill({ status: 200, body: JSON.stringify([]), headers: { 'content-type': 'application/json' } })
+  if (url.pathname === '/api/system/tasks') return route.fulfill({ status: 200, body: JSON.stringify(fixtureTasks), headers: { 'content-type': 'application/json' } })
+  const taskAction = url.pathname.match(/^\/api\/system\/tasks\/([^/]+)\/(cancel|retry|resume)$/)
+  if (taskAction) { taskActions.push({ runId: taskAction[1], action: taskAction[2] }); return route.fulfill({ status: 202, body: JSON.stringify({ runId: 'fixture-task-replay', previousRunId: taskAction[1], action: taskAction[2] }), headers: { 'content-type': 'application/json' } }) }
   if (url.pathname === '/api/system/host-tools') return route.fulfill({ status: 200, body: JSON.stringify([
     { id: 'securecrt', displayName: 'SecureCRT', product: 'SecureCRT', status: 'HOST_WINDOWS_REQUIRED', configured: false, isWindowsTool: true, detail: 'fixture: real host helper not connected' },
     { id: 'xshell', displayName: 'Xshell', product: 'Xshell', status: 'NOT_CONFIGURED', configured: false, isWindowsTool: true, detail: 'fixture: configure on host' },
@@ -55,14 +73,19 @@ try {
   await page.getByRole('heading', { name: '设备管理' }).waitFor()
   await page.screenshot({ path: `${output}/web-pr1-devices.png`, fullPage: true })
   await page.getByRole('button', { name: '终端控制台' }).click()
-  await page.getByRole('heading', { name: '终端控制台' }).waitFor()
+  // Terminal mode intentionally hides the page header to maximize console
+  // space, so assert the visible workbench instead of the hidden h1.
+  await page.locator('.terminal-workbench').waitFor()
   await page.screenshot({ path: `${output}/web-pr1-terminal.png`, fullPage: true })
-  await page.locator('.history-item').first().click()
+  await page.locator('[data-testid="terminal-history-row"]').first().getByRole('button', { name: '回放 / 导出' }).click()
   await page.getByText('会话历史 / 只读回放').waitFor()
   await page.screenshot({ path: `${output}/web-pr1-history-replay.png`, fullPage: true })
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '任务中心' }).click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
+  await page.getByRole('button', { name: '重试' }).click()
+  await page.waitForTimeout(100)
+  if (!taskActions.some(action => action.runId === 'fixture-task-failed' && action.action === 'retry')) throw new Error('task center retry action was not sent to the service API')
   await page.screenshot({ path: `${output}/web-pr1-tasks.png`, fullPage: true })
   await page.getByRole('button', { name: '工具集' }).click()
   await page.getByRole('heading', { name: '工具集' }).waitFor()
@@ -70,7 +93,13 @@ try {
   await page.getByRole('button', { name: '文件管理' }).click()
   await page.getByRole('heading', { name: '文件管理' }).waitFor()
   await page.screenshot({ path: output + '/web-pr2-files.png', fullPage: true })
-  console.log('PASS: Vue login, light/dark overview, devices, terminal, tasks, tools and files screenshots')
+  await page.evaluate(() => { history.pushState({}, '', '/route-that-does-not-exist'); window.dispatchEvent(new PopStateEvent('popstate')) })
+  await page.getByText('找不到此页面').waitFor()
+  await page.getByRole('button', { name: '返回运行总览' }).click()
+  await page.getByRole('heading', { name: '运行总览' }).waitFor()
+  await page.getByRole('button', { name: '轨道交通' }).click()
+  await page.getByText('轨道交通模块尚未接入真实业务 API').waitFor()
+  console.log(`PASS: Vue UI interaction and error-state checks at ${viewportWidth}x${viewportHeight}`)
 } finally {
   await browser.close()
   server.kill('SIGTERM')

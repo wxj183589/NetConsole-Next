@@ -377,6 +377,19 @@ export interface TerminalDevice {
   lastDisconnectReason?: string | null
 }
 
+export interface H3cConnectionTestResult {
+  deviceId: string
+  host: string
+  port: number
+  protocol: string
+  status: string
+  message: string
+  vendor?: string | null
+  version?: string | null
+  hostKeyDecision?: string | null
+  elapsedMs: number
+}
+
 export interface TerminalSession {
   id: string
   targetId: string
@@ -407,6 +420,55 @@ export interface TaskRun {
   captureStatus?: string | null
   parseStatus?: string | null
 }
+export interface TaskCommand {
+  index: number
+  command: string
+  state: string
+  error?: string | null
+  rawOutputPath?: string | null
+  captureStatus?: string | null
+  parseStatus?: string | null
+  capturedMs?: number | null
+}
+
+export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP'
+export interface NetworkDiagnosticItem {
+  id: string
+  deviceId: string
+  deviceName: string
+  siteId: string
+  kind: NetworkDiagnosticKind
+  state: string
+  outcome?: string | null
+  detail?: string | null
+  startedMs?: number | null
+  endedMs?: number | null
+  latencyMs?: number | null
+  evidenceCount: number
+  evidenceSources: string[]
+}
+export interface NetworkDiagnosticRun {
+  id: string
+  actor: string
+  state: string
+  siteId?: string | null
+  timeoutMs: number
+  totalDevices: number
+  totalChecks: number
+  completedChecks: number
+  succeededChecks: number
+  failedChecks: number
+  noEvidenceChecks: number
+  cancelledChecks: number
+  queuedChecks: number
+  runningChecks: number
+  progressPercent: number
+  createdMs: number
+  startedMs?: number | null
+  endedMs?: number | null
+  failureReason?: string | null
+  items: NetworkDiagnosticItem[]
+}
 
 export interface H3cFact {
   id: string
@@ -420,6 +482,75 @@ export interface H3cFact {
   payloadJson: string
   dataState?: string
   freshness?: string
+}
+
+export interface H3cLldpRelation {
+  profileId: string
+  localDeviceId: string
+  localInterface: string
+  neighborDevice: string
+  neighborPort?: string | null
+  neighborManagementAddress?: string | null
+  neighborChassisId?: string | null
+  siteId: string
+  source: string
+  capturedMs: number
+  factRevision: string
+  relationKey: string
+  changeKind: string
+}
+
+export interface H3cLldpClaims {
+  profileId: string
+  scopeState: string
+  isGlobal: boolean
+  claimsRevision?: string | null
+  allowedSiteReferences: string[]
+  factCount: number
+  relationCount: number
+  relations: H3cLldpRelation[]
+}
+
+export interface ConfigBackupSnapshot {
+  id: string
+  profileId: string
+  deviceId: string
+  siteId: string
+  version: number
+  state: string
+  createdMs: number
+  capturedMs?: number | null
+  sha256?: string | null
+  byteCount: number
+  taskRunId?: string | null
+  error?: string | null
+  canDownload: boolean
+  downloadName?: string | null
+}
+
+export interface ConfigBackupBatch {
+  id: string
+  actorUserId: string
+  state: string
+  createdMs: number
+  completedMs?: number | null
+  total: number
+  completed: number
+  succeeded: number
+  failed: number
+  items: Array<{ profileId: string; state: string; snapshotId?: string | null; error?: string | null }>
+}
+
+export interface ConfigBackupDiff {
+  baseId: string
+  targetId: string
+  profileId: string
+  identical: boolean
+  addedLines: number
+  removedLines: number
+  changedLines: number
+  added: string[]
+  removed: string[]
 }
 
 export interface WirelessScope {
@@ -490,6 +621,7 @@ export interface WirelessApResource {
   sourceRevision: string
   projectionRevision: string
   conflictReason?: string | null
+  stateConflictReason?: string | null
   observations: WirelessObservation[]
 }
 
@@ -526,6 +658,60 @@ export interface WirelessTopology {
   confirmed: boolean
   revision: string
   asOf: number
+}
+
+export interface WirelessEffectiveState {
+  normalizedState: string
+  rawState: string
+  capturedMs: number
+  sourceRevision: string
+  rawManifestRef: string
+  parserRevision: string
+  verificationLevel: string
+  freshnessState: string
+}
+
+export interface WirelessSourceRuntimeState {
+  sourceAcDeviceId: string
+  sourceSiteId: string
+  normalizedState: string
+  current: WirelessEffectiveState | null
+  previousEffective: WirelessEffectiveState | null
+  recent10: Array<{ id: string; previousState: string; normalizedState: string; capturedMs: number; sourceRevision: string; rawManifestRef: string }>
+  latestOutcome: string
+  latestCapturedMs: number | null
+  freshnessDeadlineMs: number | null
+  historyStatus: string
+}
+
+export interface WirelessRuntimeState {
+  resourceId: string
+  normalizedState: string
+  sources: WirelessSourceRuntimeState[]
+  scope: WirelessScope
+  asOf: number
+  sourceRevision: string
+  freshnessWindowMs: number
+  warnings: string[]
+  current: WirelessAggregateEffectiveState | null
+  previousEffective: WirelessAggregateEffectiveState | null
+  recent10: Array<{ id: string; previousState: string; normalizedState: string; capturedMs: number; sourceRevision: string; sources: WirelessAggregateSourceEvidence[] }> | null
+}
+
+export interface WirelessAggregateSourceEvidence {
+  sourceAcDeviceId: string
+  sourceSiteId: string
+  normalizedState: string
+  capturedMs: number
+  sourceRevision: string
+  rawManifestRef: string
+}
+
+export interface WirelessAggregateEffectiveState {
+  normalizedState: string
+  capturedMs: number
+  sources: WirelessAggregateSourceEvidence[]
+  freshnessState: string
 }
 
 export interface HostTool {
@@ -667,6 +853,29 @@ export function getZteFacts(id: string, params: { kind?: string; history?: boole
 export function getH3cFacts(id: string, params: { kind?: string; history?: boolean; limit?: number } = {}): Promise<H3cFact[]> {
   return request(queryPath(`/api/system/h3c/profiles/${encodeURIComponent(id)}/facts`, params))
 }
+export function getH3cLldpRelations(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpRelation[]> {
+  return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-relations?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
+}
+export function getH3cLldpClaims(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpClaims> {
+  return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-claims?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
+}
+export function createConfigBackup(profileIds: string[]): Promise<ConfigBackupBatch> {
+  return request('/api/system/config-backups', { method: 'POST', body: JSON.stringify({ profileIds }) })
+}
+export function getConfigBackupBatch(id: string): Promise<ConfigBackupBatch> {
+  return request('/api/system/config-backups/batches/' + encodeURIComponent(id))
+}
+export function getConfigBackups(profileId: string): Promise<ConfigBackupSnapshot[]> {
+  return request('/api/system/config-backups?profileId=' + encodeURIComponent(profileId))
+}
+export async function downloadConfigBackup(id: string): Promise<Blob> {
+  const response = await fetch('/api/system/config-backups/' + encodeURIComponent(id) + '/download', { credentials: 'include' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
+}
+export function getConfigBackupDiff(baseId: string, targetId: string): Promise<ConfigBackupDiff> {
+  return request('/api/system/config-backups/' + encodeURIComponent(baseId) + '/diff/' + encodeURIComponent(targetId))
+}
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))
 }
@@ -675,6 +884,9 @@ export function getWirelessApResources(params: { page?: number; pageSize?: numbe
 }
 export function getWirelessApResource(id: string): Promise<WirelessApResource> {
   return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}`)
+}
+export function getWirelessRuntimeState(id: string, params: { sourceAcId?: string; domainId?: string } = {}, signal?: AbortSignal): Promise<WirelessRuntimeState> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/runtime-state`, params), { signal })
 }
 export function getWirelessApObservations(id: string, params: { page?: number; pageSize?: number; sourceAcId?: string; domainId?: string } = {}): Promise<WirelessPage<WirelessObservation>> {
   return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/observations`, params))
@@ -771,6 +983,27 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
+}
+export function cancelTask(runId: string): Promise<{ cancelled: boolean; runId: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+}
+export function retryTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/retry`, { method: 'POST' })
+}
+export function resumeTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/resume`, { method: 'POST' })
+}
+export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string }): Promise<NetworkDiagnosticRun> {
+  return request('/api/system/diagnostics/runs', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function getNetworkDiagnostics(id: string): Promise<NetworkDiagnosticRun> {
+  return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}`)
+}
+export function cancelNetworkDiagnostics(id: string): Promise<{ cancelled: boolean }> {
+  return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+}
 export function getHostTools(): Promise<HostTool[]> { return request('/api/system/host-tools') }
 export function updateHostTool(id: string, executablePath: string | null): Promise<HostTool> {
   return request('/api/system/host-tools/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify({ executablePath }) })
@@ -809,6 +1042,9 @@ export async function downloadArchive(id: string): Promise<Blob> {
 
 export function createH3cProfile(payload: Record<string, unknown>): Promise<TerminalDevice> {
   return request('/api/system/h3c/profiles', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function testH3cConnection(profileId: string): Promise<H3cConnectionTestResult> {
+  return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/test-connection`, { method: 'POST' })
 }
 
 export function createTerminalSession(payload: Record<string, unknown>): Promise<{ sessionId: string }> {

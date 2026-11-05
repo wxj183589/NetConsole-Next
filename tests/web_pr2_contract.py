@@ -28,6 +28,15 @@ def main():
     contains("tools/acceptance/Test-WebPR2-Host.ps1", "CHECK_ONLY", "LOCAL_API_TEST", "DESKTOP_HELPER_TEST", "EXTERNAL_TOOL_TEST", "FILE_MANAGER_TEST", "ARCHIVE_TEST", "NetConsoleNext.DesktopHelper", "AllowGuiLaunch", "ConfirmOperator", "configurationChanged = $false")
     contains("docs/WEB_PR2_WINDOWS_HOST_ACCEPTANCE.md", "HOST_DESKTOP_UNAVAILABLE", "NOT_INSTALLED", "PIPE_ACL", "PROCESS_LAUNCH_VERIFIED", "REAL_DEVICE_LOGIN_VERIFIED")
     contains("tests/NetConsole.Next.Service.Tests/Program.cs", "STARTUP_ORPHAN_CLEANUP=PASS", "PERIODIC_CLEANUP_TIME_ELAPSED=PASS", "IDLE_CLEANUP_TIME_ELAPSED=PASS", "DOWNLOAD_CLEANUP_RACE=PASS", "RETAINED_JOB_LIMIT_EXHAUSTION=PASS")
+    program = (ROOT / "src/NetConsole.Next.Service/Program.cs").read_text(encoding="utf-8")
+    assert 'globalFileRoutes = app.MapGroup("/api/system/files")' in program
+    assert 'globalFileRoutes.AddEndpointFilter' in program and 'RequireGlobalFiles(invocation.HttpContext)' in program
+    for method, path in (("Get", "/roots"), ("Get", "/list"), ("Get", "/download"), ("Post", "/archive-jobs"),
+                         ("Get", "/archive-jobs/{id}"), ("Post", "/archive-jobs/{id}/cancel"), ("Get", "/archive-jobs/{id}/download")):
+        assert f'globalFileRoutes.Map{method}("{path}"' in program, f"missing guarded machine-file route: {path}"
+    assert 'app.MapGet("/api/system/files/' not in program and 'app.MapPost("/api/system/files/' not in program
+    contains("src/NetConsole.Next.Service/InteractiveScopeAuthorizer.cs", "ReadActiveSessionIdentity", "GLOBAL_FILE_SCOPE_REQUIRED", "CanUseTerminal")
+    contains("src/NetConsole.Next.Service/FileArchiveService.cs", 'EnsureAuthorized(job.UserId, job.SessionId, "BEFORE_FILE")', '"BEFORE_PUBLISH"')
     contains("web/src/router.ts", "ToolsView.vue", "FilesView.vue")
     contains("web/src/views/ToolsView.vue", "宿主机桌面", "SUPERADMIN")
     contains("web/src/views/FilesView.vue", "createArchiveJob", "downloadArchive", "openHostDirectory")
