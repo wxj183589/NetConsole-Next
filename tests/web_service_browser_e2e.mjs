@@ -90,11 +90,12 @@ try {
   await page.getByRole('heading', { name: '运行总览' }).waitFor()
   await page.screenshot({ path: path.join(output, 'service-overview-1920.png'), fullPage: true })
 
-  for (const label of ['设备管理', '任务中心']) {
+  for (const label of ['设备管理', '任务中心', '系统设置']) {
     await page.locator('.app-sidebar').getByRole('button', { name: label }).click()
     await page.getByRole('heading', { name: label }).waitFor()
     await page.locator('.card').first().waitFor()
   }
+  await page.getByRole('heading', { name: '模块开放状态' }).waitFor()
   await page.locator('.app-sidebar').getByRole('button', { name: '工具集' }).click()
   await page.getByRole('heading', { name: '工具集' }).waitFor()
   await page.locator('.tool-card, .tool-list, .empty-state').first().waitFor()
