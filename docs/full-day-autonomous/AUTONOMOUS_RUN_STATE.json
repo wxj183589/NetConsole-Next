@@ -5,10 +5,8 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "NEXT_GAP_MODULE_GOVERNANCE",
-  "activeWorkstreams": [
-    "module-registry-backend-governance"
-  ],
+  "phase": "INTEGRATED_MODULE_GOVERNANCE_REGRESSION",
+  "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
     "task scope",
@@ -21,10 +19,10 @@
     "diagnostic restart history"
   ],
   "nextTasks": [
-    "module registry backend persistence and enable/disable API",
     "R3 AP identity/domain/group persistence contract",
     "multi-device cross-AC collection manifest",
-    "four-simulator credential-backed login"
+    "four-simulator credential-backed login",
+    "settings UI for module governance"
   ],
   "externalBlockers": [
     "credentials unavailable",
@@ -34,5 +32,5 @@
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "b0b4cca"
+  "lastRecoveryCommit": "80de217"
 }
