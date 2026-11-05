@@ -26,15 +26,16 @@ The legacy bearer token is accepted only for compatibility with LocalManager and
 
 Cookie-authenticated writes require a same-origin `Origin`, matching CSRF header/cookie, and the stored session hash. Bearer-authenticated LocalManager requests retain the existing compatibility path. Integrity quarantine additionally requires `SUPERADMIN`.
 
-## LAN bind
+## Network binding
 
-Default remains loopback. LAN is explicit:
+The current product is loopback-only. Remote Web/TLS is not implemented:
 
 ```text
-NETCONSOLE_NEXT_WEB_BIND=0.0.0.0
-# or
-NETCONSOLE_NEXT_WEB_LAN=1
+NETCONSOLE_NEXT_WEB_BIND=127.0.0.1
+# NETCONSOLE_NEXT_WEB_LAN=1 is rejected
 ```
 
-The port remains `NETCONSOLE_NEXT_WEB_PORT` (default `18771`). In this mode the service accepts the configured port on non-loopback hosts and still rejects other ports. HTTP is intentional for the current single-host/LAN deployment; HTTPS is not silently claimed.
+The port remains `NETCONSOLE_NEXT_WEB_PORT` (default `18771`). Non-loopback bind values and
+`NETCONSOLE_NEXT_WEB_LAN=1` fail closed. A future remote mode requires separate TLS,
+authenticated identity, strict Origin validation and CSRF/security review.
 

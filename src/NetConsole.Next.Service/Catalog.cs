@@ -173,6 +173,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV18Migration(db);
         ApplyV19Migration(db);
         ApplyV20Migration(db);
+        ApplyV21Migration(db);
+        ApplyV22Migration(db);
         ZteCollectionSchema.Apply(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
@@ -481,6 +483,33 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v20.sql")
             ?? throw new InvalidOperationException("Embedded schema_v20.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV21Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        AddColumnIfMissing(db, transaction, "h3c_device_profiles", "credential_password", "TEXT");
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v21.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v21.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static void ApplyV22Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v22.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v22.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -1098,8 +1127,13 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (string.IsNullOrWhiteSpace(profile.Username) || profile.Username.Length > 64 ||
             profile.Username.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
             throw new ArgumentException("H3C username contains unsupported characters.", nameof(profile));
-        if (!H3cCredentialReference.IsValid(profile.CredentialReference))
+        var credentialReference = string.IsNullOrWhiteSpace(profile.CredentialReference)
+            ? "DEVICE_" + profile.Id.ToUpperInvariant()
+            : profile.CredentialReference.Trim().ToUpperInvariant();
+        if (!H3cCredentialReference.IsValid(credentialReference))
             throw new ArgumentException("Credential reference must match [A-Z][A-Z0-9_]{0,63}.", nameof(profile));
+        if (profile.Password is { Length: > 4096 })
+            throw new ArgumentException("Device password is too long.", nameof(profile));
         var fingerprint = string.IsNullOrWhiteSpace(profile.HostKeySha256) ? string.Empty :
             H3cHostKeyFingerprint.Normalize(profile.HostKeySha256);
         if (!TerminalTextEncoding.IsSupported(profile.TerminalEncoding))
@@ -1115,14 +1149,24 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using (var existing = db.CreateCommand())
         {
             existing.Transaction = transaction;
-            existing.CommandText = @"SELECT host,port,username,credential_reference,host_key_sha256
+            existing.CommandText = @"SELECT host,port,username,credential_reference,host_key_sha256,credential_password
                 FROM h3c_device_profiles WHERE id=$id";
             existing.Parameters.AddWithValue("$id", profile.Id);
             using var reader = existing.ExecuteReader();
-            if (reader.Read() && (reader.GetString(0) != profile.Host || reader.GetInt32(1) != profile.Port ||
-                reader.GetString(2) != profile.Username || reader.GetString(3) != profile.CredentialReference ||
-                (!string.IsNullOrEmpty(fingerprint) && (reader.IsDBNull(4) || reader.GetString(4) != fingerprint))))
-                throw new InvalidOperationException("H3C connection identity is immutable; create a new profile id for host, credential-reference or host-key changes.");
+            string? existingPassword = null;
+            if (reader.Read())
+            {
+                if (reader.GetString(0) != profile.Host || reader.GetInt32(1) != profile.Port ||
+                    reader.GetString(2) != profile.Username || reader.GetString(3) != credentialReference ||
+                    (!string.IsNullOrEmpty(fingerprint) && (reader.IsDBNull(4) || reader.GetString(4) != fingerprint)))
+                    throw new InvalidOperationException("H3C connection identity is immutable; create a new profile id for host, credential-reference or host-key changes.");
+                existingPassword = reader.IsDBNull(5) ? null : reader.GetString(5);
+            }
+            profile = profile with
+            {
+                CredentialReference = credentialReference,
+                Password = profile.ClearPassword ? null : string.IsNullOrEmpty(profile.Password) ? existingPassword : profile.Password
+            };
         }
         using (var source = db.CreateCommand())
         {
@@ -1139,10 +1183,11 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         {
             insert.Transaction = transaction;
             insert.CommandText = @"INSERT INTO h3c_device_profiles
-                (id,source_id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback)
-                VALUES($id,$source,$host,$port,$username,$credential,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$protocol,$telnetFallback)
+                (id,source_id,host,port,username,credential_reference,credential_password,host_key_sha256,enabled,created_ms,updated_ms,host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback)
+                VALUES($id,$source,$host,$port,$username,$credential,$password,$fingerprint,$enabled,$created,$updated,$policy,$legacy,$encoding,$protocol,$telnetFallback)
                 ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,host=excluded.host,port=excluded.port,
                     username=excluded.username,credential_reference=excluded.credential_reference,
+                    credential_password=excluded.credential_password,
                     host_key_sha256=CASE WHEN excluded.host_key_sha256='' THEN h3c_device_profiles.host_key_sha256 ELSE excluded.host_key_sha256 END,
                     enabled=excluded.enabled,updated_ms=excluded.updated_ms,
                     host_key_update_policy=excluded.host_key_update_policy,allow_legacy_algorithms=excluded.allow_legacy_algorithms,
@@ -1154,6 +1199,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             insert.Parameters.AddWithValue("$port", profile.Port);
             insert.Parameters.AddWithValue("$username", profile.Username);
             insert.Parameters.AddWithValue("$credential", profile.CredentialReference);
+            insert.Parameters.AddWithValue("$password", (object?)profile.Password ?? DBNull.Value);
             insert.Parameters.AddWithValue("$fingerprint", fingerprint);
             insert.Parameters.AddWithValue("$enabled", profile.Enabled ? 1 : 0);
             insert.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
@@ -1205,16 +1251,111 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = @"SELECT id,host,port,username,credential_reference,host_key_sha256,enabled,created_ms,updated_ms,
-            host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
-            FROM h3c_device_profiles WHERE id=$id";
+        command.CommandText = @"SELECT profile.id,profile.host,profile.port,profile.username,profile.credential_reference,profile.host_key_sha256,profile.enabled,profile.created_ms,profile.updated_ms,
+            profile.host_key_update_policy,profile.allow_legacy_algorithms,profile.terminal_encoding,profile.terminal_protocol,profile.allow_telnet_fallback,
+            COALESCE(source.site_id,'local')
+            FROM h3c_device_profiles profile LEFT JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=$id";
         command.Parameters.AddWithValue("$id", id);
         using var reader = command.ExecuteReader();
         return reader.Read()
             ? new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
                 reader.GetString(4), reader.IsDBNull(5) ? string.Empty : reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8),
-                reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0)
+                reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0,
+                SiteId: reader.GetString(14))
             : null;
+    }
+
+    internal string? GetH3cCredentialPassword(string profileId)
+    {
+        if (string.IsNullOrWhiteSpace(profileId)) return null;
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT credential_password FROM h3c_device_profiles WHERE id=$id";
+        command.Parameters.AddWithValue("$id", profileId.Trim());
+        return command.ExecuteScalar() is string value && value.Length > 0 ? value : null;
+    }
+
+    internal SiteSshJumpHostSnapshot? GetSiteSshJumpHost(string siteId, bool includePassword = true)
+    {
+        if (string.IsNullOrWhiteSpace(siteId)) return null;
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT site_id,host,port,username,credential_reference,credential_password,host_key_sha256,enabled,updated_ms
+            FROM site_ssh_jump_hosts WHERE site_id=$site";
+        command.Parameters.AddWithValue("$site", siteId.Trim());
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        return new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
+            reader.GetString(4), includePassword && !reader.IsDBNull(5) ? reader.GetString(5) : null,
+            reader.IsDBNull(6) ? string.Empty : reader.GetString(6), reader.GetInt32(7) != 0, reader.GetInt64(8));
+    }
+
+    public void UpsertSiteSshJumpHost(SiteSshJumpHostSnapshot jump)
+    {
+        if (string.IsNullOrWhiteSpace(jump.SiteId) || string.IsNullOrWhiteSpace(jump.Host) ||
+            Uri.CheckHostName(jump.Host) == UriHostNameType.Unknown)
+            throw new ArgumentException("Jump Host site and host are required.", nameof(jump));
+        if (jump.Port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(jump.Port));
+        if (string.IsNullOrWhiteSpace(jump.Username) || jump.Username.Length > 64)
+            throw new ArgumentException("Jump Host username is invalid.", nameof(jump));
+        if (!H3cCredentialReference.IsValid(jump.CredentialReference))
+            throw new ArgumentException("Jump Host credential reference is invalid.", nameof(jump));
+        if (jump.Password is { Length: > 4096 }) throw new ArgumentException("Jump Host password is too long.", nameof(jump));
+        var fingerprint = string.IsNullOrWhiteSpace(jump.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(jump.HostKeySha256);
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"INSERT INTO site_ssh_jump_hosts(site_id,host,port,username,credential_reference,credential_password,host_key_sha256,enabled,updated_ms)
+            VALUES($site,$host,$port,$user,$reference,$password,$fingerprint,$enabled,$updated)
+            ON CONFLICT(site_id) DO UPDATE SET host=excluded.host,port=excluded.port,username=excluded.username,
+                credential_reference=excluded.credential_reference,
+                credential_password=CASE WHEN $clear=1 THEN NULL WHEN $password IS NULL THEN site_ssh_jump_hosts.credential_password ELSE excluded.credential_password END,
+                host_key_sha256=CASE WHEN excluded.host_key_sha256='' THEN site_ssh_jump_hosts.host_key_sha256 ELSE excluded.host_key_sha256 END,
+                enabled=excluded.enabled,updated_ms=excluded.updated_ms";
+        command.Parameters.AddWithValue("$site", jump.SiteId.Trim());
+        command.Parameters.AddWithValue("$host", jump.Host.Trim());
+        command.Parameters.AddWithValue("$port", jump.Port);
+        command.Parameters.AddWithValue("$user", jump.Username.Trim());
+        command.Parameters.AddWithValue("$reference", jump.CredentialReference.Trim().ToUpperInvariant());
+        command.Parameters.AddWithValue("$password", (object?)jump.Password ?? DBNull.Value);
+        command.Parameters.AddWithValue("$clear", jump.ClearPassword ? 1 : 0);
+        command.Parameters.AddWithValue("$fingerprint", fingerprint);
+        command.Parameters.AddWithValue("$enabled", jump.Enabled ? 1 : 0);
+        command.Parameters.AddWithValue("$updated", UtcNowMs());
+        command.ExecuteNonQuery();
+    }
+
+    public bool DeleteSiteSshJumpHost(string siteId)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "DELETE FROM site_ssh_jump_hosts WHERE site_id=$site";
+        command.Parameters.AddWithValue("$site", siteId);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    public bool UpdateSiteSshJumpHostFingerprint(string siteId, string fingerprint)
+    {
+        if (string.IsNullOrWhiteSpace(siteId)) throw new ArgumentException("Jump Host site is required.", nameof(siteId));
+        var normalized = H3cHostKeyFingerprint.Normalize(fingerprint);
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE site_ssh_jump_hosts SET host_key_sha256=$fingerprint,updated_ms=$updated WHERE site_id=$site";
+        command.Parameters.AddWithValue("$fingerprint", normalized);
+        command.Parameters.AddWithValue("$updated", UtcNowMs());
+        command.Parameters.AddWithValue("$site", siteId.Trim());
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    public void UpdateH3cCredential(string id, string? password, bool clearPassword)
+    {
+        if (!clearPassword && password is { Length: > 4096 }) throw new ArgumentException("Device password is too long.", nameof(password));
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE h3c_device_profiles SET credential_password=$password,updated_ms=$now WHERE id=$id";
+        command.Parameters.AddWithValue("$password", clearPassword ? DBNull.Value : (object?)password ?? DBNull.Value);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.Parameters.AddWithValue("$id", id);
+        if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException("H3C device profile was not found.");
     }
 
     public bool H3cProfileIsInScope(string id, P2B5SiteScopeDecision scope)
@@ -1245,7 +1386,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var command = db.CreateCommand();
         var scopeFilter = scope is null || scope.IsGlobal ? "1=1" : DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
         command.CommandText = $@"SELECT profile.id,profile.host,profile.port,profile.username,profile.credential_reference,profile.host_key_sha256,profile.enabled,profile.created_ms,profile.updated_ms,
-            host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback
+            host_key_update_policy,allow_legacy_algorithms,terminal_encoding,terminal_protocol,allow_telnet_fallback,COALESCE(source.site_id,'local')
             FROM h3c_device_profiles profile
             LEFT JOIN collection_sources source ON source.id=profile.source_id
             WHERE {scopeFilter}
@@ -1257,7 +1398,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         while (reader.Read())
             profiles.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
                 reader.GetString(4), reader.IsDBNull(5) ? string.Empty : reader.GetString(5), reader.GetInt32(6) != 0, reader.GetInt64(7), reader.GetInt64(8),
-                reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0));
+                 reader.GetString(9), reader.GetInt32(10) != 0, reader.GetString(11), reader.GetString(12), reader.GetInt32(13) != 0,
+                 SiteId: reader.GetString(14)));
         return profiles;
     }
 

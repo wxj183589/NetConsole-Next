@@ -201,7 +201,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
                 _profile?.TerminalProtocol == "AUTO" && _profile.AllowTelnetFallback && Snapshot.Protocol == "SSH")
             {
                 await _transport.DisposeAsync().ConfigureAwait(false);
-                _transport = new TelnetTerminalTransport(_profile, _credentials.GetPassword(_profile.CredentialReference) ?? string.Empty);
+                _transport = new TelnetTerminalTransport(_profile, _credentials.GetPassword(_profile) ?? string.Empty);
                 await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
                 _catalog.UpdateTerminalProtocol(Snapshot.Id, _transport.Protocol);
                 Snapshot = Snapshot with { Protocol = _transport.Protocol };
@@ -282,7 +282,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
                 ? new SimulatedSerialTerminalTransport(_serial.PortName)
                 : new SerialTerminalTransport(_serial);
         var profile = _profile ?? throw new InvalidOperationException("Terminal device profile is missing.");
-        var password = _credentials.GetPassword(profile.CredentialReference);
+        var password = _credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         return Snapshot.Protocol switch
         {

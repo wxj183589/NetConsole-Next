@@ -31,7 +31,7 @@
 
 ## Local Windows acceptance conditions
 
-Run Release build and the existing `tests/smoke.py`, `tests/terminal_e2e.py`, C# tests, then start a second browser from another LAN machine with `NETCONSOLE_NEXT_WEB_BIND=0.0.0.0`. Verify two independent admin sessions, cookie/CSRF writes, no token in browser storage, SSH/Telnet/COM on the host, recording integrity, replay/export, and that collection continues after all browsers close. Mark real H3C and physical COM separately; synthetic tests do not prove field compatibility.
+Run Release build and the existing `tests/smoke.py`, `tests/terminal_e2e.py`, C# tests, then verify the loopback-only service from the local host. A second LAN browser is not an acceptance path because non-loopback Web/TLS is not implemented. Verify cookie/CSRF writes, no token in browser storage, SSH/Telnet/COM on the host, recording integrity, replay/export, and that collection continues after all browsers close. Mark real H3C and physical COM separately; synthetic tests do not prove field compatibility.
 
 ## Fix report
 

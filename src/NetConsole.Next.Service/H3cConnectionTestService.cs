@@ -95,7 +95,7 @@ internal sealed class H3cConnectionTestService(
     private async Task<H3cConnectionTestResult> TestTelnetAsync(
         H3cDeviceProfileSnapshot profile, long started, CancellationToken cancellationToken)
     {
-        var password = credentials.GetPassword(profile.CredentialReference);
+        var password = credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password))
             return Failure(profile, started, "TELNET", ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"));
         await using var transport = new TelnetTerminalTransport(profile, password);
@@ -131,7 +131,8 @@ internal sealed class H3cConnectionTestService(
     {
         H3cCredentialUnavailableException => ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"),
         H3cAuthenticationFailedException => ("AUTHENTICATION_FAILED", "账号认证失败"),
-        H3cHostKeyMismatchException or H3cHostKeyMissingException => ("HOST_KEY_REJECTED", "主机身份校验失败"),
+        H3cHostKeyMismatchException or H3cHostKeyMissingException or H3cJumpHostKeyMismatchException or H3cJumpHostKeyMissingException
+            => ("HOST_KEY_REJECTED", "主机身份校验失败"),
         H3cConnectionTimeoutException or TimeoutException => ("CONNECT_TIMEOUT", "连接超时"),
         H3cProtocolNegotiationException or H3cUnsupportedAlgorithmException => ("PROTOCOL_MISMATCH", "协议或算法不匹配"),
         SocketException => ("UNREACHABLE", "设备不可达"),

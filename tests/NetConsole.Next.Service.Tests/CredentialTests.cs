@@ -1,0 +1,97 @@
+using Microsoft.Data.Sqlite;
+using NetConsole.Next.Service;
+using System.Net;
+
+internal static class CredentialTests
+{
+    public static void Run()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "next-credential-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(root, "catalog.db"), Pooling = false
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "INSERT OR IGNORE INTO sites(id,name) VALUES('site-a','Site A'),('site-b','Site B')";
+                command.ExecuteNonQuery();
+            }
+            var sharedReference = "SHARED_FIXTURE";
+            var firstId = Guid.NewGuid().ToString("N");
+            var secondId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(firstId, "192.0.2.10", 22, "reader", sharedReference,
+                string.Empty, true, 0, 0, Password: "first-secret"));
+            catalog.CreateH3cDeviceProfile(new(secondId, "192.0.2.11", 22, "reader", sharedReference,
+                string.Empty, true, 0, 0, Password: "second-secret"));
+            var provider = new DeviceRecordH3cCredentialProvider(catalog);
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) == "first-secret",
+                "device credentials must be resolved by profile id even when references are shared");
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(secondId)!) == "second-secret",
+                "each device must retain its own password");
+            catalog.CreateH3cDeviceProfile(new(firstId, "192.0.2.10", 22, "reader", sharedReference,
+                string.Empty, true, 0, 0));
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) == "first-secret",
+                "omitting a password on profile update must retain the existing password");
+            catalog.CreateH3cDeviceProfile(new(firstId, "192.0.2.10", 22, "reader", sharedReference,
+                string.Empty, true, 0, 0, Password: null, ClearPassword: true));
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(firstId)!) is null,
+                "an explicit clear operation must remove only the selected device password");
+            Assert(provider.GetPassword(catalog.GetH3cDeviceProfile(secondId)!) == "second-secret",
+                "clearing one device must not affect another device sharing a reference");
+
+            var pinA = Convert.ToBase64String(new byte[32]).TrimEnd('=');
+            var pinB = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()).TrimEnd('=');
+            catalog.UpsertSiteSshJumpHost(new("site-a", "192.0.2.20", 22, "jump-a", "JUMP_A", "jump-secret-a", pinA, true, 0));
+            catalog.UpsertSiteSshJumpHost(new("site-b", "192.0.2.21", 2222, "jump-b", "JUMP_B", "jump-secret-b", pinB, true, 0));
+            Assert(catalog.GetSiteSshJumpHost("site-a")?.Password == "jump-secret-a" &&
+                   catalog.GetSiteSshJumpHost("site-b")?.Password == "jump-secret-b",
+                "Jump Host credentials must remain isolated by Site");
+            Assert(catalog.GetSiteSshJumpHost("site-a", includePassword: false)?.Password is null,
+                "Jump Host API view path must support password redaction");
+            catalog.UpsertSiteSshJumpHost(new("site-a", "192.0.2.20", 22, "jump-a", "JUMP_A", null, string.Empty, true, 0));
+            Assert(catalog.GetSiteSshJumpHost("site-a")?.Password == "jump-secret-a",
+                "empty Jump Host password updates must retain the existing secret");
+            catalog.UpsertSiteSshJumpHost(new("site-a", "192.0.2.20", 22, "jump-a", "JUMP_A", null, string.Empty, true, 0, true));
+            Assert(catalog.GetSiteSshJumpHost("site-a")?.Password is null,
+                "explicit Jump Host clear must remove only the selected Site secret");
+            Assert(catalog.GetSiteSshJumpHost("site-b")?.Password == "jump-secret-b",
+                "clearing one Site Jump Host must not affect another Site");
+            Assert(catalog.UpdateSiteSshJumpHostFingerprint("site-b", pinA) &&
+                   H3cHostKeyFingerprint.Matches(pinA, catalog.GetSiteSshJumpHost("site-b")!.HostKeySha256),
+                "Jump Host fingerprint refresh must update only the selected Site");
+            Assert(!H3cHostKeyFingerprint.Matches(pinA, pinB),
+                "unknown or changed Jump Host fingerprints must fail closed");
+            Assert(!new NetmikoWorkerH3cSshTransport(
+                new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "192.0.2.30", 23, "reader", "DEVICE", string.Empty,
+                    true, 0, 0, TerminalProtocol: "TELNET"), "device-secret",
+                catalog.GetSiteSshJumpHost("site-b"))!.HasJumpHost,
+                "Telnet sessions must not use an SSH Jump Host");
+            Assert(catalog.DeleteSiteSshJumpHost("site-a") && catalog.GetSiteSshJumpHost("site-a") is null &&
+                   catalog.GetSiteSshJumpHost("site-b") is not null,
+                "deleting one Site Jump Host must leave other Sites unchanged");
+            Console.WriteLine("CREDENTIAL_TESTS=5/5 PASS");
+            Console.WriteLine("JUMP_HOST_TESTS=8/8 PASS");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static void Assert(bool value, string message)
+    {
+        if (!value) throw new InvalidOperationException(message);
+    }
+}

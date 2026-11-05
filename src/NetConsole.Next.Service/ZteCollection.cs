@@ -73,11 +73,12 @@ internal sealed class ZteSshDeviceSession : IAsyncDisposable
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
-        var password = _credentials.GetPassword(_profile.CredentialReference);
+        var password = _credentials.GetPassword(_profile.Id, _profile.CredentialReference);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         var h3cProfile = new H3cDeviceProfileSnapshot(_profile.Id, _profile.Host, _profile.Port, _profile.Username,
             _profile.CredentialReference, _profile.HostKeySha256, _profile.Enabled, _profile.CreatedMs, _profile.UpdatedMs,
-            _profile.HostKeyUpdatePolicy, _profile.AllowLegacyAlgorithms, _profile.TerminalEncoding, "SSH", false);
+            _profile.HostKeyUpdatePolicy, _profile.AllowLegacyAlgorithms, _profile.TerminalEncoding, "SSH", false,
+            DeviceType: "zte_zxros");
         _transport = _transportFactory.Create(h3cProfile, password);
         await _transport.ConnectAsync((_, fingerprint) => H3cHostKeyFingerprint.Matches(_profile.HostKeySha256, fingerprint), cancellationToken);
     }
@@ -121,7 +122,7 @@ internal sealed class ZteCollectionService
     {
         _catalog = catalog;
         _credentials = credentials;
-        _transportFactory = transportFactory ?? new SshNetH3cSshTransportFactory();
+        _transportFactory = transportFactory ?? new NetmikoWorkerH3cSshTransportFactory();
     }
 
     public IReadOnlyList<ZteProfileView> Profiles(P2B5SiteScopeDecision scope, int limit = 100) =>

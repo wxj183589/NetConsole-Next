@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Renci.SshNet;
 using Renci.SshNet.Common;
@@ -11,6 +12,9 @@ namespace NetConsole.Next.Service;
 internal interface IH3cCredentialProvider
 {
     string? GetPassword(string reference);
+
+    string? GetPassword(H3cDeviceProfileSnapshot profile) => GetPassword(profile.CredentialReference);
+    string? GetPassword(string profileId, string reference) => GetPassword(reference);
 }
 
 internal sealed class H3cCredentialUnavailableException() : InvalidOperationException(
@@ -21,6 +25,12 @@ internal sealed class H3cHostKeyMismatchException() : InvalidOperationException(
 
 internal sealed class H3cHostKeyMissingException() : InvalidOperationException(
     "SSH connection completed without a verifiable host key.") { }
+
+internal sealed class H3cJumpHostKeyMismatchException() : InvalidOperationException(
+    "SSH Jump Host key did not match the configured SHA256 pin.") { }
+
+internal sealed class H3cJumpHostKeyMissingException() : InvalidOperationException(
+    "SSH Jump Host connection completed without a verifiable host key.") { }
 
 internal sealed class H3cAuthenticationFailedException() : InvalidOperationException(
     "SSH authentication failed for the configured H3C profile.") { }
@@ -80,6 +90,16 @@ internal sealed class WindowsDpapiH3cCredentialProvider(string dataRoot) : IH3cC
 internal sealed class UnavailableH3cCredentialProvider : IH3cCredentialProvider
 {
     public string? GetPassword(string reference) => null;
+}
+
+// Production H3C authentication reads the password from the device-bound
+// profile row. The reference parameter is retained only as an internal lookup
+// key for compatibility with the existing terminal and ZTE abstractions.
+internal sealed class DeviceRecordH3cCredentialProvider(Catalog catalog) : IH3cCredentialProvider
+{
+    public string? GetPassword(string reference) => null;
+    public string? GetPassword(H3cDeviceProfileSnapshot profile) => catalog.GetH3cCredentialPassword(profile.Id);
+    public string? GetPassword(string profileId, string reference) => catalog.GetH3cCredentialPassword(profileId);
 }
 
 internal static class H3cSshAlgorithmPolicy
@@ -166,6 +186,205 @@ internal sealed class SshNetH3cSshTransportFactory : IH3cSshTransportFactory
 {
     public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) =>
         new SshNetH3cSshTransport(profile, password);
+}
+
+/// <summary>
+/// Production network-device transport.  The CLI implementation lives in the
+/// pinned CPython/Netmiko worker; this .NET side owns process lifetime, bounded
+/// request/response I/O, cancellation and the Catalog host-key decision.
+/// </summary>
+internal sealed class NetmikoWorkerH3cSshTransportFactory(Catalog? catalog = null) : IH3cSshTransportFactory
+{
+    public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) =>
+        new NetmikoWorkerH3cSshTransport(profile, password, catalog?.GetSiteSshJumpHost(profile.SiteId), catalog);
+}
+
+internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
+{
+    private readonly H3cDeviceProfileSnapshot _profile;
+    private readonly string _password;
+    private readonly SiteSshJumpHostSnapshot? _jumpHost;
+    private readonly Catalog? _catalog;
+    private Process? _process;
+    private StreamWriter? _input;
+    private StreamReader? _output;
+    private bool _connected;
+    private bool _disposed;
+    private int _requestGate;
+
+    public NetmikoWorkerH3cSshTransport(H3cDeviceProfileSnapshot profile, string password,
+        SiteSshJumpHostSnapshot? jumpHost = null, Catalog? catalog = null)
+    {
+        _profile = profile;
+        _password = password;
+        _catalog = catalog;
+        _jumpHost = jumpHost is { Enabled: true } &&
+            !string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase)
+            ? jumpHost : null;
+    }
+
+    public bool IsConnected => _connected && !_disposed && _process is { HasExited: false };
+    internal bool HasJumpHost => _jumpHost is not null;
+
+    public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(verifyHostKey);
+        StartWorker();
+        try
+        {
+            var result = await RequestAsync(new
+            {
+                op = "connect",
+                host = _profile.Host,
+                port = _profile.Port,
+                username = _profile.Username,
+                password = _password,
+                vendor = "h3c",
+                protocol = string.Equals(_profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase) ? "telnet" : "ssh",
+                device_type = string.IsNullOrWhiteSpace(_profile.DeviceType) ? null : _profile.DeviceType,
+                conn_timeout = 10,
+                auth_timeout = 10,
+                banner_timeout = 10,
+                encoding = string.Equals(_profile.TerminalEncoding, "GB18030", StringComparison.OrdinalIgnoreCase)
+                    ? "gb18030" : "utf-8",
+                jump_host = BuildJumpRequest()
+            }, cancellationToken).ConfigureAwait(false);
+            var keyType = result.TryGetProperty("host_key_type", out var type) && type.ValueKind == JsonValueKind.String
+                ? type.GetString() : null;
+            var fingerprint = result.TryGetProperty("host_key_sha256", out var key) && key.ValueKind == JsonValueKind.String
+                ? key.GetString() : null;
+            var isTelnet = string.Equals(_profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase);
+            if (_jumpHost is not null)
+            {
+                var jumpFingerprint = result.TryGetProperty("jump_host_key_sha256", out var jumpKey) && jumpKey.ValueKind == JsonValueKind.String
+                    ? jumpKey.GetString() : null;
+                if (string.IsNullOrWhiteSpace(jumpFingerprint)) throw new H3cJumpHostKeyMissingException();
+                if (!string.IsNullOrWhiteSpace(_jumpHost.HostKeySha256) &&
+                    !H3cHostKeyFingerprint.Matches(_jumpHost.HostKeySha256, jumpFingerprint))
+                    throw new H3cJumpHostKeyMismatchException();
+            }
+            if (!isTelnet)
+            {
+                if (string.IsNullOrWhiteSpace(fingerprint)) throw new H3cHostKeyMissingException();
+                if (!verifyHostKey(keyType, fingerprint)) throw new H3cHostKeyMismatchException();
+            }
+            if (_jumpHost is not null && string.IsNullOrWhiteSpace(_jumpHost.HostKeySha256) && _catalog is not null &&
+                result.TryGetProperty("jump_host_key_sha256", out var presentedJumpKey) && presentedJumpKey.ValueKind == JsonValueKind.String)
+                _catalog.UpdateSiteSshJumpHostFingerprint(_jumpHost.SiteId, presentedJumpKey.GetString()!);
+            _connected = true;
+        }
+        catch (OperationCanceledException) { Abort(); throw; }
+        catch { Abort(); throw; }
+    }
+
+    public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+    {
+        if (!IsConnected) throw new InvalidOperationException("Netmiko worker is not connected.");
+        var result = await RequestAsync(new { op = "execute", command, read_timeout = 30 }, cancellationToken).ConfigureAwait(false);
+        return result.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.String
+            ? output.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    public void Abort()
+    {
+        _connected = false;
+        try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); } catch { }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try
+        {
+            if (_process is { HasExited: false } && _input is not null)
+            {
+                _input.WriteLine(JsonSerializer.Serialize(new { op = "close" }));
+                _input.Flush();
+            }
+        }
+        catch { }
+        Abort();
+        try { _input?.Dispose(); } catch { }
+        try { _output?.Dispose(); } catch { }
+        try { _process?.Dispose(); } catch { }
+    }
+
+    private void StartWorker()
+    {
+        var script = FindWorkerScript();
+        var start = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_NETMIKO_PYTHON") ?? "python",
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(script)!
+        };
+        start.ArgumentList.Add(script);
+        _process = Process.Start(start) ?? throw new InvalidOperationException("Netmiko worker could not start.");
+        _input = _process.StandardInput;
+        _output = _process.StandardOutput;
+        _ = Task.Run(async () =>
+        {
+            try { while (await _process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
+            catch { }
+        });
+    }
+
+    private async Task<JsonElement> RequestAsync(object request, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _requestGate, 1) != 0)
+            throw new InvalidOperationException("Netmiko worker requests must be serialized.");
+        try
+        {
+            var input = _input ?? throw new InvalidOperationException("Netmiko worker input is unavailable.");
+            var output = _output ?? throw new InvalidOperationException("Netmiko worker output is unavailable.");
+            await input.WriteLineAsync(JsonSerializer.Serialize(request)).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await input.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var line = await output.ReadLineAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new IOException("Netmiko worker exited before returning a response.");
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean())
+                return root.GetProperty("result").Clone();
+            var error = root.TryGetProperty("error", out var kind) ? kind.GetString() : null;
+            throw MapWorkerFailure(error);
+        }
+        finally { Volatile.Write(ref _requestGate, 0); }
+    }
+
+    private static Exception MapWorkerFailure(string? error) => error switch
+    {
+        "AuthenticationException" or "NetmikoAuthenticationException" => new H3cAuthenticationFailedException(),
+        "TimeoutError" or "NetmikoTimeoutException" or "socket.timeout" => new H3cConnectionTimeoutException(),
+        "ValueError" => new H3cUnsupportedAlgorithmException(),
+        _ => new H3cProtocolNegotiationException()
+    };
+
+    private static string FindWorkerScript()
+    {
+        var configured = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_NETMIKO_WORKER");
+        var candidates = new[]
+        {
+            configured,
+            Path.Combine(AppContext.BaseDirectory, "tools", "netmiko_worker.py"),
+            Path.Combine(Directory.GetCurrentDirectory(), "tools", "netmiko_worker.py")
+        }.Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => Path.GetFullPath(path!));
+        var script = candidates.FirstOrDefault(File.Exists);
+        return script ?? throw new FileNotFoundException("Netmiko worker script was not found.");
+    }
+
+    private object? BuildJumpRequest() => _jumpHost is null ? null : new
+    {
+        host = _jumpHost.Host,
+        port = _jumpHost.Port,
+        username = _jumpHost.Username,
+        password = _jumpHost.Password
+    };
 }
 
 internal sealed class SshNetH3cSshTransport : IH3cSshTransport
@@ -438,7 +657,7 @@ internal static class H3cCommandOutputCollector
 internal sealed class H3cSshDeviceSessionFactory(Catalog catalog, IH3cCredentialProvider credentials,
     IH3cSshTransportFactory? transportFactory = null) : IDeviceSessionFactory
 {
-    private readonly IH3cSshTransportFactory _transportFactory = transportFactory ?? new SshNetH3cSshTransportFactory();
+    private readonly IH3cSshTransportFactory _transportFactory = transportFactory ?? new NetmikoWorkerH3cSshTransportFactory(catalog);
 
     public IDeviceSession Create(string target)
     {
@@ -458,7 +677,7 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var password = credentials.GetPassword(profile.CredentialReference);
+        var password = credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         _transport = transportFactory.Create(profile, password);
         string? hostKeyCorrelation = null;

@@ -68,6 +68,8 @@ else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
     H3cLldpTopologyTests.Run();
 else if (args.Length > 0 && args[0] == "--config-backup-tests")
     await ConfigBackupTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--credential-tests")
+    CredentialTests.Run();
 else
     await SchedulerTests.RunAsync();
 

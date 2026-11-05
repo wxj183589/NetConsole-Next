@@ -40,7 +40,7 @@ The primary routes are: overview, devices, terminal, tasks, wireless, rail, tool
 
 - login for seeded `admin` / `superadmin` identities;
 - independent browser sessions, PBKDF2 password hashes, password change, role-bearing identity;
-- explicit loopback default and opt-in LAN bind (`NETCONSOLE_NEXT_WEB_BIND=0.0.0.0` or `NETCONSOLE_NEXT_WEB_LAN=1`);
+- loopback-only Web binding; non-loopback bind and `NETCONSOLE_NEXT_WEB_LAN=1` are rejected until a separate TLS/authenticated remote mode is implemented;
 - origin + CSRF checks for Cookie-authenticated writes;
 - Next-specific layout, light/dark theme, workspace tabs, real health/device/task APIs;
 - Vue xterm terminal for SSH/Telnet/COM, multiple tabs, split view, search, history, read-only replay and TXT/JSONL/HTML export;

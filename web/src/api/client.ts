@@ -1156,7 +1156,8 @@ export interface H3cOnboardRequest {
   protocol?: 'SSH' | 'TELNET' | 'AUTO'
   port?: number
   username: string
-  credentialReference: string
+  credentialReference?: string
+  password?: string
   allowTelnetFallback?: boolean
 }
 export function onboardH3cProfile(payload: H3cOnboardRequest): Promise<TerminalDevice> {
@@ -1164,6 +1165,9 @@ export function onboardH3cProfile(payload: H3cOnboardRequest): Promise<TerminalD
 }
 export function testH3cConnection(profileId: string): Promise<H3cConnectionTestResult> {
   return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/test-connection`, { method: 'POST' })
+}
+export function updateH3cCredential(profileId: string, payload: { password?: string; clearPassword?: boolean }): Promise<TerminalDevice> {
+  return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/credential`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 
 export function createTerminalSession(payload: Record<string, unknown>): Promise<{ sessionId: string }> {

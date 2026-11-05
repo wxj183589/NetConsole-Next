@@ -224,13 +224,29 @@ internal sealed record H3cDeviceProfileSnapshot(
     bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO",
-    bool AllowTelnetFallback = false)
+    bool AllowTelnetFallback = false,
+    string? Password = null,
+    bool ClearPassword = false,
+    string DeviceType = "",
+    string SiteId = "local")
 {
     public string SourceId => "h3c-" + Id;
 
     public H3cProfileView ToView() => new(Id, Host, Port, Username, Enabled, CreatedMs, UpdatedMs,
         HostKeyUpdatePolicy, AllowLegacyAlgorithms, TerminalEncoding, TerminalProtocol, AllowTelnetFallback);
 }
+
+internal sealed record SiteSshJumpHostSnapshot(
+    string SiteId, string Host, int Port, string Username, string CredentialReference,
+    string? Password, string HostKeySha256, bool Enabled, long UpdatedMs,
+    bool ClearPassword = false)
+{
+    public SiteSshJumpHostView ToView() => new(SiteId, Host, Port, Username, Enabled, HostKeySha256, UpdatedMs);
+}
+
+internal sealed record SiteSshJumpHostView(
+    string SiteId, string Host, int Port, string Username, bool Enabled,
+    string HostKeySha256, long UpdatedMs);
 
 // Credential references and host-key fingerprints are internal connection facts;
 // keep them out of the authenticated read DTO returned by the HTTP API.

@@ -29,13 +29,12 @@ builder.Services.AddSingleton<P2B5RailReferenceService>();
 builder.Services.AddSingleton<WebAuthStore>();
 builder.Services.AddSingleton<InteractiveScopeAuthorizer>();
 builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>();
-IH3cCredentialProvider credentialProvider = builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
-    ? new EnvironmentH3cCredentialProvider(enabled: true)
-    : OperatingSystem.IsWindows()
-        ? new WindowsDpapiH3cCredentialProvider(settings.DataRoot)
-        : new UnavailableH3cCredentialProvider();
-builder.Services.AddSingleton<IH3cCredentialProvider>(credentialProvider);
+builder.Services.AddSingleton<IH3cCredentialProvider>(sp =>
+    builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
+        ? new EnvironmentH3cCredentialProvider(enabled: true)
+        : new DeviceRecordH3cCredentialProvider(sp.GetRequiredService<Catalog>()));
 builder.Services.AddSingleton<H3cConnectionTestService>();
+builder.Services.AddSingleton<NetmikoJumpHostProbe>();
 builder.Services.AddSingleton<TerminalSessionManager>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
@@ -1066,9 +1065,8 @@ if (settings.H3cEnabled)
     app.MapPost("/api/system/h3c/profiles/onboard", (HttpContext context, H3cOnboardRequest request, Catalog rawCatalog) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Host);
-        if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username) ||
-            string.IsNullOrWhiteSpace(request.CredentialReference))
-            return Results.BadRequest(new { error = "host, username and credentialReference are required." });
+        if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username))
+            return Results.BadRequest(new { error = "host and username are required." });
         var protocol = request.Protocol?.Trim().ToUpperInvariant() switch
         {
             "SSH" => "SSH",
@@ -1083,8 +1081,9 @@ if (settings.H3cEnabled)
         try
         {
             rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),
-                request.CredentialReference.Trim().ToUpperInvariant(), string.Empty, true, 0, 0,
-                H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback));
+                string.Empty, string.Empty, true, 0, 0,
+                H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback,
+                request.Password));
             return rawCatalog.GetH3cDeviceProfile(id) is { } profile
                 ? Results.Created($"/api/system/h3c/profiles/{id}", profile.ToView())
                 : Results.NotFound();
@@ -1102,7 +1101,7 @@ if (settings.H3cEnabled)
             rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
                 request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0,
                 request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms, request.TerminalEncoding,
-                request.TerminalProtocol, request.AllowTelnetFallback));
+                request.TerminalProtocol, request.AllowTelnetFallback, request.Password, request.ClearPassword));
             return rawCatalog.GetH3cDeviceProfile(request.Id) is { } profile
                 ? Results.Created($"/api/system/h3c/profiles/{request.Id}", profile.ToView())
                 : Results.NotFound();
@@ -1122,6 +1121,22 @@ if (settings.H3cEnabled)
         {
             rawCatalog.SetH3cCompatibility(id, request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms,
                 request.TerminalEncoding, request.TerminalProtocol, request.AllowTelnetFallback);
+            return rawCatalog.GetH3cDeviceProfile(id) is { } profile
+                ? Results.Ok(profile.ToView())
+                : Results.NotFound();
+        }
+        catch (KeyNotFoundException) { return Results.NotFound(); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    });
+    app.MapPut("/api/system/h3c/profiles/{id}/credential", (HttpContext context, string id,
+        H3cCredentialRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_CREDENTIAL_PERMISSION_DENIED", id);
+        var scope = scopes.Resolve(CurrentIdentity(context));
+        if (!scope.IsAuthorized || !rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+        try
+        {
+            rawCatalog.UpdateH3cCredential(id, request.Password, request.ClearPassword);
             return rawCatalog.GetH3cDeviceProfile(id) is { } profile
                 ? Results.Ok(profile.ToView())
                 : Results.NotFound();
@@ -1298,6 +1313,75 @@ app.MapPost("/api/system/zte/profiles", (HttpContext context, ZteProfileRequest 
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     catch (Microsoft.Data.Sqlite.SqliteException ex) { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
+});
+
+app.MapGet("/api/system/sites/{siteId}/ssh-jump-host", (HttpContext context, string siteId,
+    Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    return catalog.GetSiteSshJumpHost(siteId, includePassword: false) is { } jump
+        ? Results.Ok(jump.ToView())
+        : Results.NotFound();
+});
+app.MapPut("/api/system/sites/{siteId}/ssh-jump-host", (HttpContext context, string siteId,
+    SiteSshJumpHostRequest request, Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "SITE_JUMP_HOST_WRITE_PERMISSION_DENIED", siteId);
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    try
+    {
+        catalog.UpsertSiteSshJumpHost(new(siteId, request.Host, request.Port, request.Username,
+            request.CredentialReference, request.Password, request.HostKeySha256 ?? string.Empty,
+            request.Enabled, 0, request.ClearPassword));
+        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+app.MapDelete("/api/system/sites/{siteId}/ssh-jump-host", (HttpContext context, string siteId,
+    Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "SITE_JUMP_HOST_DELETE_PERMISSION_DENIED", siteId);
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    return catalog.DeleteSiteSshJumpHost(siteId) ? Results.NoContent() : Results.NotFound();
+});
+app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/test", async (HttpContext context, string siteId,
+    Catalog catalog, NetmikoJumpHostProbe probe) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "SITE_JUMP_HOST_TEST_PERMISSION_DENIED", siteId);
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    var jump = catalog.GetSiteSshJumpHost(siteId, includePassword: true);
+    if (jump is null) return Results.NotFound();
+    try
+    {
+        var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(jump.HostKeySha256) &&
+            !H3cHostKeyFingerprint.Matches(jump.HostKeySha256, result.HostKeySha256))
+            return Results.Conflict(new { error = "JUMP_HOST_KEY_MISMATCH", detail = "Jump Host fingerprint changed; refresh was not applied." });
+        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256)) return Results.NotFound();
+        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+    { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
+    catch (NetmikoJumpHostProbeException ex)
+    { return Results.Conflict(new { error = ex.Code, detail = ex.Message }); }
+});
+app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/refresh-fingerprint", async (HttpContext context, string siteId,
+    Catalog catalog, NetmikoJumpHostProbe probe) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "SITE_JUMP_HOST_REFRESH_PERMISSION_DENIED", siteId);
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    var jump = catalog.GetSiteSshJumpHost(siteId, includePassword: true);
+    if (jump is null) return Results.NotFound();
+    try
+    {
+        var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
+        if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256)) return Results.NotFound();
+        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+    { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
+    catch (NetmikoJumpHostProbeException ex)
+    { return Results.Conflict(new { error = ex.Code, detail = ex.Message }); }
 });
 app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
 {
@@ -1915,9 +1999,10 @@ internal sealed record RawIssueQuarantineRequest(string Detail);
 internal sealed record H3cProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,
     string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
-    string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
-internal sealed record H3cOnboardRequest(string Host, string Username, string CredentialReference,
-    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false);
+    string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false, string? Password = null, bool ClearPassword = false);
+internal sealed record H3cOnboardRequest(string Host, string Username, string? CredentialReference = null,
+    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false, string? Password = null);
+internal sealed record H3cCredentialRequest(string? Password = null, bool ClearPassword = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
@@ -1928,6 +2013,9 @@ internal sealed record ZteProfileRequest(string Id, string Host, int Port, strin
     string CredentialReference, string HostKeySha256, bool Enabled = true,
     string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string SiteId = "local");
+internal sealed record SiteSshJumpHostRequest(string Host, int Port, string Username,
+    string CredentialReference, string? Password = null, string? HostKeySha256 = null,
+    bool Enabled = true, bool ClearPassword = false);
 internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
     IReadOnlyList<string> SupportedProtocols, string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms,
     string TerminalEncoding, string TerminalProtocol, bool AllowTelnetFallback,
