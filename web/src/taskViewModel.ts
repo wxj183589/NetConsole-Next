@@ -42,3 +42,7 @@ export function taskFailureLabel(reason?: string | null): string {
   if (reason.includes('ResultPersistence')) return '结果保存失败，原始证据已保留待修复'
   return `任务失败：${reason}`
 }
+
+export function canCancelTask(state: string): boolean { return ['QUEUED', 'CONNECTING', 'RUNNING'].includes(state) }
+export function canRetryTask(state: string): boolean { return ['FAILED', 'TIMED_OUT', 'CANCELLED'].includes(state) }
+export function canResumeTask(state: string): boolean { return state === 'INTERRUPTED' }

@@ -679,6 +679,36 @@ app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string ru
     if (!rawCatalog.RecentTaskRuns(100, scope).Any(item => item.Id == runId)) return Results.NotFound();
     return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
 });
+app.MapPost("/api/system/tasks/{runId}/cancel", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_CANCEL_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.Cancel(runId)
+        ? Results.Ok(new { cancelled = true, runId })
+        : Results.Conflict(new { error = "TASK_NOT_CANCELLABLE" });
+});
+app.MapPost("/api/system/tasks/{runId}/retry", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_RETRY_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.TryRetryTaskRun(runId, out var retryId, CurrentIdentity(context).UserId)
+        ? Results.Accepted("/api/system/tasks", new { runId = retryId, previousRunId = runId, action = "RETRY" })
+        : Results.Conflict(new { error = "TASK_NOT_RETRYABLE_OR_SCOPE_REVOKED" });
+});
+app.MapPost("/api/system/tasks/{runId}/resume", (HttpContext context, string runId, Catalog rawCatalog,
+    BoundedCollectionScheduler scheduler) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "TASK_RESUME_PERMISSION_DENIED", runId);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (!rawCatalog.RecentTaskRuns(100, CurrentSiteScope(context)).Any(item => item.Id == runId)) return Results.NotFound();
+    return scheduler.TryResumeInterruptedTaskRun(runId, out var resumedId, CurrentIdentity(context).UserId)
+        ? Results.Accepted("/api/system/tasks", new { runId = resumedId, previousRunId = runId, action = "RESUME" })
+        : Results.Conflict(new { error = "TASK_NOT_INTERRUPTED_OR_SCOPE_REVOKED" });
+});
 app.MapPost("/api/system/diagnostics/runs", (HttpContext context, NetworkDiagnosticBatchRequest request,
     NetworkDiagnosticsService diagnostics) =>
 {

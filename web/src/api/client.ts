@@ -986,6 +986,15 @@ export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tas
 export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
 }
+export function cancelTask(runId: string): Promise<{ cancelled: boolean; runId: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+}
+export function retryTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/retry`, { method: 'POST' })
+}
+export function resumeTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/resume`, { method: 'POST' })
+}
 export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string }): Promise<NetworkDiagnosticRun> {
   return request('/api/system/diagnostics/runs', { method: 'POST', body: JSON.stringify(payload) })
 }

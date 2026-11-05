@@ -5,14 +5,14 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-autonomous-full-feature",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\worktrees\\next-autonomous-full-feature",
-  "phase": "CONFIG_BACKUP_AND_DIAGNOSTIC_HISTORY",
-  "activeWorkstreams": ["integration"],
+  "phase": "TASK_ACTIONS_AND_UI_ACCEPTANCE",
+  "activeWorkstreams": ["integration", "task-center"],
   "completedAtStart": ["AP runtime history", "task scope", "interactive files authority", "fact revision/site provenance", "single-command Raw publication", "bounded network diagnostics batch", "configuration backup", "LLDP topology relations", "diagnostic restart history"],
-  "nextTasks": ["four-simulator credential-backed login", "1920/2560 UI acceptance", "service-backed browser gate"],
+  "nextTasks": ["four-simulator credential-backed login", "service-backed browser gate", "R3 dual-AC live evidence"],
   "externalBlockers": ["credentials unavailable", "existing service mutex for HTTP gate"],
   "realDataChanged": false,
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "7721739"
+  "lastRecoveryCommit": "3bd6803"
 }

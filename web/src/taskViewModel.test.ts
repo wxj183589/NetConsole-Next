@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { captureStatusLabel, parseStatusLabel, taskFailureLabel, taskStateLabel, taskTypeLabel } from './taskViewModel'
+import { canCancelTask, canResumeTask, canRetryTask, captureStatusLabel, parseStatusLabel, taskFailureLabel, taskStateLabel, taskTypeLabel } from './taskViewModel'
 
 describe('task view model', () => {
   it('uses operator friendly labels while preserving unknown states', () => {
@@ -15,5 +15,14 @@ describe('task view model', () => {
     expect(taskFailureLabel('H3cAuthenticationFailedException')).toContain('认证失败')
     expect(taskFailureLabel('H3cConnectionTimeoutException')).toBe('设备响应超时')
     expect(taskFailureLabel(null)).toBe('—')
+  })
+
+  it('exposes only valid task lifecycle actions', () => {
+    expect(canCancelTask('RUNNING')).toBe(true)
+    expect(canCancelTask('SUCCEEDED')).toBe(false)
+    expect(canRetryTask('FAILED')).toBe(true)
+    expect(canRetryTask('INTERRUPTED')).toBe(false)
+    expect(canResumeTask('INTERRUPTED')).toBe(true)
+    expect(canResumeTask('CANCELLED')).toBe(false)
   })
 })
