@@ -25,6 +25,7 @@ const nav = [
   { path: '/devices', label: '设备管理', icon: Monitor },
   { path: '/zte', label: 'ZTE 采集', icon: Connection },
   { path: '/h3c', label: 'H3C 事实回放', icon: Connection },
+  { path: '/config-backups', label: '配置备份', icon: FolderOpened },
   { path: '/network-planning', label: '网络规划', icon: Share },
   { path: '/terminal', label: '终端控制台', icon: Connection },
   { path: '/tasks', label: '任务中心', icon: List },

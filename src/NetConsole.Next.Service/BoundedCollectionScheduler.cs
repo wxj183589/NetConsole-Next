@@ -334,7 +334,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             {
                 var command = commandPlan[currentCommandIndex];
                 var output = await session.ExecuteAsync(command, linked.Token);
-                commandOutputs.Add((command, output, currentCommandIndex, "COMPLETE"));
+                commandOutputs.Add((command, ConfigBackupSanitizer.Sanitize(command, output), currentCommandIndex, "COMPLETE"));
             }
             result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "AFTER_COMMAND");
@@ -349,7 +349,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         {
             H3cCollectionMetrics.RecordFailure(ex);
             if (!string.IsNullOrEmpty(ex.Output))
-                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output,
+                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ConfigBackupSanitizer.Sanitize(commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output),
                     Math.Min(currentCommandIndex, commandPlan.Count - 1), "PARTIAL"));
             result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             terminalState = ex.IsCancellation ? timeout.IsCancellationRequested ? "TIMED_OUT" : "CANCELLED" : "FAILED";

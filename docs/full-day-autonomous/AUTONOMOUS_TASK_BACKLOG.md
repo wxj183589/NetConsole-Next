@@ -4,4 +4,4 @@
 
 已完成本轮：诊断批量任务（Ping/TCP/DNS/LLDP）、进度、取消、失败隔离和 Tools UI。
 
-下一批：四台模拟器 credential-backed 登录；配置备份版本/差异；LLDP 拓扑变化历史；无线正式 identity/domain/group；service-backed browser gate；模块注册持久化。
+下一批：四台模拟器 credential-backed 登录；无线正式 identity/domain/group；service-backed browser gate；模块注册持久化；1920/2560 UI 交互验收。

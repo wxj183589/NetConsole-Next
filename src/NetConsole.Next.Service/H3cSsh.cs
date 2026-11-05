@@ -545,6 +545,7 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
         var profile = catalog.GetH3cDeviceProfile(definition.Target)
             ?? throw new InvalidOperationException("H3C result references a missing device profile.");
         var capturedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        output = ConfigBackupSanitizer.Sanitize(command, output);
         var outputByteCount = Encoding.UTF8.GetByteCount(output);
         if (outputByteCount > H3cRawOutput.MaximumBytes)
             throw new InvalidDataException("H3C response exceeds the Raw output byte limit.");

@@ -20,12 +20,14 @@ internal static class H3cCommandPolicy
     public const string DisplayLldpNeighborInformationList = "display lldp neighbor-information list";
     public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
     public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
+    public const string DisplayCurrentConfiguration = "display current-configuration";
 
     public static bool IsAllowed(string command) => command is
         DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayWlanApAll or
         DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
         DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
-        DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface;
+        DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface or
+        DisplayCurrentConfiguration;
 }
 
 internal static class TerminalTextEncoding
@@ -435,6 +437,22 @@ internal static partial class H3cComwareParser
             return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
         }
+        if (command == H3cCommandPolicy.DisplayCurrentConfiguration)
+        {
+            var transcript = CliTranscriptParser.Parse(output, command, completedExec);
+            return new(transcript.Status switch
+            {
+                CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNRECOGNIZED",
+                CliTranscriptStatus.Paged or CliTranscriptStatus.Incomplete => "PARTIAL",
+                CliTranscriptStatus.Empty => "EMPTY",
+                _ => string.IsNullOrWhiteSpace(transcript.Output) ? "EMPTY" : "PARSED"
+            }, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = transcript.Status.ToString().ToUpperInvariant(),
+                output = transcript.Output,
+                notice = transcript.Notice
+            }));
+        }
         if (command == H3cCommandPolicy.DisplayDevice)
         {
             var transcript = CliTranscriptParser.Parse(output, command, completedExec);
@@ -466,7 +484,7 @@ internal static partial class H3cComwareParser
             H3cCommandPolicy.DisplayWlanMeshLink or H3cCommandPolicy.DisplayWlanMeshProfile or
             H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient or
             H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
-            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface))
+            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface or H3cCommandPolicy.DisplayCurrentConfiguration))
             return null;
 
         var transcript = CliTranscriptParser.Parse(output, command, completedExec);

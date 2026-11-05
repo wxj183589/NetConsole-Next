@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text.Json;
 
 namespace NetConsole.Next.Service;
 
@@ -57,11 +58,18 @@ internal sealed class NetworkDiagnosticsService : IDisposable
     private const int MaximumRuns = 128;
     private const int MaximumConcurrency = 4;
     private readonly Catalog _catalog;
+    private readonly string _historyRoot;
     private readonly object _gate = new();
     private readonly Dictionary<string, DiagnosticRun> _runs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NetworkDiagnosticRunSnapshot> _history = new(StringComparer.Ordinal);
     private bool _disposed;
 
-    public NetworkDiagnosticsService(Catalog catalog) => _catalog = catalog;
+    public NetworkDiagnosticsService(Catalog catalog)
+    {
+        _catalog = catalog;
+        _historyRoot = Path.Combine(catalog.DataRoot, "diagnostics");
+        LoadHistory();
+    }
 
     public NetworkDiagnosticRunSnapshot Start(NetworkDiagnosticBatchRequest request, string actor,
         P2B5SiteScopeDecision scope)
@@ -107,7 +115,8 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         {
             ThrowIfDisposed();
             PruneRuns();
-            if (_runs.Count >= MaximumRuns) throw new InvalidOperationException("Too many diagnostic batches are retained; wait for an older batch to expire.");
+            PruneHistory(Math.Max(0, MaximumRuns - _runs.Count - 1));
+            if (_runs.Count + _history.Count >= MaximumRuns) throw new InvalidOperationException("Too many diagnostic batches are retained; wait for an older batch to expire.");
             _runs.Add(run.Id, run);
             _ = ExecuteRunAsync(run);
             return Snapshot(run, scope);
@@ -117,7 +126,11 @@ internal sealed class NetworkDiagnosticsService : IDisposable
     public NetworkDiagnosticRunSnapshot? Get(string id, P2B5SiteScopeDecision scope)
     {
         if (!scope.IsAuthorized || string.IsNullOrWhiteSpace(id)) return null;
-        lock (_gate) return _runs.TryGetValue(id, out var run) ? Snapshot(run, scope) : null;
+        lock (_gate)
+        {
+            if (_runs.TryGetValue(id, out var run)) return Snapshot(run, scope);
+            return _history.TryGetValue(id, out var snapshot) ? FilterSnapshot(snapshot, scope) : null;
+        }
     }
 
     public bool Cancel(string id, string actor, string role, P2B5SiteScopeDecision scope)
@@ -172,6 +185,14 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var noEvidence = run.Items.Count(item => item.State == "NO_EVIDENCE");
         run.State = cancelled == run.Items.Count ? "CANCELLED" : failed + noEvidence == 0 ? "SUCCEEDED" : "PARTIAL";
         if (run.State == "PARTIAL") run.FailureReason = "部分诊断未成功；请查看设备明细。";
+        if (PersistCompleted(run))
+        {
+            lock (_gate)
+            {
+                _runs.Remove(run.Id);
+                PruneHistory();
+            }
+        }
     }
 
     private async Task ExecuteItemAsync(DiagnosticRun run, DiagnosticItem item, CancellationToken cancellationToken)
@@ -303,6 +324,87 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                      .OrderBy(run => run.EndedMs ?? run.CreatedMs).Take(Math.Max(0, _runs.Count - MaximumRuns + 1)).Select(run => run.Id).ToArray())
             _runs.Remove(id);
     }
+
+    private void LoadHistory()
+    {
+        Directory.CreateDirectory(_historyRoot);
+        if ((File.GetAttributes(_historyRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Diagnostic history directory cannot be a reparse point.");
+        foreach (var path in Directory.EnumerateFiles(_historyRoot, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > 512 * 1024)
+                continue;
+            try
+            {
+                var snapshot = JsonSerializer.Deserialize<NetworkDiagnosticRunSnapshot>(File.ReadAllText(path));
+                if (snapshot is not null && IsSafeId(snapshot.Id) && IsTerminal(snapshot.State) &&
+                    snapshot.Items.Count <= MaximumChecks && snapshot.TotalChecks == snapshot.Items.Count)
+                    _history[snapshot.Id] = snapshot;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            { /* A corrupt history file is ignored; live diagnostic collection remains available. */ }
+        }
+        PruneHistory(MaximumRuns);
+    }
+
+    private bool PersistCompleted(DiagnosticRun run)
+    {
+        var snapshot = Snapshot(run, P2B5SiteScopeDecision.Global);
+        var path = Path.Combine(_historyRoot, snapshot.Id + ".json");
+        var part = path + ".part";
+        try
+        {
+            Directory.CreateDirectory(_historyRoot);
+            File.WriteAllText(part, JsonSerializer.Serialize(snapshot));
+            File.Move(part, path, true);
+            lock (_gate)
+            {
+                _history[snapshot.Id] = snapshot;
+                PruneHistory(Math.Max(0, MaximumRuns - _runs.Count));
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            try { if (File.Exists(part)) File.Delete(part); } catch { }
+            return false;
+        }
+    }
+
+    private void PruneHistory(int maxRetained = MaximumRuns)
+    {
+        foreach (var item in _history.Values.OrderByDescending(value => value.CreatedMs).Skip(maxRetained).ToArray())
+        {
+            _history.Remove(item.Id);
+            var path = Path.Combine(_historyRoot, item.Id + ".json");
+            try { if (File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0) File.Delete(path); } catch { }
+        }
+    }
+
+    private static NetworkDiagnosticRunSnapshot FilterSnapshot(NetworkDiagnosticRunSnapshot snapshot,
+        P2B5SiteScopeDecision scope)
+    {
+        var visible = snapshot.Items.Where(item => DeviceSiteScope.Allows(scope, item.SiteId)).ToArray();
+        var completed = visible.Count(item => IsTerminal(item.State));
+        var succeeded = visible.Count(item => item.State == "SUCCEEDED");
+        var failed = visible.Count(item => item.State == "FAILED");
+        var noEvidence = visible.Count(item => item.State == "NO_EVIDENCE");
+        var cancelled = visible.Count(item => item.State == "CANCELLED");
+        var queued = visible.Count(item => item.State == "QUEUED");
+        var running = visible.Count(item => item.State == "RUNNING");
+        var devices = visible.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count();
+        return snapshot with
+        {
+            TotalDevices = devices, TotalChecks = visible.Length, CompletedChecks = completed,
+            SucceededChecks = succeeded, FailedChecks = failed, NoEvidenceChecks = noEvidence,
+            CancelledChecks = cancelled, QueuedChecks = queued, RunningChecks = running,
+            ProgressPercent = visible.Length == 0 ? 0 : completed * 100 / visible.Length,
+            Items = visible
+        };
+    }
+
+    private static bool IsSafeId(string value) => value.Length is > 0 and <= 128 &&
+        value.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_');
 
     private static IReadOnlyList<string> NormalizeIds(IReadOnlyList<string>? values) => values is null
         ? Array.Empty<string>()

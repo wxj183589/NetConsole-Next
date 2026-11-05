@@ -9,7 +9,8 @@ internal static class NetworkDiagnosticsTests
         await BatchReportsProgressAndIsolatesFailures();
         await CancellationStopsQueuedChecks();
         await LldpReportsOnlyVerifiedFacts();
-        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=3/3 PASS");
+        await PersistsCompletedRunAcrossRestart();
+        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=4/4 PASS");
     }
 
     private static async Task BatchReportsProgressAndIsolatesFailures()
@@ -62,6 +63,24 @@ internal static class NetworkDiagnosticsTests
         var item = final.Items.Single();
         Assert(item.State == "SUCCEEDED" && item.EvidenceCount > 0 && item.EvidenceSources.Contains(Catalog.H3cOfflineFixtureSource),
             "LLDP diagnostics must report evidence from verified Facts and never synthesize a topology result");
+    }
+
+    private static async Task PersistsCompletedRunAcrossRestart()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "Restart durable", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        var firstService = new NetworkDiagnosticsService(fixture.Catalog);
+        var started = firstService.Start(new(new[] { device.Item.Id }, new[] { "DNS" }, 1_000), "test", P2B5SiteScopeDecision.Global);
+        var completed = await WaitTerminal(firstService, started.Id);
+        Assert(completed.State is "SUCCEEDED" or "PARTIAL", "the restart fixture must finish before persistence is checked");
+        firstService.Dispose();
+
+        var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        var restored = restarted.Get(started.Id, P2B5SiteScopeDecision.Global);
+        Assert(restored is not null && restored.ProgressPercent == 100 && restored.Items.Count == 1 &&
+               restored.Items[0].DeviceId == device.Item.Id,
+            "completed diagnostic history must survive service recreation with bounded item data");
+        restarted.Dispose();
     }
 
     private static async Task<NetworkDiagnosticRunSnapshot> WaitTerminal(NetworkDiagnosticsService service, string id)

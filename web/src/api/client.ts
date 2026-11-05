@@ -511,6 +511,48 @@ export interface H3cLldpClaims {
   relations: H3cLldpRelation[]
 }
 
+export interface ConfigBackupSnapshot {
+  id: string
+  profileId: string
+  deviceId: string
+  siteId: string
+  version: number
+  state: string
+  createdMs: number
+  capturedMs?: number | null
+  sha256?: string | null
+  byteCount: number
+  taskRunId?: string | null
+  error?: string | null
+  canDownload: boolean
+  downloadName?: string | null
+}
+
+export interface ConfigBackupBatch {
+  id: string
+  actorUserId: string
+  state: string
+  createdMs: number
+  completedMs?: number | null
+  total: number
+  completed: number
+  succeeded: number
+  failed: number
+  items: Array<{ profileId: string; state: string; snapshotId?: string | null; error?: string | null }>
+}
+
+export interface ConfigBackupDiff {
+  baseId: string
+  targetId: string
+  profileId: string
+  identical: boolean
+  addedLines: number
+  removedLines: number
+  changedLines: number
+  added: string[]
+  removed: string[]
+}
+
 export interface WirelessScope {
   status: string
   claimsRevision: string
@@ -816,6 +858,23 @@ export function getH3cLldpRelations(id: string, params: { history?: boolean; lim
 }
 export function getH3cLldpClaims(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpClaims> {
   return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-claims?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
+}
+export function createConfigBackup(profileIds: string[]): Promise<ConfigBackupBatch> {
+  return request('/api/system/config-backups', { method: 'POST', body: JSON.stringify({ profileIds }) })
+}
+export function getConfigBackupBatch(id: string): Promise<ConfigBackupBatch> {
+  return request('/api/system/config-backups/batches/' + encodeURIComponent(id))
+}
+export function getConfigBackups(profileId: string): Promise<ConfigBackupSnapshot[]> {
+  return request('/api/system/config-backups?profileId=' + encodeURIComponent(profileId))
+}
+export async function downloadConfigBackup(id: string): Promise<Blob> {
+  const response = await fetch('/api/system/config-backups/' + encodeURIComponent(id) + '/download', { credentials: 'include' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
+}
+export function getConfigBackupDiff(baseId: string, targetId: string): Promise<ConfigBackupDiff> {
+  return request('/api/system/config-backups/' + encodeURIComponent(baseId) + '/diff/' + encodeURIComponent(targetId))
 }
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))

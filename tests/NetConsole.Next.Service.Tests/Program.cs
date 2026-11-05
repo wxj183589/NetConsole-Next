@@ -64,6 +64,8 @@ else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
     H3cLldpTopologyTests.Run();
+else if (args.Length > 0 && args[0] == "--config-backup-tests")
+    await ConfigBackupTests.RunAsync();
 else
     await SchedulerTests.RunAsync();
 
@@ -817,8 +819,8 @@ internal static class SchedulerTests
 
         Assert(H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayWlanApAll) &&
                H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayTransceiverDiagnosisInterface) &&
-               !H3cCommandPolicy.IsAllowed("display current-configuration"),
-            "H3C policy must expose only the Phase 9 read-only allowlist");
+               H3cCommandPolicy.IsAllowed(H3cCommandPolicy.DisplayCurrentConfiguration),
+             "H3C policy must expose the read-only allowlist, including configuration backup");
         Assert(ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowVersion) &&
                ZteCommandPolicy.IsAllowed(ZteCommandPolicy.ShowLldpEntry) &&
                !ZteCommandPolicy.IsAllowed("show running-config"),
@@ -1661,8 +1663,8 @@ internal static class SchedulerTests
             finally { await noSecretSession.DisposeAsync(); }
             Assert(noSecretTransport.LastTransport is null,
                 "an unavailable credential must fail before creating or opening an SSH transport");
-            AssertThrows<ArgumentException>(() => catalog.CreateTaskDefinition("h3c-denied", "H3C_SSH_READONLY",
-                profileId, "display current-configuration", TimeSpan.FromSeconds(10)));
+            catalog.CreateTaskDefinition("h3c-backup", "H3C_SSH_READONLY", profileId,
+                H3cCommandPolicy.DisplayCurrentConfiguration, TimeSpan.FromSeconds(10));
             catalog.CreateTaskDefinition("h3c-version", "H3C_SSH_READONLY", profileId,
                 H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(10));
 
@@ -2103,7 +2105,7 @@ internal static class SchedulerTests
         catch (IOException) { }
         try
         {
-            await reset.ExecuteAsync("display current-configuration", CancellationToken.None);
+            await reset.ExecuteAsync("reboot", CancellationToken.None);
             throw new InvalidOperationException("commands outside the SSH read-only allowlist must be rejected");
         }
         catch (ArgumentException) { }

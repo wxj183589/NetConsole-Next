@@ -100,6 +100,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
 {
     private const int MaximumLineBytes = 512 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
+    public string DataRoot => settings.DataRoot;
     public string RawRoot => Path.Combine(settings.DataRoot, "raw");
     public RawRecoverySummary RecoverySummary { get; private set; } = EmptyRecovery();
     public string IntegrityStatus { get; private set; } = "unchecked";

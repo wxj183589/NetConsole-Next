@@ -30,3 +30,11 @@
 外部阻断：四台模拟器只有 TCP/协议可达，缺可用认证材料；HTTP/Service-backed Gate 受现有 Service Mutex 影响。不得猜密码或绕过 Mutex。
 
 下一检查点：合并独立 worktree 中可验证提交，运行后端/前端/浏览器回归，更新任务池和剩余阻断。
+
+## 2026-11-05 08:55 CST
+
+- 完成 FD-P2-02：配置备份允许命令、批量有界调度、版本化脱敏文件、manifest 哈希、历史/差异/下载 API 与配置备份页面；重新校验当前 Site claims，不把配置发布到 Facts。
+- 完成诊断历史持久化：已完成批次原子写入 Next 数据根 `diagnostics`，服务对象重建后恢复终态历史，最多保留 128 批次；未完成批次不伪造恢复。
+- 验证：`CONFIG_BACKUP_TESTS=1/1 PASS`、`NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`、完整 Service harness PASS、Release build 0 warning/0 error、`vue-tsc --noEmit` PASS、Vitest `4 files / 7 tests PASS`、Vite build PASS、`git diff --check` PASS。
+- 更新旧测试中的配置命令拒绝断言，使其覆盖新增只读配置备份命令与实际非法 `reboot` 命令。
+- 四台模拟器仍缺安全凭据；真实认证、双 AC HA、切换和实时 AP 归属继续 BLOCKED；未修改生产或开发真实数据，未 push/merge/release。

@@ -62,6 +62,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
         sp.GetRequiredService<Catalog>().MarkUnavailable(ex);
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
     }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
+builder.Services.AddSingleton<ConfigBackupService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
@@ -707,6 +708,46 @@ app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, st
     return diagnostics.Cancel(id, identity.UserId, identity.Role, CurrentSiteScope(context))
         ? Results.Ok(new { cancelled = true })
         : Results.NotFound(new { error = "DIAGNOSTIC_RUN_NOT_VISIBLE_OR_TERMINAL" });
+});
+app.MapPost("/api/system/config-backups", (HttpContext context, ConfigBackupRequest request,
+    ConfigBackupService backups) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var batch = backups.Start(request.ProfileIds ?? Array.Empty<string>(), CurrentIdentity(context), CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/config-backups/batches/{batch.Id}", batch);
+    }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
+app.MapGet("/api/system/config-backups/batches/{id}", (HttpContext context, string id, ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return backups.GetBatch(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } batch
+        ? Results.Ok(batch) : Results.NotFound();
+});
+app.MapGet("/api/system/config-backups", (HttpContext context, string profileId,
+    ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return Results.Ok(backups.List(profileId, CurrentSiteScope(context)));
+});
+app.MapGet("/api/system/config-backups/{id}/download", (HttpContext context, string id,
+    ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var result = backups.OpenDownload(id, CurrentSiteScope(context));
+    return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "text/plain; charset=utf-8",
+        result.Value.Name, enableRangeProcessing: true);
+});
+app.MapGet("/api/system/config-backups/{baseId}/diff/{targetId}", (HttpContext context, string baseId,
+    string targetId, ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var diff = backups.Diff(baseId, targetId, CurrentSiteScope(context));
+    return diff is null ? Results.NotFound() : Results.Ok(diff);
 });
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>
@@ -1632,6 +1673,7 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cH
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true, IReadOnlyList<string>? Commands = null);
+internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference, string HostKeySha256, bool Enabled = true,
