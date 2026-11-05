@@ -5,7 +5,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "INTEGRATED_MODULE_GOVERNANCE_REGRESSION",
+  "phase": "NEXT_TASK_R3_PERSISTENCE_AND_COLLECTION_MANIFEST",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -32,5 +32,5 @@
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "80de217"
+  "lastRecoveryCommit": "c811ff0"
 }

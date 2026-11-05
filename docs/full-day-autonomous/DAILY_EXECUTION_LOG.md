@@ -63,3 +63,4 @@
 - Service-backed browser smoke：真实隔离 Service 在发布输出目录启动，浏览器完成登录并访问概览、设备、任务、工具、文件页面，`1920×1080 PASS`；首次发现并修复了测试脚本错误地以仓库根作为 ASP.NET content root 的问题，随后复验通过。
 - 2026-11-05 模块治理：新增 schema v17 `module_registry`，服务端提供 `/api/system/modules` 与 SUPERADMIN-only 启停 API；核心模块禁止停用，状态重启后保留，AppShell 使用服务端状态覆盖导航。`module_registry_e2e.py` 的 ADMIN 403、核心保护、重启持久化全部 PASS。四台模拟器凭据仍不可用，未访问真实设备。
 - 模块治理回归：`dotnet build` 0 warning/0 error、Vue typecheck、Vitest `5 files / 10 tests`、模块 API 隔离 e2e 全部 PASS；并行启动两个真实 Service 首次触发单实例 Mutex，改为串行后 Service-backed browser smoke 1920×1080 PASS。
+- 完整 .NET Service harness：通过（vendor replay、Raw/Facts、P2B migrations、wireless/runtime、task scope、interactive scope、fact publication、concurrency、SQLite、诊断、归档和性能场景）；模块治理新增 API e2e 仍通过。
