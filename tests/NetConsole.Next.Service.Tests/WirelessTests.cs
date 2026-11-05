@@ -207,6 +207,15 @@ internal static class WirelessTests
             var runtimeService = new WirelessReadModelService(catalog);
             var physicalId = runtimeService.GetSnapshot(global).ApResources.Single().Id;
             var persistedSnapshot = runtimeService.GetSnapshot(global);
+            var manifestPage = catalog.QueryWirelessCollectionManifests(global, "", null, 1, 10);
+            Assert(manifestPage.Total == 1 && manifestPage.Items.Single().ObservationCount == persistedSnapshot.ApResources.Sum(item => item.Observations.Count),
+                "persisted wireless collection manifests must be queryable with stable counts");
+            var manifestDetail = catalog.GetWirelessCollectionManifest(manifestPage.Items.Single().Id, global);
+            Assert(manifestDetail is not null && manifestDetail.Items.Count == manifestPage.Items.Single().ObservationCount,
+                "collection manifest detail must retain per-observation provenance");
+            var hiddenManifest = catalog.GetWirelessCollectionManifest(manifestPage.Items.Single().Id,
+                new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other-site" }, "fixture"));
+            Assert(hiddenManifest is null, "collection manifest detail must hide when no current Site claim can see its items");
             using (var db = new SqliteConnection($"Data Source={Path.Combine(root, "catalog.db")}"))
             {
                 db.Open();

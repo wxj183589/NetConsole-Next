@@ -22,3 +22,4 @@
 | FD-P3-03 | Docs | 全天候 16 项交付报告、矩阵、回执、handoff | P3 | all workstreams | IN_PROGRESS | 本轮交接继续更新 |
 | FD-P1-11 | Wireless/Facts | AP Group 详情、成员与 provenance 只读 API/UI | P1 | FD-P1-09、Site claims | COMPLETED_LOCAL | group scope/detail API、浏览器点击验收 |
 | FD-P1-12 | Wireless/Facts | AC Domain AP association 与 observation provenance 只读 API | P1 | FD-P1-09、Site claims | COMPLETED_LOCAL | API-W04 fixture/filter 验收 |
+| FD-P1-13 | Wireless/Facts | 跨 AC collection manifest 查询、详情与采集记录 UI | P1 | FD-P1-10、Site claims | COMPLETED_LOCAL | manifest API 过滤/详情、Catalog scope 回归、浏览器点击验收 |

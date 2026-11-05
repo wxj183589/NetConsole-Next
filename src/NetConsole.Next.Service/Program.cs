@@ -1441,6 +1441,38 @@ app.MapGet("/api/system/wireless/ac-domains/{id}/ap-associations", (HttpContext 
     { return WirelessAuthorityUnavailable(ex); }
 });
 
+app.MapGet("/api/system/wireless/ac-domains/{id}/collection-manifests", (HttpContext context, HttpRequest request, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        if (string.IsNullOrWhiteSpace(id)) return WirelessResourceNotVisible();
+        var page = ParseQueryInt(QueryValue(request, "page"), 1);
+        var pageSize = ParseQueryInt(QueryValue(request, "pageSize") ?? QueryValue(request, "limit"), 20);
+        if (page < 1 || pageSize is < 1 or > 100)
+            return Results.BadRequest(new { error = "page must be positive and pageSize must be between 1 and 100." });
+        return Results.Ok(wireless.GetCollectionManifests(CurrentSiteScope(context), id,
+            QueryValue(request, "sourceAcId"), page, pageSize));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/collection-manifests/{id}", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        return wireless.GetCollectionManifest(id, CurrentSiteScope(context), QueryValue(context.Request, "sourceAcId")) is { } detail
+            ? Results.Ok(detail)
+            : WirelessResourceNotVisible();
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
 app.MapGet("/api/system/wireless/ac-domains/{id}/ap-groups", (HttpContext context, HttpRequest request, string id,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {

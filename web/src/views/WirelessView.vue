@@ -7,11 +7,15 @@ import {
   getWirelessApGroup,
   getWirelessApGroups,
   getWirelessApResources,
+  getWirelessCollectionManifest,
+  getWirelessCollectionManifests,
   getWirelessRuntimeState,
   type WirelessAcDomain,
   type WirelessApGroup,
   type WirelessApGroupDetail,
   type WirelessApResource,
+  type WirelessCollectionManifest,
+  type WirelessCollectionManifestDetail,
   type WirelessRuntimeState,
 } from '../api/client'
 
@@ -28,6 +32,11 @@ const groupError = ref('')
 const groupDetail = ref<WirelessApGroupDetail | null>(null)
 const groupDetailLoading = ref(false)
 const groupDetailError = ref('')
+const collectionManifests = ref<WirelessCollectionManifest[]>([])
+const collectionError = ref('')
+const collectionDetail = ref<WirelessCollectionManifestDetail | null>(null)
+const collectionDetailLoading = ref(false)
+const collectionDetailError = ref('')
 const warnings = ref<string[]>([])
 const page = ref(1)
 const pageSize = 20
@@ -40,6 +49,8 @@ let runtimeController: AbortController | null = null
 let refreshGeneration = 0
 let groupGeneration = 0
 let groupDetailGeneration = 0
+let collectionGeneration = 0
+let collectionDetailGeneration = 0
 
 const selectedDomain = computed(() => domains.value.find(domain => domain.id === selectedDomainId.value) || domains.value[0] || null)
 const visibleResources = computed(() => resources.value.filter(resource => {
@@ -57,7 +68,10 @@ function viewObservations(resource: WirelessApResource) {
   return resource.observations.filter(item => (!selectedDomain.value || item.sourceAcDomainId === selectedDomain.value.id) && (!selectedAcId.value || item.sourceAcDeviceId === selectedAcId.value))
 }
 watch([search, stateFilter, selectedDomainId, selectedAcId], () => { page.value = 1; selectedResourceId.value = '' })
-watch([selectedDomainId, selectedAcId], () => { groupDetail.value = null; groupDetailError.value = ''; ++groupDetailGeneration })
+watch([selectedDomainId, selectedAcId], () => {
+  groupDetail.value = null; groupDetailError.value = ''; ++groupDetailGeneration
+  collectionDetail.value = null; collectionDetailError.value = ''; ++collectionDetailGeneration
+})
 watch([() => selectedResource.value?.id, () => selectedResource.value?.projectionRevision, selectedDomainId, selectedAcId], () => { void loadRuntime() })
 
 async function loadRuntime(): Promise<void> {
@@ -93,12 +107,14 @@ function selectDomain(domain: WirelessAcDomain): void {
   selectedAcId.value = ''
   selectedResourceId.value = ''
   void loadGroups(domain.id)
+  void loadCollectionManifests(domain.id)
 }
 function selectAc(domain: WirelessAcDomain, deviceId: string): void {
   selectedDomainId.value = domain.id
   selectedAcId.value = deviceId
   selectedResourceId.value = ''
   void loadGroups(domain.id)
+  void loadCollectionManifests(domain.id)
 }
 async function readAll<T>(read: (params: { page: number; pageSize: number }) => Promise<{ items: T[]; hasMore: boolean; warnings?: string[]; sourceRevision?: string }>): Promise<T[]> {
   const items: T[] = []
@@ -126,6 +142,33 @@ async function loadGroups(domainId: string): Promise<void> {
     if (generation === groupGeneration) groupError.value = cause instanceof Error ? cause.message : 'AP 组读取失败'
   }
 }
+async function loadCollectionManifests(domainId: string): Promise<void> {
+  const generation = ++collectionGeneration
+  collectionManifests.value = []
+  collectionError.value = ''
+  collectionDetail.value = null
+  collectionDetailError.value = ''
+  try {
+    const result = await readAll(params => getWirelessCollectionManifests(domainId, { ...params, sourceAcId: selectedAcId.value || undefined }))
+    if (generation === collectionGeneration) collectionManifests.value = result
+  } catch (cause) {
+    if (generation === collectionGeneration) collectionError.value = cause instanceof Error ? cause.message : '采集记录读取失败'
+  }
+}
+async function selectCollectionManifest(manifest: WirelessCollectionManifest): Promise<void> {
+  const generation = ++collectionDetailGeneration
+  collectionDetail.value = null
+  collectionDetailError.value = ''
+  collectionDetailLoading.value = true
+  try {
+    const result = await getWirelessCollectionManifest(manifest.id, { sourceAcId: selectedAcId.value || undefined })
+    if (generation === collectionDetailGeneration) collectionDetail.value = result
+  } catch (cause) {
+    if (generation === collectionDetailGeneration) collectionDetailError.value = cause instanceof Error ? cause.message : '采集记录详情读取失败'
+  } finally {
+    if (generation === collectionDetailGeneration) collectionDetailLoading.value = false
+  }
+}
 async function selectGroup(group: WirelessApGroup): Promise<void> {
   const generation = ++groupDetailGeneration
   groupDetail.value = null
@@ -143,15 +186,21 @@ async function selectGroup(group: WirelessApGroup): Promise<void> {
 async function refresh(): Promise<void> {
   const generation = ++refreshGeneration
   ++groupGeneration
+  ++collectionGeneration
   ++runtimeGeneration
   runtimeController?.abort()
   runtimeState.value = null
   loading.value = true
   error.value = ''
   groupError.value = ''
+  collectionError.value = ''
   groupDetail.value = null
   groupDetailError.value = ''
   ++groupDetailGeneration
+  collectionManifests.value = []
+  collectionDetail.value = null
+  collectionDetailError.value = ''
+  ++collectionDetailGeneration
   warnings.value = []
   try {
     const [domainItems, resourceItems] = await Promise.all([
@@ -165,12 +214,12 @@ async function refresh(): Promise<void> {
     if (!selectedDomain.value?.members.some(member => member.deviceId === selectedAcId.value)) selectedAcId.value = ''
     page.value = 1
     selectedResourceId.value = ''
-    if (selectedDomainId.value) await loadGroups(selectedDomainId.value)
-    else groups.value = []
+    if (selectedDomainId.value) await Promise.all([loadGroups(selectedDomainId.value), loadCollectionManifests(selectedDomainId.value)])
+    else { groups.value = []; collectionManifests.value = [] }
     await loadRuntime()
   } catch (cause) {
     if (generation !== refreshGeneration) return
-    domains.value = []; resources.value = []; groups.value = []
+    domains.value = []; resources.value = []; groups.value = []; collectionManifests.value = []
     selectedDomainId.value = ''; selectedAcId.value = ''; selectedResourceId.value = ''
     error.value = cause instanceof Error ? cause.message : '无线业务数据读取失败'
     ElMessage.error(error.value)
@@ -229,6 +278,8 @@ onMounted(() => { void refresh() })
           </div>
 
           <section class="card wireless-members"><div class="card__header"><h2>AC 成员与 AP 观察状态</h2><span class="state-pill">1+1 需运行证据确认</span></div><div class="wireless-member-grid"><article v-for="member in selectedDomain.members" :key="member.deviceId" class="wireless-member-card"><div class="wireless-member-card__top"><strong>{{ member.displayName }}</strong><span :class="['state-pill', stateClass(member.runtimeState)]">{{ stateText(member.runtimeState) }}</span></div><div class="wireless-member-card__line"><span>Device ID</span><code>{{ member.deviceId }}</code></div><div class="wireless-member-card__line"><span>地址 / 版本</span><span>{{ member.managementIp }} · {{ member.version || '—' }}</span></div><div class="wireless-member-card__line"><span>来源状态</span><span>{{ member.connectionStatus }} · {{ member.role }}</span></div></article></div></section>
+
+          <section class="card wireless-collection"><div class="card__header"><h2>采集记录</h2><span class="state-pill info">Raw provenance</span></div><div v-if="collectionManifests.length" class="wireless-collection-list"><button v-for="manifest in collectionManifests" :key="manifest.id" class="wireless-collection-row" :class="{ selected: collectionDetail?.manifest.id === manifest.id }" type="button" @click="selectCollectionManifest(manifest)"><span><strong>{{ manifest.sourceRevision }}</strong><small>{{ manifest.sourceAcDeviceIds.join(' / ') }} · {{ formatTime(manifest.lastCapturedMs) }}</small></span><span>{{ manifest.observationCount }} 条 Observation</span></button></div><div v-else class="empty-state"><div><strong>{{ collectionError ? '采集记录读取失败' : '暂无采集记录' }}</strong><small>{{ collectionError || '当前 AC 作用域没有可见的跨 AC collection manifest。' }}</small></div></div><div v-if="collectionDetailLoading" class="wireless-collection-detail muted-text">正在读取采集记录…</div><div v-else-if="collectionDetailError" class="wireless-collection-detail bad-text">{{ collectionDetailError }}</div><div v-else-if="collectionDetail" class="wireless-collection-detail"><div class="card__header"><h3>{{ collectionDetail.manifest.sourceRevision }}</h3><span class="state-pill info">{{ collectionDetail.manifest.status }}</span></div><div class="wireless-collection-detail__meta"><span>来源 AC <code>{{ collectionDetail.manifest.sourceAcDeviceIds.join(' / ') }}</code></span><span>Observation <code>{{ collectionDetail.items.length }}</code></span><span>Scope <code>{{ collectionDetail.manifest.scopeStatus }}</code></span></div><div class="wireless-collection-item" v-for="item in collectionDetail.items.slice(0, 20)" :key="item.observationId"><span><strong>{{ item.sourceAcDeviceId }}</strong><small>{{ item.sourceAcDomainId }} · {{ formatTime(item.capturedMs) }}</small></span><span><code>{{ item.rawManifestRef }}</code> · {{ item.outcome }}</span></div></div></section>
 
           <section class="card"><div class="card__header"><h2>FIT-AP</h2><div class="wireless-toolbar"><input v-model="search" aria-label="搜索 AP" placeholder="Serial / MAC / 名称搜索" /><select v-model="stateFilter" aria-label="筛选 AP 状态"><option value="">所有状态</option><option v-for="state in ['RUNNING_MASTER', 'RUNNING_BACKUP', 'OFFLINE', 'UNKNOWN', 'STALE', 'CONFLICT']" :key="state" :value="state">{{ stateText(state) }}</option></select><span class="state-pill info">{{ visibleResources.length }} 条</span></div></div><div v-if="visibleResources.length" class="table-wrap"><table class="data-table wireless-table"><thead><tr><th>物理 AP</th><th>Serial</th><th>完整 MAC</th><th>来源 AC</th><th>AP 组</th><th>状态</th><th>身份</th><th>最近观察</th></tr></thead><tbody><tr v-for="resource in pagedResources" :key="resource.id" :class="{ selected: selectedResource?.id === resource.id }" @click="selectedResourceId = resource.id"><td><span class="device-name">{{ resource.displayName }}</span><span class="device-subline mono">{{ resource.id }}</span></td><td class="mono">{{ resource.serialEvidence || '—' }}</td><td class="mono">{{ resource.normalizedMacSet.join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" class="source-tag">{{ observation.sourceAcDeviceId }}</span></td><td>{{ viewObservations(resource).map(observation => observation.apGroup).filter(Boolean).join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" :class="['state-pill', stateClass(observation.normalizedState)]">{{ stateText(observation.normalizedState) }}</span></td><td><span :class="['state-pill', stateClass(resource.identityStatus)]">{{ stateText(resource.identityStatus) }}</span></td><td>{{ formatTime(resource.lastSeenMs) }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><strong>暂无可见 AP Observation</strong><small>当前筛选下没有 AP，请调整搜索或状态筛选。</small></div></div></section>
 
@@ -310,6 +361,19 @@ onMounted(() => { void refresh() })
 .wireless-group-detail h3 { margin: 0; color: var(--nc-text); font-size: 13px; }
 .wireless-group-detail__meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 7px; }
 .wireless-group-detail code { color: var(--nc-text); font-size: 10px; }
+.wireless-collection-list { padding: 0 14px 8px; }
+.wireless-collection-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; border-bottom: 1px solid var(--nc-border); padding: 10px 2px; color: var(--nc-text-secondary); background: transparent; font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.wireless-collection-row:hover, .wireless-collection-row.selected { background: var(--nc-primary-soft); }
+.wireless-collection-row strong, .wireless-collection-row small { display: block; }
+.wireless-collection-row small { margin-top: 3px; color: var(--nc-text-muted); }
+.wireless-collection-detail { margin: 0 14px 14px; border: 1px solid var(--nc-border); border-radius: 7px; padding: 12px; color: var(--nc-text-secondary); font-size: 11px; }
+.wireless-collection-detail .card__header { padding: 0 0 8px; }
+.wireless-collection-detail h3 { margin: 0; color: var(--nc-text); font-size: 13px; }
+.wireless-collection-detail__meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 7px; }
+.wireless-collection-detail code { color: var(--nc-text); font-size: 10px; }
+.wireless-collection-item { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--nc-border); padding: 7px 0; }
+.wireless-collection-item strong, .wireless-collection-item small { display: block; }
+.wireless-collection-item small { margin-top: 3px; color: var(--nc-text-muted); }
 .wireless-observation > div { display: flex; align-items: center; gap: 7px; }
 .wireless-observation small { margin-top: 3px; color: var(--nc-text-muted); }
 .wireless-runtime { min-width: 0; }

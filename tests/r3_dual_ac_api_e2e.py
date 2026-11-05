@@ -91,6 +91,19 @@ def main():
             status, ac1_associations = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-associations?sourceAcId=ac-device-1", token)
             assert status == 200 and ac1_associations["total"] == 1
             assert ac1_associations["items"][0]["rawManifestRef"].startswith("fixture:ac1:")
+            status, manifests = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/collection-manifests?page=1&pageSize=10", token)
+            assert status == 200 and manifests["total"] == 1 and manifests["items"][0]["observationCount"] == 2, (status, manifests)
+            manifest_id = manifests["items"][0]["id"]
+            status, manifest_detail = request(base, f"/api/system/wireless/collection-manifests/{manifest_id}", token)
+            assert status == 200 and manifest_detail["manifest"]["id"] == manifest_id
+            assert len(manifest_detail["items"]) == 2
+            status, ac1_manifest_detail = request(base, f"/api/system/wireless/collection-manifests/{manifest_id}?sourceAcId=ac-device-1", token)
+            assert status == 200 and len(ac1_manifest_detail["items"]) == 1
+            assert ac1_manifest_detail["manifest"]["sourceAcDeviceIds"] == ["ac-device-1"]
+            status, ac1_manifests = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/collection-manifests?sourceAcId=ac-device-1", token)
+            assert status == 200 and ac1_manifests["total"] == 1 and ac1_manifests["items"][0]["observationCount"] == 1
+            status, _ = request(base, "/api/system/wireless/collection-manifests/not-visible", token)
+            assert status == 404
             status, groups = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-groups", token)
             assert status == 200 and groups["total"] == 2, (status, groups)
             group_id = groups["items"][0]["id"]
@@ -118,6 +131,8 @@ def main():
             print("R3_DUAL_AC_OBSERVATION_PROVENANCE=PASS")
             print("R3_DUAL_AC_TOPOLOGY_EVIDENCE=PASS")
             print("R3_DUAL_AC_ASSOCIATION_PROVENANCE=PASS")
+            print("R3_DUAL_AC_COLLECTION_MANIFEST=PASS")
+            print("R3_DUAL_AC_COLLECTION_MANIFEST_SCOPE=PASS")
             print("R3_DUAL_AC_GROUP_SCOPE=PASS")
             print("R3_DUAL_AC_GROUP_DETAIL_PROVENANCE=PASS")
             print("R3_WIRELESS_FILTER_SCOPE=PASS")

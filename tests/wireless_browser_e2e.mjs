@@ -91,6 +91,17 @@ await page.route('**/api/**', async route => {
      const members = allResources.filter(resource => group.memberResourceIds.includes(resource.id))
      body = { group, members, total: members.length, asOf: snapshot.asOf, scope: snapshot.scope, sourceRevision: 'fixture-revision', warnings: ['OFFLINE_FIXTURE_EVIDENCE'], provenance: { sourceAcDeviceId: group.sourceAcDeviceId, sourceAcDomainId: group.sourceAcDomainId, sourceRevision: group.sourceRevision, scopeStatus: group.scopeStatus, groupScope: group.groupScope } }
    }
+ } else if (pathname.includes('/wireless/collection-manifests/') && !pathname.endsWith('/collection-manifests')) {
+   const id = decodeURIComponent(pathname.split('/').at(-1))
+   const items = snapshot.apResources.flatMap(resource => resource.observations).map(item => ({ observationId: item.id, sourceAcDeviceId: item.sourceAcDeviceId, sourceAcDomainId: item.sourceAcDomainId, sourceSiteId: item.sourceSiteId, rawManifestRef: item.rawManifestRef, sourceRevision: item.sourceRevision, capturedMs: item.capturedMs, outcome: 'OBSERVED' }))
+   if (id !== `wireless-collection:${snapshot.sourceRevision}`) { status = 404; body = { error: 'WIRELESS_RESOURCE_NOT_VISIBLE' } }
+   else body = { manifest: { id, sourceRevision: snapshot.sourceRevision, scopeStatus: snapshot.scope.status, sourceAcDeviceIds: [...new Set(items.map(item => item.sourceAcDeviceId))], firstCapturedMs: Math.min(...items.map(item => item.capturedMs)), lastCapturedMs: Math.max(...items.map(item => item.capturedMs)), observationCount: items.length, status: 'PUBLISHED', createdMs: snapshot.asOf }, items, asOf: snapshot.asOf, scope: snapshot.scope, sourceRevision: snapshot.sourceRevision, warnings: ['OFFLINE_FIXTURE_EVIDENCE'] }
+ } else if (pathname.endsWith('/collection-manifests')) {
+   const allItems = snapshot.apResources.flatMap(resource => resource.observations)
+   const sourceAcId = url.searchParams.get('sourceAcId')
+   const items = sourceAcId ? allItems.filter(item => item.sourceAcDeviceId === sourceAcId) : allItems
+   const id = `wireless-collection:${snapshot.sourceRevision}`
+   body = paged(items.length ? [{ id, sourceRevision: snapshot.sourceRevision, scopeStatus: snapshot.scope.status, sourceAcDeviceIds: [...new Set(items.map(item => item.sourceAcDeviceId))], firstCapturedMs: Math.min(...items.map(item => item.capturedMs)), lastCapturedMs: Math.max(...items.map(item => item.capturedMs)), observationCount: items.length, status: 'PUBLISHED', createdMs: snapshot.asOf }] : [], url)
  } else if (pathname.endsWith('/ap-groups')) {
    if (mode === 'group-error') { status = 503; body = { error: 'fixture group unavailable' } }
    else body = paged(snapshot.apGroups, url)
@@ -131,6 +142,8 @@ try {
  await expect(page.locator('.wireless-group-row')).toHaveCount(1)
  await page.locator('.wireless-group-row').first().click()
  await expect(page.locator('.wireless-group-detail')).toContainText('来源 AC')
+ await page.locator('.wireless-collection-row').first().click()
+ await expect(page.locator('.wireless-collection-detail')).toContainText('fixture:ac1:')
  await expect(page.locator('.wireless-observation')).toHaveCount(1)
  await expect(page.locator('.wireless-source-history')).toHaveCount(1)
  await expect(page.locator('.wireless-source-history')).toContainText('ac-device-1')

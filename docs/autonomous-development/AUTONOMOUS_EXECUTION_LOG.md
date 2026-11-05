@@ -4,7 +4,7 @@
 
 Batch A：身份/来源/失败状态/重复输入/库存分页/证据标记修复；定向测试准备中。
 
-LIVE_SIMULATOR_EVIDENCE：四台 TCP PASS；AC1/AC2/SW SSH auth_none 协商均要求 publickey/password（SW 亦允许 keyboard-interactive），未认证。FIT-AP Telnet 收到 banner，未发送密码。配置修改=0。
+LIVE_SIMULATOR_EVIDENCE：四台 TCP PASS；AC1/AC2/SW SSH 均返回 banner，auth_none 协商要求 publickey/password（SW 亦允许 keyboard-interactive），未认证；FIT-AP Telnet 返回 banner/prompt，未发送密码。默认 Next 数据根 `C:\ProgramData\NetConsoleNext\data` 中没有 `credentials\h3c-credentials.v1.json`，`h3c_device_profiles` 为空，且服务未安装，因此不存在可用 DPAPI credential reference。配置修改=0。
 
 Batch B：补齐终端session route group claims门禁、创建目标校验、历史count分页前过滤、回放/导出/ticket/stream当前权限检查；WebSocket逐输入/输出边界重新解析Site claims。generic tasks和H3C profile list不再全局泄露；Task创建/执行仍为SUPERADMIN-only，完整actor snapshot尚未实现。
 
