@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_O_MULTI_COMMAND_PLAN_UI",
+  "phase": "CHECKPOINT_P_MULTI_COMMAND_RAW_COMPLETENESS",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -42,7 +42,7 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "991aa74",
+  "lastRecoveryCommit": "69bbcac",
   "credentialAudit": {
     "at": "2026-11-05",
     "simulatorHost": "LOCAL_HCL_VIRTUALBOX",

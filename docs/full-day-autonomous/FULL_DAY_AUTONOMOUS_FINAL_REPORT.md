@@ -1,13 +1,13 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`eeb6427`。未 push、未 merge、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`69bbcac`。未 push、未 merge、未 release。
 
 ## 结论
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
 | 多设备并行、并发上限、同设备互斥 | PASS（隔离 fixture） | `CONCURRENCY_P1_TESTS=5/5 PASS` |
-| 单任务多命令 | PASS（隔离 fixture） | 命令计划、schema v16、H3C fact tests `11/11 PASS` |
+| 单任务多命令 | PASS（隔离 fixture） | 命令计划、schema v16、H3C fact tests `13/13 PASS`；成功终态要求完整 Raw manifest 集合 |
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
 | 一键测试连接与快速添加 | PASS（API/UI/HTTP 回归） | onboarding endpoint、SSH/Telnet 默认端口、设备列表按钮、`web_auth_e2e.py` |
 | SSH 自动信任/轮换、Telnet 回退 | PASS（服务/模拟 transport；AC1/AC2 live login） | 连接工作流构建、harness 与 AC1/AC2 Host Key AUTO_UPDATE |

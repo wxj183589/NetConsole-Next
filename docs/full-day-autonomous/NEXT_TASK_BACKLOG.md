@@ -4,11 +4,11 @@
 |---|---|---|---|---|---|---|
 | FD-P0-01 | Security | 凭据、密码、HostKey、Site 权限无泄漏 | P0 | 现有 DPAPI/claims | COMPLETED_BASELINE | 定向安全回归 |
 | FD-P1-01 | Scheduler | 多设备批量子任务、并发上限、同设备互斥 | P1 | 现有 BoundedCollectionScheduler | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=5/5 PASS` |
-| FD-P1-02 | Scheduler | 单任务多命令顺序、命令级状态、独立 Raw | P1 | Raw manifest 合同 | COMPLETED_LOCAL | 11/11 H3C fact tests |
+| FD-P1-02 | Scheduler | 单任务多命令顺序、命令级状态、独立 Raw | P1 | Raw manifest 合同 | COMPLETED_LOCAL | 13/13 H3C fact tests；成功终态缺 manifest fail-closed |
 | FD-P1-03 | Connection | SSH 首次自动信任、指纹轮换、并发原子更新 | P1 | DPAPI、host-key history | COMPLETED_LOCAL | 服务/隔离 transport |
 | FD-P1-04 | Connection | 一键测试连接和友好错误映射 | P1 | profile/credential/session | COMPLETED_LOCAL | API + device list action |
 | FD-P1-05 | Wireless | 双 AC/AP identity、Observation、group 和 runtime | P1 | 已完成 R3 projection | PARTIAL_EXTERNAL | fixture + four simulator evidence |
-| FD-P1-06 | Facts | 多命令 collection manifest 与 Raw→Facts→Current | P1 | FD-P1-02 | COMPLETED_LOCAL | coherent isolated fixture |
+| FD-P1-06 | Facts | 多命令 collection manifest 与 Raw→Facts→Current | P1 | FD-P1-02 | COMPLETED_LOCAL | coherent isolated fixture；13/13 publication tests |
 | FD-P1-07 | Task UI | 任务中心按业务语言展示进度、设备明细、重试/取消 | P1 | FD-P1-01/02 | COMPLETED_LOCAL | command detail API/UI typecheck |
 | FD-P1-08 | Device UI | 新增设备默认协议/端口、当前 Site、测试连接 | P1 | FD-P1-04 | COMPLETED_LOCAL | device list quick test + typecheck |
 | FD-P2-01 | Diagnostics | Ping/TCP/DNS/LLDP 诊断批量任务、进度和重启历史 | P2 | scheduler/catalog | COMPLETED_LOCAL | `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS` |
