@@ -11,7 +11,8 @@ internal static class ConcurrencyP1Tests
         await FailedTaskCanBeRetriedAsANewRun();
         await InterruptedTaskRequiresExplicitResume();
         await SuccessfulTaskCannotBeRetried();
-        Console.WriteLine("CONCURRENCY_P1_TESTS=4/4 PASS");
+        await TaskRunLookupSurvivesRecentWindow();
+        Console.WriteLine("CONCURRENCY_P1_TESTS=5/5 PASS");
     }
 
     private static async Task SameDeviceIsExclusiveDifferentDevicesRemainParallel()
@@ -72,6 +73,19 @@ internal static class ConcurrencyP1Tests
         Assert(completed.State == "SUCCEEDED", "setup task should succeed");
         Assert(!scheduler.TryRetryTaskRun(completed.Id, out _), "a successful run cannot be retried as a failure");
         Assert(fixture.AuditCount("TASK_RETRY_REQUESTED") == 0, "successful retry denial should not create an accepted audit");
+    }
+
+    private static Task TaskRunLookupSurvivesRecentWindow()
+    {
+        using var fixture = new PersistedFixture();
+        var created = Enumerable.Range(0, 125)
+            .Select(_ => fixture.Catalog.CreateTaskRun("success-definition"))
+            .ToArray();
+        var recentIds = fixture.Catalog.RecentTaskRuns(100).Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        var olderId = created.First(id => !recentIds.Contains(id));
+        Assert(fixture.Catalog.GetTaskRun(olderId)?.Id == olderId,
+            "direct task lookup must find a run outside the recent task window");
+        return Task.CompletedTask;
     }
 
     private static async Task<DeviceCollectionSnapshot> WaitTerminal(BoundedCollectionScheduler scheduler, string id)

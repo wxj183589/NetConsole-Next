@@ -1874,28 +1874,33 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
         using var reader = command.ExecuteReader();
         var result = new List<TaskRunSnapshot>();
-        while (reader.Read())
-        {
-            result.Add(new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1),
-                reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt64(4),
-                reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
-                reader.IsDBNull(7) ? null : reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.IsDBNull(9) ? null : reader.GetString(9),
-                reader.IsDBNull(10) ? null : reader.GetString(10),
-                reader.IsDBNull(11) ? null : reader.GetString(11),
-                reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                reader.IsDBNull(13) ? null : reader.GetString(13),
-                reader.IsDBNull(14) ? null : reader.GetString(14),
-                reader.IsDBNull(15) ? null : reader.GetString(15)));
-        }
+        while (reader.Read()) result.Add(ReadTaskRunSnapshot(reader));
         return result;
     }
 
     public TaskRunSnapshot? GetTaskRun(string id)
     {
         if (string.IsNullOrWhiteSpace(id)) return null;
-        return RecentTaskRuns(100).FirstOrDefault(item => item.Id == id);
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
+                o.relative_path,o.sha256,o.byte_count,o.parsed_json,o.capture_status,o.parse_status
+            FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id
+            WHERE t.id=$id LIMIT 1";
+        command.Parameters.AddWithValue("$id", id);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadTaskRunSnapshot(reader) : null;
     }
+
+    private static TaskRunSnapshot ReadTaskRunSnapshot(SqliteDataReader reader) =>
+        new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetInt64(4),
+            reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetInt64(6),
+            reader.IsDBNull(7) ? null : reader.GetInt64(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11), reader.IsDBNull(12) ? null : reader.GetInt64(12),
+            reader.IsDBNull(13) ? null : reader.GetString(13), reader.IsDBNull(14) ? null : reader.GetString(14),
+            reader.IsDBNull(15) ? null : reader.GetString(15));
 
     public IReadOnlyList<TaskCommandSnapshot> GetTaskRunCommands(string runId)
     {
