@@ -3,16 +3,16 @@
   "mode": "AUTONOMOUS_MULTI_WORKSTREAM",
   "date": "2026-11-05",
   "baseCommit": "052240f",
-  "branch": "codex-A/netconsole-next-autonomous-full-feature",
-  "worktree": "D:\\study\\NetConsole-Next-Workspace\\worktrees\\next-autonomous-full-feature",
-  "phase": "TASK_ACTIONS_AND_UI_ACCEPTANCE",
-  "activeWorkstreams": ["integration", "task-center"],
+  "branch": "codex-A/netconsole-next-r3-dual-ac",
+  "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
+  "phase": "INTEGRATED_SERVICE_AND_UI_REGRESSION",
+  "activeWorkstreams": [],
   "completedAtStart": ["AP runtime history", "task scope", "interactive files authority", "fact revision/site provenance", "single-command Raw publication", "bounded network diagnostics batch", "configuration backup", "LLDP topology relations", "diagnostic restart history"],
   "nextTasks": ["four-simulator credential-backed login", "service-backed browser gate", "R3 dual-AC live evidence"],
   "externalBlockers": ["credentials unavailable", "existing service mutex for HTTP gate"],
   "realDataChanged": false,
   "remotePush": false,
-  "merge": false,
+  "merge": true,
   "release": false,
-  "lastRecoveryCommit": "99d0514"
+  "lastRecoveryCommit": "db8120e"
 }

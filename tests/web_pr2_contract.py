@@ -37,7 +37,7 @@ def main():
     assert 'app.MapGet("/api/system/files/' not in program and 'app.MapPost("/api/system/files/' not in program
     contains("src/NetConsole.Next.Service/InteractiveScopeAuthorizer.cs", "ReadActiveSessionIdentity", "GLOBAL_FILE_SCOPE_REQUIRED", "CanUseTerminal")
     contains("src/NetConsole.Next.Service/FileArchiveService.cs", 'EnsureAuthorized(job.UserId, job.SessionId, "BEFORE_FILE")', '"BEFORE_PUBLISH"')
-    contains("web/src/router.ts", "ToolsView.vue", "FilesView.vue")
+    contains("web/src/moduleRegistry.ts", "ToolsView.vue", "FilesView.vue")
     contains("web/src/views/ToolsView.vue", "宿主机桌面", "SUPERADMIN")
     contains("web/src/views/FilesView.vue", "createArchiveJob", "downloadArchive", "openHostDirectory")
     print("WEB_PR2_CONTRACT=PASS")

@@ -1,7 +1,7 @@
 # FD-P3-02 模块注册与导航错误状态
 
 日期：2026-11-05
-Branch：`codex-A/netconsole-next-autonomous-full-feature`
+Branch：`codex-A/netconsole-next-r3-dual-ac`
 
 ## 完成内容
 

@@ -58,3 +58,4 @@
 - 扩展 `tests/r3_dual_ac_api_e2e.py` 离线双 AC API 验收：覆盖未知来源 AC 过滤不泄露、完整 MAC 格式校验、runtime-state 隐藏来源返回 404、observations 隐藏来源返回空分页。
 - 验证：`R3_DUAL_AC_API_FIXTURE=PASS`、identity dedup、observation provenance、topology evidence、group scope、`R3_WIRELESS_FILTER_SCOPE=PASS`、auth guard 全部 PASS。
 - 该证据仍来自离线 fixture；四台模拟器凭据、双 AC HA 切换与实时 AP 归属继续 BLOCKED，未修改真实数据。
+- 2026-11-05 收口：全天候 workstream 已合入当前 R3 分支，集成提交 `db8120e`。Release Service build（0 warnings/0 errors）、完整 Service harness、Vue typecheck、Vitest 5 files/10 tests、Web UI contract、Web PR2 contract、R3 wireless API fixture（含 filter scope）均 PASS。四台模拟器凭据仍不可用，实时认证与双 AC HA 继续 BLOCKED。
