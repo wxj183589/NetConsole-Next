@@ -52,3 +52,9 @@
 - 新增任务中心取消、失败重试、服务重启中断恢复 API/UI，服务端复用既有 scheduler，并在每条 route 执行 SUPERADMIN 与当前 Site scope 校验。
 - 验证：完整 Service harness PASS；Service/Tests build PASS；`CONCURRENCY_P1_TESTS=4/4 PASS`；Vitest `5 files/10 tests PASS`；vue-tsc、Vite、Web contract `4 checks`、1920/2560 browser PASS。
 - 四台模拟器仍缺安全凭据，真实登录、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED；未修改真实数据，未 push/merge/release。
+
+## 2026-11-05 R3 Wireless API contract audit
+
+- 扩展 `tests/r3_dual_ac_api_e2e.py` 离线双 AC API 验收：覆盖未知来源 AC 过滤不泄露、完整 MAC 格式校验、runtime-state 隐藏来源返回 404、observations 隐藏来源返回空分页。
+- 验证：`R3_DUAL_AC_API_FIXTURE=PASS`、identity dedup、observation provenance、topology evidence、group scope、`R3_WIRELESS_FILTER_SCOPE=PASS`、auth guard 全部 PASS。
+- 该证据仍来自离线 fixture；四台模拟器凭据、双 AC HA 切换与实时 AP 归属继续 BLOCKED，未修改真实数据。

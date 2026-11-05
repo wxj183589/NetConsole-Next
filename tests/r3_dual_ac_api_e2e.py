@@ -87,6 +87,15 @@ def main():
             assert status == 200 and topology["confirmed"] is True
             status, groups = request(base, "/api/system/wireless/ac-domains/domain-ac1-ac2/ap-groups", token)
             assert status == 200 and groups["total"] == 2, (status, groups)
+            resource_id = resource["id"]
+            status, filtered = request(base, "/api/system/wireless/ap-resources?sourceAcId=missing-ac&page=1&pageSize=10", token)
+            assert status == 200 and filtered["total"] == 0 and filtered["items"] == [], (status, filtered)
+            status, _ = request(base, "/api/system/wireless/ap-resources?mac=not-a-mac", token)
+            assert status == 400
+            status, _ = request(base, f"/api/system/wireless/ap-resources/{resource_id}/runtime-state?sourceAcId=missing-ac", token)
+            assert status == 404
+            status, hidden_observations = request(base, f"/api/system/wireless/ap-resources/{resource_id}/observations?sourceAcId=missing-ac", token)
+            assert status == 200 and hidden_observations["total"] == 0 and hidden_observations["items"] == [], (status, hidden_observations)
             status, _ = request(base, "/api/system/wireless/ap-resources/not-visible", token)
             assert status == 404
             status, _ = request(base, "/api/system/wireless/ap-resources")
@@ -96,6 +105,7 @@ def main():
             print("R3_DUAL_AC_OBSERVATION_PROVENANCE=PASS")
             print("R3_DUAL_AC_TOPOLOGY_EVIDENCE=PASS")
             print("R3_DUAL_AC_GROUP_SCOPE=PASS")
+            print("R3_WIRELESS_FILTER_SCOPE=PASS")
             print("R3_WIRELESS_AUTH_GUARD=PASS")
         finally:
             if service.poll() is None:
