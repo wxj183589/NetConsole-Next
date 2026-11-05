@@ -5,7 +5,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "NEXT_TASK_SETTINGS_UI_AND_LIVE_EVIDENCE",
+  "phase": "CHECKPOINT_UI_COMMITTED_LIVE_EVIDENCE_BLOCKED",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -16,10 +16,11 @@
     "bounded network diagnostics batch",
     "configuration backup",
     "LLDP topology relations",
-    "diagnostic restart history"
+    "diagnostic restart history",
+    "module registry and SUPERADMIN settings UI",
+    "cross-AC collection manifest persistence"
   ],
   "nextTasks": [
-    "settings UI for module governance",
     "four-simulator credential-backed login",
     "R3 live dual-AC HA evidence"
   ],
@@ -31,5 +32,5 @@
   "remotePush": false,
   "merge": true,
   "release": false,
-  "lastRecoveryCommit": "fe124b1"
+  "lastRecoveryCommit": "1c54d38"
 }
