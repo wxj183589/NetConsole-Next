@@ -3,7 +3,7 @@
 | ID | 工作流 | 任务 | 优先级 | 依赖 | 状态 | 验收 |
 |---|---|---|---|---|---|---|
 | FD-P0-01 | Security | 凭据、密码、HostKey、Site 权限无泄漏 | P0 | 现有 DPAPI/claims | COMPLETED_BASELINE | 定向安全回归 |
-| FD-P1-01 | Scheduler | 多设备批量子任务、并发上限、同设备互斥 | P1 | 现有 BoundedCollectionScheduler | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=4/4 PASS` |
+| FD-P1-01 | Scheduler | 多设备批量子任务、并发上限、同设备互斥 | P1 | 现有 BoundedCollectionScheduler | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | FD-P1-02 | Scheduler | 单任务多命令顺序、命令级状态、独立 Raw | P1 | Raw manifest 合同 | COMPLETED_LOCAL | 11/11 H3C fact tests |
 | FD-P1-03 | Connection | SSH 首次自动信任、指纹轮换、并发原子更新 | P1 | DPAPI、host-key history | COMPLETED_LOCAL | 服务/隔离 transport |
 | FD-P1-04 | Connection | 一键测试连接和友好错误映射 | P1 | profile/credential/session | COMPLETED_LOCAL | API + device list action |

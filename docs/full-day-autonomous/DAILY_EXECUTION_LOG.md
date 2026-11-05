@@ -50,7 +50,7 @@
 
 - 1920×1080 与 2560×1440 离线浏览器验收通过：登录、概览、设备、终端历史、任务中心、工具、文件、未知路由和禁用模块状态均完成交互检查；任务中心“重试”实际发出服务 API 请求。
 - 新增任务中心取消、失败重试、服务重启中断恢复 API/UI，服务端复用既有 scheduler，并在每条 route 执行 SUPERADMIN 与当前 Site scope 校验。
-- 验证：完整 Service harness PASS；Service/Tests build PASS；`CONCURRENCY_P1_TESTS=4/4 PASS`；Vitest `5 files/10 tests PASS`；vue-tsc、Vite、Web contract `4 checks`、1920/2560 browser PASS。
+- 验证：完整 Service harness PASS；Service/Tests build PASS；`CONCURRENCY_P1_TESTS=5/5 PASS`；Vitest `5 files/10 tests PASS`；vue-tsc、Vite、Web contract `4 checks`、1920/2560 browser PASS。
 - 四台模拟器仍缺安全凭据，真实登录、双 AC HA、切换/恢复和实时 AP 归属继续 BLOCKED；未修改真实数据，未 push/merge/release。
 
 ## 2026-11-05 R3 Wireless API contract audit

@@ -1878,16 +1878,33 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         return result;
     }
 
-    public TaskRunSnapshot? GetTaskRun(string id)
+    public TaskRunSnapshot? GetTaskRun(string id, P2B5SiteScopeDecision? scope = null)
     {
         if (string.IsNullOrWhiteSpace(id)) return null;
         using var db = Open();
         using var command = db.CreateCommand();
+        var scopeParameters = new List<(string Name, object? Value)>();
+        var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
+        if (scope is not null && !scope.IsGlobal)
+        {
+            const string safeJson = "CASE WHEN json_valid(frozen.request_json) THEN frozen.request_json ELSE '{}' END";
+            scopeFilter += $@" AND (t.task_type<>'H3C_SSH_READONLY' OR EXISTS(
+                SELECT 1 FROM task_definitions frozen
+                JOIN h3c_device_profiles profile ON profile.source_id=t.source_id
+                JOIN device_inventory device ON device.terminal_profile_id=profile.id
+                WHERE frozen.id=t.definition_id AND json_extract({safeJson},'$.scopeSnapshot.version')=1
+                  AND json_extract({safeJson},'$.scopeSnapshot.profileId')=profile.id
+                  AND json_extract({safeJson},'$.scopeSnapshot.deviceId')=device.id
+                  AND json_extract({safeJson},'$.scopeSnapshot.siteId')=source.site_id
+                  AND device.site_id=source.site_id))";
+        }
         command.CommandText = @"SELECT t.id,t.source_id,t.task_type,t.state,t.queued_ms,t.started_ms,t.deadline_ms,t.ended_ms,t.failure_reason,t.definition_id,
                 o.relative_path,o.sha256,o.byte_count,o.parsed_json,o.capture_status,o.parse_status
             FROM task_runs t LEFT JOIN task_run_raw_outputs o ON o.task_run_id=t.id
-            WHERE t.id=$id LIMIT 1";
+            LEFT JOIN collection_sources source ON source.id=t.source_id
+            WHERE t.id=$id AND " + scopeFilter + " LIMIT 1";
         command.Parameters.AddWithValue("$id", id);
+        DeviceSiteScope.AddParameters(command, scopeParameters);
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadTaskRunSnapshot(reader) : null;
     }

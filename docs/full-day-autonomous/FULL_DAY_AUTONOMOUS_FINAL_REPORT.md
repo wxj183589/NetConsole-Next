@@ -6,7 +6,7 @@
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| 多设备并行、并发上限、同设备互斥 | PASS（隔离 fixture） | `CONCURRENCY_P1_TESTS=4/4 PASS` |
+| 多设备并行、并发上限、同设备互斥 | PASS（隔离 fixture） | `CONCURRENCY_P1_TESTS=5/5 PASS` |
 | 单任务多命令 | PASS（隔离 fixture） | 命令计划、schema v16、H3C fact tests `11/11 PASS` |
 | 独立 Raw、失败保留、Facts 发布 | PASS（隔离 fixture） | 多命令成功/后续失败测试 |
 | 一键测试连接 | PASS（API/UI 接入） | profile test endpoint、设备列表按钮 |
