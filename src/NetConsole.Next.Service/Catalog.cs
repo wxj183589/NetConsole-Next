@@ -1684,6 +1684,13 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             profileId = reader.GetString(0); host = reader.GetString(1); sourceId = reader.GetString(2); requestJson = reader.GetString(3);
         }
         var commandPlan = ReadTaskCommands(JsonDocument.Parse(requestJson).RootElement);
+        // A successful multi-command run is only terminal once every planned
+        // command has an independently sealed Raw manifest. Failed and
+        // cancelled runs may intentionally persist the completed prefix (or a
+        // bounded partial result), but must never claim success with a hole in
+        // the command-level evidence set.
+        if (terminalState == "SUCCEEDED" && manifests.Count != commandPlan.Count)
+            throw new InvalidDataException("A successful multi-command task must persist one Raw manifest for every planned command.");
         if (manifests.Any(item => item.CommandIndex < 0 || item.CommandIndex >= commandPlan.Count ||
             !string.Equals(commandPlan[item.CommandIndex], item.Command, StringComparison.Ordinal)))
             throw new InvalidDataException("Multi-command Raw manifests do not match the immutable task command plan.");

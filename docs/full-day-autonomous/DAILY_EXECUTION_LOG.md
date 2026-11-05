@@ -91,3 +91,8 @@
 - SW SSH 认证与 Host Key 通过，但旧 HCL Exec 通道在设备信息命令阶段断开/超时；现在返回“连接成功，但设备信息识别失败”，不再冒泡 HTTP 500。
 - FIT-AP Telnet banner 可达；使用既有文档记录的 `h3capadmin` 建立隔离档案后，设备仍拒绝引用凭据，状态为 `AUTHENTICATION_FAILED`。密码未猜测、未重试穷举。
 - 配置写入、重启、主备切换、恢复和实时 AP 归属验证均未执行；详见 `docs/autonomous-development/AUTO_LOGIN_SIMULATOR_ACCEPTANCE_20261105.md`。
+### 2026-11-05｜多命令 Raw 完整性边界
+
+- 在 `Catalog.CompleteTaskRunWithRawOutputs` 增加成功终态的 command plan 完整性检查：计划命令数与独立 Raw manifest 数不一致时拒绝终态提交，失败/取消仍保留已完成前缀。
+- 增加 `SuccessfulMultiCommandRunRequiresCompleteManifestSet` 回归，覆盖缺失 manifest 不改变运行状态且不落库部分命令集合。
+- H3C 事实发布专项：`H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS`；并发专项：`CONCURRENCY_P1_TESTS=5/5 PASS`；完整 Service harness：PASS。

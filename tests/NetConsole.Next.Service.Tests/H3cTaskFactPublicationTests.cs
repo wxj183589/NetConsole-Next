@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 internal static class H3cTaskFactPublicationTests
@@ -17,8 +18,10 @@ internal static class H3cTaskFactPublicationTests
         LegacyDefinitionsCannotAcquireEndpointProof();
         await ReferencedCommandCannotInvalidateAdmittedRaw();
         await MultiCommandRawOutputsRemainIndependent();
+        await MultiCommandRawCannotRelabelDeviceHost();
+        await SuccessfulMultiCommandRunRequiresCompleteManifestSet();
         await MultiCommandFailureKeepsEarlierRawBounded();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=11/11 PASS");
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()
@@ -204,6 +207,64 @@ internal static class H3cTaskFactPublicationTests
         Assert(run.State == "FAILED" && commands.Count == 2 && commands[0].State == "PARTIAL" && commands[1].State == "FAILED" &&
             f.Catalog.QueryH3cFacts(f.Profile, history: true).Count == 0,
             "a failed later command must retain earlier Raw as partial evidence without publishing facts");
+    }
+
+    private static async Task MultiCommandRawCannotRelabelDeviceHost()
+    {
+        using var f = new Fixture();
+        var definition = Guid.NewGuid().ToString("N");
+        var first = H3cCommandPolicy.DisplayVersion;
+        var second = H3cCommandPolicy.DisplayWlanApAll;
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, first, TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: new[] { first, second });
+        await using var scheduler = f.Scheduler(new Factory());
+        Assert(scheduler.TryScheduleDefinition(definition, out var runId, "local-api-token"), "multi-command relabel task admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (true)
+        {
+            var run = scheduler.Get(runId)!;
+            if (run.State is "SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT") break;
+            await Task.Delay(10, timeout.Token);
+        }
+        var relative = f.Scalar($"SELECT relative_path FROM task_run_command_outputs WHERE task_run_id='{runId}' AND command_index=0");
+        var factsBeforeTamper = f.Catalog.QueryH3cFacts(f.Profile, history: true).Count;
+        var path = Path.Combine(f.Root, relative.Replace('/', Path.DirectorySeparatorChar));
+        var raw = File.ReadAllText(path);
+        Assert(raw.Contains("\"device_host\":\"192.0.2.41\"", StringComparison.Ordinal),
+            "fixture Raw should contain the captured device host before tampering");
+        File.WriteAllText(path, raw.Replace("\"device_host\":\"192.0.2.41\"", "\"device_host\":\"192.0.2.99\"", StringComparison.Ordinal),
+            new System.Text.UTF8Encoding(false));
+        var segmentHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+        f.Execute($"UPDATE raw_segments SET sha256='{segmentHash}' WHERE relative_path='{relative}'; UPDATE task_run_command_outputs SET raw_segment_sha256='{segmentHash}' WHERE task_run_id='{runId}' AND command_index=0");
+        var publication = f.Catalog.PublishH3cTaskFacts(runId);
+        var relabelFacts = f.Catalog.QueryH3cFacts(f.Profile, history: true);
+        Assert(publication.Status != "PUBLISHED" && relabelFacts.Count == factsBeforeTamper,
+            $"multi-command Raw host relabel must fail closed without publishing facts (status={publication.Status}, facts={relabelFacts.Count})");
+    }
+
+    private static async Task SuccessfulMultiCommandRunRequiresCompleteManifestSet()
+    {
+        using var f = new Fixture();
+        var definition = Guid.NewGuid().ToString("N");
+        var first = H3cCommandPolicy.DisplayVersion;
+        var second = H3cCommandPolicy.DisplayWlanApAll;
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, first, TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: new[] { first, second });
+        var runId = f.Catalog.CreateTaskRun(definition);
+        f.Catalog.TransitionTaskRun(runId, "CONNECTING");
+        f.Catalog.TransitionTaskRun(runId, "RUNNING");
+        var task = f.Catalog.GetTaskDefinition(definition)!;
+        var manifest = await new H3cTaskRawResultSink(f.Catalog).PersistCommandAsync(runId, task, first,
+            Factory.Output(first), "COMPLETE", 0);
+        try
+        {
+            f.Catalog.CompleteTaskRunWithRawOutputs(runId, new[] { manifest }, "SUCCEEDED", null);
+            throw new InvalidOperationException("a successful multi-command run accepted an incomplete Raw manifest set");
+        }
+        catch (InvalidDataException) { }
+        Assert(f.Catalog.GetTaskRun(runId)!.State == "RUNNING" &&
+            f.Scalar($"SELECT COUNT(*) FROM task_run_command_outputs WHERE task_run_id='{runId}'") == "0",
+            "incomplete success must leave the run open and avoid committing a partial command set");
     }
 
     private sealed class Fixture : IDisposable

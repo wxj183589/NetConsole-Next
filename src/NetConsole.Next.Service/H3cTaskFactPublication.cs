@@ -93,6 +93,9 @@ internal sealed partial class Catalog
         using var request = JsonDocument.Parse(requestJson);
         var commands = ReadTaskCommands(request.RootElement);
         var scope = CaptureH3cFactScope(db, transaction, profileId);
+        if (scope is null) return new("CAPTURE_SCOPE_NOT_PROVEN", 0);
+        var profile = GetH3cDeviceProfile(profileId);
+        if (profile is null) return new("CAPTURE_SCOPE_NOT_PROVEN", 0);
         var outputs = new Dictionary<string, string>(StringComparer.Ordinal);
         var provenance = new List<H3cFactRawCommandProvenance>();
         using (var query = db.CreateCommand())
@@ -114,10 +117,17 @@ internal sealed partial class Catalog
                 var bytes = File.ReadAllBytes(fullPath);
                 if (bytes.Length < 2 || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
                     !string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), reader.GetString(4), StringComparison.OrdinalIgnoreCase) ||
-                    !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out _, out _, out var recordRun, out var capture) ||
+                    !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out var recordSource, out var recordHost,
+                        out var recordRun, out var capture) || recordSource != profile.SourceId || recordHost != profile.Host ||
                     recordRun != runId || capture != "COMPLETE") return new("RAW_UNAVAILABLE", 0);
                 using var raw = JsonDocument.Parse(bytes.AsMemory(0, bytes.Length - 1));
                 var record = raw.RootElement;
+                if (record.GetProperty("device_profile_id").GetString() != profileId ||
+                    record.GetProperty("command").GetString() != command ||
+                    record.GetProperty("captured_ms").GetInt64() != reader.GetInt64(5) ||
+                    record.GetProperty("output_byte_count").GetInt32() != record.GetProperty("output_utf8_base64").GetBytesFromBase64().Length ||
+                    !string.Equals(record.GetProperty("output_sha256").GetString(), reader.GetString(3), StringComparison.OrdinalIgnoreCase))
+                    return new("RAW_UNAVAILABLE", 0);
                 var output = new UTF8Encoding(false, true).GetString(Convert.FromBase64String(record.GetProperty("output_utf8_base64").GetString()!));
                 outputs[command] = output;
                 provenance.Add(new(index, command, reader.GetString(3), reader.GetString(4), reader.GetInt64(5)));
