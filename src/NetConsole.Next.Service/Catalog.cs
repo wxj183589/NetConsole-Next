@@ -2038,6 +2038,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var reader = command.ExecuteReader();
         var result = new List<TaskRunSnapshot>();
         while (reader.Read()) result.Add(ReadTaskRunSnapshot(reader));
+
         return result;
     }
 
