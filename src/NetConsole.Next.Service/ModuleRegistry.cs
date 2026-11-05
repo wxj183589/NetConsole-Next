@@ -2,6 +2,28 @@ using Microsoft.Data.Sqlite;
 
 namespace NetConsole.Next.Service;
 
+internal static class ModuleRegistryRouting
+{
+    public static string? ResolveApiModule(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        if (value.StartsWith("/api/system/devices", StringComparison.Ordinal) ||
+            value.StartsWith("/api/system/device-", StringComparison.Ordinal)) return "devices";
+        if (value.StartsWith("/api/system/zte/", StringComparison.Ordinal)) return "zte";
+        if (value.StartsWith("/api/system/h3c/", StringComparison.Ordinal)) return "h3c";
+        if (value.StartsWith("/api/system/config-backups", StringComparison.Ordinal)) return "config-backups";
+        if (value.StartsWith("/api/system/network-planning/", StringComparison.Ordinal)) return "network-planning";
+        if (value.StartsWith("/api/system/terminal/", StringComparison.Ordinal)) return "terminal";
+        if (value.StartsWith("/api/system/tasks", StringComparison.Ordinal)) return "tasks";
+        if (value.StartsWith("/api/system/diagnostics/", StringComparison.Ordinal)) return "tools";
+        if (value.StartsWith("/api/system/wireless/", StringComparison.Ordinal)) return "wireless";
+        if (value.StartsWith("/api/system/rail-reference/", StringComparison.Ordinal)) return "rail";
+        if (value.StartsWith("/api/system/host-tools", StringComparison.Ordinal)) return "tools";
+        if (value.StartsWith("/api/system/files/", StringComparison.Ordinal)) return "files";
+        return null;
+    }
+}
+
 internal sealed partial class Catalog
 {
     public IReadOnlyList<ModuleStateSnapshot> ListModuleStates()
@@ -15,6 +37,15 @@ internal sealed partial class Catalog
             result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
                 reader.GetInt32(3) != 0, reader.GetInt64(4), reader.GetString(5)));
         return result;
+    }
+
+    public bool IsModuleEnabled(string key)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT enabled FROM module_registry WHERE module_key=$key";
+        command.Parameters.AddWithValue("$key", key);
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0, System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 
     public ModuleStateSnapshot SetModuleEnabled(string key, bool enabled, string actor)

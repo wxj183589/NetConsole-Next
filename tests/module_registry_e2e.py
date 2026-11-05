@@ -107,6 +107,9 @@ def main():
             status, changed = superadmin.request("/api/system/modules/rail", "PUT", {"enabled": True})
             assert status == 200 and changed["enabled"] is True
             assert superadmin.request("/api/system/modules/devices", "PUT", {"enabled": False})[0] == 409
+            status, _ = superadmin.request("/api/system/modules/tools", "PUT", {"enabled": False})
+            assert status == 200
+            assert superadmin.request("/api/system/host-tools")[0] == 404
         finally:
             stop(service)
 

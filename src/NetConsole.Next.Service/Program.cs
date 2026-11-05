@@ -133,6 +133,23 @@ app.Use(async (context, next) =>
         return;
     }
     context.Items[WebCookieNames.IdentityItem] = identity;
+    var moduleKey = ModuleRegistryRouting.ResolveApiModule(context.Request.Path);
+    if (moduleKey is not null)
+    {
+        try
+        {
+            if (!context.RequestServices.GetRequiredService<Catalog>().IsModuleEnabled(moduleKey))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return;
+        }
+    }
     if (!bearer.StartsWith("Bearer ", StringComparison.Ordinal) && IsWriteRequest(context.Request.Method))
     {
         var origin = context.Request.Headers.Origin.ToString();
