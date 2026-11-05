@@ -225,18 +225,18 @@ STATUS=BLOCKED
 TASK_ID=A13
 MODULE=Acceptance
 FEATURE=HTTP/API 与 Service harness 回归
-CURRENT_STATUS=审计发现
+CURRENT_STATUS=Checkpoint K 已重新执行隔离 R3 HTTP API、Service harness 与真实 Service 浏览器 smoke
 USER_VALUE=保证运维结果可信、授权隔离和可用性
 SEVERITY=P1
-DEPENDENCIES=现有 Service 维护窗口
-EVIDENCE=全局 Mutex 已占用
-IMPLEMENTATION_SCOPE=保留预览，不绕过 Mutex
+DEPENDENCIES=NONE（隔离数据根和临时 loopback 端口）
+EVIDENCE=R3 API fixture 11 项 PASS；完整 Service harness PASS；Service-backed Browser smoke 1920x1080 PASS
+IMPLEMENTATION_SCOPE=只验证隔离服务和现有 API/UI，不接触设备凭据或真实数据
 SECURITY_RISK=按当前 Site claims 和来源隔离；不增加外部目标
 DATABASE_IMPACT=本轮不修改真实数据或正式 schema
-TESTABILITY=离线 fixture / 定向现有测试；真实设备单列
-ESTIMATED_EFFORT=按证据逐批实施
+TESTABILITY=Release build、Service harness、R3 API E2E、Service-backed Browser smoke
+ESTIMATED_EFFORT=已完成
 PRIORITY=P1
-STATUS=PARTIAL_BLOCKED
+STATUS=COMPLETED
 
 ## A14 浏览器离线夹具 1920/2560
 
@@ -475,4 +475,21 @@ STATUS=COMPLETED
 
 ## Checkpoint J状态说明
 
-A10已实现只读Current/PreviousEffective/Recent10、显式deadline及partial-history；A11已实现单目标冻结scope与执行/读取撤权收敛。两项保留PARTIAL_BLOCKED仅指完整无线持久主体生命周期/多目标Plan与Report，不再把这些已实现能力归为schema阻断。A20已有单命令Raw引用核验，正式持久身份/生命周期及coherent多命令关系仍待方案评审。A23不会把独立AP表/地址任务伪装同一次采集；当前候选/STALE标记保留。任务池共26项，状态以下方实际统计为准。
+A10已实现只读Current/PreviousEffective/Recent10、显式deadline及partial-history；A11已实现单目标冻结scope与执行/读取撤权收敛。两项保留PARTIAL_BLOCKED仅指完整无线持久主体生命周期/多目标Plan与Report，不再把这些已实现能力归为schema阻断。A20已有单命令Raw引用核验，正式持久身份/生命周期及coherent多命令关系仍待方案评审。A23不会把独立AP表/地址任务伪装同一次采集；当前候选/STALE标记保留。任务池共27项；Checkpoint K 新增 A27，并将 A13 从部分阻断更新为完成，状态以下方实际统计为准。
+## A27 跨 AC collection manifest 查询与采集记录 UI
+
+TASK_ID=A27
+MODULE=Wireless/Facts/UI
+FEATURE=按 AC Domain 和当前 Site claims 查询 collection manifest 列表/详情，呈现来源 AC 与 Raw provenance
+CURRENT_STATUS=Checkpoint K 已完成实现并通过隔离 API/Catalog/浏览器验收
+USER_VALUE=让运维查看跨 AC 采集记录和逐条来源，不把离线记录误认为实时设备状态
+SEVERITY=P1
+DEPENDENCIES=既有 schema v19 manifest、P2B5 Site claims
+EVIDENCE=新只读 routes、Catalog 过滤/计数测试、R3 fixture API、wireless browser fixture
+IMPLEMENTATION_SCOPE=Program.cs、WirelessCollectionManifest.cs、WirelessView.vue 和现有测试
+SECURITY_RISK=每次读取重检当前 Site claims；source AC 过滤后从可见 Observation 重新聚合
+DATABASE_IMPACT=不新增 schema/migration；只读既有 manifest 表，不访问真实数据
+TESTABILITY=Release harness、R3 API E2E、browser fixture、Service smoke
+ESTIMATED_EFFORT=已完成
+PRIORITY=P1
+STATUS=COMPLETED

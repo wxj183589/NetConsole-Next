@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_R3_API_ACCEPTED_LIVE_EVIDENCE_BLOCKED",
+  "phase": "CHECKPOINT_K_MANIFEST_API_AND_SIMULATOR_EVIDENCE",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -19,19 +19,23 @@
     "LLDP topology relations",
     "diagnostic restart history",
     "module registry and SUPERADMIN settings UI",
-    "cross-AC collection manifest persistence"
+    "cross-AC collection manifest persistence",
+    "collection manifest read API/UI",
+    "simulator protocol banner and credential-vault audit"
   ],
   "nextTasks": [
-    "four-simulator credential-backed login",
-    "R3 live dual-AC HA evidence"
+    "secure credential reference and four-simulator authentication",
+    "R3 live dual-AC HA evidence",
+    "multi-command Plan/Report and formal identity lifecycle review"
   ],
   "externalBlockers": [
     "credentials unavailable",
-    "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available"
+    "real dual-AC HA and AP ownership evidence blocked until secure credential reference is available",
+    "formal multi-command identity/report contract review pending"
   ],
   "realDataChanged": false,
   "remotePush": false,
-  "merge": true,
+  "merge": false,
   "release": false,
-  "lastRecoveryCommit": "174c724"
+  "lastRecoveryCommit": "6b96456"
 }

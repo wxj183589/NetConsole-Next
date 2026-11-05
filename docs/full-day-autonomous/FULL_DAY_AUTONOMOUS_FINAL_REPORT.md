@@ -1,6 +1,6 @@
 # 全天候自主开发最终报告
 
-日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；集成提交：`1c54d38`。未 push、已本地合并、未 release。
+日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；本轮最新提交：`6b96456`。未 push、已本地合并、未 release。
 
 ## 结论
 
@@ -30,10 +30,17 @@
 
 ## 2026-11-05 最终复核补充
 
-- UI 提交 `1c54d38`：SUPERADMIN 设置页读取模块状态、启停非核心模块并禁用核心模块操作；Service-backed 浏览器 smoke 新增“系统设置/模块开放状态”检查，`1920×1080 PASS`。
+- 此前 UI 提交 `1c54d38`：SUPERADMIN 设置页读取模块状态、启停非核心模块并禁用核心模块操作；Service-backed 浏览器 smoke 新增“系统设置/模块开放状态”检查，`1920×1080 PASS`。
 - 串行 Service Tests Release build：0 warnings / 0 errors；完整 C# Service harness：PASS，包含 schema v19、无线投影、跨 AC manifest、任务并发、SQLite、诊断、归档和性能场景。
 - 前端既有 `vue-tsc`、Vitest（5 files / 10 tests）和 Vite build 证据保持有效；发布输出已更新并纳入版本控制。
 - 四台模拟器已取得白名单协议 banner 可达证据；默认 Next 数据根没有 DPAPI vault 且 `h3c_device_profiles` 为空，凭据引用不可用，真实认证、HA 切换/恢复和实时 AP 归属仍为 BLOCKED。
 - 本轮补齐 AP Group 详情/成员/provenance 只读合同；不提供组写回，不把离线 fixture 当作实时模拟器证据。
 - 收口回归证据：R3 API fixture、无线投影/runtime、任务并发、Raw→Facts、LLDP、Service/Tests build、Vitest、vue-tsc、Vite 和无线浏览器 fixture 均通过；HTTP service-backed gate 仍受既有单实例 Mutex 与模拟器凭据缺口限制。
 - collection manifest 回归新增 source AC 详情过滤与未授权来源不泄露断言；该能力仍是隔离 fixture/Catalog 证据，不替代四台模拟器实时采集。
+
+## Checkpoint K 增量
+
+- 当前 HEAD：`6b96456`。
+- A13 隔离 HTTP/API、完整 Service harness 与 Service-backed Browser smoke 复验通过。
+- A27 跨 AC collection manifest 列表/详情、source AC 过滤、Site claims 聚合与无线页采集记录完成。
+- 四台模拟器仅协议 banner 可达；默认 Next DPAPI vault/profile 缺失，真实认证、HA、切换/恢复继续 BLOCKED。

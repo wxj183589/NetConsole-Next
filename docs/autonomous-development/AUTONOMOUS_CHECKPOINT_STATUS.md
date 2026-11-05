@@ -1,19 +1,19 @@
 # 最新Checkpoint（J）
 
 CURRENT_BATCH=J_RAW_FACT_PUBLICATION_AND_HANDOFF
-TASKS=26
-COMPLETED_TASKS=18
+TASKS=27
+COMPLETED_TASKS=20
 FAILED_TASKS=0
-BLOCKED_TASKS=4
-PARTIAL_BLOCKED_TASKS=4
+BLOCKED_TASKS=3
+PARTIAL_BLOCKED_TASKS=3
 NEW_DEFECTS=A21-A26已进入动态任务池
 FIXED_DEFECTS=以任务池逐项EVIDENCE和验收文档为准
 TESTS_RUN=后端61方法/分支、Vitest5、Workspace4、15浏览器状态、完整Service suite及各构建
 TESTS_PASS=后端61个具名方法/分支、Vitest5、Workspace Python4；另有15个GUI状态及完整Service harness
 TESTS_FAIL=0_CURRENT_PRODUCT_FAILURES
-LATEST_CODE_COMMIT=82a67f1
+LATEST_CODE_COMMIT=6b96456
 LATEST_COMMIT=本文件所属报告commit，以git log为准
-NEXT_RECOMMENDED_TASK=安全认证材料和维护窗口到位后HTTP/真实双AC；评审协调多命令Plan及正式identity生命周期
+NEXT_RECOMMENDED_TASK=取得安全认证材料后执行四台白名单真实认证与双AC HA；其余继续评审多命令Plan及正式identity生命周期
 FINAL_STATUS=PARTIAL_PENDING_EXTERNAL_GATES
 
 F-J额外交付只读Recent10/时效、单目标Task scope、当前交互身份/ZIP撤权、事实修订/归属及单命令Raw发布。旧Checkpoint E的“Recent10/task snapshot均被schema阻断”结论已被实现证据修正。自动登录授权持续有效；没有Merge/Push/Release，没有终止预览PID60784。未宣称全产品完成。

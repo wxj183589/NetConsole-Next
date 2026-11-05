@@ -14,5 +14,6 @@
 - Cross-AC collection manifest：schema v19 manifest + item provenance、source revision、Raw manifest reference、跨 AC 计数和重启恢复 PASS。
 - Cross-AC collection manifest read API/UI：Domain 列表、详情、source AC 过滤和当前 Site claims 聚合 PASS；`R3_DUAL_AC_COLLECTION_MANIFEST=PASS`、`R3_DUAL_AC_COLLECTION_MANIFEST_SCOPE=PASS`。
 - R3 dual-AC API fixture：过滤、隐藏来源、MAC 校验和授权 guard PASS（`R3_WIRELESS_FILTER_SCOPE=PASS`）。
-- 四台模拟器认证/HA：BLOCKED（无凭据）。
+- 四台模拟器认证/HA：BLOCKED（无 DPAPI vault/profile；协议 banner 可达）。
 - 生产/真实开发数据写入：0。
+- Service-backed Browser smoke：隔离数据根、loopback 临时端口、1920×1080 登录与页面导航 PASS。
