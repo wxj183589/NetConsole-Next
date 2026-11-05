@@ -15,5 +15,5 @@
 | FD-P2-02 | Backup | 配置备份、历史版本、差异和下载授权 | P2 | Raw/archive/claims | COMPLETED_LOCAL | CONFIG_BACKUP_TESTS=1/1 PASS |
 | FD-P2-03 | Topology | LLDP 关系与变化历史 | P2 | verified facts | COMPLETED_LOCAL | H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS |
 | FD-P3-01 | UI | 1920/2560 任务/设备/无线交互验收 | P3 | UI workstream | QUEUED | Chrome screenshots |
-| FD-P3-02 | Integration | module registry/navigation and error states | P3 | frontend build | QUEUED | typecheck/browser |
+| FD-P3-02 | Integration | module registry/navigation and error states | P3 | frontend build | COMPLETED_LOCAL | typecheck/browser |
 | FD-P3-03 | Docs | 全天候 16 项交付报告、矩阵、回执、handoff | P3 | all workstreams | IN_PROGRESS | files exist and current |

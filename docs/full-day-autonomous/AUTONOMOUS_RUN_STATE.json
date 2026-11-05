@@ -8,7 +8,7 @@
   "phase": "CONFIG_BACKUP_AND_DIAGNOSTIC_HISTORY",
   "activeWorkstreams": ["integration"],
   "completedAtStart": ["AP runtime history", "task scope", "interactive files authority", "fact revision/site provenance", "single-command Raw publication", "bounded network diagnostics batch", "configuration backup", "LLDP topology relations", "diagnostic restart history"],
-  "nextTasks": ["four-simulator credential-backed login", "module registry and navigation error states", "1920/2560 UI acceptance", "service-backed browser gate"],
+  "nextTasks": ["four-simulator credential-backed login", "1920/2560 UI acceptance", "service-backed browser gate"],
   "externalBlockers": ["credentials unavailable", "existing service mutex for HTTP gate"],
   "realDataChanged": false,
   "remotePush": false,

@@ -38,3 +38,10 @@
 - 验证：`CONFIG_BACKUP_TESTS=1/1 PASS`、`NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`、完整 Service harness PASS、Release build 0 warning/0 error、`vue-tsc --noEmit` PASS、Vitest `4 files / 7 tests PASS`、Vite build PASS、`git diff --check` PASS。
 - 更新旧测试中的配置命令拒绝断言，使其覆盖新增只读配置备份命令与实际非法 `reboot` 命令。
 - 四台模拟器仍缺安全凭据；真实认证、双 AC HA、切换和实时 AP 归属继续 BLOCKED；未修改生产或开发真实数据，未 push/merge/release。
+
+## 2026-11-05 FD-P3-02
+
+- 新增统一前端 module registry：Router、AppShell 导航和 workspace 标签共用路径、名称、图标及 `READY`/`DISABLED` 状态；移除重复导航定义。
+- 新增未知路由和异步模块加载失败页面，保留目标路径与错误详情并提供返回运行总览操作；不为未接入模块生成模拟业务数据。
+- 验证：`vue-tsc --noEmit` PASS；Vitest `5 files / 9 tests PASS`；Vite build PASS（既有大 chunk warning）；Web UI contract `3 checks PASS`；`git diff --check` PASS。
+- 1920/2560 交互验收、service-backed browser gate 和四台模拟器凭据登录仍待执行；本轮未访问真实设备或真实数据，未 push/merge/release。

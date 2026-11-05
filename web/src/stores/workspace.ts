@@ -1,19 +1,15 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
+import { moduleForPath } from '../moduleRegistry'
 
 export interface WorkspaceTab { path: string; label: string; pinned?: boolean }
-
-const labels: Record<string, string> = {
-  '/': '运行总览', '/devices': '设备管理', '/network-planning': '网络规划', '/terminal': '终端控制台', '/tasks': '任务中心',
-  '/wireless': '无线管理', '/rail': '轨道交通', '/tools': '工具集', '/files': '文件管理', '/settings': '系统设置',
-}
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<WorkspaceTab[]>(loadTabs())
   const activePath = ref('/')
   const tabLabels = computed(() => tabs.value.map((tab) => tab.label))
 
-  function open(path: string, label = labels[path] || '工作区'): void {
+  function open(path: string, label = moduleForPath(path)?.label || '工作区'): void {
     if (!tabs.value.some((tab) => tab.path === path)) tabs.value.push({ path, label })
     activePath.value = path
   }
