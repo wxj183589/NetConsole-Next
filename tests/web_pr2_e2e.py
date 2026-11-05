@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import signal
 import sqlite3
 import sys
 import subprocess
@@ -78,6 +79,35 @@ def create_job(client, selections):
     return result
 
 
+def stop_service(service, catalog_path=None):
+    """Stop the isolated host and allow SQLite handles to be released."""
+    if service.poll() is None:
+        if os.name == "nt":
+            try:
+                service.send_signal(signal.CTRL_BREAK_EVENT)
+            except (AttributeError, OSError, ValueError):
+                service.terminate()
+        else:
+            service.terminate()
+        try:
+            service.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            service.kill()
+            service.wait(timeout=10)
+    # Windows can release SQLite handles just after process exit. Probe the
+    # database with an exclusive read handle before TemporaryDirectory removes
+    # the root, avoiding a flaky cleanup failure after a passing gate.
+    if catalog_path is not None:
+        for _ in range(100):
+            try:
+                with open(catalog_path, "rb", buffering=0):
+                    break
+            except OSError:
+                time.sleep(0.1)
+    else:
+        time.sleep(0.5)
+
+
 def main():
     repo = Path(__file__).resolve().parents[1]
     dll = repo / "src/NetConsole.Next.Service/bin/Release/net10.0/NetConsole.Next.Service.dll"
@@ -102,8 +132,10 @@ def main():
                    NETCONSOLE_NEXT_ARCHIVE_MAX_METADATA_ENTRIES="64",
                    NETCONSOLE_NEXT_ARCHIVE_TEST_COPY_DELAY_MS="5",
                    NETCONSOLE_NEXT_ARCHIVE_CLEANUP_INTERVAL_SECONDS="1")
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         service = subprocess.Popen(["dotnet", str(dll)], cwd=repo, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                   creationflags=creationflags)
         base = f"http://127.0.0.1:{selected}"
         try:
             client = Client(base)
@@ -132,10 +164,14 @@ def main():
 
             # Keep positive file/queue assertions under global roles; a second
             # isolated global user preserves the cross-user quota coverage.
-            with sqlite3.connect(root / "catalog.db") as db:
+            db = sqlite3.connect(root / "catalog.db")
+            try:
                 db.execute("""INSERT INTO web_users(id,username,role,password_salt,password_hash,password_iterations,created_ms,updated_ms)
                     SELECT 'global-fixture-2','global-fixture-2','SUPERADMIN',password_salt,password_hash,password_iterations,created_ms,updated_ms
                     FROM web_users WHERE username='superadmin'""")
+                db.commit()
+            finally:
+                db.close()
             admin, other_admin, superadmin, scoped_admin = Client(base), Client(base), Client(base), Client(base)
             admin.login("superadmin", "superadmin")
             other_admin.login("superadmin", "superadmin")
@@ -214,9 +250,7 @@ def main():
             print("REAL_WINDOWS_GUI=NOT_RUN")
             print("PASS: isolated real service API, archive resource admission, cancellation and ZIP integrity contract")
         finally:
-            if service.poll() is None:
-                service.terminate()
-                service.wait(timeout=15)
+            stop_service(service, root / "catalog.db")
             if service.returncode and service.stdout:
                 print(service.stdout.read()[-4000:])
 
