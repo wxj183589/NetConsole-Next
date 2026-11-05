@@ -12,4 +12,4 @@
 | Site authorization | current scope guards across task/files/terminal/wireless | baseline pass | task center and diagnostics every read/write |
 | Device management | P2A batch and CSV contracts | baseline pass | current UI integration and connection test |
 | Diagnostics/backup/topology | Ping/TCP/DNS diagnostics with restart-durable history, versioned redacted config backup/diff/download, LLDP relation/history/claims API and UI | PASS (isolated fixture/API/UI) | four-simulator credential-backed evidence |
-| UI/UX | device test-connection action, task command detail and task actions | PASS (1920/2560 offline browser) | service-backed browser gate |
+| UI/UX | device test-connection action, task command detail and task actions | PASS (1920/2560 offline browser + 1920 service-backed smoke) | service-backed mutation/browser gate |
