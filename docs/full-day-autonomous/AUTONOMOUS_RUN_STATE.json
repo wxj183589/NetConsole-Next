@@ -6,7 +6,7 @@
   "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_K_MANIFEST_API_AND_SIMULATOR_EVIDENCE",
+  "phase": "CHECKPOINT_L_CONNECTION_ONBOARDING_AND_TASK_LOOKUP",
   "activeWorkstreams": [],
   "completedAtStart": [
     "AP runtime history",
@@ -21,7 +21,9 @@
     "module registry and SUPERADMIN settings UI",
     "cross-AC collection manifest persistence",
     "collection manifest read API/UI",
-    "simulator protocol banner and credential-vault audit"
+    "simulator protocol banner and credential-vault audit",
+    "secure connection onboarding API/UI",
+    "historical task lookup by ID"
   ],
   "nextTasks": [
     "secure credential reference and four-simulator authentication",
@@ -37,5 +39,5 @@
   "remotePush": false,
   "merge": false,
   "release": false,
-  "lastRecoveryCommit": "6b96456"
+  "lastRecoveryCommit": "5e0b2a0"
 }
