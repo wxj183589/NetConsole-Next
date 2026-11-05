@@ -1062,6 +1062,37 @@ if (settings.H3cEnabled)
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
     });
+    app.MapPost("/api/system/h3c/profiles/onboard", (HttpContext context, H3cOnboardRequest request, Catalog rawCatalog) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Host);
+        if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username) ||
+            string.IsNullOrWhiteSpace(request.CredentialReference))
+            return Results.BadRequest(new { error = "host, username and credentialReference are required." });
+        var protocol = request.Protocol?.Trim().ToUpperInvariant() switch
+        {
+            "SSH" => "SSH",
+            "TELNET" => "TELNET",
+            "AUTO" or null or "" => "AUTO",
+            _ => null
+        };
+        if (protocol is null) return Results.BadRequest(new { error = "protocol must be SSH, TELNET or AUTO." });
+        var port = request.Port ?? (protocol == "TELNET" ? 23 : 22);
+        if (port is < 1 or > 65535) return Results.BadRequest(new { error = "port must be between 1 and 65535." });
+        var id = "h3c-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),
+                request.CredentialReference.Trim().ToUpperInvariant(), string.Empty, true, 0, 0,
+                H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback));
+            return rawCatalog.GetH3cDeviceProfile(id) is { } profile
+                ? Results.Created($"/api/system/h3c/profiles/{id}", profile.ToView())
+                : Results.NotFound();
+        }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
+    });
     app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
@@ -1846,6 +1877,8 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string CredentialReference, string HostKeySha256, bool Enabled = true,
     string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
+internal sealed record H3cOnboardRequest(string Host, string Username, string CredentialReference,
+    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
