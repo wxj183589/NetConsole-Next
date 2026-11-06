@@ -4,6 +4,8 @@
 
 状态：**连接策略及共享 worker 预算的定向回归通过；完整业务继承仍为 PARTIAL / REAL_DEVICE_PENDING。** 本文记录连接策略修复及其验收；完整生产入口盘点见 [连接审计](NETMIKO_CONNECTION_AUDIT_20261106.md)。
 
+当前最终功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。下方8320e2f、24项Worker和session69905为策略/预算检查点历史；最终完整harness为session31025 EXIT0，重连172/172、Worker前序同批29/29。旧网络SSH.NET/自定义回显分页已删除，准确候选七项运行门禁通过，见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。VLAN和封存任务诊断下载已补齐；一次性全机诊断命令仍未迁移。
+
 ## 本批问题与最终行为
 
 本批核验发现，连接测试和 Web Shell 已有 AUTO 协议切换逻辑，但采集 session 没有相同的 SSH→Telnet 尝试。连接测试还保留单独的 Telnet 登录路径，使测试与实际采集的连接策略不一致。另一个缺口是，设备档案的 `AllowLegacyAlgorithms` 没有传给 Netmiko worker，原版已验证的 H3C 旧 Host Key 协商兼容参数没有生效。
@@ -21,7 +23,7 @@
 - worker 名额在启动前等待，支持调用者取消；连接的 45 秒期限及 Jump probe 的 30 秒期限均包含预算等待。启动失败归还名额；成功启动后由异步退出观察器在进程实际退出时归还，释放幂等。`Abort`、`Dispose` 和 probe 结束负责终止进程；终止请求失败且进程仍活着时继续占名额。
 - transport 使用独立生命周期锁保护启动与终止，取得名额后复核取消和释放状态，同一实例只启动一次。预算没有复用 SSH 连接，也没有增加连接池或业务调度框架。
 
-上述次数分别约束协议切换和 H3C Host Key 兼容尝试。它们没有实现断线后的任意命令重放、通用重连循环或自建连接池。
+上述次数分别约束协议切换和 H3C Host Key 兼容尝试。后续 `4ee1cb7` 增加共享两次预算的有界断线恢复，仍不重放任意命令、不建设连接池，见 [重连验收](NETMIKO_RECONNECT_ACCEPTANCE_20261106.md)。
 
 ## 原版研究与复用范围
 
@@ -35,7 +37,7 @@
 | 回显、分页与命令执行经验 | `netmiko_connection.py` 的 `safe_send_command`、`safe_send_command_with_paging`；`h3c_collect_service.py` 的命令与 fallback 选择 | Next worker 使用 Netmiko `send_command` 和驱动准备；没有移植原版手工分页循环，避免再次实现终端分页机制 |
 | AC、FIT-AP 和 AP Group | `h3c_ac_collect_service.py` 的 AC 命令集、Netmiko 建连及组证据处理；`services/ac/ac_command_service.py`、`ac_service.py`、`ac_optical_service.py` | Next 保留 AC 采集与事实投影；FIT-AP 通过 AC 管理。原版完整命令集和稳定组证据尚未全部迁移 |
 | 配置生命周期 | `config_lifecycle_service.py` 的 `display current-configuration`、`display saved-configuration` 和统一重试入口 | Next 当前实现独立 H3C 的运行配置备份；保存配置、启动配置和完整生命周期尚未继承 |
-| CLI 诊断文件下载 | `diagnostic_download_service.py` 的 `display diagnostic-information` 和统一重试入口 | Next 现有诊断不包含该 CLI 导出，明确保留为业务缺口 |
+| CLI 诊断文件下载 | `diagnostic_download_service.py` 的 `display diagnostic-information` 和统一重试入口 | Next 已在 `34b524d` 实现任务封存 TXT/ZIP 下载，不重新采集；原版一次性 `display diagnostic-information` 命令仍未实现 |
 
 原版允许 SSH 与 Telnet 各自保存端口、用户名、密码。Next 当前档案只有一组主机、端口、用户名、密码及协议；AUTO 的 Telnet 尝试使用同一档案端点。本批没有扩展为两套协议端点或两套凭据，不能宣称这项参数模型已与原版等同。
 
@@ -49,7 +51,7 @@
 | 设备详情刷新 | 详情和 Facts API 读取 Catalog 已存事实 | 点击刷新本身不会触发新的 CLI 采集；需先执行采集任务 |
 | 批量连接测试 | 设备页明确选择库存 ID → 专用 `devices/connection-tests` API → 现有任务计划与统一 Netmiko 调度；固定只读 `display version` | 仅 SUPERADMIN、已启用且精确关联档案的独立 H3C 设备；整批可见性预检优先，拒绝 FIT-AP 和不支持的目标。证据见 [专项验收](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md) |
 | 设备信息、接口 | H3C 命令计划 → `BoundedCollectionScheduler` → `H3cSshDeviceSession`；ZTE → `ZteCollectionService` → 相同 Netmiko transport | H3C 与 ZTE 有各自业务命令及 parser；其他厂商的完整结构化采集仍待实现和验证 |
-| VLAN | 现有 VLAN 规划、导入、接口 VLAN 字段 | **缺口：无生产 `display vlan` / `show vlan` 采集及完整解析链** |
+| VLAN | `170bf81` 已实现 H3C `display vlan all` detail 采集、Raw 发布、完整表快照及 UI | parser6/6、publication14/14、HTTP25与Chrome mock6/6 PASS；其它厂商和未验证型号仍待验收 |
 | LLDP | H3C 任务命令及 ZTE LLDP 命令共用 Netmiko | LLDP 诊断读取已存 Facts，与主动采集不同 |
 | 光模块 | H3C `display transceiver diagnosis interface` 与 ZTE `show opticalinfo brief` 已有命令与 parser，共用 Netmiko | H3C 可从允许的任务定义/计划 API 提交；任务页快捷命令不覆盖全部命令；型号实机待验证 |
 | AC 与 FIT-AP | H3C AP 列表、地址、射频及相关 WLAN 命令走统一任务链；`WirelessReadModel` 从 AC Facts 构造 AP 观察 | FIT-AP 不独立登录。完整原版 AC 命令集、双 AC HA、切换恢复及实时归属仍待验收 |
@@ -63,7 +65,7 @@
 
 这些业务限制保留，同时由 `NetmikoWorkerBudget` 约束同一 Service 进程的全部上述 worker。该预算不跨多个 Service 实例共享；名额限制的是 worker 进程，不是将 Jump 转发与目标 SSH 拆成独立连接数。
 
-源码中仍保留旧 `SshNetH3cSshTransportFactory`、旧网络 `SshTerminalTransport` 及其历史处理代码，当前默认 DI、采集和网络终端分支不使用它们。它们是残留代码债务；“生产默认入口已统一”不等于“旧实现已经全部删除”。
+后续架构收口已删除旧 `SshNetH3cSshTransportFactory`、旧网络 `SshTerminalTransport`、自定义回显/分页处理及专用 wire harness。Linux SSH.NET、串口与 TCP 诊断按各自用途保留，见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。
 
 ## 驱动、认证和 Host Key
 
@@ -99,7 +101,7 @@ worker 禁用用户 `known_hosts` 读写和交互确认，登录及 Netmiko 准�
 - `tests/NetConsole.Next.Service.Tests/NetmikoWorkerBudgetTests.cs`：共享饱和、取消、Dispose 等待、活跃进程持有、重复连接/清理、启动/连接失败、快速退出和 probe 释放；使用真实本机合成子进程。
 - `tests/netmiko_worker_test.py`：H3C 兼容作用范围、尝试上限和 Jump 资源释放回归。
 
-## 验证结果与证据范围
+## 策略与预算检查点验证结果（历史）
 
 | 验证 | 本批实际结果 | 能证明的范围 |
 | --- | --- | --- |
@@ -116,17 +118,17 @@ worker 禁用用户 `known_hosts` 读写和交互确认，登录及 Netmiko 准�
 
 预算测试复用测试程序集作为 JSON worker 子进程，不依赖外部 Python 安装，也不使用真实设备。它验证生产 C# 进程启动和释放路径；实际 CPython/Netmiko 协议及 Jump 转发仍由 Python 单元测试和根任务 E2E 覆盖。
 
-本批准确功能提交为 `8320e2f0653c0f295700883c1900eef0a0690632`；当前候选 `build/service-8320e2f-20261106` 的 ProductVersion 已核验包含该完整 SHA。CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装与复制前后隔离 driver/Telnet smoke 均 PASS；候选 Production/独立 cwd-data/PATH 仅 System32 的五项运行门禁均 PASS，详见 [当前候选验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；当前 framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
+此历史检查点的准确功能提交为 `8320e2f0653c0f295700883c1900eef0a0690632`；对应候选 `build/service-8320e2f-20261106` 的 ProductVersion 已核验包含该完整 SHA。CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装与复制前后隔离 driver/Telnet smoke 均 PASS；当时候选五项运行门禁均 PASS。当前9fc499f候选和七项运行门禁详见 [最终架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
 
 已有 `reports/netmiko-simulator-20261106.json` 记录 HCL AC1 `192.168.56.2`、AC2 `192.168.56.5` 和 SW `192.168.56.3` 的只读命令返回；这是前序批次证据，本次连接策略审计未重新登录这些模拟器。远端配置写入为 0。
 
 ## 保留问题
 
-1. VLAN 实时 CLI 采集、完整 AP Group 证据、原版完整 AC 命令集与 CLI 诊断导出尚有缺口。专用批量连接入口已补齐，限定为独立 H3C 的只读版本命令测试，不扩大其他厂商的业务兼容范围。
+1. 完整 AP Group 证据、原版完整 AC 命令集与一次性 `display diagnostic-information` 命令尚有缺口。H3C VLAN采集/快照已由170bf81补齐，任务封存TXT/ZIP诊断下载已由34b524d补齐。专用批量连接限定为独立H3C的只读版本命令测试，不扩大其他厂商的业务兼容范围。
 2. Huawei、Cisco、Ruijie、Juniper 当前的驱动可选性不能扩写成这些厂商的全业务兼容。未验证型号与真实交换机、路由器、AC 均标记 `REAL_DEVICE_PENDING`。
 3. 配置备份仅覆盖当前声明的独立 H3C 运行配置；原版启动配置、保存配置和其他厂商流程尚未完整迁移。本批未执行任何远端配置变更。
 4. AUTO 目前共用一个档案端口和凭据；不提供原版独立 SSH/Telnet 参数。显式内部驱动与协议不符时直接失败。
-5. 断线后的通用自动重连、退避和命令重放尚未实现；已有任务显式重试入口不能当作完整的自动恢复能力。
+5. 4ee1cb7及9fc499f已补齐有界断线恢复、退避与发送前精确只读命令恢复，最终172/172回归通过；发送后结果未知及交互命令不自动重放，不能宣称任意命令均可安全恢复。
 6. 真实 Linux、真实 Jump Host、双 AC HA 与现场切换恢复、正式离线安装和其他 Windows 环境仍待验收。
 
 本批保留当前分支，仅本地提交；未执行 Push、Merge 或 Release。

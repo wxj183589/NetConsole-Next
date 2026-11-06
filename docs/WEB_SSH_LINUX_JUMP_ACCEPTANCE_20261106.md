@@ -2,6 +2,16 @@
 
 日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。本批保留当前分支，只做本地提交；不 Push、Merge、Release，不修改真实数据。完整全天候目标仍为 `PARTIAL`。
 
+## 当前最终检查点
+
+功能提交 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16` 已退役旧网络SSH.NET/自定义回显分页实现，保留独立Linux SSH.NET。统一网络入口、认证与Host Key、VLAN、封存诊断和有界重连的源码与范围见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。最终Release构建0 warnings/errors；默认完整Service harness session31025 EXIT0，重连172/172；网络终端契约3 checks与完整浏览器E2E session87828 EXIT0。
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-9fc499f-20261106` 的ProductVersion精确为 `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。bundle为 `build/netmiko-reconnect-final-20261106`；当前Vue构建及复制前后隔离smoke PASS。候选E2E session16200 EXIT0，BUNDLED_RUNTIME/STATIC_UI/NETMIKO_CONNECTION/TASK_DIAGNOSTICS/NETMIKO_RECONNECT/LINUX_WEBSOCKET/CANDIDATE七项PASS，覆盖当前VLAN与诊断页面、TXT/ZIP封存hash和不重采集、内置Worker恢复且不重放已完成命令。
+
+结构化报告：Workspace `reports/netmiko-final-9fc499f-20261106.json`。下方8320e2f与a3954a5候选为历史检查点，不代表当前版本。目标机安装/SCM/升级卸载、真实Linux/Jump和硬件仍待验收，不宣称全产品完成。
+
+当前源码最终Jump E2E session65279 EXIT0，`SITE_JUMP_HTTP_NETMIKO`与`SITE_JUMP_RESTART_DELETE`均PASS，包括连接测试和终端转发拒绝各仅尝试一次、稳定错误码、取消释放与重启后自动读取配置。候选及Jump测试后Service/Python残留0、`offline-candidate-*`目录0；用户Vite PID90348和`127.0.0.1:18792`监听保留。
+
 ## 实现
 
 - 网络设备采集、连接测试和 Web Shell 继续统一使用 CPython + Netmiko。轻量服务只管理任务、凭据、驱动、Host Key、取消、错误和数据发布。交换机/路由器/AC/独立 AP 等共用此入口；FIT-AP 通过 AC 管理。
@@ -38,13 +48,13 @@ SmartHub 只读参考为 `D:\study\h3cai-smarthub\ui-reconstruction` 的布局�
 
 最新连接策略、共享 worker 预算与批量连接入口的源码和回归证据分别见 [连接策略](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md) 与 [批量测试](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md)。
 
-## 当前准确功能提交候选
+## 8320e2f 历史准确版本候选
 
 功能提交：`8320e2f0653c0f295700883c1900eef0a0690632`。最终终端首次 FAILED 原因码修复后的 Release 构建为 0 warnings / 0 errors；完整默认 Service harness 为 EXIT 0（session69905）。Jump 最终复验 `SITE_JUMP_HTTP_NETMIKO` 与 `SITE_JUMP_RESTART_DELETE` 均 PASS；测试仍在首次 FAILED 时断言稳定原因码。确定性回归阻塞录制收尾，验证内存及 Catalog 在收尾前后保持一致。
 
-当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 已逐字核对为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`。离线 bundle 为 `build/netmiko-8320e2f-20261106`，使用本地 18 个固定版本/hash wheel，`--no-index --require-hashes` 安装。组合构建从当前 Vue 源码生成 Webroot，未改源码静态资源；复制前后隔离 driver/Telnet smoke 均 PASS。
+该历史候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 已逐字核对为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`。离线 bundle 为 `build/netmiko-8320e2f-20261106`，使用本地 18 个固定版本/hash wheel，`--no-index --require-hashes` 安装。组合构建从该检查点 Vue 源码生成 Webroot，未改源码静态资源；复制前后隔离 driver/Telnet smoke 均 PASS。
 
-`py -3.13 -B tests/offline_candidate_e2e.py --candidate <当前候选>` 的五项门禁均 PASS：
+该历史候选当时运行 `py -3.13 -B tests/offline_candidate_e2e.py --candidate <候选>` 的五项门禁均 PASS：
 
 - `OFFLINE_BUNDLED_RUNTIME`：内置 CPython 3.13、Netmiko 4.7.0、Paramiko 4.0.0。
 - `OFFLINE_STATIC_UI`：HTTP 字节 hash 与候选一致，入口可达 Linux、Jump 设置、终端、设备批量连接/备份及配置备份页面。

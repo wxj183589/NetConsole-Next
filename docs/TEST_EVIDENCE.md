@@ -2,7 +2,13 @@
 
 Evidence is scoped to the stated code and environment. CI or simulation does not imply field acceptance.
 
-## G2.1 current branch evidence
+## Current Netmiko checkpoint, 2026-11-06
+
+Branch `codex-A/netconsole-next-r3-dual-ac`, feature `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`: Release build 0 warnings/errors; full Service harness session31025 EXIT0 with reconnect172/172; terminal browser E2E session87828 and Jump E2E session65279 EXIT0. The exact-version Windows candidate passed seven isolated runtime gates, session16200 EXIT0. Full evidence and limitations are in [unified architecture acceptance](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) and Workspace `reports/netmiko-final-9fc499f-20261106.json`. No remote CI, Push, Merge or Release was performed for this checkpoint.
+
+The following G2/G2.1/G2.3 records retain their original SHAs and test environments. Their words “current” and dependency versions refer to those historical checkpoints. `ssh_protocol_sim.py` and `requirements-ssh-protocol.txt` retired with the obsolete network SSH.NET implementation; their old results do not validate the current Netmiko runtime or current dependency versions.
+
+## G2.1 branch evidence (historical)
 
 Development branch `feat/g2-1-h3c-ssh-hardening`, based on the open PR #10 head `e41f87333373da46957078f735da21613fe5fe92`. Current branch HEAD is `426a42c2fd8b3f91576444ec2bd9325052b7bdb5`. GitHub Actions runs `39638777555` and `39638767476` passed on Ubuntu and Windows Server 2025; the Windows deployment-script syntax runs `39638777563` and `39638767206` also passed. Run `39638777555` includes the Windows-only legacy Raw path alias regression and completed the Windows SCM lifecycle checks. Earlier Windows run `39637531532` exposed duplicate catalog rows when legacy backslash paths met forward-slash recovery paths; commit `426a42c` fixes the canonicalization and comparison behavior. The load artifacts record the measured Service implementation commit `99d5d836f3f89a6131888e226ffff02ea4624117`; this patch did not claim a performance improvement. PR #11 remains open and unmerged.
 

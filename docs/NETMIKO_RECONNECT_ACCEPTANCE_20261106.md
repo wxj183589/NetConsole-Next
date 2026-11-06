@@ -6,6 +6,14 @@
 
 本文记录 NetConsole-Next 对原版 NetConsole 断线处理语义的继承边界，以及本批新增的 Netmiko Worker 重连策略。本文只描述只读 CLI 采集和连接恢复，不授权或验证任何设备配置变更。
 
+## 当前最终检查点
+
+准确功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`，包含有界恢复 `4ee1cb7` 和后续异常/并发分类修复。最终 Release build 为 0 warnings / 0 errors；默认完整 Service harness session31025 EXIT0，`NETMIKO_RETRY_TESTS=172/172`。下文163与session46633保留为前一检查点历史，不代表当前计数。
+
+新增回归确认 Jump 配置/指纹 CAS 冲突返回 `JUMP_HOST_CONFIGURATION_CHANGED`，仅结束当前会话，不禁用 Catalog、不重试、不继续发送命令。显式转发拒绝 `JUMP_HOST_FORWARD_DENIED` 不重试；登录连接丢失分类 `UNREACHABLE`，终端断线分类 `TRANSPORT_DISCONNECTED`，录制收尾前后原因码一致。
+
+准确候选 `build/service-9fc499f-20261106` 的 EXE ProductVersion 为 `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。session16200 EXIT0，7项离线门禁通过，其中 `OFFLINE_NETMIKO_RECONNECT` 实际运行内置CPython/Netmiko，验证发送前断线恢复、Raw顺序和不重放已完成命令。完整网络终端浏览器E2E session87828 EXIT0；交互Shell仍不使用自动命令重放。完整结果、候选和边界见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)，结构化报告为 Workspace `reports/netmiko-final-9fc499f-20261106.json`。
+
 ## 原版参考语义
 
 原版 `src/netconsole/services/netmiko_connection.py` 的 `run_netmiko_with_retry` 会遍历 `ConnectionManager` 生成的候选连接目标；每个目标只建立一次连接并执行完整 callback，最后释放连接。它不是同一端点的定次数重连器。由于 callback 可能包含写命令，Next 不直接重放这个 callback。
@@ -56,7 +64,7 @@ Jump Host 的业务配置在逻辑会话中冻结。重连前会重新读取并�
 
 已知的原版测试参考包括 `tests/test_ac_mesh_link_resident_polling.py` 的连接失败重连、解析失败不重连和可中断退避，`tests/test_online_mr_collection.py` 的重连初始化与失败采样语义，以及 `tests/test_fping_v5.py` 的连接 reset 限次恢复。
 
-## 本批定向结果
+## 前一检查点定向结果（历史）
 
 以下结果由开发执行方与主任务在 2026-11-06 的当前修改集上执行；所有 SSH 故障注入均使用隔离回环合成服务，不连接现场设备。
 

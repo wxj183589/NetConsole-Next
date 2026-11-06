@@ -1,6 +1,45 @@
 # 完整测试矩阵
 
-2026-11-06 当前集成检查点：功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。本轮 AUTO/legacy 策略、共享 worker 预算、专用批量连接、Terminal reason 修复和当前离线候选均已完成本机最终验证。整体 **PARTIAL**，实机保持 **REAL_DEVICE_PENDING**。
+## 2026-11-06 当前检查点：9fc499f
+
+Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。 整体 **PARTIAL / REAL_DEVICE_PENDING**。
+
+| 门禁 | 当前结果 | 证据边界 |
+| --- | --- | --- |
+| Release Service / Tests build | 9fc499f PASS，0 warnings / 0 errors | 网络transport退役及分类 / Jump CAS修正后的最终构建 |
+| 默认完整 Service harness | 最终session `31025`，EXIT 0 PASS | 包括重连172、ZTE12、scope13、VLAN6/publication14、诊断89及既有回归 |
+| Netmiko有界恢复 / worker | C#172/172、Python29/29、HTTP13 checks PASS | 最多2次额外重连；发送前精确只读allowlist；不重放发送后未知结果 |
+| ZTE / Task Site边界 | 12/12、13/13 PASS | 当前actor/Profile/Site/target复核；失败保留旧Current |
+| 网络transport退役 / CI | 9fc499f COMPLETED_LOCAL；最终完整harness PASS | 旧网络SSH.NET移除；Linux保留；CI仅workflow与本机等价gates，远端未运行 |
+| VLAN parser / publication | 6/6、14/14 PASS | 已测Comware detail、整表Current/history；不是其他厂商或真实型号兼容 |
+| VLAN HTTP→Netmiko→合成 SSH | 25 checks PASS | 独立Service/隔离数据/真实CPython与回环SSH；最后分页与正文边界修复由后续完整harness覆盖 |
+| VLAN Chrome源码UI / API mock | 6/6场景 PASS | 1920×1080 / 2560×1440；不执行后端或设备连接 |
+| CLI诊断后端定向 | 89/89 PASS | 篡改/配置排除/partial/权限/64KiB撤权/取消/并发/下载零新增任务与文件 |
+| CLI诊断 HTTP→Netmiko→合成 SSH | 21 checks PASS | TXT/ZIP/hash、权限/篡改、重启后无新设备命令；最终脱敏后大小边界由完整harness覆盖 |
+| TasksView / Chrome诊断UI | Vue20/20、Chrome mock8/8 PASS | 浏览器实际保存TXT/ZIP，关闭/切任务/撤权/迟到隔离；浏览器使用模拟API |
+| 完整前端 | Vitest14 files/124 tests、typecheck、Vite build PASS | 包含VLAN及诊断下载；既有大chunk提示保留 |
+| 当前离线候选 | 9fc499f七项本机PASS，session16200 EXIT0 | 包括OFFLINE_NETMIKO_RECONNECT与TASK_DIAGNOSTICS；精确ProductVersion，Production/隔离数据/PATH仅System32 |
+
+当前离线候选 `D:\study\NetConsole-Next-Workspace\build\service-9fc499f-20261106`，ProductVersion `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`，复用已验证 bundle `build/netmiko-reconnect-final-20261106`（CPython 3.13 / Netmiko 4.7 / Paramiko 4）。构建 session `2553` EXIT 0，当前 Vue 与复制前后 driver / Telnet smoke PASS；Production、独立 cwd/隔离数据、PATH 仅 System32、无 Python/worker 覆盖的 E2E session `16200` EXIT 0。`OFFLINE_BUNDLED_RUNTIME`、`OFFLINE_STATIC_UI`、`OFFLINE_NETMIKO_CONNECTION`、`OFFLINE_TASK_DIAGNOSTICS`、`OFFLINE_NETMIKO_RECONNECT`、`OFFLINE_LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 七项均 PASS；重连不重放已完成命令，诊断 TXT/ZIP hash 验证且不重新采集。最终自有 Next Service / Python 进程残留 0、offline-candidate 临时目录 0，用户 Vite PID `90348` / `127.0.0.1:18792` 保留。目标机仍需 .NET 10 ASP.NET Core Runtime，安装/SCM/升级/卸载尚未验收；34b524d 及更早候选仅作历史。
+
+本批详细边界见 `../H3C_VLAN_ACCEPTANCE_20261106.md`、`../TASK_DIAGNOSTIC_DOWNLOAD_ACCEPTANCE_20261106.md`、`../NETMIKO_RECONNECT_ACCEPTANCE_20261106.md`。未写设备配置、未访问旧数据根；不 Push、Merge、Release。有界发送前恢复、旧网络 transport 退役与精确 SHA 离线候选已通过本机门禁。
+
+FD-P1-35：`4ee1cb7` 实现 Netmiko 有界发送前恢复；`9fc499f` 最终检查增至 C# 172/172、Python worker 29/29、HTTP 断线注入 13 checks、ZTE 操作边界 12/12、Task Site scope 13/13 PASS。同一逻辑任务最多 2 次额外重连（250ms / 1000ms），共享原期限、取消与 Service 16 个 worker 槽；仅对驱动精确只读 allowlist 中、发送前已确认连接丢失的当前命令恢复。发送后断线、部分回显、ReadTimeout、worker EOF/pipe 和交互 Shell 操作不自动重放。重连前复核当前 actor / Site / target / endpoint；每次物理连接认证后才更新 Host Key。ZTE 撤权将已完成事实封为 PARTIAL 历史并保留旧 Current。
+
+FD-P1-36：`9fc499f` 已退役旧 SSH.NET 网络设备 transport / decoder / 测试，并修复连接异常与 Jump CAS 并发分类；Linux SSH.NET ShellStream 保留。最终 Release Service / Tests 构建 0 warnings / 0 errors；完整 Service harness session `31025` EXIT 0 PASS，重连检查增至 172/172，ZTE12、scope13、VLAN6/publication14、诊断89均 PASS。CI 已转 CPython 3.13 真实 Netmiko 门禁，仅更新 workflow 并验证本机等价门禁，未执行远端 CI。
+
+
+终端最终回归：`terminal_ui_contract.py` 3 checks PASS；完整终端浏览器 E2E session `87828` EXIT 0，覆盖 Netmiko Telnet 自动认证、SSH / Telnet / AUTO、中文、COM、split/search/theme、ticket/history/replay/export 和 PTY resize；均为本机合成设备 / 浏览器范围。
+
+最终 Jump Host E2E session `65279` EXIT 0：`SITE_JUMP_HTTP_NETMIKO`、`SITE_JUMP_RESTART_DELETE` 两项 PASS，包含连接测试与终端转发拒绝各只尝试一次的新断言。最终进程核验 Next Service / Python 残留 0、`test-data/offline-candidate-*` 目录 0；用户 Vite PID `90348` 与 `127.0.0.1:18792` 监听保留。结构化证据：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-9fc499f-20261106.json`。
+
+统一架构与全入口验收见 [Netmiko统一验收](../NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。
+
+## 8320e2f 集成测试矩阵（历史）
+
+以下保留该批测试数、session69905与五项候选门禁；其中“当前/最终”均指当时范围，不能作为34b524d候选证据。
+
+2026-11-06 历史集成检查点：功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。本轮 AUTO/legacy 策略、共享 worker 预算、专用批量连接、Terminal reason 修复和当前离线候选均已完成本机最终验证。整体 **PARTIAL**，实机保持 **REAL_DEVICE_PENDING**。
 
 | 门禁 | 当前证据 | 证据边界 |
 | --- | --- | --- |

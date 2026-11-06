@@ -29,8 +29,7 @@
 - 业务 parser、命令白名单、事实模型和 SQLite 不进入 worker。
 
 worker 连接后先返回 SSH SHA256 指纹；.NET 自动首次信任或轮换（包括旧 STRICT 档案），
-不弹出确认窗口。Telnet 不使用 HostKey。现有 `SshNetH3cSshTransport` 仅保留为显式
-合成 wire test transport，不是生产默认入口。
+不弹出确认窗口。Telnet 不使用 HostKey。旧网络 SSH.NET transport、提示符/分页回显收集器和流式解码器已退役；SSH.NET 仅保留独立 Linux 终端用途。
 
 ## 凭据
 
@@ -50,9 +49,13 @@ H3C profile 的密码存于设备 profile 记录，按 profile ID 读取；共�
 
 ## 本轮定向回归
 
-2026-11-06 当前连接增量：采集、连接测试与网络 Web Shell 共用有界 AUTO 协议策略；显式允许的 H3C 旧 Host Key 协商兼容最多再尝试一次。所有网络 worker 与 Jump probe 共享每 Service 进程 16 个名额，等待可取消，实际子进程退出后才归还。没有新增连接池或任意命令重放，通用断线自动重连仍未实现。策略与原版差异见 [连接策略验收](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md)。
+当前最终功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；旧网络SSH.NET、回显/分页及专用wire harness已退役。Release构建0 warnings/errors，完整Service harness session31025 EXIT0，重连172/172；网络终端契约3 checks、完整浏览器session87828 EXIT0。准确版本候选7项运行门禁通过；最终源码、报告及待验收项见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。下方历史测试按当时范围保留。
+
+2026-11-06 当前连接增量：采集、连接测试与网络 Web Shell 共用有界 AUTO 协议策略；显式允许的 H3C 旧 Host Key 协商兼容最多再尝试一次。所有网络 worker 与 Jump probe 共享每 Service 进程 16 个名额，等待可取消，实际子进程退出后才归还。没有新增连接池或任意命令重放。后续 `4ee1cb7` 已实现同一逻辑会话最多两次额外重连、250/1000 ms 可取消退避，并在每次重连和每条命令前复核当前授权；只有发送前明确断线的当前厂商精确只读命令可以恢复。详见 [重连验收](NETMIKO_RECONNECT_ACCEPTANCE_20261106.md)。策略与原版差异见 [连接策略验收](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md)。
 
 设备页现有专用批量连接入口，按精确库存 ID 创建固定只读 `display version` 任务计划，复用已有调度、报告与取消；只支持已关联有效档案的独立 H3C。预检和执行 scope 捕获间的库存重绑会在任务写入前拒绝。详见 [批量连接验收](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md)。
+
+以下为 `8320e2f` 策略/预算/批量连接批次的历史结果；当前统一架构与准确版本候选见 [最终架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。
 
 本批功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`；Release 构建 0 warnings / 0 errors；终端原因码修复后的最终默认 Service harness EXIT 0（session69905）；连接策略 6 组、共享预算 6 组、批量连接 8/8、Netmiko worker 24/24、Vue 12 files / 82 tests 与 typecheck、Chrome 批量页面 mock 4 组及真实 Service→Netmiko→合成 SSH 14/14 均 PASS。Jump 最终回环/重启删除两项 PASS，首次 FAILED 原因码有确定性回归。当前准确 SHA 离线候选五项运行门禁 PASS，见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)；下列旧计数保留为历史。
 

@@ -1,5 +1,15 @@
 # Netmiko Windows 离线运行包
 
+## 当前准确版本候选（2026-11-06）
+
+当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-9fc499f-20261106`，EXE ProductVersion 精确为 `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。复用 Worker 未变化的 `build/netmiko-reconnect-final-20261106`，内置 CPython3.13、Netmiko4.7.0、Paramiko4.0.0及18个固定版本/hash wheel。构建session2553 EXIT0，当前Vue源码构建与复制前后driver/Telnet/JSON smoke PASS。
+
+`py -3.13 -B tests/offline_candidate_e2e.py --candidate <当前目录>`，session16200 EXIT0。Production、独立cwd/数据根、PATH仅System32且清除Python/Worker覆盖，7项均PASS：`OFFLINE_BUNDLED_RUNTIME`、`OFFLINE_STATIC_UI`、`OFFLINE_NETMIKO_CONNECTION`、`OFFLINE_TASK_DIAGNOSTICS`、`OFFLINE_NETMIKO_RECONNECT`、`OFFLINE_LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE`。候选使用自身运行时，覆盖VLAN/任务诊断入口、TXT/ZIP封存hash及不重采集、只读命令断线恢复且不重放已完成命令。
+
+准确证据见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) 和 Workspace `reports/netmiko-final-9fc499f-20261106.json`。这是本机候选运行验收，framework-dependent Service仍需目标机.NET10 ASP.NET Core Runtime；SCM安装、升级卸载及其他Windows机器继续待验收。未Push、Merge或Release。
+
+## 构建与部署方法
+
 目标为 Windows x64 和 CPython 3.13。构建机需要本机安装 CPython 3.13 x64（含 pip）、仓库源码和 `tools/netmiko_requirements.txt` 全部固定版本对应的本地 wheel。构建不会下载依赖，缺少兼容 wheel 时直接失败。wheel 可以预先放在离线 wheelhouse，也可以读取本机 pip 缓存；wheel 来源和获取方式由部署人员核验。
 
 ```powershell
@@ -30,6 +40,6 @@ py -3.13 tools/publish_windows_offline.py --name service-offline-candidate --bun
 
 历史连接批次候选为 Workspace `build/service-web-linux-jump-a3954a5-20261106`，程序集 ProductVersion 为 `1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b`，内含 `tools/netmiko/`；构建时前后隔离 driver/Telnet smoke PASS。此包早于 Group/cache/F10/配置备份及最新连接/批量测试增量，不作为当前候选。最新准确功能提交的候选及运行证据见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。这不替代目标机安装、Windows SCM 生命周期或升级卸载验收。
 
-当前本机候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；配套 bundle 为 `build/netmiko-8320e2f-20261106`。当前 Vue 源码构建、复制前后 driver/Telnet smoke，以及 Production/独立 cwd-data/PATH 仅 System32 的候选运行五项门禁均 PASS，覆盖内置依赖、HTTP 资源 hash、设备批量与备份页面可达、回环 SSH Netmiko 登录和 Linux WebSocket。Service/Python 及该轮临时目录残留为 0；准确证据见上述专项文档和 Workspace `reports/netmiko-final-8320e2f-20261106.json`。此结果仅为本机候选运行验收，未安装 SCM，未发布。
+前序本机候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；配套 bundle 为 `build/netmiko-8320e2f-20261106`。该检查点的 Vue 源码构建、复制前后 driver/Telnet smoke，以及 Production/独立 cwd-data/PATH 仅 System32 的候选运行五项门禁均 PASS，覆盖内置依赖、HTTP 资源 hash、设备批量与备份页面可达、回环 SSH Netmiko 登录和 Linux WebSocket。Service/Python 及该轮临时目录残留为 0；历史证据见 Workspace `reports/netmiko-final-8320e2f-20261106.json`。此结果仅为该历史版本的本机候选运行验收，不代替本文顶部当前版本，未安装 SCM，未发布。
 
 服务实际运行账户也必须能读取这些路径。重新构建以更新 worker 或依赖；包内 worker 必须与服务版本一起交付。构建与导入检查不连接设备，不代表设备兼容性、模拟器验收或生产验收。当前脚本只验证 Windows x64 CPython 3.13，其他平台和版本需要分别验证。
