@@ -130,7 +130,10 @@ internal sealed record WirelessApResourceView(
     string ProjectionRevision,
     string? ConflictReason,
     IReadOnlyList<WirelessApObservationView> Observations,
-    string? StateConflictReason = null);
+    string? StateConflictReason = null)
+{
+    public string IdentityRevision => WirelessIdentityContract.ComputeRevision(this);
+}
 
 internal sealed record WirelessApGroupView(
     string Id,

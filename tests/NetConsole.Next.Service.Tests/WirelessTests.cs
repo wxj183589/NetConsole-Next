@@ -22,6 +22,7 @@ internal static class WirelessTests
         MissingEvidenceIsNotContradiction();
         SameRevisionStateConflictIsPreserved();
         ReportsMultiSourceMasterWithoutTopologyInference();
+        WirelessIdentityContractTests.Run();
         Console.WriteLine("WIRELESS_PROJECTION_TESTS=PASS");
     }
 

@@ -1682,6 +1682,20 @@ app.MapGet("/api/system/wireless/ap-resources/{id}", (HttpContext context, strin
     { return WirelessAuthorityUnavailable(ex); }
 });
 
+app.MapGet("/api/system/wireless/ap-resources/{id}/identity-review", (HttpContext context, string id,
+    WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var resource = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        return resource is null ? WirelessResourceNotVisible() : Results.Ok(WirelessIdentityContract.Describe(resource));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
 app.MapGet("/api/system/wireless/ap-resources/{id}/runtime-state", (HttpContext context, HttpRequest request, string id,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {
