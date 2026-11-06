@@ -376,17 +376,39 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
 
             result = eventually(traced)
             hops = result["items"][0]["traceRoute"]
-            assert result["state"] == "SUCCEEDED" and result["succeededChecks"] == result["totalChecks"] == 1
-            assert hops["destinationReached"] and hops["destinationAddress"] == "127.0.0.1" and hops["maxHops"] == 30
-            assert len(hops["hops"]) == 1 and hops["hops"][0]["ttl"] == 1
-            assert hops["hops"][0]["address"] == "127.0.0.1" and hops["hops"][0]["status"] == "REACHED"
-            assert hops["hops"][0]["latencyMs"] >= 0 and target.commands == previous_commands
+            trace_failure = None
+            try:
+                assert result["state"] == "SUCCEEDED" and result["succeededChecks"] == result["totalChecks"] == 1
+                assert hops["destinationReached"] and hops["destinationAddress"] == "127.0.0.1" and hops["maxHops"] == 30
+                assert len(hops["hops"]) == 1 and hops["hops"][0]["ttl"] == 1
+                assert hops["hops"][0]["address"] == "127.0.0.1" and hops["hops"][0]["status"] == "REACHED"
+                assert hops["hops"][0]["latencyMs"] >= 0
+            except (AssertionError, KeyError, TypeError, IndexError):
+                # Finish independent schedule persistence/fault gates before
+                # returning a failing exit status for actual ICMP acceptance.
+                trace_failure = ("state=" + str(result.get("state")) + "; outcome=" +
+                                 str(result["items"][0].get("outcome")))
+            assert target.commands == previous_commands, "Host diagnostics sent a device command"
+            summaries = config_expect(owner, "/api/system/diagnostics/runs?limit=1")
+            assert len(summaries) == 1 and summaries[0]["id"] == trace["id"]
+            assert summaries[0]["totalDevices"] == summaries[0]["totalChecks"] == 1
+            assert summaries[0]["completedChecks"] == 1 and summaries[0]["kinds"] == ["TRACEROUTE"]
+            assert not ({"actor", "items", "host", "deviceIds"} & summaries[0].keys())
+            assert config_expect(admin, "/api/system/diagnostics/runs?limit=1") == summaries
+            assert config_expect(admin, trace_path) == result, "Existing ADMIN history read was narrowed"
+            for invalid in (0, 129):
+                assert config_expect(owner, "/api/system/diagnostics/runs?limit=" + str(invalid), status=400)["error"] == "DIAGNOSTIC_HISTORY_LIMIT_INVALID"
             stop()
             owner, admin = start()
             assert config_expect(owner, plans) == [completed]
             assert config_expect(owner, trace_path)["items"][0]["traceRoute"] == hops
+            assert config_expect(owner, "/api/system/diagnostics/runs?limit=1") == summaries
             assert target.commands == previous_commands and definition_count(root) == before + 1
-            print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no CLI commands)", flush=True)
+            print("OFFLINE_DIAGNOSTIC_HISTORY=PASS (bounded summary discovery, ADMIN read compatibility, restart, no diagnostic admission)", flush=True)
+            if trace_failure is None:
+                print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no CLI commands)", flush=True)
+            else:
+                print("OFFLINE_TRACEROUTE=FAIL (" + trace_failure + "; required live ICMP gate)", flush=True)
 
             assert config_expect(owner, plan_path, "DELETE") == {"deleted": True}
             config_expect(owner, plan_path, "PATCH", {"enabled": True}, 404)
@@ -415,6 +437,8 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
             eventually(lambda: target.active == 0)
             assert not target.errors, target.errors
             print("OFFLINE_BACKUP_SCHEDULES=PASS (CRUD/role/input, durable restart, disabled/overdue once via bundled Netmiko, sanitized SAVED snapshot, delete, corrupt-store isolation/repair)", flush=True)
+            if trace_failure is not None:
+                raise AssertionError("Required Windows loopback Traceroute gate failed: " + trace_failure)
         except Exception:
             log.flush()
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]

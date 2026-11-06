@@ -2,13 +2,13 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage } from 'element-plus'
-import type { NetworkDiagnosticItem, NetworkDiagnosticRun } from '../api/client'
+import { ApiRequestError, type NetworkDiagnosticItem, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import ToolsView from './ToolsView.vue'
 
 const api = vi.hoisted(() => ({ getHostTools: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(),
-  updateHostTool: vi.fn(), launchHostTool: vi.fn(), startNetworkDiagnostics: vi.fn(), getNetworkDiagnostics: vi.fn(), cancelNetworkDiagnostics: vi.fn() }))
-vi.mock('../api/client', () => api)
+  updateHostTool: vi.fn(), launchHostTool: vi.fn(), startNetworkDiagnostics: vi.fn(), listNetworkDiagnostics: vi.fn(), getNetworkDiagnostics: vi.fn(), cancelNetworkDiagnostics: vi.fn() }))
+vi.mock('../api/client', async importOriginal => ({ ...await importOriginal<typeof import('../api/client')>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }))
 
 function item(overrides: Partial<NetworkDiagnosticItem> = {}): NetworkDiagnosticItem {
@@ -24,6 +24,11 @@ function run(overrides: Partial<NetworkDiagnosticRun> = {}): NetworkDiagnosticRu
   return { id: 'diagnostic-one', actor: 'tester', state: 'SUCCEEDED', timeoutMs: 30000, totalDevices: 1, totalChecks: 1,
     completedChecks: 1, succeededChecks: 1, failedChecks: 0, noEvidenceChecks: 0, cancelledChecks: 0, queuedChecks: 0,
     runningChecks: 0, progressPercent: 100, createdMs: 1000, items: [item()], ...overrides }
+}
+function summary(value = run()): NetworkDiagnosticRunSummary {
+  return { id: value.id, state: value.state, totalDevices: value.totalDevices, totalChecks: value.totalChecks,
+    completedChecks: value.completedChecks, progressPercent: value.progressPercent, createdMs: value.createdMs,
+    kinds: [...new Set(value.items.map(item => item.kind))] }
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 const wrappers: VueWrapper[] = []
@@ -52,6 +57,7 @@ describe('network diagnostic tools and traceroute', () => {
       { id: 'invalid-device', enabled: true, isValid: false },
     ] })
     api.startNetworkDiagnostics.mockResolvedValue(run()); api.getNetworkDiagnostics.mockResolvedValue(run())
+    api.listNetworkDiagnostics.mockResolvedValue([])
     api.cancelNetworkDiagnostics.mockResolvedValue({ cancelled: true })
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
@@ -63,6 +69,7 @@ describe('network diagnostic tools and traceroute', () => {
       .toEqual(['device-one', 'device-two'])
     expect(wrapper.text()).toContain('从 NetConsole 服务所在主机')
     expect(api.startNetworkDiagnostics).not.toHaveBeenCalled(); expect(api.getNetworkDiagnostics).not.toHaveBeenCalled()
+    expect(api.listNetworkDiagnostics).toHaveBeenCalledTimes(1); expect(api.listNetworkDiagnostics).toHaveBeenCalledWith(50)
   })
 
   it('submits exact batch device UUIDs and traceroute with a 30 second total deadline', async () => {
@@ -201,5 +208,114 @@ describe('network diagnostic tools and traceroute', () => {
     expect(wrapper.text()).toContain('尚未运行诊断')
     wrapper.unmount(); late.resolve(run()); await flushPromises(); await vi.advanceTimersByTimeAsync(1400)
     expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets existing read roles discover and reopen retained results after remount without starting diagnostics', async () => {
+    const saved = run({ state: 'PARTIAL', failureReason: '保留的部分路径', items: [item({ state: 'FAILED', outcome: 'TIMEOUT' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(saved)]); api.getNetworkDiagnostics.mockResolvedValue(saved)
+    const reader = await render('ADMIN')
+    expect(reader.get('select[aria-label="诊断历史"]').text()).toContain('部分完成 · 1 台设备 · Traceroute 路径')
+    expect(api.getNetworkDiagnostics).not.toHaveBeenCalled()
+    await reader.get('select[aria-label="诊断历史"]').setValue(saved.id); await flushPromises()
+    expect(reader.text()).toContain('保留的部分路径'); expect(reader.text()).toContain('已记录 3 / 30 跳')
+    expect(button(reader, '开始诊断').attributes('disabled')).toBeDefined()
+    expect(button(reader, '取消任务').attributes('disabled')).toBeDefined()
+    reader.unmount()
+    const reopened = await render('ADMIN')
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(1)
+    await reopened.get('select[aria-label="诊断历史"]').setValue(saved.id); await flushPromises()
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(2)
+    expect(reopened.text()).toContain('保留的部分路径')
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled(); expect(api.cancelNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('ignores a late detail response after switching history and does not resume the old polling loop', async () => {
+    vi.useFakeTimers()
+    const old = deferred<NetworkDiagnosticRun>(); const latest = run({ id: 'diagnostic-two', failureReason: '当前选择的历史' })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(), summary(latest)])
+    api.getNetworkDiagnostics.mockReturnValueOnce(old.promise).mockResolvedValueOnce(latest)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one')
+    expect(wrapper.text()).toContain('正在读取诊断结果')
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(latest.id); await flushPromises()
+    expect(wrapper.text()).toContain('当前选择的历史')
+    old.resolve(run({ state: 'RUNNING', failureReason: '过期历史不可覆盖' })); await flushPromises()
+    await vi.advanceTimersByTimeAsync(1400)
+    expect(wrapper.text()).toContain('当前选择的历史'); expect(wrapper.text()).not.toContain('过期历史不可覆盖')
+    expect((wrapper.get('select[aria-label="诊断历史"]').element as HTMLSelectElement).value).toBe(latest.id)
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(2); expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('switches away from a live batch without cancelling it or accepting its late progress', async () => {
+    vi.useFakeTimers()
+    const late = deferred<NetworkDiagnosticRun>(); const saved = run({ id: 'saved-history', failureReason: '已保存历史' })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(saved)])
+    api.startNetworkDiagnostics.mockResolvedValue(run({ state: 'RUNNING' }))
+    api.getNetworkDiagnostics.mockReturnValueOnce(late.promise).mockResolvedValueOnce(saved)
+    const wrapper = await render(); await selectTrace(wrapper); await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(saved.id); await flushPromises()
+    late.resolve(run({ state: 'RUNNING' })); await flushPromises(); await vi.advanceTimersByTimeAsync(1400)
+    expect(wrapper.text()).toContain('已保存历史'); expect(wrapper.text()).not.toContain('执行中 · 100%')
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(2); expect(api.cancelNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('refreshes summaries without reading details and clears an omitted selection instead of retaining stale evidence', async () => {
+    api.listNetworkDiagnostics.mockResolvedValueOnce([summary()]).mockResolvedValueOnce([summary()]).mockResolvedValueOnce([])
+    const wrapper = await render(); await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(true)
+    await button(wrapper, '刷新历史').trigger('click'); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(true); expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(1)
+    await button(wrapper, '刷新历史').trigger('click'); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(false)
+    expect((wrapper.get('select[aria-label="诊断历史"]').element as HTMLSelectElement).value).toBe('')
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('does not let an older list response clear a newly selected history', async () => {
+    const stale = deferred<NetworkDiagnosticRunSummary[]>()
+    api.listNetworkDiagnostics.mockResolvedValueOnce([summary()]).mockReturnValueOnce(stale.promise)
+    const wrapper = await render(); await button(wrapper, '刷新历史').trigger('click')
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    stale.resolve([]); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(true)
+    expect((wrapper.get('select[aria-label="诊断历史"]').element as HTMLSelectElement).value).toBe('diagnostic-one')
+    expect(button(wrapper, '刷新历史').attributes('disabled')).toBeUndefined()
+  })
+
+  it('retries a failed historical detail read without starting a new batch', async () => {
+    api.listNetworkDiagnostics.mockResolvedValue([summary()])
+    api.getNetworkDiagnostics.mockRejectedValueOnce(new Error('历史结果暂时不可读')).mockResolvedValueOnce(run())
+    const wrapper = await render('ADMIN'); await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('历史结果暂时不可读')
+    await button(wrapper, '重新读取结果').trigger('click'); await flushPromises()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false); expect(wrapper.find('.diagnostic-results').exists()).toBe(true)
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(2); expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it.each([401, 403, 404])('clears inaccessible historical results on detail HTTP %i', async status => {
+    api.listNetworkDiagnostics.mockResolvedValue([summary()])
+    api.getNetworkDiagnostics.mockResolvedValueOnce(run()).mockRejectedValueOnce(new ApiRequestError(status, 'sensitive server detail'))
+    const wrapper = await render(); await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('')
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('诊断记录已不存在或不可访问，请刷新历史。')
+    expect(wrapper.text()).not.toContain('sensitive server detail'); expect(button(wrapper, '重新读取结果')).toBeUndefined()
+    expect(wrapper.get('select[aria-label="诊断历史"]').findAll('option')).toHaveLength(1)
+  })
+
+  it('clears stale evidence on a denied history refresh and ignores a list from an earlier identity', async () => {
+    const stale = deferred<NetworkDiagnosticRunSummary[]>()
+    api.listNetworkDiagnostics.mockResolvedValueOnce([summary()]).mockRejectedValueOnce(new ApiRequestError(403, 'denied'))
+      .mockReturnValueOnce(stale.promise).mockResolvedValueOnce([])
+    const wrapper = await render(); await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    await button(wrapper, '刷新历史').trigger('click'); await flushPromises()
+    expect(wrapper.find('.diagnostic-results').exists()).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('诊断历史读取失败')
+    await button(wrapper, '刷新历史').trigger('click')
+    useAuthStore().user = { username: 'other-reader', role: 'ADMIN' } as never; await flushPromises()
+    stale.resolve([summary()]); await flushPromises()
+    expect(wrapper.get('select[aria-label="诊断历史"]').findAll('option')).toHaveLength(1)
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(1); expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
   })
 })

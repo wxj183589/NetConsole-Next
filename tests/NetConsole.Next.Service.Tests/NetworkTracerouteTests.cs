@@ -8,14 +8,14 @@ using NetConsole.Next.Service;
 
 internal static class NetworkTracerouteTests
 {
-    public static async Task RunAsync()
+    public static async Task RunAsync(bool includeLiveLoopback = true)
     {
         await HopsResolveOnceAndRequireTheActualDestination();
         await StopsAtThirtyHops();
         await StopsOnUnreachable();
         await SupportsIpv6WithoutGuessingAnIpv4Address();
         using var fixture = new Fixture();
-        await LoopbackAndRestartRetainStructuredHistory(fixture);
+        if (includeLiveLoopback) await LoopbackAndRestartRetainStructuredHistory(fixture);
         await TotalDeadlineRetainsPartialHops(fixture);
         await DnsSharesTheTotalDeadline(fixture);
         await CancellationDrainsRunningAndQueuedChecks(fixture);
@@ -24,8 +24,10 @@ internal static class NetworkTracerouteTests
         await CurrentActorChangesStopFurtherProbes(fixture, "role='ADMIN'", "role='SUPERADMIN'");
         AdmissionRejectsUnknownActorAndForeignSite(fixture);
         await ProbeFailuresRemainSanitized(fixture);
+        await ProbePermissionDenialRetainsPartialHistory(fixture);
         await AllFiveKindsUseTheExistingBatchLimit(fixture);
-        Console.WriteLine("NETWORK_TRACEROUTE_TESTS=14/14 PASS");
+        Console.WriteLine(includeLiveLoopback ? "NETWORK_TRACEROUTE_TESTS=15/15 PASS" :
+            "NETWORK_TRACEROUTE_FIXTURE_TESTS=14/14 PASS (live ICMP loopback excluded; separate required gate)");
         Console.WriteLine("NETWORK_TRACEROUTE_FIXTURE=" + fixture.Root);
     }
 
@@ -243,6 +245,33 @@ internal static class NetworkTracerouteTests
         }
         catch (ArgumentException) { }
         Assert(probe.Calls.Count == callsBeforeRejectedBatch, "rejecting a batch beyond the shared check budget must not start any probes");
+    }
+
+    private static async Task ProbePermissionDenialRetainsPartialHistory(Fixture fixture)
+    {
+        Exception[] denied = [new System.ComponentModel.Win32Exception(5, "sensitive fixture path"),
+            new SocketException((int)SocketError.AccessDenied), new UnauthorizedAccessException("sensitive fixture path")];
+        foreach (var error in denied)
+        {
+            var probe = new Probe { Send = (_, ttl, _, _) => ttl == 1
+                ? Task.FromResult(new NetworkTracerouteProbeReply(IPStatus.TtlExpired, IPAddress.Parse("192.0.2.1"), 1))
+                : throw new PingException("sensitive fixture path", error) };
+            string id;
+            using (var service = new NetworkDiagnosticsService(fixture.Catalog, probe))
+            {
+                id = fixture.Start(service, fixture.Device()).Id;
+                var run = await Terminal(service, id);
+                Assert(run.State == "PARTIAL" && run.FailedChecks == 1 && run.Items.Single() is
+                    { State: "FAILED", Outcome: "ICMP_PERMISSION_DENIED", TraceRoute.DestinationReached: false, TraceRoute.Hops.Count: 1 },
+                    "host permission denial must remain a failed check while retaining observed partial hops");
+                Assert(run.Items.Single().Detail == "Service 主机拒绝 ICMP 探测，请检查服务账户或主机策略" && probe.Calls.Count == 2,
+                    "permission denial is sanitized and does not retry the host operation");
+            }
+            using var restarted = new NetworkDiagnosticsService(fixture.Catalog, probe);
+            Assert(restarted.Get(id, P2B5SiteScopeDecision.Global)?.Items.Single() is
+                { Outcome: "ICMP_PERMISSION_DENIED", TraceRoute.Hops.Count: 1 },
+                "the failure classification and partial path survive a service restart");
+        }
     }
 
     private sealed class Probe : INetworkTracerouteProbe

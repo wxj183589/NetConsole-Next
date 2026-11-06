@@ -50,6 +50,11 @@ internal sealed record NetworkDiagnosticRunSnapshot(
     string? FailureReason,
     IReadOnlyList<NetworkDiagnosticItemSnapshot> Items);
 
+internal sealed record NetworkDiagnosticRunSummary(
+    string Id, string State, int TotalDevices, int TotalChecks, int CompletedChecks,
+    int ProgressPercent, long CreatedMs, long? StartedMs, long? EndedMs,
+    IReadOnlyList<string> Kinds);
+
 internal sealed class NetworkDiagnosticsService : IDisposable
 {
     private static readonly HashSet<string> SupportedKinds = new(StringComparer.OrdinalIgnoreCase)
@@ -136,9 +141,44 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         if (!scope.IsAuthorized || string.IsNullOrWhiteSpace(id)) return null;
         lock (_gate)
         {
-            if (_runs.TryGetValue(id, out var run)) return Snapshot(run, scope);
+            if (_runs.TryGetValue(id, out var run)) return FilterSnapshot(Snapshot(run, scope), scope);
             return _history.TryGetValue(id, out var snapshot) ? FilterSnapshot(snapshot, scope) : null;
         }
+    }
+
+    public NetworkDiagnosticRunSnapshot? Get(string id, string actor, P2B5SiteScopeDecision scope)
+    {
+        RequireHistoryReader(actor, scope);
+        return Get(id, scope);
+    }
+
+    public IReadOnlyList<NetworkDiagnosticRunSummary> List(string actor, P2B5SiteScopeDecision scope, int limit = 50)
+    {
+        RequireHistoryReader(actor, scope);
+        if (limit is < 1 or > MaximumRuns)
+            throw new ArgumentException($"limit must be between 1 and {MaximumRuns}.", nameof(limit));
+        lock (_gate)
+        {
+            // Live batches and completed files share one bounded read model.
+            // Summary reads never admit a diagnostic or expose hidden child totals.
+            return _history.Values.Where(item => !_runs.ContainsKey(item.Id))
+                .Concat(_runs.Values.Select(run => Snapshot(run, scope)))
+                .Select(item => FilterSnapshot(item, scope)).Where(item => item.Items.Count > 0)
+                .OrderByDescending(item => item.CreatedMs).ThenBy(item => item.Id, StringComparer.Ordinal)
+                .Take(limit).Select(item => new NetworkDiagnosticRunSummary(item.Id, item.State,
+                    item.TotalDevices, item.TotalChecks, item.CompletedChecks, item.ProgressPercent,
+                    item.CreatedMs, item.StartedMs, item.EndedMs,
+                    item.Items.Select(child => child.Kind).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()))
+                .ToArray();
+        }
+    }
+
+    private void RequireHistoryReader(string actor, P2B5SiteScopeDecision scope)
+    {
+        if (!scope.IsAuthorized)
+            throw new DeviceSiteScopeException("DIAGNOSTIC_SCOPE_DENIED", "当前 Site 权限不可用。");
+        if (string.IsNullOrWhiteSpace(actor) || _catalog.GetActiveTaskActor(actor) is null)
+            throw new DeviceSiteScopeException("DIAGNOSTIC_ACTOR_REVOKED", "当前账号不可用，请重新登录。");
     }
 
     public bool Cancel(string id, string actor, string role, P2B5SiteScopeDecision scope)
@@ -292,6 +332,13 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         {
             Complete(item, "CANCELLED", "DIAGNOSTIC_SCOPE_REVOKED", "当前账号、局点或设备目标已变化，诊断已停止",
                 ElapsedMs(started), 0, Array.Empty<string>());
+        }
+        catch (PingException exception) when (exception.InnerException is UnauthorizedAccessException or
+            System.ComponentModel.Win32Exception { NativeErrorCode: 5 } or
+            SocketException { SocketErrorCode: SocketError.AccessDenied })
+        {
+            Complete(item, "FAILED", "ICMP_PERMISSION_DENIED",
+                "Service 主机拒绝 ICMP 探测，请检查服务账户或主机策略", ElapsedMs(started), 0, Array.Empty<string>());
         }
         catch (PingException)
         {

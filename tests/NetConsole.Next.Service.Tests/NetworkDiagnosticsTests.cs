@@ -1,6 +1,7 @@
 using NetConsole.Next.Service;
 using Microsoft.Data.Sqlite;
 using System.Net;
+using System.Text.Json;
 
 internal static class NetworkDiagnosticsTests
 {
@@ -10,7 +11,10 @@ internal static class NetworkDiagnosticsTests
         await CancellationStopsQueuedChecks();
         await LldpReportsOnlyVerifiedFacts();
         await PersistsCompletedRunAcrossRestart();
-        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=4/4 PASS");
+        await ListsLiveAndCompletedWithoutNewChecks();
+        await HistoryListBoundsAndRestoresSafeSummaries();
+        await HistoryReadsRespectCurrentAccountAndSiteScope();
+        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=7/7 PASS");
     }
 
     private static async Task BatchReportsProgressAndIsolatesFailures()
@@ -106,6 +110,99 @@ internal static class NetworkDiagnosticsTests
         restarted.Dispose();
     }
 
+    private static async Task ListsLiveAndCompletedWithoutNewChecks()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "History live", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        var probe = new CancellationProbe();
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        var run = diagnostics.Start(new([device.Item.Id], ["TRACEROUTE"], 5_000), "local-api-token", P2B5SiteScopeDecision.Global);
+        using (var waiting = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
+            while (probe.SendCount == 0) await Task.Delay(10, waiting.Token);
+        for (var index = 0; index < 3; index++)
+        {
+            var listed = diagnostics.List("local-api-token", P2B5SiteScopeDecision.Global).Single();
+            Assert(listed.Id == run.Id && listed.State == "RUNNING" && listed.TotalChecks == 1 &&
+                listed.Kinds.SequenceEqual(["TRACEROUTE"]) && probe.SendCount == 1,
+                "listing an active diagnostic must be read-only and cannot start another check");
+        }
+        Assert(diagnostics.Cancel(run.Id, "local-api-token", "SUPERADMIN", P2B5SiteScopeDecision.Global), "fixture run must cancel");
+        await WaitTerminal(diagnostics, run.Id);
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        var completed = restarted.List("local-api-token", P2B5SiteScopeDecision.Global).Single();
+        Assert(completed.Id == run.Id && completed.State == "CANCELLED" && completed.ProgressPercent == 100 &&
+            probe.SendCount == 1, "a persisted cancelled batch must be discoverable after restart without a new probe");
+    }
+
+    private static async Task HistoryListBoundsAndRestoresSafeSummaries()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "History seed", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog);
+        var started = diagnostics.Start(new([device.Item.Id], ["DNS"], 1_000), "test", P2B5SiteScopeDecision.Global);
+        var seed = await WaitTerminal(diagnostics, started.Id);
+        for (var index = 1; index <= 130; index++)
+        {
+            var snapshot = seed with { Id = Guid.NewGuid().ToString("N"), CreatedMs = seed.CreatedMs + index };
+            File.WriteAllText(Path.Combine(fixture.Root, "diagnostics", snapshot.Id + ".json"), JsonSerializer.Serialize(snapshot));
+        }
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        var summaries = restarted.List("local-api-token", P2B5SiteScopeDecision.Global, 128);
+        Assert(summaries.Count == 128 && summaries[0].CreatedMs == seed.CreatedMs + 130 &&
+            summaries.Zip(summaries.Skip(1), (left, right) => left.CreatedMs >= right.CreatedMs).All(value => value),
+            "history discovery must honor the existing 128-run bound and list newest first after restart");
+        Assert(restarted.List("local-api-token", P2B5SiteScopeDecision.Global).Count == 50 &&
+            restarted.List("local-api-token", P2B5SiteScopeDecision.Global, 1).Single().Id == summaries[0].Id,
+            "summary response limits must apply before serialization");
+        foreach (var limit in new[] { 0, -1, 129, int.MaxValue })
+        {
+            try { restarted.List("local-api-token", P2B5SiteScopeDecision.Global, limit); throw new InvalidOperationException("history limit accepted"); }
+            catch (ArgumentException) { }
+        }
+        var serialized = JsonSerializer.Serialize(summaries);
+        Assert(!serialized.Contains("Items", StringComparison.Ordinal) && !serialized.Contains("Actor", StringComparison.Ordinal) &&
+            !serialized.Contains("127.0.0.", StringComparison.Ordinal), "history summaries must not contain child output, actors or endpoints");
+    }
+
+    private static async Task HistoryReadsRespectCurrentAccountAndSiteScope()
+    {
+        using var fixture = new Fixture();
+        fixture.Execute("INSERT INTO sites(id,name) VALUES('history-other','History other')");
+        var local = fixture.Catalog.CreateDeviceInventory(new(null, "History local", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        var foreign = fixture.Catalog.CreateDeviceInventory(new(null, "History foreign", "127.0.0.2", "", "", "NETWORK_DEVICE", "history-other", null, "fixture", true, null), "test");
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog);
+        var mixed = diagnostics.Start(new([local.Item.Id, foreign.Item.Id], ["DNS"], 1_000), "test", P2B5SiteScopeDecision.Global);
+        await WaitTerminal(diagnostics, mixed.Id);
+        var hidden = diagnostics.Start(new([foreign.Item.Id], ["DNS"], 1_000), "test", P2B5SiteScopeDecision.Global);
+        await WaitTerminal(diagnostics, hidden.Id);
+        var reader = fixture.Scalar("SELECT id FROM web_users WHERE username='superadmin'");
+        fixture.Execute("UPDATE web_users SET role='ADMIN' WHERE id=$id", reader);
+        var scope = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture");
+        var summary = diagnostics.List(reader, scope).Single();
+        var detail = diagnostics.Get(mixed.Id, reader, scope);
+        Assert(summary.Id == mixed.Id && summary.TotalDevices == 1 && summary.TotalChecks == 1 &&
+            summary.CompletedChecks == 1 && detail?.Items.Single().DeviceId == local.Item.Id && detail.TotalDevices == 1,
+            "existing read roles retain history access while all child counts and targets remain inside their current Site scope");
+        var empty = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "history-empty" }, "fixture");
+        Assert(diagnostics.List(reader, empty).Count == 0, "a batch with no visible child must not leak into history discovery");
+        // Historical evidence keeps its captured Site identity when inventory later moves.
+        fixture.Execute("UPDATE device_inventory SET site_id='history-other' WHERE id=$id", local.Item.Id);
+        Assert(diagnostics.List(reader, scope).Single().Id == mixed.Id,
+            "history discovery must preserve the existing captured-Site read contract after an inventory move");
+        ExpectHistoryDenied(() => diagnostics.List(reader, P2B5SiteScopeDecision.Denied("fixture")));
+        ExpectHistoryDenied(() => diagnostics.List("unknown-account", scope));
+        fixture.Execute("UPDATE web_users SET disabled=1 WHERE id=$id", reader);
+        ExpectHistoryDenied(() => diagnostics.List(reader, scope));
+        ExpectHistoryDenied(() => diagnostics.Get(mixed.Id, reader, scope));
+    }
+
+    private static void ExpectHistoryDenied(Action read)
+    {
+        try { read(); }
+        catch (DeviceSiteScopeException) { return; }
+        throw new InvalidOperationException("History access must reject a revoked actor or denied Site scope.");
+    }
+
     private static async Task<NetworkDiagnosticRunSnapshot> WaitTerminal(NetworkDiagnosticsService service, string id)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
@@ -143,6 +240,19 @@ internal static class NetworkDiagnosticsTests
             Settings = new() { DataRoot = Root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             Catalog = new(Settings);
             Catalog.Initialize();
+        }
+        public void Execute(string sql, string? id = null)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(Root, "catalog.db"), Pooling = false }.ToString());
+            db.Open(); using var command = db.CreateCommand(); command.CommandText = sql;
+            if (id is not null) command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+        public string Scalar(string sql)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(Root, "catalog.db"), Pooling = false }.ToString());
+            db.Open(); using var command = db.CreateCommand(); command.CommandText = sql;
+            return (string)command.ExecuteScalar()!;
         }
         public void Dispose()
         {

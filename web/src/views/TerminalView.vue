@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, markRaw, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, markRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Connection, Document, Monitor, Search, Setting, SwitchButton } from '@element-plus/icons-vue'
@@ -7,7 +7,9 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import NcLayout from '../components/NcLayout.vue'
+import { useAuthStore } from '../stores/auth'
 import {
+  ApiRequestError,
   closeTerminalSession, createTerminalSession, downloadExport, getRecordingIntegrity, getReplay, getSerialPorts,
   getTerminalDevices, getTerminalEvents, getTerminalSessions, issueTerminalTicket,
   createLinuxServerSession, getLinuxServers, getTerminalSession,
@@ -27,9 +29,21 @@ const activeDeviceId = ref('')
 const selectedProtocol = ref('AUTO')
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const linuxServers = ref<LinuxServer[]>([])
 const selectedLinuxId = ref('')
 const sessions = ref<TerminalSession[]>([])
+const historyTab = ref<'sessions' | 'replay'>('sessions')
+const historyPage = ref(1)
+const historyPageSize = ref(10)
+const historyTotal = ref(0)
+const historyKeyword = ref('')
+const historyProtocol = ref('')
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyPageSize.value)))
+let historyGeneration = 0
+let historyActive = true
 const tabs = reactive<TerminalTab[]>([])
 const activeId = ref('')
 const split = ref(false)
@@ -48,6 +62,10 @@ const replayEntries = ref<ReplayEntry[]>([])
 const replayIndex = ref(0)
 const replaySpeed = ref(1)
 const replaySearch = ref('')
+const replayLoading = ref(false)
+const replayError = ref('')
+const replayHasMore = ref(false)
+let replayGeneration = 0
 let replayTimer: ReturnType<typeof setTimeout> | undefined
 
 const terminalTheme = { background: '#08111d', foreground: '#dbe8f8', cursor: '#5d9cff', selectionBackground: '#294a76' }
@@ -176,19 +194,81 @@ async function openSerialSession(): Promise<void> {
   tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
   try { const session = await createTerminalSession({ targetId: tab.targetId, protocol: 'SERIAL', mode: 'RESTRICTED_READONLY', serialPort: selectedSerialPort.value }); tab.sessionId = session.sessionId; await connectSocket(tab) } catch { ElMessage.error('COM 会话创建失败') }
 }
-async function refreshHistory(): Promise<void> { try { sessions.value = (await getTerminalSessions()).items } catch { sessions.value = [] } }
+function permissionDenied(cause: unknown): boolean { return cause instanceof ApiRequestError && [401, 403, 404].includes(cause.status) }
+function clearReplay(): void {
+  replayGeneration += 1; stopReplay(); replayLoading.value = false; replayError.value = ''
+  replayEntries.value = []; replayIndex.value = 0; historyEvents.value = []; historyIntegrity.value = null; replayHasMore.value = false
+}
+function invalidateHistory(): void {
+  historyGeneration += 1; sessions.value = []; historyTotal.value = 0; historyLoading.value = false
+  historyDialog.value = false; historySession.value = null; clearReplay()
+}
+function denyHistory(): void { invalidateHistory(); historyError.value = '会话不可用或当前账户无权访问，请刷新历史。' }
+async function refreshHistory(page = historyPage.value): Promise<void> {
+  if (!historyActive) return
+  const generation = ++historyGeneration
+  historyPage.value = page; historyLoading.value = true; historyError.value = ''; sessions.value = []
+  try {
+    const result = await getTerminalSessions({ page, pageSize: historyPageSize.value, keyword: historyKeyword.value.trim(), protocol: historyProtocol.value })
+    if (generation !== historyGeneration || !historyActive) return
+    historyTotal.value = result.total
+    if (page > historyPages.value) { await refreshHistory(historyPages.value); return }
+    sessions.value = result.items
+  } catch (cause) {
+    if (generation !== historyGeneration || !historyActive) return
+    if (permissionDenied(cause)) denyHistory()
+    else { historyTotal.value = 0; historyError.value = '会话历史读取失败，请重试。' }
+  } finally { if (generation === historyGeneration) historyLoading.value = false }
+}
+function searchHistory(): void { void refreshHistory(1) }
 function formatTime(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function stateClass(state: string): string { return ['CONNECTED', 'COMPLETE', 'COMPLETED'].includes(state) ? 'good' : ['FAILED', 'CORRUPTED'].includes(state) ? 'bad' : 'warn' }
 function decode(value: string): string { try { const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0)); return new TextDecoder().decode(bytes) } catch { return '[无法解码]' } }
 async function openHistory(session: TerminalSession): Promise<void> {
-  historySession.value = session; historyDialog.value = true; replayIndex.value = 0; replayEntries.value = []; replaySearch.value = ''
-  try { [historyEvents.value, historyIntegrity.value] = await Promise.all([getTerminalEvents(session.id), getRecordingIntegrity(session.id)]); let offset = 0; do { const page = await getReplay(session.id, offset); replayEntries.value.push(...page.entries); offset += page.entries.length; if (!page.hasMore || !page.entries.length) break } while (replayEntries.value.length < 10000) } catch { ElMessage.error('会话回放读取失败') }
+  if (!historyActive) return
+  clearReplay()
+  const generation = replayGeneration
+  const current = () => historyActive && historyDialog.value && generation === replayGeneration && historySession.value?.id === session.id
+  historyTab.value = 'replay'; historySession.value = session; historyDialog.value = true; replaySearch.value = ''; replayLoading.value = true
+  try {
+    const [events, integrity] = await Promise.all([getTerminalEvents(session.id), getRecordingIntegrity(session.id)])
+    if (!current()) return
+    const entries: ReplayEntry[] = []
+    let offset = 0
+    let hasMore = false
+    do {
+      const page = await getReplay(session.id, offset)
+      if (!current()) return
+      entries.push(...page.entries); offset += page.entries.length; hasMore = page.hasMore
+      if (!page.hasMore || !page.entries.length) break
+    } while (entries.length < 10000)
+    historyEvents.value = events; historyIntegrity.value = integrity; replayEntries.value = entries; replayHasMore.value = hasMore
+  } catch (cause) {
+    if (!current()) return
+    if (permissionDenied(cause)) denyHistory()
+    else replayError.value = '会话回放读取失败，请重试。'
+  } finally { if (generation === replayGeneration) replayLoading.value = false }
 }
 function replayText(): string { return replayEntries.value.slice(0, replayIndex.value).filter((entry) => entry.direction === 'output').map((entry) => decode(entry.dataB64)).join('') }
+const replayDisplay = computed(() => {
+  const text = replayText()
+  if (!replaySearch.value) return text
+  const escaped = replaySearch.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.replace(new RegExp(escaped, 'gi'), match => `【${match}】`)
+})
 function stopReplay(): void { if (replayTimer) clearTimeout(replayTimer); replayTimer = undefined }
 function playReplay(): void { stopReplay(); if (replayIndex.value >= replayEntries.value.length) replayIndex.value = 0; const step = () => { if (replayIndex.value >= replayEntries.value.length) return; const current = replayEntries.value[replayIndex.value]; replayIndex.value += 1; replayTimer = setTimeout(step, Math.max(12, ((replayEntries.value[replayIndex.value]?.atMs || current.atMs + 120) - current.atMs) / replaySpeed.value)) }; step() }
-async function exportSession(format: string): Promise<void> { if (!historySession.value) return; try { const blob = await downloadExport(historySession.value.id, format); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${historySession.value.id}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href) } catch { ElMessage.error('导出失败') } }
-function closeHistory(): void { stopReplay(); historyDialog.value = false }
+async function exportSession(format: string): Promise<void> {
+  if (!historySession.value || replayLoading.value || replayError.value) return
+  const sessionId = historySession.value.id; const generation = replayGeneration
+  const current = () => historyActive && historyDialog.value && generation === replayGeneration && historySession.value?.id === sessionId
+  try {
+    const blob = await downloadExport(sessionId, format)
+    if (!current()) return
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${sessionId}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href)
+  } catch (cause) { if (!current()) return; if (permissionDenied(cause)) denyHistory(); else ElMessage.error('导出失败') }
+}
+function closeHistory(): void { historyDialog.value = false; clearReplay() }
 async function refreshAll(): Promise<void> { loading.value = true; try { [devices.value, linuxServers.value] = await Promise.all([getTerminalDevices(), getLinuxServers().catch(() => [])]); if (!activeDeviceId.value && devices.value[0]) selectDevice(devices.value[0]); await refreshHistory() } catch { devices.value = []; sessions.value = []; ElMessage.info('当前服务未提供可用终端设备，页面保留真实空状态') } finally { loading.value = false } }
 function handleWindowResize(): void { void fitVisibleTerminals() }
 let initialized = false
@@ -208,8 +288,14 @@ async function openRequestedTarget(): Promise<void> {
   if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) }
 }
 watch(() => route.fullPath, () => { if (route.path !== '/terminal') lastRequestedPath = ''; else if (initialized) void openRequestedTarget() })
+watch(() => [auth.user?.username, auth.user?.role], () => {
+  invalidateHistory(); historyPage.value = 1; historyError.value = ''
+  if (historyActive && initialized && auth.user) void refreshHistory()
+}, { flush: 'sync' })
+onActivated(() => { historyActive = true; if (initialized) void refreshHistory() })
+onDeactivated(() => { historyActive = false; invalidateHistory() })
 onMounted(async () => { window.addEventListener('resize', handleWindowResize); await refreshAll(); initialized = true; await openRequestedTarget() })
-onBeforeUnmount(() => { window.removeEventListener('resize', handleWindowResize); stopReplay(); tabs.forEach((tab) => { const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose() }) })
+onBeforeUnmount(() => { historyActive = false; invalidateHistory(); window.removeEventListener('resize', handleWindowResize); tabs.forEach((tab) => { const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose() }) })
 </script>
 
 <template>
@@ -240,10 +326,57 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleWindowResize)
         <div :class="['terminal-panes', { split }]" v-if="tabs.length"><div v-for="tab in tabs" :key="tab.id" v-show="isPaneVisible(tab)" class="terminal-pane"><div :ref="(element) => setPaneRef(tab.id, element as Element | null)" class="terminal-host" /></div></div><div v-else class="terminal-placeholder"><div><el-icon><Connection /></el-icon><p>内置终端尚未打开会话</p><small>SSH、Telnet、COM 都必须经过服务端受控会话。</small></div></div>
       </section>
 
-<section class="terminal-history-dock"><div class="terminal-history-tabs"><button class="terminal-history-tab is-active" type="button"><el-icon><Document /></el-icon> 会话历史</button><button class="terminal-history-tab" type="button">终端回放</button><button class="terminal-history-tab" type="button">任务记录</button><span class="toolbar-spacer" /><el-button text size="small" @click="refreshHistory">刷新历史</el-button></div><div class="terminal-history-body"><table v-if="sessions.length" class="terminal-history-table"><thead><tr><th>目标设备</th><th>协议</th><th>开始时间</th><th>录制状态</th><th>完整性</th><th>操作</th></tr></thead><tbody><tr v-for="session in sessions.slice(0, 6)" :key="session.id" data-testid="terminal-history-row"><td>{{ session.targetName }}</td><td>{{ session.protocol }}</td><td>{{ formatTime(session.startedMs) }}</td><td><span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></td><td>{{ session.recordingComplete ? 'COMPLETE' : '待确认' }}</td><td><el-button text size="small" @click="openHistory(session)">回放 / 导出</el-button></td></tr></tbody></table><div v-else class="terminal-history-empty"><div><el-icon><Document /></el-icon><p>暂无会话历史</p><small>终端会话结束后，服务端才会出现可回放记录。</small></div></div></div></section>
+      <section class="terminal-history-dock" aria-label="终端历史与回放">
+        <div class="terminal-history-tabs">
+          <button :class="['terminal-history-tab', { 'is-active': historyTab === 'sessions' }]" :aria-pressed="historyTab === 'sessions'" type="button" @click="historyTab = 'sessions'"><el-icon><Document /></el-icon> 会话历史</button>
+          <button :class="['terminal-history-tab', { 'is-active': historyTab === 'replay' }]" :aria-pressed="historyTab === 'replay'" type="button" @click="historyTab = 'replay'">终端回放</button>
+          <button class="terminal-history-tab" type="button" @click="router.push('/tasks')">任务记录 ↗</button>
+          <span class="toolbar-spacer" /><el-button text size="small" :loading="historyLoading" @click="refreshHistory()">刷新历史</el-button>
+        </div>
+        <p v-if="historyError" class="terminal-history-feedback" role="alert">{{ historyError }} <el-button text size="small" @click="refreshHistory()">重试历史</el-button></p>
+        <div v-if="historyTab === 'sessions'" class="terminal-history-session-panel">
+          <form class="terminal-history-filters" @submit.prevent="searchHistory">
+            <input v-model="historyKeyword" aria-label="搜索会话历史" placeholder="搜索目标、会话或事件" />
+            <select v-model="historyProtocol" aria-label="历史协议" @change="searchHistory"><option value="">全部协议</option><option value="SSH">SSH</option><option value="TELNET">Telnet</option><option value="SERIAL">COM</option></select>
+            <el-button size="small" native-type="submit" :loading="historyLoading">搜索历史</el-button>
+            <span class="toolbar-spacer" />
+            <span role="status"><template v-if="historyLoading">正在读取历史…</template><template v-else-if="historyError">历史页码暂不可用</template><template v-else>共 {{ historyTotal }} 条 · 第 {{ historyPage }} / {{ historyPages }} 页</template></span>
+            <select v-model.number="historyPageSize" aria-label="每页会话数" @change="searchHistory"><option :value="10">10 条 / 页</option><option :value="20">20 条 / 页</option><option :value="50">50 条 / 页</option></select>
+            <el-button size="small" :disabled="historyLoading || historyPage <= 1" @click="refreshHistory(historyPage - 1)">上一页</el-button>
+            <el-button size="small" :disabled="historyLoading || historyPage >= historyPages" @click="refreshHistory(historyPage + 1)">下一页</el-button>
+          </form>
+          <div class="terminal-history-body" :aria-busy="historyLoading">
+            <table v-if="sessions.length" class="terminal-history-table"><thead><tr><th>目标设备</th><th>协议</th><th>开始时间</th><th>会话状态</th><th>录制状态</th><th>完整性</th><th>操作</th></tr></thead><tbody><tr v-for="session in sessions" :key="session.id" data-testid="terminal-history-row"><td>{{ session.targetName }}</td><td>{{ session.protocol }}</td><td>{{ formatTime(session.startedMs) }}</td><td>{{ session.state }}</td><td><span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></td><td>{{ session.recordingComplete ? 'COMPLETE' : '待确认' }}</td><td><el-button text size="small" @click="openHistory(session)">回放 / 导出</el-button></td></tr></tbody></table>
+            <div v-else class="terminal-history-empty"><div><el-icon><Document /></el-icon><p>{{ historyLoading ? '正在读取会话历史…' : historyError ? '会话历史暂不可用' : '暂无匹配的会话历史' }}</p><small v-if="!historyLoading && !historyError">可调整搜索、协议或页码查找较早会话。</small></div></div>
+          </div>
+        </div>
+        <div v-else class="terminal-history-body terminal-replay-selection">
+          <template v-if="historySession"><strong>{{ historySession.targetName }} · {{ historySession.protocol }}</strong><span>{{ formatTime(historySession.startedMs) }} · {{ historySession.state }}</span><el-button size="small" @click="openHistory(historySession)">打开回放 / 导出</el-button></template>
+          <template v-else><span>请从会话历史选择一条记录进行回放或导出。</span></template>
+          <el-button text size="small" @click="historyTab = 'sessions'">选择会话</el-button>
+        </div>
+      </section>
     </div>
 
     <el-dialog v-model="serialDialog" title="打开本地 COM Console" width="420px"><label class="form-field"><span>端口</span><select v-model="selectedSerialPort"><option v-for="port in serialPorts" :key="port" :value="port">{{ port }}</option></select></label><template #footer><el-button @click="serialDialog = false">取消</el-button><el-button type="primary" @click="openSerialSession">打开</el-button></template></el-dialog>
-    <el-dialog :model-value="historyDialog" title="会话历史 / 只读回放" width="860px" @close="closeHistory"><template v-if="historySession"><div class="toolbar" style="margin-bottom:12px"><span>{{ historySession.targetName }} · {{ historySession.protocol }}</span><span :class="['state-pill', stateClass(historyIntegrity?.status || '')]">{{ historyIntegrity?.status || '读取中' }}</span><span class="state-pill">{{ historyIntegrity?.hashMatches ? 'SHA-256 匹配' : '完整性待确认' }}</span><div style="flex:1" /><el-button size="small" @click="exportSession('TXT')">TXT</el-button><el-button size="small" @click="exportSession('JSONL')">JSONL</el-button><el-button size="small" @click="exportSession('HTML')">HTML</el-button></div><div class="toolbar" style="margin-bottom:12px"><el-button size="small" @click="replayIndex = 0; stopReplay()">重新开始</el-button><el-button size="small" @click="playReplay">播放</el-button><label style="font-size:12px;color:var(--nc-text-secondary)">速度 <select v-model.number="replaySpeed"><option :value="0.5">0.5x</option><option :value="1">1x</option><option :value="2">2x</option><option :value="4">4x</option></select></label><input v-model="replaySearch" placeholder="搜索回放" style="min-height:30px;border:1px solid var(--nc-border);border-radius:6px;padding:0 8px" /></div><pre class="history-replay">{{ replaySearch ? replayText().replace(new RegExp(replaySearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (match) => `【${match}】`) : replayText() }}</pre><div class="section-label">事件时间轴</div><div class="table-wrap"><table class="data-table"><tbody><tr v-for="event in historyEvents" :key="`${event.atMs}-${event.eventType}`"><td>{{ formatTime(event.atMs) }}</td><td>{{ event.eventType }}</td><td class="muted mono">{{ event.detailJson }}</td></tr></tbody></table></div></template></el-dialog>
+    <el-dialog :model-value="historyDialog" title="会话历史 / 只读回放" width="860px" @close="closeHistory">
+      <template v-if="historySession">
+        <div class="toolbar" style="margin-bottom:12px"><span>{{ historySession.targetName }} · {{ historySession.protocol }}</span><span :class="['state-pill', stateClass(historyIntegrity?.status || '')]">{{ historyIntegrity?.status || (replayLoading ? '读取中' : '未读取') }}</span><span class="state-pill">{{ historyIntegrity?.hashMatches ? 'SHA-256 匹配' : '完整性待确认' }}</span><div style="flex:1" /><el-button v-for="format in ['TXT', 'JSONL', 'HTML']" :key="format" size="small" :disabled="replayLoading || !!replayError" @click="exportSession(format)">{{ format }}</el-button></div>
+        <p v-if="replayLoading" role="status">正在读取会话回放…</p>
+        <p v-if="replayError" role="alert">{{ replayError }} <el-button size="small" @click="openHistory(historySession)">重试回放</el-button></p>
+        <p v-if="replayHasMore" class="form-hint">当前预览前 10000 条录制事件，可导出完整记录。</p>
+        <div class="toolbar" style="margin-bottom:12px"><el-button size="small" :disabled="replayLoading || !replayEntries.length" @click="replayIndex = 0; stopReplay()">重新开始</el-button><el-button size="small" :disabled="replayLoading || !replayEntries.length" @click="playReplay">播放</el-button><label style="font-size:12px;color:var(--nc-text-secondary)">速度 <select v-model.number="replaySpeed"><option :value="0.5">0.5x</option><option :value="1">1x</option><option :value="2">2x</option><option :value="4">4x</option></select></label><input v-model="replaySearch" placeholder="搜索回放" style="min-height:30px;border:1px solid var(--nc-border);border-radius:6px;padding:0 8px" /></div>
+        <pre class="history-replay">{{ replayDisplay }}</pre>
+        <div class="section-label">事件时间轴</div><div class="table-wrap"><table class="data-table"><tbody><tr v-for="event in historyEvents" :key="`${event.atMs}-${event.eventType}`"><td>{{ formatTime(event.atMs) }}</td><td>{{ event.eventType }}</td><td class="muted mono">{{ event.detailJson }}</td></tr></tbody></table></div>
+      </template>
+    </el-dialog>
   </NcLayout>
 </template>
+
+<style scoped>
+.terminal-history-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; font-size: 11px; color: #b6c9df; }
+.terminal-history-session-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.terminal-history-filters input, .terminal-history-filters select { min-height: 28px; max-width: 220px; border: 1px solid var(--nc-border); border-radius: 5px; background: var(--nc-surface); color: var(--nc-text); padding: 0 6px; }
+.terminal-history-feedback { margin: 0; padding: 6px 12px; font-size: 12px; color: #ffb4b4; }
+.terminal-replay-selection { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px; font-size: 12px; color: #b6c9df; }
+</style>

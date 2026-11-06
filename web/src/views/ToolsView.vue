@@ -2,7 +2,7 @@
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
-import { getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun } from '../api/client'
+import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -16,6 +16,10 @@ const inventory = ref<DeviceInventoryItem[]>([])
 const selectedDiagnosticDevices = ref<string[]>([])
 const diagnosticKinds = ref<NetworkDiagnosticKind[]>(['PING', 'TCP', 'DNS'])
 const diagnosticRun = ref<NetworkDiagnosticRun | null>(null)
+const diagnosticHistory = ref<NetworkDiagnosticRunSummary[]>([])
+const selectedDiagnosticRun = ref('')
+const diagnosticHistoryLoading = ref(false)
+const diagnosticHistoryError = ref('')
 const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'TCP', 'DNS', 'TRACEROUTE', 'LLDP']
 const diagnosticTimeoutMs = ref(2000)
 const diagnosticStarting = ref(false)
@@ -26,6 +30,7 @@ const diagnosticActive = computed(() => diagnosticRun.value?.state === 'QUEUED' 
 let diagnosticPoll: ReturnType<typeof setTimeout> | undefined
 let diagnosticGeneration = 0
 let diagnosticReadGeneration = -1
+let diagnosticHistoryGeneration = 0
 let pageActive = true
 const isSuperAdmin = () => auth.user?.role === 'SUPERADMIN'
 
@@ -42,7 +47,49 @@ async function refresh(): Promise<void> {
   finally { loading.value = false }
 }
 function stopDiagnosticPolling(): void { if (diagnosticPoll) { clearTimeout(diagnosticPoll); diagnosticPoll = undefined } }
-function diagnosticCurrent(id: string, generation: number): boolean { return pageActive && diagnosticGeneration === generation && diagnosticRun.value?.id === id }
+function diagnosticCurrent(id: string, generation: number): boolean { return pageActive && diagnosticGeneration === generation && selectedDiagnosticRun.value === id }
+function clearDiagnosticSelection(id = ''): void {
+  diagnosticGeneration++
+  stopDiagnosticPolling()
+  selectedDiagnosticRun.value = id
+  diagnosticRun.value = null
+  diagnosticError.value = ''
+  diagnosticStarting.value = false
+  diagnosticCancelling.value = false
+  diagnosticReading.value = false
+}
+function rememberDiagnostic(run: NetworkDiagnosticRun): void {
+  const summary: NetworkDiagnosticRunSummary = { id: run.id, state: run.state, totalDevices: run.totalDevices,
+    totalChecks: run.totalChecks, completedChecks: run.completedChecks, progressPercent: run.progressPercent,
+    createdMs: run.createdMs, startedMs: run.startedMs, endedMs: run.endedMs,
+    kinds: [...new Set(run.items.map(item => item.kind))] }
+  diagnosticHistory.value = [summary, ...diagnosticHistory.value.filter(item => item.id !== run.id)]
+    .sort((left, right) => right.createdMs - left.createdMs || left.id.localeCompare(right.id)).slice(0, 50)
+}
+async function refreshDiagnosticHistory(): Promise<void> {
+  const generation = ++diagnosticHistoryGeneration
+  const selectionGeneration = diagnosticGeneration
+  diagnosticHistoryLoading.value = true
+  diagnosticHistoryError.value = ''
+  try {
+    const history = await listNetworkDiagnostics(50)
+    if (!pageActive || generation !== diagnosticHistoryGeneration || selectionGeneration !== diagnosticGeneration) return
+    diagnosticHistory.value = history
+    if (selectedDiagnosticRun.value && !history.some(item => item.id === selectedDiagnosticRun.value)) clearDiagnosticSelection()
+  } catch (cause) {
+    if (!pageActive || generation !== diagnosticHistoryGeneration || selectionGeneration !== diagnosticGeneration) return
+    if (cause instanceof ApiRequestError && [401, 403, 404].includes(cause.status)) {
+      diagnosticHistory.value = []
+      clearDiagnosticSelection()
+    }
+    diagnosticHistoryError.value = '诊断历史读取失败，请刷新重试。'
+  } finally { if (generation === diagnosticHistoryGeneration) diagnosticHistoryLoading.value = false }
+}
+function openDiagnosticHistory(): void {
+  const id = selectedDiagnosticRun.value
+  clearDiagnosticSelection(id)
+  if (id) void pollDiagnostics(id)
+}
 async function pollDiagnostics(id: string, generation = diagnosticGeneration): Promise<void> {
   if (!diagnosticCurrent(id, generation) || diagnosticReadGeneration === generation) return
   stopDiagnosticPolling()
@@ -52,10 +99,19 @@ async function pollDiagnostics(id: string, generation = diagnosticGeneration): P
     const run = await getNetworkDiagnostics(id)
     if (!diagnosticCurrent(id, generation)) return
     diagnosticRun.value = run
+    rememberDiagnostic(run)
     diagnosticError.value = ''
     if (run.state === 'QUEUED' || run.state === 'RUNNING') diagnosticPoll = setTimeout(() => { void pollDiagnostics(id, generation) }, 700)
   } catch (cause) {
-    if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断进度读取失败'
+    if (diagnosticCurrent(id, generation)) {
+      if (cause instanceof ApiRequestError && [401, 403, 404].includes(cause.status)) {
+        diagnosticHistoryGeneration++
+        diagnosticHistoryLoading.value = false
+        diagnosticHistory.value = cause.status === 404 ? diagnosticHistory.value.filter(item => item.id !== id) : []
+        clearDiagnosticSelection()
+        diagnosticError.value = '诊断记录已不存在或不可访问，请刷新历史。'
+      } else diagnosticError.value = cause instanceof Error ? cause.message : '诊断结果读取失败'
+    }
   } finally {
     if (diagnosticReadGeneration === generation) { diagnosticReadGeneration = -1; diagnosticReading.value = false }
   }
@@ -75,7 +131,9 @@ async function startDiagnostics(): Promise<void> {
   try {
     const run = await startNetworkDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value })
     if (!pageActive || generation !== diagnosticGeneration) return
+    selectedDiagnosticRun.value = run.id
     diagnosticRun.value = run
+    rememberDiagnostic(run)
     if (run.state === 'QUEUED' || run.state === 'RUNNING') void pollDiagnostics(run.id, generation)
   } catch (cause) {
     if (pageActive && generation === diagnosticGeneration) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务启动失败'
@@ -92,7 +150,8 @@ async function cancelDiagnostics(): Promise<void> {
   catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务取消失败' }
   finally { if (generation === diagnosticGeneration) diagnosticCancelling.value = false }
 }
-function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
+function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
+function diagnosticHistoryLabel(item: NetworkDiagnosticRunSummary): string { return `${new Date(item.createdMs).toLocaleString('zh-CN', { hour12: false })} · ${diagnosticStateLabel(item.state)} · ${item.totalDevices} 台设备 · ${item.kinds.map(diagnosticKindLabel).join('、')}` }
 function diagnosticKindLabel(value: string): string { return ({ PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
 function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
 function diagnosticOutcomeLabel(value?: string | null): string { return ({ OK: '检查成功', TRACEROUTE_MAX_HOPS: '达到跳数上限，尚未到达目标', TRACEROUTE_UNREACHABLE: '目标不可达', TIMEOUT: '检查总超时', CANCELLED: '已取消', DIAGNOSTIC_SCOPE_REVOKED: '设备访问权限已变化' } as Record<string, string>)[value || ''] || value || '—' }
@@ -112,11 +171,11 @@ async function launch(tool: HostTool): Promise<void> {
   } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '启动请求失败') }
 }
 function statusLabel(value: string): string { return ({ READY: '可用', NOT_CONFIGURED: '未配置', EXECUTABLE_NOT_FOUND: '程序不存在', HOST_WINDOWS_REQUIRED: '需要 Windows 宿主机', REPARSE_POINT_BLOCKED: '路径被阻断', EXECUTABLE_NOT_ALLOWED: '不是允许的程序' } as Record<string, string>)[value] || value }
-onMounted(refresh)
+onMounted(() => { void refresh(); void refreshDiagnosticHistory() })
 onUnmounted(suspendDiagnostics)
 onDeactivated(suspendDiagnostics)
-onActivated(() => { if (!pageActive) { pageActive = true; if (diagnosticRun.value && diagnosticActive.value) void pollDiagnostics(diagnosticRun.value.id) } })
-watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration++; stopDiagnosticPolling(); diagnosticRun.value = null; diagnosticError.value = ''; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false })
+onActivated(() => { if (!pageActive) { pageActive = true; void refreshDiagnosticHistory(); if (selectedDiagnosticRun.value && diagnosticActive.value) void pollDiagnostics(selectedDiagnosticRun.value) } })
+watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelection(); diagnosticHistory.value = []; diagnosticHistoryError.value = ''; diagnosticHistoryGeneration++; if (pageActive) void refreshDiagnosticHistory() })
 </script>
 
 <template>
@@ -126,13 +185,19 @@ watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration
     <section class="card" style="margin-bottom:14px">
       <div class="card__header"><div><h2>网络诊断</h2><small>从 NetConsole 服务所在主机检查已登记设备；LLDP 读取当前局点内已验证的事实</small></div><span v-if="diagnosticRun" class="state-pill" :class="diagnosticRun.state === 'SUCCEEDED' ? 'good' : diagnosticRun.state === 'PARTIAL' ? 'warn' : ''">{{ diagnosticStateLabel(diagnosticRun.state) }} · {{ diagnosticRun.progressPercent }}%</span></div>
       <div class="card__body">
+        <div class="toolbar diagnostic-history">
+          <label class="form-field"><span>诊断历史（最近 50 条）</span><select v-model="selectedDiagnosticRun" aria-label="诊断历史" :disabled="diagnosticStarting" @change="openDiagnosticHistory"><option value="">选择已有任务查看结果</option><option v-for="record in diagnosticHistory" :key="record.id" :value="record.id">{{ diagnosticHistoryLabel(record) }}</option></select></label>
+          <el-button size="small" :loading="diagnosticHistoryLoading" :disabled="diagnosticHistoryLoading" @click="refreshDiagnosticHistory">刷新历史</el-button>
+          <small class="muted">查看历史只读取已保存结果。</small>
+        </div>
+        <p v-if="diagnosticHistoryError" role="alert" class="diagnostic-error">{{ diagnosticHistoryError }}</p>
         <div class="toolbar diagnostic-controls">
           <label class="form-field diagnostic-devices"><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" aria-label="诊断设备" multiple size="4" :disabled="diagnosticStarting || diagnosticActive"><option v-for="device in inventory" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
           <div class="form-field"><span>检查类型</span><label v-for="kind in diagnosticKindOptions" :key="kind" class="check-row"><input v-model="diagnosticKinds" type="checkbox" :value="kind" :disabled="diagnosticStarting || diagnosticActive" @change="selectDiagnosticKind" />{{ diagnosticKindLabel(kind) }}</label></div>
           <label class="form-field"><span>每项检查总超时</span><select v-model.number="diagnosticTimeoutMs" aria-label="每项检查总超时" :disabled="diagnosticStarting || diagnosticActive"><option :value="2000">2 秒</option><option :value="5000">5 秒</option><option :value="10000">10 秒</option><option :value="30000">30 秒</option></select><small class="muted">Traceroute 最多 30 跳，建议 30 秒。</small></label>
           <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
-        <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="diagnosticRun && diagnosticActive && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(diagnosticRun.id)">重新读取进度</el-button></div>
+        <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="selectedDiagnosticRun && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(selectedDiagnosticRun)">{{ diagnosticActive ? '重新读取进度' : '重新读取结果' }}</el-button></div>
         <template v-if="diagnosticRun">
           <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
@@ -146,7 +211,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration
             </section></td></tr>
           </template></tbody></table></div>
         </template>
-        <div v-else class="empty-state" style="margin-top:12px"><div><strong>尚未运行诊断</strong><small>选择设备和检查类型后开始一个批量任务。</small></div></div>
+        <div v-else class="empty-state" style="margin-top:12px"><div><strong>{{ diagnosticReading ? '正在读取诊断结果' : '尚未运行诊断' }}</strong><small>选择历史查看已有结果，或选择设备和检查类型开始批量任务。</small></div></div>
       </div>
     </section>
     <div class="toolbar" style="margin-bottom:12px"><label class="form-field" style="min-width:300px"><span>外部终端目标设备</span><select v-model="selectedDevice"><option value="">选择已登记设备</option><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.host }}:{{ device.port }} · {{ device.username }}</option></select></label><span v-if="!isSuperAdmin()" class="state-pill warn">仅 SUPERADMIN 可启动和配置</span></div>
@@ -164,6 +229,9 @@ watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration
 
 <style scoped>
 .diagnostic-controls { align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+.diagnostic-history { gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 18px; }
+.diagnostic-history .form-field { flex: 1 1 440px; min-width: 0; max-width: 760px; }
+.diagnostic-history select { width: 100%; }
 .diagnostic-devices { flex: 1 1 360px; max-width: 560px; min-width: 0; }
 .diagnostic-devices select { width: 100%; }
 .diagnostic-controls .check-row { display: flex; align-items: center; gap: 7px; white-space: nowrap; }

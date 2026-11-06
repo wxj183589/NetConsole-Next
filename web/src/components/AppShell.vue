@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Bell, DataLine, Guide, Operation, Search, UserFilled } from '@element-plus/icons-vue'
+import { DataLine, Guide, Operation, Search, UserFilled } from '@element-plus/icons-vue'
 import { getDeviceInventory, getHealth, getModuleStates, type HealthSnapshot, type ModuleState } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -30,8 +30,9 @@ const nav = computed(() => moduleRegistry.map(item => {
 }))
 const currentLabel = computed(() => String(route.meta.label || '运行总览'))
 const isTerminal = computed(() => route.path === '/terminal')
-const healthLabel = computed(() => health.value?.healthState === 'HEALTHY' ? '服务正常' : health.value?.healthState === 'DEGRADED' ? '服务降级' : '服务状态')
-const queueLabel = computed(() => health.value?.collectionState === 'running' ? '队列状态正常' : health.value?.collectionState || '队列待命')
+const healthLabel = computed(() => ({ HEALTHY: '服务正常', DEGRADED: '服务降级', FAULTED: '服务故障' } as Record<string, string>)[health.value?.healthState || ''] || '服务状态未知')
+const healthTone = computed(() => ({ HEALTHY: 'success', DEGRADED: 'warning', FAULTED: 'danger' } as Record<string, string>)[health.value?.healthState || ''] || 'unknown')
+const queueLabel = computed(() => health.value?.collectionState === 'running' ? '队列状态正常' : health.value?.collectionState || '队列状态未知')
 
 async function navigate(item: (typeof moduleRegistry)[number]): Promise<void> {
   if (item.status === 'DISABLED') { ElMessage.info(item.disabledReason || `${item.label}尚未接入真实业务 API`); return }
@@ -54,12 +55,12 @@ async function submitGlobalSearch(): Promise<void> {
   await router.push({ path: '/devices', query: { q: globalSearch.value.trim() } })
 }
 async function refreshShell(): Promise<void> {
-  try {
-    health.value = await getHealth()
-    moduleStates.value = await getModuleStates()
-    const inventory = await getDeviceInventory({ page: 1, pageSize: 1 })
-    deviceCount.value = inventory.summary.totalRecords
-  } catch { /* keep the shell usable while a service is starting */ }
+  const [healthResult, modulesResult, inventoryResult] = await Promise.allSettled([
+    getHealth(), getModuleStates(), getDeviceInventory({ page: 1, pageSize: 1 }),
+  ])
+  health.value = healthResult.status === 'fulfilled' ? healthResult.value : null
+  if (modulesResult.status === 'fulfilled') moduleStates.value = modulesResult.value
+  deviceCount.value = inventoryResult.status === 'fulfilled' ? inventoryResult.value.summary.onlineDevices : null
 }
 
 onMounted(async () => {
@@ -85,7 +86,7 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
           <span v-if="item.status === 'DISABLED'" class="status-chip">未开放</span>
         </button>
       </div>
-      <div class="sidebar-footer"><div class="sidebar-footer__line"><span class="sidebar-dot" />本机服务</div><span class="mono sidebar-instance">{{ health?.instanceId || 'instance-id pending' }}</span></div>
+      <div class="sidebar-footer"><div class="sidebar-footer__line"><span :class="['sidebar-dot', `status-dot--${healthTone}`]" />{{ healthLabel }}</div><span class="mono sidebar-instance">{{ health?.instanceId || 'instance-id pending' }}</span></div>
       <button class="sidebar-collapse" type="button" :title="sidebarCollapsed ? '展开导航' : '收起导航'" @click="sidebarCollapsed = !sidebarCollapsed"><el-icon><Guide /></el-icon></button>
     </aside>
 
@@ -94,8 +95,7 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
         <div class="header-context"><span class="header-context__product">NetConsole Next</span><span class="header-context__divider">/</span><strong>{{ currentLabel }}</strong></div>
         <div class="header-actions">
           <label class="global-search"><el-icon><Search /></el-icon><input v-model="globalSearch" placeholder="搜索设备、IP、任务…" @keydown.enter="submitGlobalSearch" /><kbd>⌘ K</kbd></label>
-          <div class="header-status"><span class="header-status__item"><i class="status-dot status-dot--success" />{{ healthLabel }}</span><span class="header-status__item header-status__queue"><el-icon><DataLine /></el-icon>{{ queueLabel }}</span><span class="header-status__item">在线设备 <b>{{ deviceCount ?? '—' }}</b></span></div>
-          <button class="header-icon-button" type="button" title="通知"><el-icon><Bell /></el-icon><span class="notification-badge">0</span></button>
+          <div class="header-status"><span class="header-status__item"><i :class="['status-dot', `status-dot--${healthTone}`]" />{{ healthLabel }}</span><span class="header-status__item header-status__queue"><el-icon><DataLine /></el-icon>{{ queueLabel }}</span><span class="header-status__item">在线设备 <b>{{ deviceCount ?? '—' }}</b></span></div>
           <button class="header-icon-button" type="button" :title="dark ? '切换浅色主题' : '切换深色主题'" @click="toggleTheme"><el-icon><Operation /></el-icon></button>
           <div class="user-menu"><span class="avatar"><el-icon><UserFilled /></el-icon></span><span class="user-menu__name">{{ auth.user?.username }}</span><span class="user-menu__role">{{ auth.user?.role }}</span><button class="user-menu__exit" type="button" title="退出登录" @click="signOut">退出</button></div>
         </div>
@@ -109,3 +109,10 @@ watch(() => route.path, (path) => { workspace.open(path, String(route.meta.label
     </main>
   </div>
 </template>
+
+<style scoped>
+.sidebar-dot { box-shadow: none; }
+.status-dot--warning { background: var(--nc-warning); }
+.status-dot--danger { background: var(--nc-danger); }
+.status-dot--unknown { background: var(--nc-text-muted); }
+</style>

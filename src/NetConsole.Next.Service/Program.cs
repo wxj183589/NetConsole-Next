@@ -791,11 +791,20 @@ app.MapPost("/api/system/diagnostics/runs", (HttpContext context, NetworkDiagnos
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
 });
+app.MapGet("/api/system/diagnostics/runs", (HttpContext context, int? limit,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(diagnostics.List(CurrentIdentity(context).UserId, CurrentSiteScope(context), limit ?? 50)); }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (ArgumentException) { return Results.BadRequest(new { error = "DIAGNOSTIC_HISTORY_LIMIT_INVALID", detail = "历史读取数量应为 1 至 128。" }); }
+});
 app.MapGet("/api/system/diagnostics/runs/{id}", (HttpContext context, string id,
     NetworkDiagnosticsService diagnostics) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
-    return diagnostics.Get(id, CurrentSiteScope(context)) is { } run ? Results.Ok(run) : Results.NotFound();
+    try { return diagnostics.Get(id, CurrentIdentity(context).UserId, CurrentSiteScope(context)) is { } run ? Results.Ok(run) : Results.NotFound(); }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: StatusCodes.Status403Forbidden); }
 });
 app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, string id,
     NetworkDiagnosticsService diagnostics) =>

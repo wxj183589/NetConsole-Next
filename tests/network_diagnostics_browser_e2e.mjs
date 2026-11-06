@@ -16,6 +16,7 @@ const result = { status: 'RUNNING', evidenceType: 'CHROME_SOURCE_UI_MOCKED_API_F
   scenarios, screenshots, requests, errors, unexpected, resources: { vitePort: null, ownedViteClosed: false, ownedChromeClosed: false } }
 let server; let browser; let page; let failure
 let mode = 'success'; let role = 'SUPERADMIN'; let currentId = ''; let pollReads = 0; let cancelled = false; let serial = 0
+const history = new Map()
 const devices = [
   { id: 'mock-device-one', name: '核心交换机 · 合成样本', managementIp: '192.0.2.10', enabled: true, isValid: true },
   { id: 'mock-device-two', name: '边界路由器 · 合成样本', managementIp: '192.0.2.20', enabled: true, isValid: true },
@@ -38,10 +39,15 @@ function run(state = 'RUNNING') {
   return { id: currentId, actor: 'fixture-operator', state, timeoutMs: 30000, totalDevices: 2, totalChecks: 2,
     completedChecks: terminal ? 2 : 0, succeededChecks: state === 'PARTIAL' ? 1 : 0, failedChecks: state === 'PARTIAL' ? 1 : 0,
     noEvidenceChecks: 0, cancelledChecks: state === 'CANCELLED' ? 2 : 0, queuedChecks: 0, runningChecks: terminal ? 0 : 2,
-    progressPercent: terminal ? 100 : 0, createdMs: 1_800_000_000_000,
+    progressPercent: terminal ? 100 : 0, createdMs: 1_800_000_000_000 + serial * 1000,
     failureReason: state === 'PARTIAL' ? '部分诊断未成功；请查看设备明细。' : null,
     items: state === 'PARTIAL' ? [traceItem(devices[0]), traceItem(devices[1], 'FAILED', true)]
       : devices.map(device => traceItem(device, state === 'CANCELLED' ? 'CANCELLED' : 'RUNNING', state === 'CANCELLED')) }
+}
+function summary(value) {
+  return { id: value.id, state: value.state, totalDevices: value.totalDevices, totalChecks: value.totalChecks,
+    completedChecks: value.completedChecks, progressPercent: value.progressPercent, createdMs: value.createdMs,
+    kinds: [...new Set(value.items.map(item => item.kind))] }
 }
 async function routeApi(route) {
   const request = route.request(); const url = new URL(request.url()); const endpoint = url.pathname
@@ -54,15 +60,22 @@ async function routeApi(route) {
   else if (endpoint === '/api/system/devices') body = { items: devices, total: 2, page: 1, pageSize: 100, hasMore: false, summary: { totalRecords: 2 } }
   else if (endpoint === '/api/system/host-tools') body = [{ id: 'putty', displayName: 'PuTTY', product: 'PuTTY', status: 'READY', executablePath: 'D:\\synthetic-tools\\putty.exe' }]
   else if (endpoint === '/api/system/terminal/devices') body = [{ id: 'mock-terminal', host: '192.0.2.10', port: 22, username: 'reader' }]
+  else if (endpoint === '/api/system/diagnostics/runs' && request.method() === 'GET') body = [...history.values()]
+    .sort((left, right) => right.createdMs - left.createdMs).slice(0, Number(url.searchParams.get('limit') || 50)).map(summary)
   else if (endpoint === '/api/system/diagnostics/runs' && request.method() === 'POST') {
     if (mode === 'start-error') { status = 503; body = { error: 'DIAGNOSTIC_FAILED', detail: '诊断任务启动失败（合成场景）' } }
-    else { currentId = `mock-diagnostic-${++serial}`; pollReads = 0; cancelled = false; status = 202; body = run() }
+    else { currentId = `mock-diagnostic-${++serial}`; pollReads = 0; cancelled = false; status = 202; body = run(); history.set(currentId, body) }
   } else if (endpoint === `/api/system/diagnostics/runs/${currentId}/cancel` && request.method() === 'POST') {
     cancelled = true; body = { cancelled: true }
-  } else if (endpoint === `/api/system/diagnostics/runs/${currentId}` && request.method() === 'GET') {
-    pollReads++
-    if (mode === 'poll-error' && pollReads === 1) { status = 503; body = { error: 'DIAGNOSTIC_READ_FAILED', detail: '诊断进度读取失败（合成场景）' } }
-    else body = cancelled ? run('CANCELLED') : mode === 'cancel' || pollReads === 1 ? run() : run('PARTIAL')
+  } else if (/^\/api\/system\/diagnostics\/runs\/[^/]+$/.test(endpoint) && request.method() === 'GET') {
+    const id = endpoint.split('/').at(-1); const retained = history.get(id)
+    if (!retained) { status = 404; body = {} }
+    else if (id !== currentId || !['QUEUED', 'RUNNING'].includes(retained.state)) body = retained
+    else {
+      pollReads++
+      if (mode === 'poll-error' && pollReads === 1) { status = 503; body = { error: 'DIAGNOSTIC_READ_FAILED', detail: '诊断进度读取失败（合成场景）' } }
+      else { body = cancelled ? run('CANCELLED') : mode === 'cancel' || pollReads === 1 ? run() : run('PARTIAL'); history.set(id, body) }
+    }
   } else { status = 404; body = {}; unexpected.push(`${request.method()} ${endpoint}`) }
   await route.fulfill({ status, contentType: 'application/json', headers: { 'cache-control': 'no-store' }, body: JSON.stringify(body) })
 }
@@ -111,6 +124,20 @@ try {
     await page.setViewportSize(viewport); await checkLayout(); await screenshot(`traceroute-results-${viewport.width}.png`)
   }
   scenarios.push('hop-tables-and-controls-fit-1920x1080-and-2560x1440-without-horizontal-overflow')
+  const savedId = currentId
+  const startsBeforeHistory = requests.filter(request => request.endpoint === '/api/system/diagnostics/runs' && request.method === 'POST').length
+  await page.getByRole('button', { name: '刷新历史', exact: true }).click()
+  await expect(page.getByLabel('诊断历史', { exact: true })).toHaveValue(savedId)
+  await page.reload()
+  await expect(page.getByLabel('诊断历史', { exact: true }).locator(`option[value="${savedId}"]`)).toHaveCount(1)
+  await expect(page.locator('.diagnostic-results')).toHaveCount(0)
+  await page.getByLabel('诊断历史', { exact: true }).selectOption(savedId)
+  await expect(page.locator('.diagnostic-progress')).toContainText('已完成 2 / 2 项检查')
+  await expect(page.locator('.trace-route').nth(1)).toContainText('该跳超时')
+  expect(requests.filter(request => request.endpoint === '/api/system/diagnostics/runs' && request.method === 'POST').length).toBe(startsBeforeHistory)
+  await checkLayout(); await screenshot('diagnostic-history-reopened.png')
+  scenarios.push('history-refresh-and-page-reload-discover-and-reopen-results-without-new-diagnostics')
+  await selectTrace()
   mode = 'cancel'; await page.getByRole('button', { name: '开始诊断', exact: true }).click()
   await expect(page.locator('.trace-route').first()).toContainText('正在探测路径')
   await page.getByRole('button', { name: '取消任务', exact: true }).click()
@@ -138,6 +165,16 @@ try {
   await expect(page.getByRole('button', { name: '开始诊断', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '取消任务', exact: true })).toBeDisabled()
   scenarios.push('lower-role-cannot-start-or-cancel-diagnostics')
+  const startsBeforeReader = requests.filter(request => request.endpoint === '/api/system/diagnostics/runs' && request.method === 'POST').length
+  await page.getByLabel('诊断历史', { exact: true }).selectOption(savedId)
+  await expect(page.locator('.diagnostic-progress')).toContainText('已完成 2 / 2 项检查')
+  await expect(page.locator('.trace-route').first()).toContainText('已到达目标')
+  history.delete(savedId)
+  await page.getByRole('button', { name: '刷新历史', exact: true }).click()
+  await expect(page.locator('.diagnostic-results')).toHaveCount(0)
+  await expect(page.getByLabel('诊断历史', { exact: true })).toHaveValue('')
+  expect(requests.filter(request => request.endpoint === '/api/system/diagnostics/runs' && request.method === 'POST').length).toBe(startsBeforeReader)
+  scenarios.push('existing-read-role-can-open-history-and-refresh-clears-a-record-no-longer-listed')
   await page.close(); role = 'SUPERADMIN'; mode = 'success'
   page = await browser.newPage({ viewport: viewports[0], deviceScaleFactor: 1.25 })
   page.on('pageerror', error => errors.push(error.message)); await page.route(url => url.pathname.startsWith('/api/'), routeApi)

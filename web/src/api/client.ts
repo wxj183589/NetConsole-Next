@@ -416,6 +416,20 @@ export interface TerminalSession {
   disconnectReason?: string | null
 }
 
+export interface TerminalSessionQuery {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  protocol?: string
+}
+
+export interface TerminalSessionPage {
+  page: number
+  pageSize: number
+  total: number
+  items: TerminalSession[]
+}
+
 export interface LinuxServer {
   id: string
   name: string
@@ -558,6 +572,19 @@ export interface NetworkDiagnosticRun {
   endedMs?: number | null
   failureReason?: string | null
   items: NetworkDiagnosticItem[]
+}
+
+export interface NetworkDiagnosticRunSummary {
+  id: string
+  state: string
+  totalDevices: number
+  totalChecks: number
+  completedChecks: number
+  progressPercent: number
+  createdMs: number
+  startedMs?: number | null
+  endedMs?: number | null
+  kinds: NetworkDiagnosticKind[]
 }
 
 export interface H3cFact {
@@ -1295,6 +1322,9 @@ export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: N
 export function getNetworkDiagnostics(id: string): Promise<NetworkDiagnosticRun> {
   return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}`)
 }
+export function listNetworkDiagnostics(limit = 50): Promise<NetworkDiagnosticRunSummary[]> {
+  return request('/api/system/diagnostics/runs?limit=' + encodeURIComponent(String(limit)))
+}
 export function cancelNetworkDiagnostics(id: string): Promise<{ cancelled: boolean }> {
   return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
 }
@@ -1383,8 +1413,11 @@ export function issueTerminalTicket(sessionId: string): Promise<{ ticket: string
 export function closeTerminalSession(sessionId: string): Promise<void> {
   return request(`/api/system/terminal/sessions/${encodeURIComponent(sessionId)}/close`, { method: 'POST' })
 }
-export function getTerminalSessions(): Promise<{ items: TerminalSession[]; total: number }> {
-  return request('/api/system/terminal/sessions?page=1&pageSize=100')
+export function getTerminalSessions(query: TerminalSessionQuery = {}): Promise<TerminalSessionPage> {
+  const params = new URLSearchParams({ page: String(query.page ?? 1), pageSize: String(query.pageSize ?? 20) })
+  if (query.keyword?.trim()) params.set('keyword', query.keyword.trim())
+  if (query.protocol) params.set('protocol', query.protocol)
+  return request(`/api/system/terminal/sessions?${params}`)
 }
 export function getTerminalSession(sessionId: string): Promise<TerminalSession> {
   return request(`/api/system/terminal/sessions/${encodeURIComponent(sessionId)}`)
