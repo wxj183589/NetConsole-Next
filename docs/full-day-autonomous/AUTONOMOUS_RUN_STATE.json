@@ -1,108 +1,106 @@
 {
   "project": "NetConsole-Next-Full-Day-Autonomous-Development",
   "mode": "AUTONOMOUS_MULTI_WORKSTREAM",
-  "date": "2026-11-05",
+  "date": "2026-11-06",
   "codexThreadId": "01a1a80b-08b3-7862-b637-ed9f1f68984c",
-  "baseCommit": "052240f",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
-  "phase": "CHECKPOINT_L_NETMIKO_CONNECTION_AND_SIMULATOR_GATES",
+  "overallStatus": "PARTIAL",
+  "phase": "NETMIKO_WEB_LINUX_JUMP_LOCAL_ACCEPTANCE",
+  "currentHead": "a3954a5e95590782a576272d4e4b3c526eab248b",
+  "currentHeadShort": "a3954a5",
+  "headMeaning": "feature batch locally committed as a3954a5; documentation is defined by its containing commit",
   "activeWorkstreams": [
-    "Netmiko worker interactive/driver mapping and connection boundary",
-    "formal AP identity candidate/replacement lifecycle review",
-    "simulator connection evidence and HA gate"
+    "documentation closure",
+    "wireless identity and HA backlog"
   ],
-  "completedAtStart": [
-    "AP runtime history",
-    "task scope",
-    "interactive files authority",
-    "fact revision/site provenance",
-    "single-command Raw publication",
-    "bounded network diagnostics batch",
-    "configuration backup",
-    "LLDP topology relations",
-    "diagnostic restart history",
-    "module registry and SUPERADMIN settings UI",
-    "cross-AC collection manifest persistence",
-    "collection manifest read API/UI",
-    "simulator protocol banner and credential-vault audit",
-    "secure connection onboarding API/UI",
-    "historical task lookup by ID",
-    "task detail/cancel/retry/resume API direct-ID scope lookup",
-    "connection onboarding HTTP regression",
-    "fixed read-only multi-command plan UI and HTTP submission regression",
-    "controlled unique-MAC partial-evidence AP association",
-    "multi-target H3C parent plan, child run linkage, aggregate status and claims-protected report",
-    "Netmiko CPython worker and explicit driver mapping",
-    "profile-scoped credential storage and resolution",
-    "SSH HostKey automatic first trust and rotation audit",
-    "Site Jump Host probe and explicit fingerprint refresh",
-    "historical task lookup by ID and direct-ID recovery actions"
+  "completedLocal": [
+    "bounded task scheduling, command-level Raw and complete-manifest publication",
+    "historical task direct-ID lookup and retry/cancel/resume",
+    "diagnostics, configuration backup, LLDP relations and bounded history",
+    "module registry, SUPERADMIN settings and API capability gates",
+    "wireless identity projection, observations, AP group details and collection manifests",
+    "network CLI collection, connection testing and Web Shell unified through CPython+Netmiko",
+    "explicit SSH/Telnet driver mapping without cross-vendor fallback",
+    "profile password persistence and automatic resolution, atomic device/profile onboarding",
+    "authenticated automatic SSH Host Key first trust and rotation including legacy STRICT profiles",
+    "ZTE credential API and UI",
+    "Linux server inventory and SSH.NET interactive terminal",
+    "Site Jump Host forwarding, probe, Settings UI and fingerprint lifecycle",
+    "network terminal, Linux and Jump local browser/integration gates",
+    "fresh Windows offline candidate build and bundled-runtime execution gate"
   ],
   "nextTasks": [
-    "formal AP identity candidate/replacement lifecycle review",
-    "cross-AC live collection, AP ownership and dual-AC HA evidence",
-    "complete module workbench integration",
-    "re-run full Service harness after concurrent worker changes settle"
+    "formal AP candidate/replacement and Domain/group lifecycle contracts",
+    "dual-AC HA, failover/recovery and live AP ownership evidence",
+    "complete remaining module workbench integration",
+    "native Windows 125 percent display acceptance",
+    "cross-machine Web authentication/TLS and target-machine installation acceptance"
   ],
   "externalBlockers": [
-    "FIT-AP Telnet credential is rejected by the simulator and must be replaced through the local secure channel",
-    "SW SSH authentication succeeds but the legacy HCL Exec/device-identification path remains partial",
-    "dual-AC HA, failover/recovery and real AP ownership evidence remain pending",
-    "formal AP replacement/candidate and Domain/group lifecycle contract remains pending"
+    "real hardware, real Linux and actual bastion interoperability remain REAL_DEVICE_PENDING",
+    "dual-AC HA and live AP ownership are not established by simulator command responses",
+    "native display scaling and installation/SCM/upgrade/uninstall require their own acceptance"
   ],
-  "realDataChanged": false,
-  "remotePush": false,
-  "merge": false,
-  "release": false,
-  "lastRecoveryCommit": "5c600162a46932dc7064d0e2e34d9ed0dac01396",
-  "credentialAudit": {
-    "at": "2026-11-05",
-    "simulatorHost": "LOCAL_HCL_VIRTUALBOX",
-    "credentialRoot": "test-data/simulator-live-20261105",
-    "nextDpapiVaultPresent": true,
-    "deviceProfilesPresent": true,
-    "credentialReferencePresent": true,
-    "sshAgentIdentityAvailable": false,
-    "deviceConfigContainsRecoverableSecret": false,
-    "passwordGuessing": false,
-    "simulatorConfigChanged": false,
-    "status": "PARTIAL_AC1_AC2_PASS_SW_EXEC_PARTIAL_FIT_AP_AUTH_FAILED"
+  "credentialModel": {
+    "date": "2026-11-06",
+    "normalDeviceDpapiVault": false,
+    "passwordStorage": "plaintext SQLite fields under narrowed local data-root filesystem ACL",
+    "resolution": "device/profile-specific automatic read; no secret in ordinary response DTOs",
+    "input": "password form and local process pipe; never URL, command line, logs, Raw or exported reports",
+    "hostKeys": "separate from passwords; automatic first trust and rotation after successful authentication",
+    "onboarding": "device and profile committed in one transaction"
   },
-  "currentHead": "5c600162a46932dc7064d0e2e34d9ed0dac01396",
-  "currentHeadShort": "5c60016",
   "simulatorEvidence": {
+    "path": "D:\\study\\NetConsole-Next-Workspace\\reports\\netmiko-simulator-20261106.json",
+    "evidence": "LIVE_HCL_SIMULATOR_NETMIKO_READONLY",
     "AC1": {
       "endpoint": "192.168.56.2:22",
-      "protocol": "SSH",
       "status": "PASS",
-      "detail": "automatic credential authentication and device-version identification"
+      "commands": "version and AC AP queries"
     },
     "AC2": {
       "endpoint": "192.168.56.5:22",
-      "protocol": "SSH",
       "status": "PASS",
-      "detail": "automatic credential authentication and device-version identification"
+      "commands": "version and AC AP queries"
     },
     "SW": {
       "endpoint": "192.168.56.3:22",
-      "protocol": "SSH",
-      "status": "PARTIAL",
-      "detail": "SSH authentication succeeded; legacy Exec/device identification failed"
+      "status": "PASS",
+      "commands": "version, interface brief and LLDP"
     },
     "FIT-AP": {
-      "endpoint": "192.168.56.4:23",
-      "protocol": "TELNET",
-      "status": "BLOCKED",
-      "detail": "banner reachable; saved credential rejected"
+      "status": "AC_MANAGED_NO_INDEPENDENT_CONNECTION"
     },
-    "dualAcHa": "PENDING_NOT_RUN",
-    "configurationWrites": 0
+    "dualAcHa": "PENDING_NO_FAILOVER_OR_CONFIGURATION_WRITE",
+    "configurationWrites": 0,
+    "realDeviceStatus": "REAL_DEVICE_PENDING"
   },
   "verification": {
-    "netmikoWorkerTests": "2/2 PASS",
-    "releaseBuild": "PASS: 0 warnings / 0 errors",
-    "fullServiceHarnessCurrent": "FAILED at ConcurrencyP1Tests.FailedTaskCanBeRetriedAsANewRun; rerun after concurrent worker changes settle",
-    "sourceChangesByThisCheckpoint": "none"
-  }
+    "serviceReleaseBuild": "PASS: 0 warnings / 0 errors after final scope fixes",
+    "fullServiceHarnessCurrent": "PASS after final scope fixes",
+    "frontendTypecheck": "PASS",
+    "frontendUnitTests": "8 files / 23 tests PASS",
+    "netmikoWorkerTests": "20 tests PASS",
+    "offlineToolRegressions": "7 tests PASS",
+    "networkTerminalE2e": "PASS: loopback SSH/Telnet/AUTO, browser, replay, cancellation and reconnect",
+    "linuxSshE2e": "PASS: final Edge LINUX_BROWSER, LINUX_HTTP_WEBSOCKET_SSH, LINUX_RESTART_IDLE_DELETE; includes completely silent revocation and SSH release",
+    "siteJumpE2e": "SITE_JUMP_HTTP_NETMIKO=PASS; SITE_JUMP_RESTART_DELETE=PASS",
+    "siteJumpSettingsBrowser": "SITE_JUMP_SETTINGS_BROWSER=PASS: Chrome and API Mock",
+    "offlineCandidateRuntime": "PASS: OFFLINE_BUNDLED_RUNTIME (Netmiko 4.7.0 / Paramiko 4.0.0), STATIC_UI, NETMIKO_CONNECTION, LINUX_WEBSOCKET, OFFLINE_CANDIDATE; Production environment with isolated cwd/data root; PATH only System32; no system Python override",
+    "offlineCandidatePath": "D:\\study\\NetConsole-Next-Workspace\\build\\service-web-linux-jump-a3954a5-20261106",
+    "offlineCandidateLimits": "local candidate execution only; not target-machine installation, SCM or native GUI acceptance",
+    "offlineCandidatePreviousRuntime": "PASS: fresh Vite/CPython bundle; candidate EXE with Production environment with isolated cwd/data root and PATH only System32; bundled Netmiko 4.7/Paramiko 4; current UI hashes; loopback H3C SSH and Linux WebSocket",
+    "offlineCandidatePreviousPath": "D:\\study\\NetConsole-Next-Workspace\\build\\service-web-linux-jump-final-20261106",
+    "offlineCandidateProductVersion": "1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b",
+    "offlineCandidateCleanup": "PASS: residual Service/Python processes 0; offline-candidate temporary directories 0"
+  },
+  "historicalEvidenceBoundary": "2026-11-05 DPAPI, SW legacy Exec and rejected independent FIT-AP login are historical; they are not current architecture blockers",
+  "realDataChanged": false,
+  "deviceConfigurationWrites": 0,
+  "remotePush": false,
+  "merge": false,
+  "release": false,
+  "baseCommit": "4dac9fc3ffc68d87a13e8cc4cef113220fb5d47e",
+  "lastRecoveryCommit": "a3954a5e95590782a576272d4e4b3c526eab248b"
 }

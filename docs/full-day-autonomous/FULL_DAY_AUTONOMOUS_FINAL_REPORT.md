@@ -1,5 +1,23 @@
 # 全天候自主开发最终报告
 
+## 2026-11-06 当前交付与边界
+
+整体状态：**PARTIAL**。Branch：`codex-A/netconsole-next-r3-dual-ac`。本批功能已本地提交 `a3954a5e95590782a576272d4e4b3c526eab248b`，文档以所属 commit 为准；起点 `4dac9fc`。未 Push、Merge、Release。
+
+网络设备 CLI 的采集、连接测试与 Web Shell 统一 CPython + Netmiko；显式驱动映射、按 Profile 自动读密码、认证后首次/变化指纹自动保存、旧 STRICT 自动化策略、原子设备/Profile onboarding 和 ZTE 凭据 UI 已集成。普通密码为受数据根 ACL 保护的 SQLite 明文字段，不使用普通设备 DPAPI 中心；API 普通查询不回显密码。Linux 服务器终端采用独立 SSH.NET ShellStream，Site Jump Host 已通过实际回环转发和 Chrome 设置页验证。
+
+当前 AC1/AC2/SW 经 Netmiko 自动认证及只读版本/AP/接口/LLDP 命令 PASS；FIT-AP 由 AC 管理。证据 `D:\study\NetConsole-Next-Workspace\reports\netmiko-simulator-20261106.json`。配置写入 0，旧 SW Exec/独立 FIT-AP Telnet/DPAPI 结论不再作为当前阻断。
+
+最终 Service build（0 warning/error）和完整 harness、Vue typecheck、8 files/23 tests、worker 20 tests、离线工具 7 tests、网络终端完整 E2E、Linux 最终 Edge/HTTP/WebSocket/restart-idle-delete（含完全静默撤权/SSH 释放）、Jump 实际回环转发与 Settings Chrome 均 PASS。最终离线候选 fresh Vite/CPython 构建和隔离运行 PASS：独立 cwd/Production 数据，PATH 仅 System32，内置 Netmiko 4.7/Paramiko 4，当前静态页面 hash、回环 H3C SSH 和 Linux WS，EXE ProductVersion 含完整 `a3954a5e95590782a576272d4e4b3c526eab248b`，最终五项门禁 PASS，Service/Python 进程及本轮临时目录残留均为 0。不是目标机安装/SCM/GUI 证据。
+
+仍待正式 AP candidate/replacement 与 Domain/group 生命周期、双 AC HA/切换/恢复/实时 AP 归属、完整模块工作台、Windows 原生 125%、跨机 Web/TLS 和目标机安装。真实网络设备、Linux 与堡垒机 `REAL_DEVICE_PENDING`；当前 Web 限 loopback，离线候选依赖目标机 .NET 10 ASP.NET Core Runtime。未触碰旧 NetConsole 真实数据根。
+
+当前入口：`AUTONOMOUS_RUN_STATE.json`、`COMPLETE_TEST_MATRIX.md`、`IMPLEMENTATION_MATRIX.md`、`REMAINING_GAPS.md` 和 `FINAL_HANDOVER.md`。架构审计见 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md`，本批验收见 `docs/WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md`。
+
+## 以下为 2026-11-05 历史报告
+
+下方原 HEAD、“当前”状态、凭据路径、失败项和测试数量只代表对应历史 checkpoint，不能覆盖上方最新结论；保留以便追溯。
+
 2026-11-06 后续增量及当前边界见 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md`；下方记录保留当时证据，不代表后续版本的最终验收。
 
 日期：2026-11-05；Branch：`codex-A/netconsole-next-r3-dual-ac`；当前 HEAD：`5c600162a46932dc7064d0e2e34d9ed0dac01396`。未 push、未 merge、未 release。

@@ -44,9 +44,21 @@ H3C profile 的密码存于设备 profile 记录，按 profile ID 读取；共�
 - H3C 自动采集、连接测试和网络设备 Web Shell 使用同一 worker；SSH Shell 支持远端 PTY 尺寸调整，Telnet 不支持远端调整。
 - 驱动按关联设备的厂商选择；Cisco 需要明确的 IOS、IOS-XE 或 NX-OS 平台，未知厂商或平台被拒绝。没有关联设备的旧 H3C 档案保留 H3C 语义。
 - Site Jump Host 测试和设备连接在认证成功后自动记录首次指纹及变化，并检查配置并发变化。Telnet 不套用 SSH Jump Host。
-- ZTE 独立档案按档案读取密码，认证后记录并轮换设备指纹；ZTE 界面仍待完善。Linux 服务器 inventory 和跨机 WebSocket 仍未实现。
-- 真实 H3C/AC/AP/ZTE 设备验证仍标记 `REAL_DEVICE_PENDING`。现有模拟器历史证据只作为
-  旧 SSH.NET/DPAPI 路径的诊断记录，不能替代新 worker 的实机验收。
+- ZTE 独立档案按档案读取密码，认证后记录并轮换设备指纹；设备管理页面已支持新增、凭据更新和采集入口。本机凭据 API 集成与页面组件测试通过，真实 ZTE 设备仍待验证。
+- Linux 服务器 inventory 和交互终端使用独立的 SSH.NET ShellStream 传输，不纳入网络设备 Netmiko worker 或 Site Jump 策略。密码随服务器记录保存，普通视图不返回明文；SSH Host Key 在认证成功后自动首次信任或轮换。loopback SSH 模拟器已覆盖 HTTP/WebSocket、Site 隔离、ANSI/中文、PTY resize、重连、多会话、录制、权限撤销、凭据及服务重启；Linux 专项浏览器 E2E 也已通过。Linux 真实主机仍待验收；Web 默认仍限 loopback，不代表跨机访问已实现。
+- 当前 Netmiko 对 HCL AC1/AC2/SW 的只读命令验收已通过，证据为 Workspace `reports/netmiko-simulator-20261106.json`；FIT-AP 仍经 AC 管理。旧 SSH.NET/DPAPI 路径只作历史诊断记录。真实 H3C/AC/AP/ZTE 设备、双 AC HA 与实时 AP 归属仍为 `REAL_DEVICE_PENDING`。
+
+## 本轮定向回归
+
+- Linux server catalog/concurrency/migration：`dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release --no-restore -- --linux-server-tests`，PASS。并发相同 Host Key 现按同一配置版本幂等成功，历史只记录一次。
+- Linux HTTP/WebSocket + Paramiko loopback SSH simulator：`py -3.13 tests/linux_ssh_e2e.py`，PASS；没有连接真实 Linux 主机。
+- ZTE 凭据 HTTP 回归：`py -3.13 tests/zte_credential_e2e.py`，PASS。
+- Web：`npm run typecheck` PASS；`npm test` 8 files / 23 tests PASS。
+- Netmiko worker：`py -3.13 tests/netmiko_worker_test.py`，20 tests PASS。
+- Linux 浏览器 E2E：`py -3.13 tests/linux_ssh_e2e.py --browser`，PASS（本机通过 `NETCONSOLE_E2E_BROWSER` 使用已安装 Edge）；测试自动在 `test-data` 隔离临时目录构建当前 Vue Webroot，并在结束时清理。覆盖服务器 CRUD、连接测试、键盘控制键/中文/ANSI、PTY resize、多标签/分屏、两类重连及 1920×1080/2K 视口；HTTP 门禁另验证静默撤权后关闭 WebSocket 并释放 SSH。
+- Jump Host：`py -3.13 tests/ssh_jump_host_e2e.py` PASS，真实回环 direct-tcpip 转发覆盖两 Site、采集/连接测试/Web Shell、并发/取消、错误分类、指纹与重启；`node tests/ssh_jump_host_browser_e2e.mjs` 的 Chrome mock API 界面门禁 PASS。
+- 完整 Service harness PASS；离线工具 4 + 3 tests PASS。最终组合候选运行证据见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。
+- 浏览器验收连接的是 loopback Paramiko SSH 模拟器，不是 Linux 实机；真实 Linux 主机和跨机 Web 访问仍待验证。
 
 ## 离线部署
 

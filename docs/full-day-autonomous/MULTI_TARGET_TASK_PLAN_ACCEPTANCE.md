@@ -1,5 +1,15 @@
 # 多目标 H3C 任务计划验收
 
+## 2026-11-06 当前状态补充
+
+本批功能已本地提交 `a3954a5`，文档以所属 commit 为准。父计划/子任务/claims 与并发合同继续有效，最后 scope 修复后的完整 Service harness PASS。设备连接使用 Netmiko，普通密码按 Profile 自动读取，不依赖旧 DPAPI 凭据中心；AC1/AC2/SW HCL 只读命令 PASS，FIT-AP 只经 AC 管理。
+
+这不等于多目标业务端到端、正式 AP 生命周期或双 AC HA 已验收，当前仍 PARTIAL。无设备配置写入。
+
+## 以下为 2026-11-05 原批次历史记录
+
+原“凭据引用未保存”结论与只接受 DPAPI 的描述不再是当前架构。
+
 日期：2026-11-05  
 分支：`codex-A/netconsole-next-r3-dual-ac`
 

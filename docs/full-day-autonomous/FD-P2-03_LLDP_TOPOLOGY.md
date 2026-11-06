@@ -1,5 +1,15 @@
 # FD-P2-03 LLDP 关系与变化历史
 
+## 2026-11-06 当前状态补充
+
+本批功能已本地提交 `a3954a5`，文档以所属 commit 为准。当前 SW 经 Netmiko 的版本、接口摘要和 LLDP 只读查询 PASS；证据见 Workspace `reports/netmiko-simulator-20261106.json`。这证明命令返回，不自动证明完整拓扑解析/业务采集的真实设备验收。
+
+LLDP 2/2 隔离关系/历史证据保持，当前 Service harness、Vue typecheck、8 files/23 tests PASS。HA、实时 AP 归属与实际硬件仍 `REAL_DEVICE_PENDING`，未写配置。
+
+## 以下为 2026-11-05 原批次历史记录
+
+下文“未执行真实模拟器登录”及测试数量仅描述原批次。
+
 日期：2026-11-05
 
 ## 交付

@@ -1,30 +1,27 @@
-# 剩余缺口与阻断
+# 剩余缺口与验收边界
 
-## External
+日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。本批功能已本地提交 `a3954a5`，文档以所属 commit 为准（起点 `4dac9fc`）；整体状态 **PARTIAL**。
 
-- 模拟器自动登录授权已存在，隔离测试根的 DPAPI 引用可用：AC1/AC2 SSH 自动认证和版本识别 PASS；SW SSH 认证成功但旧 HCL Exec/设备识别为 PARTIAL；FIT-AP Telnet 凭据被设备拒绝，仍 BLOCKED。不得猜测、穷举或记录密码。
-- 双 AC 1+1 的主备、切换、恢复和实时 AP 归属仍未执行；AC1/AC2 登录成功不等于 HA 验收。
-- HTTP/Service-backed Gate 受已有单实例 Mutex 影响；不终止用户服务、不绕过 Mutex。
+## 当前已闭环
 
-## Contract / implementation
+- 网络设备采集、连接测试与 Web Shell 统一 CPython + Netmiko；显式 SSH/Telnet driver mapping、按 Profile 自动取密码、认证后自动信任/更新 Host Key、取消和连接释放均有本机验证。
+- 新增设备和 Profile 同事务保存；ZTE 凭据 API/UI、Linux 服务器与交互终端、Site Jump Host 实际回环转发和 Settings 页面已完成本机集成。
+- AC1/AC2/SW 当前 Netmiko 登录及只读命令 PASS；FIT-AP 由 AC 管理，不独立连接。旧 DPAPI/SW Exec/FIT-AP 登录结果只作历史记录。
+- 最终 Service build（0 warning/error）、完整 harness、Vue typecheck、8 files/23 tests、worker 20 tests、离线工具 7 tests PASS。网络终端、Linux 最终 HTTP/WebSocket + Edge（含完全静默撤权和 SSH 释放） 和 Jump HTTP/Chrome Settings 门禁 PASS。
+- 当前离线候选已在隔离 cwd/数据根、PATH 仅 System32、无系统 Python 覆盖下运行：内置 Netmiko/Paramiko、当前静态页面、回环 H3C SSH 与 Linux WebSocket PASS。该候选不是正式发布或目标机安装验收。
 
-- 单命令与多命令 Raw 已可独立封存；多目标 H3C 父计划已建立子任务快照、状态聚合和取消 API；跨 AC collection manifest 查询、详情和采集记录 UI 已完成隔离验收，实时多 AC 采集与报告下载仍需继续集成。
-- Netmiko worker、显式 driver mapping、profile-scoped credential resolution、SSH HostKey 自动信任/轮换，以及 Site Jump Host probe/显式 fingerprint refresh 已完成离线或隔离服务边界；真实设备互操作和 Web Shell worker channel 集成仍待验证。
-- AP identity 已增加唯一完整 MAC 对已有 exact identity 的受控部分证据关联；正式 replacement、候选裁决、冲突审核、Domain/group 生命周期和多目标 Report 仍需独立持久合同评审。
-- 完整模块工作台仍待推进；配置备份、LLDP 关系与变化历史、诊断批次重启历史已完成离线/API/UI 验证。
+## 仍需实现或验收
 
-## 本轮新增证据
+1. 双 AC HA、切换/恢复及实时 AP 归属；命令返回不能证明主备关系。
+2. 正式 AP candidate/replacement、冲突裁决与 Domain/group 生命周期合同。
+3. 剩余完整模块工作台及实时多 AC 业务采集的端到端集成；已有诊断/备份/LLDP fixture 不自动升级为现场业务验收。
+4. Windows 原生 125% 显示缩放；现有 1920×1080/2K 视口和浏览器缩放不能替代。
+5. 跨机器 Web/TLS；当前服务限 loopback。
+6. 目标机安装、SCM、升级/卸载和其他 Windows 环境；候选仍依赖目标机 .NET 10 ASP.NET Core Runtime。
+7. 真实 H3C、ZTE、其他型号、Linux 主机和实际堡垒机互操作：`REAL_DEVICE_PENDING`。
 
-- 产品 HEAD：`5c60016`（完整 SHA：`5c600162a46932dc7064d0e2e34d9ed0dac01396`）；Netmiko worker tests `2/2 PASS`；Release build `0 warnings / 0 errors`；H3C 多命令 fixture `H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS`；成功终态缺少完整 Raw manifest 时 fail closed；LLDP topology `H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS`；诊断 fixture `NETWORK_DIAGNOSTICS_TESTS=4/4 PASS`；配置备份 `CONFIG_BACKUP_TESTS=1/1 PASS`。
-- 单命令/全量 Service harness 在本轮改动前后均通过；前端 `vue-tsc --noEmit` 与 Vitest `4 files / 7 tests` 通过。
-- 设备列表已提供“测试连接”，服务端沿用 DPAPI 引用、自动 HostKey 与 Telnet 回退；不会在浏览器或日志接触密码。
-- 网络诊断已提供 Ping/TCP/DNS/LLDP 批量任务；目标限定为当前 Site 可见的已登记设备，LLDP 仅读取带 captured scope 的 H3C Facts。
-- 当前并行工作树复跑完整 Service harness 在 `ConcurrencyP1Tests.FailedTaskCanBeRetriedAsANewRun` 处失败；该失败已记录，不能用旧 harness PASS 覆盖，待并行 worker 变更收敛后重跑。
+## 数据与历史
 
-## Verification boundary
+普通密码为受本机 ACL 保护的 SQLite 明文字段，不使用普通设备 DPAPI 中心。密码不在普通 DTO、URL、命令行、日志、Raw 或报告中回显。未写设备配置，未触碰旧 NetConsole 真实数据根。
 
-- 离线 fixture、Fake transport、隔离 SQLite 证据不得写成模拟器实时验收。
-- 部分身份证据关联仅表示候选/来源关联，不表示 AP 已完成正式生命周期确认或实时归属验收。
-- 1920×1080 和 2560×1440 是本阶段 UI 视口；125% 不作为本阶段阻断。
-
-
+历史 Mutex 争用已通过串行测试协调解决；当前完整 Service harness 与浏览器门禁通过，不再作为产品阻断。旧测试失败仍保留于历史日志。

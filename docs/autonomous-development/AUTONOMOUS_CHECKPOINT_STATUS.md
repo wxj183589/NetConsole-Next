@@ -1,6 +1,21 @@
-# 最新Checkpoint（L）
+# 当前检查点 M：Netmiko / Web / Linux / Jump
 
-2026-11-06 后续增量以 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md` 为准：Netmiko 网络终端及 AUTO 回退的合成浏览器门禁、完整 Service harness 已通过；ZTE 独立认证、Linux SSH、正式打包及真实设备验收仍未完成。下方 L 为当时的历史检查点。
+2026-11-06 当前批次以 `docs/WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md` 和 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md` 为准：完整 Service harness、前端 23 项、worker 20 项、离线工具 7 项通过；网络终端重连、Linux loopback SSH/Edge 浏览器、静默撤权、Jump 真实回环转发及 Settings Chrome mock 门禁通过。HCL AC1/AC2/SW 已使用当前 Netmiko 完成只读查询；FIT-AP 按 AC 管理，配置写入 0。真实设备、HA、实时 AP 归属、原生 125% 缩放、跨机 Web 和目标机安装仍待验收。下方 L 是历史检查点，其中旧 harness 竞态及 SW/FIT-AP 阻断已由当前证据替代。
+
+CURRENT_BATCH=M_NETMIKO_WEB_LINUX_JUMP
+FUNCTIONAL_COMMIT=a3954a5e95590782a576272d4e4b3c526eab248b
+BRANCH=codex-A/netconsole-next-r3-dual-ac
+TESTS=Service full harness PASS; Vue 23 PASS; Worker 20 PASS; offline tools 7 PASS; network/Linux/Jump E2E PASS
+OFFLINE_CANDIDATE=build/service-web-linux-jump-a3954a5-20261106
+OFFLINE_PRODUCT_VERSION=1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b
+OFFLINE_RUNTIME=PASS; PATH only System32; isolated data; no residual Service/worker processes
+NEXT_LOCAL_TASK=AP Group source identity contract repair; then formal AP candidate/replacement and Domain/group lifecycle
+FINAL_STATUS=PARTIAL; REAL_DEVICE_PENDING
+PUSH=NO
+MERGE=NO
+RELEASE=NO
+
+## 历史检查点 L（保留当时状态，以下失败与阻断不是当前结论）
 
 CURRENT_BATCH=L_NETMIKO_CONNECTION_AND_SIMULATOR_GATES
 TASKS=31

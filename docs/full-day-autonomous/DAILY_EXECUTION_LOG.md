@@ -1,5 +1,19 @@
 # 全天候自主开发日志
 
+## 2026-11-06 Netmiko / Web / Linux / Jump 最终本机门禁
+
+- 本批功能已本地提交 `a3954a5e95590782a576272d4e4b3c526eab248b`，文档以所属 commit 为准；起点 `4dac9fc`，保留 `codex-A/netconsole-next-r3-dual-ac`，未 Push、Merge、Release。
+- 网络设备采集/测试/Web Shell 统一 CPython + Netmiko；设备/Profile 原子新增，Profile 密码自动读取，SQLite 明文由数据根 ACL 保护，无普通设备 DPAPI 中心。认证成功后自动首次信任/更新指纹，旧 STRICT 不再阻断。
+- ZTE 凭据 API/UI、Linux inventory/SSH.NET 交互终端、Site Jump direct-tcpip 转发与 Settings UI 完成本机实现。
+- 最终 Service build 0 warning/error 与完整 harness PASS；Vue typecheck、8 files/23 tests、worker 20 tests、离线工具 7 tests PASS。网络终端完整 E2E PASS；Linux 最终 Edge、HTTP/WebSocket、restart/idle/delete PASS，包含完全静默撤权及 SSH 释放；Jump 真实回环转发/重启删除与 Chrome Settings PASS（浏览器 API Mock 与真实转发分开取证）。
+- 最终候选 `build/service-web-linux-jump-a3954a5-20261106` fresh Vite/CPython 构建及 `offline_candidate_e2e.py` PASS：独立 cwd/Production 隔离数据，PATH 仅 System32、无系统 Python 覆盖，内置 Netmiko 4.7/Paramiko 4、当前静态 hash、回环 H3C SSH 与 Linux WebSocket。EXE ProductVersion 含完整 `a3954a5e95590782a576272d4e4b3c526eab248b`，最终五项门禁 PASS；Service/Python 进程及本轮临时目录残留均为 0。不是目标机安装/SCM/GUI 验收。
+- AC1/AC2/SW 当前 Netmiko 自动认证和只读命令 PASS，证据 `reports/netmiko-simulator-20261106.json`。FIT-AP 由 AC 管理，不独立连接。配置写入 0；旧 SW Exec、FIT-AP 凭据和 DPAPI 结论仅为历史记录。
+- 整体仍 PARTIAL：正式 AP 生命周期、双 AC HA/归属、完整工作台、原生 Windows 125%、跨机 Web/TLS、目标机安装和真实硬件/Linux/堡垒机待验收。未访问旧 NetConsole 真实数据根。
+
+## 以下为历史执行日志
+
+下方条目保留原日期、原 HEAD、原失败和旧架构描述，不代表当前阻断或当前测试数量；当前状态以上方及运行状态 JSON 为准。
+
 ## 2026-11-05 Checkpoint O
 
 - 当前 HEAD：`8735d55`，分支：`codex-A/netconsole-next-r3-dual-ac`；工作树在文档更新前干净，未 push、未 merge、未 release。
