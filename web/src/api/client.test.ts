@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, setCsrfToken } from './client'
+import { executeConfigRestore, getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, previewConfigRestore, setCsrfToken } from './client'
 
 describe('Next API client', () => {
   it('uses same-origin credentials and never places credentials in a URL', async () => {
@@ -41,6 +41,21 @@ describe('Next API client', () => {
       await getTask('run/1')
       expect(fetchMock.mock.calls[0][0]).toBe('/api/system/tasks/run%2F1')
       expect(String(fetchMock.mock.calls[0][0])).not.toContain('password')
+    } finally { fetchMock.mockRestore() }
+  })
+
+  it('keeps configuration restore confirmation on POST bodies and out of URLs', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ id: 'preview-1' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    try {
+      await previewConfigRestore({ snapshotId: 'snapshot/1', targetProfileId: 'profile/1' })
+      await executeConfigRestore({ previewId: 'preview/1', confirmationToken: 'token-fixture', apply: false })
+      expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+        '/api/system/config-backups/restore/preview',
+        '/api/system/config-backups/restore/execute',
+      ])
+      expect(String(fetchMock.mock.calls[0][0])).not.toContain('snapshot')
+      expect(String(fetchMock.mock.calls[1][0])).not.toContain('token')
+      expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ previewId: 'preview/1', confirmationToken: 'token-fixture', apply: false })
     } finally { fetchMock.mockRestore() }
   })
 })

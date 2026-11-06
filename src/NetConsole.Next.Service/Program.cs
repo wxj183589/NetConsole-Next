@@ -80,6 +80,7 @@ builder.Services.AddSingleton<ConfigBackupService>();
 builder.Services.AddSingleton<IConfigRestoreWriter, DisabledConfigRestoreWriter>();
 builder.Services.AddSingleton<ConfigRestoreService>();
 builder.Services.AddSingleton<ConfigBackupScheduleService>();
+builder.Services.AddSingleton<SmartConfigurationService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
@@ -891,6 +892,26 @@ app.MapGet("/api/system/config-backups/{id}/startup-reference", (HttpContext con
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     var reference = backups.GetStartupReference(id, CurrentSiteScope(context));
     return reference is null ? Results.NotFound() : Results.Ok(reference);
+});
+app.MapGet("/api/system/smart-config/templates", (HttpContext context, SmartConfigurationService smartConfig) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return Results.Ok(smartConfig.ListTemplates());
+});
+app.MapPost("/api/system/smart-config/preview", (HttpContext context,
+    SmartConfigurationPreviewRequest request, SmartConfigurationService smartConfig) =>
+{
+    if (DeviceSiteScopeGuard(context, request.SiteId) is { } denied) return denied;
+    try
+    {
+        var preview = smartConfig.Preview(request, CurrentIdentity(context), CurrentSiteScope(context));
+        return Results.Ok(preview);
+    }
+    catch (SmartConfigurationValidationException ex)
+    {
+        var status = ex.Code.EndsWith("DENIED", StringComparison.Ordinal) ? StatusCodes.Status403Forbidden : StatusCodes.Status400BadRequest;
+        return Results.Json(new { error = ex.Code, detail = ex.Message, deviceWriteAllowed = false }, statusCode: status);
+    }
 });
 app.MapPost("/api/system/config-backups/restore/preview", (HttpContext context,
     ConfigRestorePreviewRequest request, ConfigRestoreService restores) =>

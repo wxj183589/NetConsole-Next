@@ -11,6 +11,7 @@ import ConfigBackupsView from './ConfigBackupsView.vue'
 const api = vi.hoisted(() => ({
   getH3cProfiles: vi.fn(), getDeviceInventoryDetail: vi.fn(), getModuleStates: vi.fn(), getConfigBackups: vi.fn(),
   createConfigBackup: vi.fn(), getConfigBackupBatch: vi.fn(), getConfigBackupDiff: vi.fn(), downloadConfigBackup: vi.fn(),
+  previewConfigRestore: vi.fn(), executeConfigRestore: vi.fn(),
 }))
 vi.mock('../api/client', async original => ({ ...await original<object>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
@@ -55,6 +56,8 @@ describe('device configuration backup context', () => {
     api.getConfigBackups.mockImplementation((id: string) => Promise.resolve(snapshots(id)))
     api.createConfigBackup.mockResolvedValue({ id: 'batch-b', state: 'SUCCEEDED', succeeded: 1, total: 1 })
     api.getConfigBackupDiff.mockResolvedValue({ addedLines: 1, removedLines: 0, added: ['当前配置'], removed: [] })
+    api.previewConfigRestore.mockResolvedValue({ id: 'restore-preview', snapshotId: 'profile-b-v1', targetProfileId: 'profile-b', targetDeviceId: 'device-b', targetSiteId: 'local', configurationKind: 'RUNNING', sourceSha256: 'sha', currentSnapshotId: 'profile-b-v2', addedLines: 2, removedLines: 1, changedLines: 1, compatibility: 'PROFILE_EXACT_H3C', confirmationToken: 'token', expiresMs: 2000, state: 'PREVIEW' })
+    api.executeConfigRestore.mockResolvedValue({ previewId: 'restore-preview', state: 'DRY_RUN', detail: '未写入', completedMs: 2000 })
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
@@ -105,6 +108,29 @@ describe('device configuration backup context', () => {
     expect(wrapper.text()).toContain('启动配置正文版本历史')
     await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
     expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'STARTUP_BODY')
+  })
+
+  it('previews a restore and keeps dry-run separate from device write execution', async () => {
+    const { wrapper } = await render()
+    const previewButtons = wrapper.findAll('button').filter(item => item.text() === '恢复预览')
+    expect(previewButtons).toHaveLength(2)
+    await previewButtons[1].trigger('click'); await flushPromises()
+    expect(api.previewConfigRestore).toHaveBeenCalledWith({ snapshotId: 'profile-b-v1', targetProfileId: 'profile-b' })
+    expect(wrapper.text()).toContain('配置恢复预览')
+    await button(wrapper, '执行 dry-run').trigger('click'); await flushPromises()
+    expect(api.executeConfigRestore).toHaveBeenCalledWith({ previewId: 'restore-preview', confirmationToken: 'token', apply: false })
+    expect(wrapper.text()).toContain('DRY_RUN')
+    expect(api.executeConfigRestore).not.toHaveBeenCalledWith(expect.objectContaining({ apply: true }))
+  })
+
+  it('surfaces a blocked writer without claiming restore success', async () => {
+    api.executeConfigRestore.mockRejectedValue(new ApiRequestError(409, 'CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE'))
+    const { wrapper } = await render()
+    await wrapper.findAll('button').find(item => item.text() === '恢复预览')!.trigger('click'); await flushPromises()
+    await button(wrapper, '执行恢复').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('设备未被修改')
+    expect(wrapper.text()).toContain('BLOCKED')
+    expect(ElMessage.success).not.toHaveBeenCalledWith('配置恢复完成，请重新采集验证')
   })
 
   it('filters mixed category history and only compares distinct versions of the selected category', async () => {

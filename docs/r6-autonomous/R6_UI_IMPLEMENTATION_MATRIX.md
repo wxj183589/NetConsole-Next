@@ -10,6 +10,8 @@ SmartHub 仅作为 clean-room 结构参考。当前实现必须通过 `NcLayout`
 | 任务中心 | PASS_LOCAL | tasks、task detail、diagnostics、retry/cancel | 现场恢复证据 |
 | 终端控制台 | PARTIAL | terminal sessions、SSH/Telnet/Linux | 真实跳板和目标机 |
 | 配置备份/恢复 | PASS_LOCAL/PARTIAL | backup snapshots/diff/schedules、restore preview | writer 和回滚 |
+| 智能配置 | PASS_LOCAL_DRY_RUN | smart-config templates/preview | 设备适配、批量执行、回滚 |
+| 拓扑/资产 | PASS_LOCAL_READONLY | inventory、H3C LLDP claims | 图形拓扑、历史和资产关联 |
 | 工具/拓扑 | PARTIAL | diagnostics、traceroute、LLDP | ARP/路由/WLAN/Mesh 诊断视图 |
 
 必须显式显示 `UNKNOWN`、`CONFLICT`、`NOT_COLLECTED`、`DISABLED`、`NOT_IMPLEMENTED`；空数据和 API 失败不能被渲染成绿色零值或 fake record。关键页面后续需补 1920x1080、2560x1440 的浏览器状态证据。

@@ -695,6 +695,57 @@ export interface ConfigBackupDiff {
   configurationKind?: ConfigBackupKind
 }
 
+export interface ConfigRestorePreview {
+  id: string
+  snapshotId: string
+  targetProfileId: string
+  targetDeviceId: string
+  targetSiteId: string
+  configurationKind: ConfigBackupKind
+  sourceSha256: string
+  currentSnapshotId?: string | null
+  addedLines: number
+  removedLines: number
+  changedLines: number
+  compatibility: string
+  confirmationToken: string
+  expiresMs: number
+  state: string
+}
+
+export interface ConfigRestoreExecutionResult {
+  previewId: string
+  state: string
+  detail?: string | null
+  completedMs: number
+}
+
+export interface SmartConfigurationVariable {
+  name: string
+  label: string
+  example: string
+  required: boolean
+}
+export interface SmartConfigurationTemplate {
+  id: string
+  name: string
+  description: string
+  variables: SmartConfigurationVariable[]
+}
+export interface SmartConfigurationPreview {
+  previewId: string
+  templateId: string
+  templateName: string
+  state: string
+  executionMode: string
+  deviceWriteAllowed: boolean
+  writeAttempted: boolean
+  siteId?: string | null
+  commands: Array<{ index: number; command: string; risk: string }>
+  errors: string[]
+  createdMs: number
+}
+
 export interface WirelessScope {
   status: string
   claimsRevision: string
@@ -1142,6 +1193,12 @@ export async function downloadConfigBackup(id: string): Promise<Blob> {
 export function getConfigBackupDiff(baseId: string, targetId: string): Promise<ConfigBackupDiff> {
   return request('/api/system/config-backups/' + encodeURIComponent(baseId) + '/diff/' + encodeURIComponent(targetId))
 }
+export function previewConfigRestore(payload: { snapshotId: string; targetProfileId: string; expectedCurrentSnapshotId?: string }): Promise<ConfigRestorePreview> {
+  return request('/api/system/config-backups/restore/preview', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function executeConfigRestore(payload: { previewId: string; confirmationToken: string; apply: boolean }): Promise<ConfigRestoreExecutionResult> {
+  return request('/api/system/config-backups/restore/execute', { method: 'POST', body: JSON.stringify(payload) })
+}
 export function getConfigBackupSchedules(profileId?: string): Promise<ConfigBackupSchedule[]> {
   return request('/api/system/config-backup-schedules' + (profileId ? '?profileId=' + encodeURIComponent(profileId) : ''))
 }
@@ -1153,6 +1210,12 @@ export function setConfigBackupScheduleEnabled(id: string, enabled: boolean): Pr
 }
 export function deleteConfigBackupSchedule(id: string): Promise<{ deleted: boolean }> {
   return request('/api/system/config-backup-schedules/' + encodeURIComponent(id), { method: 'DELETE' })
+}
+export function getSmartConfigurationTemplates(): Promise<SmartConfigurationTemplate[]> {
+  return request('/api/system/smart-config/templates')
+}
+export function previewSmartConfiguration(payload: { templateId: string; variables: Record<string, string>; siteId?: string }): Promise<SmartConfigurationPreview> {
+  return request('/api/system/smart-config/preview', { method: 'POST', body: JSON.stringify(payload) })
 }
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))

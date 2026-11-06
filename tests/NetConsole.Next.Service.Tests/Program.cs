@@ -99,6 +99,8 @@ else if (args.Length > 0 && args[0] == "--config-restore-tests")
     await ConfigRestoreTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--config-backup-schedule-tests")
     await ConfigBackupScheduleTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--smart-config-tests")
+    SmartConfigurationTests.Run();
 else if (args.Length > 0 && args[0] == "--h3c-connection-policy-tests")
 {
     await H3cConnectionPolicyTests.RunAsync();

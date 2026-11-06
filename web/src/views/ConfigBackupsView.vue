@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import ConfigBackupSchedules from '../components/ConfigBackupSchedules.vue'
-import { ApiRequestError, createConfigBackup, downloadConfigBackup, getConfigBackupBatch, getConfigBackups, getDeviceInventoryDetail, getH3cProfiles, getConfigBackupDiff, getModuleStates, type ConfigBackupBatch, type ConfigBackupDiff, type ConfigBackupKind, type ConfigBackupSnapshot, type DeviceInventoryItem, type TerminalDevice } from '../api/client'
+import { ApiRequestError, createConfigBackup, downloadConfigBackup, executeConfigRestore, getConfigBackupBatch, getConfigBackups, getDeviceInventoryDetail, getH3cProfiles, getConfigBackupDiff, getModuleStates, previewConfigRestore, type ConfigBackupBatch, type ConfigBackupDiff, type ConfigBackupKind, type ConfigBackupSnapshot, type ConfigRestoreExecutionResult, type ConfigRestorePreview, type DeviceInventoryItem, type TerminalDevice } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -24,6 +24,9 @@ const moduleAvailable = ref(false)
 const device = ref<DeviceInventoryItem | null>(null)
 const baseId = ref('')
 const targetId = ref('')
+const restorePreview = ref<ConfigRestorePreview | null>(null)
+const restoreResult = ref<ConfigRestoreExecutionResult | null>(null)
+const restoring = ref(false)
 const isSuperAdmin = computed(() => auth.user?.role === 'SUPERADMIN')
 const selectedProfile = computed(() => profiles.value.find(item => item.id === profileId.value))
 const hasDeviceContext = computed(() => Object.prototype.hasOwnProperty.call(route.query, 'deviceId'))
@@ -46,7 +49,7 @@ function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行�
 function saveBlob(blob: Blob, name: string): void { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(link.href) }
 function clearHistory(): void {
   ++historySequence; ++diffSequence
-  history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false
+  history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false; restorePreview.value = null; restoreResult.value = null
 }
 function clearTarget(): void {
   clearHistory(); ++backupSequence
@@ -157,6 +160,30 @@ async function compare(): Promise<void> {
   } catch (cause) { if (sequence === diffSequence && context === contextSequence) reportOperationError(cause, '配置差异读取失败') }
   finally { if (sequence === diffSequence) comparing.value = false }
 }
+async function previewRestore(snapshot: ConfigBackupSnapshot): Promise<void> {
+  if (!isSuperAdmin.value || !moduleAvailable.value || !profileId.value || (snapshot.state && snapshot.state !== 'SUCCEEDED') || !['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))) return
+  restoring.value = true; restorePreview.value = null; restoreResult.value = null
+  try {
+    restorePreview.value = await previewConfigRestore({ snapshotId: snapshot.id, targetProfileId: profileId.value })
+  } catch (cause) {
+    reportOperationError(cause, '配置恢复预览失败，请刷新后重试')
+  } finally { restoring.value = false }
+}
+async function runRestore(apply: boolean): Promise<void> {
+  const preview = restorePreview.value
+  if (!preview || restoring.value) return
+  restoring.value = true
+  try {
+    restoreResult.value = await executeConfigRestore({ previewId: preview.id, confirmationToken: preview.confirmationToken, apply })
+    if (restoreResult.value.state === 'DRY_RUN') ElMessage.info('恢复 dry-run 已完成，未向设备发送写命令')
+    else if (restoreResult.value.state === 'SUCCEEDED') ElMessage.success('配置恢复完成，请重新采集验证')
+    else ElMessage.warning(restoreResult.value.detail || '配置恢复未完成')
+  } catch (cause) {
+    const message = cause instanceof ApiRequestError && cause.status === 409 ? '当前恢复写入适配器未启用，设备未被修改' : (cause instanceof Error ? cause.message : '配置恢复未完成')
+    restoreResult.value = { previewId: preview.id, state: 'BLOCKED', detail: message, completedMs: Date.now() }
+    ElMessage.error(message)
+  } finally { restoring.value = false }
+}
 onMounted(() => { void refresh() })
 watch(() => route.query.deviceId, () => { if (active && route.path === '/config-backups') void refresh() }, { flush: 'sync' })
 watch([baseId, targetId], () => { ++diffSequence; diff.value = null; comparing.value = false }, { flush: 'sync' })
@@ -189,7 +216,15 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">
-        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" @click="download(snapshot)">下载</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
+        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
+      </div>
+    </section>
+    <section v-if="restorePreview" class="card" aria-label="配置恢复预览">
+      <div class="card__header"><div><h2>配置恢复预览</h2><small>仅当前设备、当前 Site 和当前账户可确认；预览不会修改设备</small></div><span class="state-pill warn">{{ restorePreview.compatibility }}</span></div>
+      <div class="card__body">
+        <div class="form-grid"><div><span class="muted">来源版本</span><strong>v{{ history.find(item => item.id === restorePreview?.snapshotId)?.version ?? '—' }}</strong></div><div><span class="muted">变化</span><strong>新增 {{ restorePreview.addedLines }} · 删除 {{ restorePreview.removedLines }} · 修改 {{ restorePreview.changedLines }}</strong></div><div><span class="muted">有效期</span><strong>{{ time(restorePreview.expiresMs) }}</strong></div></div>
+        <p class="data-quality-note">当前服务的设备写入适配器默认关闭。可执行 dry-run 验证确认合同；点击执行恢复只会在写入适配器可用且现场验收完成时发送设备命令。</p>
+        <div class="toolbar"><el-button :loading="restoring" @click="runRestore(false)">执行 dry-run</el-button><el-button type="danger" :loading="restoring" @click="runRestore(true)">执行恢复</el-button><span v-if="restoreResult" class="muted">{{ restoreResult.state }} · {{ restoreResult.detail }}</span></div>
       </div>
     </section>
     <section v-if="history.length > 1" class="card">

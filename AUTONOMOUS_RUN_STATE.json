@@ -1,26 +1,30 @@
 {
-  "project": "NetConsole-Next-R6-Full-Product-Development",
+  "project": "NetConsole-Next-R6.1-Autonomous-Full-Product-Continuation",
   "date": "2026-11-07",
   "codexThreadId": "01a1a80b-08b3-7862-b637-ed9f1f68984c",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
-  "productCommit": "87d19cd",
+  "productCommit": "PENDING_LOCAL_COMMIT",
   "overallStatus": "PARTIAL",
   "completedThisTurn": [
     "Dashboard reads real AC Domain and AP Resource APIs",
     "Wireless API failures are isolated from health, inventory and task data",
     "Failed task count and wireless availability are visible without fabricated values",
-    "Dashboard tests 2/2; Web tests 202/202; typecheck and build PASS"
+    "Dashboard tests 2/2; Web tests 211/211; typecheck and build PASS",
+    "Smart configuration dry-run templates and server validation; SMART_CONFIG_TESTS=5/5",
+    "Topology and asset workbench backed by inventory and LLDP claims APIs",
+    "Configuration restore preview and dry-run UI with explicit fail-closed writer state"
   ],
-  "uncommittedAtCheckpoint": ["R6 feature parity and autonomous reports"],
+  "uncommittedAtCheckpoint": ["R6.1 product and autonomous reports before local commit"],
+  "activeWorkstreams": ["wireless business and dual AC evidence", "configuration writer and rollback contract", "browser GUI acceptance"],
   "externalPending": [
     "Dual AC failover and live AP ownership evidence",
     "Real device, Linux and bastion interoperability",
     "Configuration restore writer and rollback acceptance",
-    "Smart configuration and complete topology/asset workbench",
+    "Smart configuration device execution and complete topology/asset workbench",
     "Cross-machine TLS and installer upgrade/rollback acceptance"
   ],
   "remotePush": "FORBIDDEN",
   "remoteMerge": "FORBIDDEN",
   "release": "FORBIDDEN",
-  "nextRecommendedTask": "Build a real API-backed AC/AP wireless workbench slice with explicit partial/unknown states and targeted tests"
+  "nextRecommendedTask": "Add browser E2E for SmartConfig, Topology and ConfigRestore states, then pursue safe simulator authentication and dual-AC evidence"
 }
