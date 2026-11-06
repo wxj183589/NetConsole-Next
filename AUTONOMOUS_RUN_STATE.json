@@ -3,7 +3,7 @@
   "date": "2026-11-07",
   "codexThreadId": "01a1a80b-08b3-7862-b637-ed9f1f68984c",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
-  "productCommit": "PENDING_LOCAL_COMMIT",
+  "productCommit": "fdf9b20",
   "overallStatus": "PARTIAL",
   "completedThisTurn": [
     "Dashboard reads real AC Domain and AP Resource APIs",
@@ -14,7 +14,7 @@
     "Topology and asset workbench backed by inventory and LLDP claims APIs",
     "Configuration restore preview and dry-run UI with explicit fail-closed writer state"
   ],
-  "uncommittedAtCheckpoint": ["R6.1 product and autonomous reports before local commit"],
+  "uncommittedAtCheckpoint": ["DevStatus handoff only"],
   "activeWorkstreams": ["wireless business and dual AC evidence", "configuration writer and rollback contract", "browser GUI acceptance"],
   "externalPending": [
     "Dual AC failover and live AP ownership evidence",
