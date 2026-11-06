@@ -239,8 +239,9 @@ internal sealed class NetworkDiagnosticsService : IDisposable
             if (run.State == "PARTIAL") run.FailureReason = "部分诊断未成功；请查看设备明细。";
             if (PersistCompleted(run))
             {
+                // Count a persisted run only once when it leaves the live set.
                 _runs.Remove(run.Id);
-                PruneHistory();
+                PruneHistory(Math.Max(0, MaximumRuns - _runs.Count));
             }
         }
     }
@@ -432,10 +433,11 @@ internal sealed class NetworkDiagnosticsService : IDisposable
             try
             {
                 var snapshot = JsonSerializer.Deserialize<NetworkDiagnosticRunSnapshot>(File.ReadAllText(path));
-                if (snapshot is not null && IsSafeId(snapshot.Id) && IsTerminalRun(snapshot.State) &&
+                if (snapshot is { Id: not null, Items: not null } && IsSafeId(snapshot.Id) && IsTerminalRun(snapshot.State) &&
                     snapshot.Items.Count <= MaximumChecks && snapshot.TotalChecks == snapshot.Items.Count &&
-                    snapshot.Items.All(item => item.TraceRoute is null || item.TraceRoute is { MaxHops: NetworkTraceroute.MaximumHops } trace &&
-                        trace.Hops is { Count: <= NetworkTraceroute.MaximumHops }))
+                    snapshot.Items.All(item => item is not null && (item.TraceRoute is null ||
+                        item.TraceRoute is { MaxHops: NetworkTraceroute.MaximumHops } trace &&
+                        trace.Hops is { Count: <= NetworkTraceroute.MaximumHops })))
                     _history[snapshot.Id] = snapshot;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -457,7 +459,6 @@ internal sealed class NetworkDiagnosticsService : IDisposable
             lock (_gate)
             {
                 _history[snapshot.Id] = snapshot;
-                PruneHistory(Math.Max(0, MaximumRuns - _runs.Count));
             }
             return true;
         }

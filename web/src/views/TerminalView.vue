@@ -41,6 +41,7 @@ const historyKeyword = ref('')
 const historyProtocol = ref('')
 const historyLoading = ref(false)
 const historyError = ref('')
+const restoringSessionId = ref('')
 const historyPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyPageSize.value)))
 let historyGeneration = 0
 let historyActive = true
@@ -153,8 +154,8 @@ function installSocketHandlers(tab: TerminalTab, socket: WebSocket, generation: 
   socket.onclose = () => { if (!isCurrentSocket(tab, socket, generation)) return; liveSockets.delete(tab.id); tab.socket = undefined; tab.connected = false; tab.terminal?.writeln('\r\n\x1b[90m已断开\x1b[0m') }
   socket.onerror = () => { if (isCurrentSocket(tab, socket, generation)) ElMessage.error(`${tab.label} WebSocket 连接失败`) }
 }
-async function connectSocket(tab: TerminalTab): Promise<void> {
-  if (!tab.sessionId) return
+async function connectSocket(tab: TerminalTab, canConnect = () => true): Promise<void> {
+  if (!tab.sessionId || !canConnect()) return
   const previous = liveSockets.get(tab.id)?.socket
   liveSockets.delete(tab.id)
   tab.socket = undefined
@@ -163,7 +164,7 @@ async function connectSocket(tab: TerminalTab): Promise<void> {
   previous?.close()
   const generation = tab.socketGeneration
   const ticket = await issueTerminalTicket(tab.sessionId)
-  if (tab.socketGeneration !== generation) return
+  if (tab.socketGeneration !== generation || !canConnect()) return
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
   const socket = new WebSocket(`${scheme}://${location.host}/api/system/terminal/sessions/${tab.sessionId}/stream?ticket=${encodeURIComponent(ticket.ticket)}`)
   liveSockets.set(tab.id, { socket, generation })
@@ -186,6 +187,44 @@ async function reconnect(): Promise<void> {
     }
     if (tab.sessionId) await connectSocket(tab)
   } catch { ElMessage.error('重连失败') }
+}
+function canRestoreSession(session: TerminalSession): boolean {
+  return !!auth.user?.username && session.mode === 'LINUX_INTERACTIVE' &&
+    session.operatorIdentity === auth.user.username && ['CONNECTED', 'CONNECTING'].includes(session.state)
+}
+async function restoreSession(session: TerminalSession): Promise<void> {
+  if (!historyActive || restoringSessionId.value || !canRestoreSession(session)) return
+  const generation = historyGeneration; const username = auth.user?.username
+  const current = () => historyActive && generation === historyGeneration && username === auth.user?.username
+  let createdTab: TerminalTab | undefined
+  restoringSessionId.value = session.id
+  try {
+    const latest = await getTerminalSession(session.id)
+    if (!current()) return
+    if (!canRestoreSession(latest)) { ElMessage.info('会话已结束或当前账户无法恢复，请刷新历史。'); await refreshHistory(); return }
+    let tab = tabs.find(candidate => candidate.sessionId === latest.id)
+    if (!tab) {
+      tab = reactive({ id: crypto.randomUUID(), label: `${latest.targetName} · Linux SSH`, targetId: latest.targetId,
+        protocol: 'SSH', mode: 'LINUX_INTERACTIVE' as const, sessionId: latest.id, inputBuffer: '', connected: false, socketGeneration: 0 })
+      createdTab = tab; tabs.push(tab)
+    }
+    selectTerminalTab(tab); await nextTick()
+    if (!current()) return
+    mountTerminal(tab)
+    if (!tab.connected) await connectSocket(tab, current)
+  } catch (cause) {
+    if (!current()) return
+    if (permissionDenied(cause)) denyHistory()
+    else ElMessage.error('恢复连接失败，请刷新历史后重试。')
+  } finally {
+    if (!current() && createdTab) {
+      const tab = createdTab; const socket = liveSockets.get(tab.id)?.socket
+      liveSockets.delete(tab.id); tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose(); paneRefs.delete(tab.id)
+      const index = tabs.indexOf(tab); if (index >= 0) tabs.splice(index, 1)
+      if (activeId.value === tab.id) activeId.value = tabs[0]?.id || ''
+    }
+    restoringSessionId.value = ''
+  }
 }
 async function openSerial(): Promise<void> { try { serialPorts.value = await getSerialPorts(); if (!serialPorts.value.length) { ElMessage.info('服务端未发现可用 COM 端口'); return }; selectedSerialPort.value = serialPorts.value[0]; serialDialog.value = true } catch { ElMessage.error('COM 端口读取失败') } }
 async function openSerialSession(): Promise<void> {
@@ -346,7 +385,7 @@ onBeforeUnmount(() => { historyActive = false; invalidateHistory(); window.remov
             <el-button size="small" :disabled="historyLoading || historyPage >= historyPages" @click="refreshHistory(historyPage + 1)">下一页</el-button>
           </form>
           <div class="terminal-history-body" :aria-busy="historyLoading">
-            <table v-if="sessions.length" class="terminal-history-table"><thead><tr><th>目标设备</th><th>协议</th><th>开始时间</th><th>会话状态</th><th>录制状态</th><th>完整性</th><th>操作</th></tr></thead><tbody><tr v-for="session in sessions" :key="session.id" data-testid="terminal-history-row"><td>{{ session.targetName }}</td><td>{{ session.protocol }}</td><td>{{ formatTime(session.startedMs) }}</td><td>{{ session.state }}</td><td><span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></td><td>{{ session.recordingComplete ? 'COMPLETE' : '待确认' }}</td><td><el-button text size="small" @click="openHistory(session)">回放 / 导出</el-button></td></tr></tbody></table>
+            <table v-if="sessions.length" class="terminal-history-table"><thead><tr><th>目标设备</th><th>协议</th><th>开始时间</th><th>会话状态</th><th>录制状态</th><th>完整性</th><th>操作</th></tr></thead><tbody><tr v-for="session in sessions" :key="session.id" data-testid="terminal-history-row"><td>{{ session.targetName }}</td><td>{{ session.protocol }}</td><td>{{ formatTime(session.startedMs) }}</td><td>{{ session.state }}</td><td><span :class="['state-pill', stateClass(session.recordingStatus)]">{{ session.recordingStatus }}</span></td><td>{{ session.recordingComplete ? 'COMPLETE' : '待确认' }}</td><td><el-button v-if="canRestoreSession(session)" text size="small" :loading="restoringSessionId === session.id" :disabled="!!restoringSessionId" @click="restoreSession(session)">恢复连接</el-button><el-button text size="small" @click="openHistory(session)">回放 / 导出</el-button></td></tr></tbody></table>
             <div v-else class="terminal-history-empty"><div><el-icon><Document /></el-icon><p>{{ historyLoading ? '正在读取会话历史…' : historyError ? '会话历史暂不可用' : '暂无匹配的会话历史' }}</p><small v-if="!historyLoading && !historyError">可调整搜索、协议或页码查找较早会话。</small></div></div>
           </div>
         </div>

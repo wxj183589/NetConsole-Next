@@ -13,11 +13,15 @@ const api = vi.hoisted(() => ({
   issueTerminalTicket: vi.fn(), getSerialPorts: vi.fn(),
 }))
 const push = vi.hoisted(() => vi.fn())
+const socketConnections = vi.hoisted(() => vi.fn())
 vi.mock('../api/client', () => api)
 vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/terminal', fullPath: '/terminal', query: {} }), useRouter: () => ({ push }) }))
 vi.mock('element-plus', () => ({ ElMessage: { info: vi.fn(), error: vi.fn() } }))
-vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class {} }))
+vi.mock('@xterm/xterm', () => ({ Terminal: class {
+  cols = 80; rows = 24
+  loadAddon() {} open() {} onResize() {} onData() {} writeln() {} dispose() {}
+} }))
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 vi.mock('@xterm/addon-search', () => ({ SearchAddon: class {} }))
 
 function session(index: number): TerminalSession {
@@ -27,6 +31,9 @@ function session(index: number): TerminalSession {
 }
 function page(number = 1, total = 25, pageSize = 10): TerminalSessionPage {
   return { page: number, pageSize, total, items: Array.from({ length: Math.min(pageSize, Math.max(0, total - (number - 1) * pageSize)) }, (_, index) => session((number - 1) * pageSize + index + 1)) }
+}
+function activeLinuxSession(index = 1): TerminalSession {
+  return { ...session(index), mode: 'LINUX_INTERACTIVE', operatorIdentity: 'tester', state: 'CONNECTED' }
 }
 function deferred<T>() {
   let resolve!: (value: T) => void; let reject!: (cause: unknown) => void
@@ -54,12 +61,19 @@ async function closeReplay(wrapper: VueWrapper) { await button(wrapper, '关闭�
 describe('terminal session history and replay', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.stubGlobal('WebSocket', class {
+      static OPEN = 1
+      readyState = 0
+      close() {} send() {}
+      constructor(public url: string) { socketConnections(this) }
+    })
     api.getTerminalDevices.mockResolvedValue([]); api.getLinuxServers.mockResolvedValue([])
     api.getTerminalSessions.mockImplementation(({ page: number, pageSize }) => Promise.resolve(page(number, 25, pageSize)))
     api.getTerminalEvents.mockResolvedValue([{ atMs: 1700000000000, eventType: 'CLOSED', detailJson: '正常结束' }])
     api.getRecordingIntegrity.mockResolvedValue({ status: 'COMPLETE', detail: '', hashMatches: true })
     api.getReplay.mockResolvedValue({ entries: [{ atMs: 1, direction: 'output', dataB64: btoa('display [a.b]') }], hasMore: false })
     api.downloadExport.mockResolvedValue(new Blob(['recording']))
+    api.issueTerminalTicket.mockResolvedValue({ ticket: 'fresh-ticket', expiresAtMs: 1700000030000 })
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 
@@ -221,5 +235,79 @@ describe('terminal session history and replay', () => {
     old.resolve(page(2)); await flushPromises()
     expect(api.getTerminalSessions).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }))
     expect(wrapper.text()).toContain('当前授权会话'); expect(wrapper.text()).not.toContain('历史设备 11')
+  })
+
+  it('offers recovery only for the current user’s active Linux sessions without attaching automatically', async () => {
+    const active = activeLinuxSession()
+    const items = [active, { ...activeLinuxSession(2), state: 'CONNECTING' },
+      { ...activeLinuxSession(3), operatorIdentity: 'another-user' },
+      { ...activeLinuxSession(4), operatorIdentity: undefined },
+      { ...activeLinuxSession(5), state: 'CLOSED' },
+      { ...activeLinuxSession(6), mode: undefined }, session(7)]
+    api.getTerminalSessions.mockResolvedValue({ ...page(1, items.length), items })
+    const wrapper = await render()
+    expect(wrapper.findAll('button').filter(value => value.text() === '恢复连接')).toHaveLength(2)
+    expect(api.getTerminalSession).not.toHaveBeenCalled()
+    expect(api.issueTerminalTicket).not.toHaveBeenCalled()
+    expect(socketConnections).not.toHaveBeenCalled()
+  })
+
+  it('recovers an existing SSH session into one tab with a fresh ticket and no new SSH session', async () => {
+    const active = activeLinuxSession()
+    api.getTerminalSessions.mockResolvedValue({ ...page(1, 1), items: [active] })
+    api.getTerminalSession.mockResolvedValue(active)
+    const wrapper = await render()
+    await button(wrapper, '恢复连接').trigger('click'); await flushPromises()
+    expect(api.getTerminalSession).toHaveBeenCalledWith(active.id)
+    expect(api.issueTerminalTicket).toHaveBeenCalledWith(active.id)
+    expect(socketConnections).toHaveBeenCalledTimes(1)
+    const socket = socketConnections.mock.calls[0][0]
+    expect(socket.url).toContain(`/terminal/sessions/${active.id}/stream?ticket=fresh-ticket`)
+    socket.onopen(); await flushPromises()
+    await button(wrapper, '恢复连接').trigger('click'); await flushPromises()
+    expect(wrapper.findAll('.terminal-tab')).toHaveLength(1)
+    expect(socketConnections).toHaveBeenCalledTimes(1)
+    expect(api.createLinuxServerSession).not.toHaveBeenCalled()
+    expect(api.createTerminalSession).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { operatorIdentity: 'another-user' }, { operatorIdentity: undefined },
+    { state: 'CLOSED' }, { state: 'DISCONNECTED' }, { mode: undefined },
+  ])('refuses recovery when fresh metadata no longer permits it: %j', async change => {
+    const active = activeLinuxSession()
+    api.getTerminalSessions.mockResolvedValue({ ...page(1, 1), items: [active] })
+    api.getTerminalSession.mockResolvedValue({ ...active, ...change })
+    const wrapper = await render()
+    await button(wrapper, '恢复连接').trigger('click'); await flushPromises()
+    expect(api.issueTerminalTicket).not.toHaveBeenCalled()
+    expect(socketConnections).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.terminal-tab')).toHaveLength(0)
+    expect(api.createLinuxServerSession).not.toHaveBeenCalled()
+  })
+
+  it.each([401, 403, 404])('keeps recovery detached after a %i permission denial', async status => {
+    const active = activeLinuxSession()
+    api.getTerminalSessions.mockResolvedValue({ ...page(1, 1), items: [active] })
+    api.getTerminalSession.mockRejectedValue(new api.ApiRequestError(status, 'denied'))
+    const wrapper = await render()
+    await button(wrapper, '恢复连接').trigger('click'); await flushPromises()
+    expect(api.issueTerminalTicket).not.toHaveBeenCalled()
+    expect(socketConnections).not.toHaveBeenCalled()
+    expect(wrapper.findAll('[data-testid=terminal-history-row]')).toHaveLength(0)
+  })
+
+  it.each(['metadata', 'ticket'])('ignores pending recovery %s after sign out', async stage => {
+    const active = activeLinuxSession(); const pending = deferred<any>()
+    api.getTerminalSessions.mockResolvedValue({ ...page(1, 1), items: [active] })
+    if (stage === 'metadata') api.getTerminalSession.mockReturnValue(pending.promise)
+    else { api.getTerminalSession.mockResolvedValue(active); api.issueTerminalTicket.mockReturnValue(pending.promise) }
+    const wrapper = await render()
+    await button(wrapper, '恢复连接').trigger('click'); await flushPromises()
+    useAuthStore().user = null
+    pending.resolve(stage === 'metadata' ? active : { ticket: 'late-ticket' }); await flushPromises()
+    expect(socketConnections).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.terminal-tab')).toHaveLength(0)
+    expect(api.createLinuxServerSession).not.toHaveBeenCalled()
   })
 })

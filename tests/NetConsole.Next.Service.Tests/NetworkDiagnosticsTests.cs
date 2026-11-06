@@ -1,12 +1,18 @@
 using NetConsole.Next.Service;
 using Microsoft.Data.Sqlite;
+using System.Collections.Concurrent;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Text.Json;
 
 internal static class NetworkDiagnosticsTests
 {
     public static async Task RunAsync()
     {
+        var historyIntegrity = Task.WhenAll(CorruptHistoryDoesNotBlockHealthyRuns(),
+            FullCapacityCompletionRetainsEveryRun());
+        try { await historyIntegrity; }
+        catch { throw historyIntegrity.Exception!; }
         await BatchReportsProgressAndIsolatesFailures();
         await CancellationStopsQueuedChecks();
         await LldpReportsOnlyVerifiedFacts();
@@ -14,7 +20,7 @@ internal static class NetworkDiagnosticsTests
         await ListsLiveAndCompletedWithoutNewChecks();
         await HistoryListBoundsAndRestoresSafeSummaries();
         await HistoryReadsRespectCurrentAccountAndSiteScope();
-        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=7/7 PASS");
+        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=9/9 PASS");
     }
 
     private static async Task BatchReportsProgressAndIsolatesFailures()
@@ -203,6 +209,71 @@ internal static class NetworkDiagnosticsTests
         throw new InvalidOperationException("History access must reject a revoked actor or denied Site scope.");
     }
 
+    private static async Task CorruptHistoryDoesNotBlockHealthyRuns()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "Corrupt history fixture", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        NetworkDiagnosticRunSnapshot seed;
+        using (var diagnostics = new NetworkDiagnosticsService(fixture.Catalog))
+            seed = await WaitTerminal(diagnostics, diagnostics.Start(new([device.Item.Id], ["DNS"], 1_000),
+                "test", P2B5SiteScopeDecision.Global).Id);
+        NetworkDiagnosticRunSnapshot[] malformed = [
+            seed with { Id = null! },
+            seed with { Id = Guid.NewGuid().ToString("N"), Items = null! },
+            seed with { Id = Guid.NewGuid().ToString("N"), Items = [null!] }
+        ];
+        var corruptFiles = malformed.Select(snapshot =>
+        {
+            var path = Path.Combine(fixture.Root, "diagnostics", Guid.NewGuid().ToString("N") + ".json");
+            var content = JsonSerializer.Serialize(snapshot);
+            File.WriteAllText(path, content);
+            return (Path: path, Content: content);
+        }).ToArray();
+
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        Assert(restarted.List("local-api-token", P2B5SiteScopeDecision.Global).Single().Id == seed.Id,
+            "structurally corrupt history must be ignored while valid completed history remains readable");
+        Assert(corruptFiles.All(file => File.ReadAllText(file.Path) == file.Content),
+            "ignoring corrupt history must preserve the original files for diagnosis");
+        var fresh = await WaitTerminal(restarted, restarted.Start(new([device.Item.Id], ["DNS"], 1_000),
+            "test", P2B5SiteScopeDecision.Global).Id);
+        Assert(fresh.State == "SUCCEEDED" && restarted.List("local-api-token", P2B5SiteScopeDecision.Global).Count == 2,
+            "corrupt historical files must not block a new diagnostic or its persistence");
+    }
+
+    private static async Task FullCapacityCompletionRetainsEveryRun()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "Capacity fixture", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        var probe = new ControlledCompletionProbe();
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        var runs = Enumerable.Range(0, 128).Select(_ => diagnostics.Start(
+            new([device.Item.Id], ["TRACEROUTE"], 30_000), "local-api-token", P2B5SiteScopeDecision.Global)).ToArray();
+        try
+        {
+            Assert(probe.PendingCount == 128, "the capacity fixture must hold all admitted batches in flight");
+            probe.CompleteNext();
+            var completed = await WaitTerminal(diagnostics, runs[0].Id);
+            Assert(completed.State == "SUCCEEDED" &&
+                diagnostics.List("local-api-token", P2B5SiteScopeDecision.Global, 128).Count == 128,
+                "completing one of 128 admitted batches must preserve that result and every remaining batch");
+            using var restarted = new NetworkDiagnosticsService(fixture.Catalog, probe);
+            Assert(restarted.Get(completed.Id, P2B5SiteScopeDecision.Global)?.State == "SUCCEEDED",
+                "a batch completed at capacity must remain durable while other batches are still active");
+        }
+        finally
+        {
+            while (probe.PendingCount > 0) probe.CompleteNext();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            while (diagnostics.List("local-api-token", P2B5SiteScopeDecision.Global, 128)
+                .Any(run => run.State is "QUEUED" or "RUNNING"))
+                await Task.Delay(10, timeout.Token);
+        }
+        using var finalRestart = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        Assert(finalRestart.List("local-api-token", P2B5SiteScopeDecision.Global, 128).Count == 128,
+            "all 128 admitted batches must survive completion and restart without an extra retention eviction");
+    }
+
     private static async Task<NetworkDiagnosticRunSnapshot> WaitTerminal(NetworkDiagnosticsService service, string id)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
@@ -226,6 +297,26 @@ internal static class NetworkDiagnosticsTests
             Interlocked.Increment(ref _sendCount);
             await Task.Delay(Timeout.Infinite, cancellationToken);
             throw new InvalidOperationException("A cancelled fixture probe cannot produce a reply.");
+        }
+    }
+
+    private sealed class ControlledCompletionProbe : INetworkTracerouteProbe
+    {
+        private readonly ConcurrentQueue<(IPAddress Address, TaskCompletionSource<NetworkTracerouteProbeReply> Completion)> _pending = new();
+        public int PendingCount => _pending.Count;
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) =>
+            Task.FromResult(new[] { IPAddress.Loopback });
+        public Task<NetworkTracerouteProbeReply> SendAsync(IPAddress address, int ttl, int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            var completion = new TaskCompletionSource<NetworkTracerouteProbeReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pending.Enqueue((address, completion));
+            return completion.Task.WaitAsync(cancellationToken);
+        }
+        public void CompleteNext()
+        {
+            if (!_pending.TryDequeue(out var pending)) throw new InvalidOperationException("No fixture probe is pending.");
+            pending.Completion.SetResult(new(IPStatus.Success, pending.Address, 0));
         }
     }
 

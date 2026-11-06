@@ -405,6 +405,8 @@ export interface TerminalSession {
   targetId: string
   targetName: string
   protocol: string
+  mode?: 'RESTRICTED_READONLY' | 'LINUX_INTERACTIVE'
+  operatorIdentity?: string
   state: string
   startedMs: number
   endedMs?: number | null
