@@ -6,10 +6,10 @@
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
   "overallStatus": "PARTIAL",
-  "phase": "LOCAL_STARTUP_BODY_IDENTITY_CONCURRENCY_ACCEPTED_PRODUCT_PARTIAL",
-  "currentHead": "41bd2e2",
-  "currentHeadShort": "41bd2e2",
-  "headMeaning": "Continuation checkpoint including startup body UI and backend regression, identity review revision contract, and same-device cancellation fix; restore and live-device evidence remain pending",
+  "phase": "R4_IDENTITY_LIFECYCLE_CONFIG_RESTORE_SCHEDULER_PRODUCT_PARTIAL",
+  "currentHead": "2a4d65f",
+  "currentHeadShort": "2a4d65f",
+  "headMeaning": "R4 local contracts for scoped task lookup, safe configuration restore preview and AP identity lifecycle authority are integrated; real device, HA and deployment evidence remain pending",
   "activeWorkstreams": [],
   "completedLocal": [
     "bounded task scheduling, command-level Raw and complete-manifest publication",
@@ -53,7 +53,10 @@
     "253b814 single in-flight progress read per generation; cancel/new terminal protected from late older RUNNING/error; ToolsView12/typecheck/build PASS",
     "cf0e172/86d3190/3c0e15a two-stage STARTUP_BODY read through validated H3C path, redacted snapshot/history/download/diff compatibility, explicit restore 409 and schedule rejection, and display-startup-to-more regression; CONFIG_BACKUP_TESTS11/11 and schedule15/15 PASS",
     "2a58ae9 Site-claims-protected AP identity review, evidence-only identityRevision, candidate/conflict decision block reasons; WIRELESS_IDENTITY_CONTRACT_TESTS3/3 and wireless regression PASS",
-    "6809701 same-device semaphore-wait cancellation remains CANCELLED and does not create a second session; CONCURRENCY_P1_TESTS6/6 PASS"
+    "6809701 same-device semaphore-wait cancellation remains CANCELLED and does not create a second session; CONCURRENCY_P1_TESTS6/6 PASS",
+    "fd48fb5 scoped task lookup by run ID with Site guard and URL encoding regression",
+    "80e6816 configuration restore preview, compatibility, dry-run, confirmation token and audit; default writer never sends device writes",
+    "d253163 and 2a4d65f AP identity lifecycle ACCEPT/REJECT/CONFLICT/SUPERSEDE authority with evidence, Site/SUPERADMIN, optimistic revision, uniqueness, bounded history and audit"
   ],
   "nextTasks": [
     "obtain stable production GroupEvidence; source-AC group-name observations remain CANDIDATE with SourceGroupKey and GroupIdentityKey null",
@@ -128,7 +131,9 @@
     "netmikoNegotiationCurrent": "Historical policy6/worker29/HTTP reconnect13 and Jump65279 retain their original scope; e93b382 full harness23456 reconnect172 and worker40 PASS; ef57213 exact-version offline reconnect gate71491 PASS",
     "configurationBackupTests": "11/11 PASS at 3c0e15a; STARTUP_BODY path validation, two-stage command order and explicit restore rejection",
     "configurationBackupScheduleTests": "15/15 PASS after 86d3190; STARTUP_BODY rejected from durable schedules",
-    "wirelessIdentityContract": "3/3 PASS at 2a58ae9; identityRevision excludes runtime state and changes with exact evidence/source revision",
+    "wirelessIdentityContract": "3/3 PASS; identityRevision excludes runtime state and changes with exact evidence/source revision",
+    "wirelessIdentityLifecycle": "5/5 PASS; isolated JSON authority with ACCEPT/REJECT/CONFLICT/SUPERSEDE, evidence/Site/SUPERADMIN gates, optimistic revision, Serial/MAC uniqueness, bounded history and audit",
+    "configurationRestore": "11/11 PASS; preview/diff/compatibility/dry-run/confirmation token/audit; default writer returns CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE and performs zero device writes",
     "wirelessRegressionAfterIdentity": "WIRELESS_GROUP_CONTRACT, CACHE4/4, REPLACEMENT3/3, IDENTITY3/3, PROJECTION and RUNTIME13/13 PASS",
     "concurrencyCancellationRegression": "6/6 PASS after 6809701; cancellation during same-device gate wait preserves CANCELLED",
     "configurationBackupHttpNetmiko": "28 checks PASS current source, session44093; Service to CPython/Netmiko to synthetic loopback SSH",
@@ -180,7 +185,7 @@
     "configurationBackupScheduleHttp": "15 checks PASS final source, session44093; real HTTP/Service/CPython-Netmiko with loopback SSH; no catch-up replay and corrupt-file subsystem isolation",
     "configurationBackupScheduleBrowser": "11/11 PASS, Chrome source UI/API mock,1920/2560; mock-state persistence only",
     "offlineCandidateStatusForCurrentBatch": "PENDING: last accepted ef57213 candidate excludes current Traceroute and backup-schedule source",
-    "frontendBuild": "PASS final253b814: session84595 EXIT0, Vite2087 modules; existing chunk-size warning only",
+    "frontendBuild": "PASS current HEAD: Vitest 17 files/200 tests, vue-tsc PASS, Vite 2089 modules; existing chunk-size warning only",
     "diagnosticProgressReadConcurrency": "PASS final253b814 ToolsView12/12: failed read, pending retry, duplicate click, cancel/new terminal, late old RUNNING; screenshots precede this patch"
   },
   "historicalEvidenceBoundary": "All historical verification/candidate objects retain their own commit/session scope. Prior2026-11-05 DPAPI, legacy SW Exec and rejected independent FIT-AP login are historical, not current architecture blockers.",
@@ -190,7 +195,7 @@
   "merge": false,
   "release": false,
   "baseCommit": "4dac9fc3ffc68d87a13e8cc4cef113220fb5d47e",
-  "lastRecoveryCommit": "8320e2f0653c0f295700883c1900eef0a0690632",
+  "lastRecoveryCommit": "2a4d65f",
   "featureCommits": {
     "apGroupSourceIdentity": "fda2a6807585f9c65f6f013950606a1fda0f8098",
     "apGroupCacheConvergence": "2696390afb945efc457e39733b893d04c72a1932",

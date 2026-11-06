@@ -194,3 +194,8 @@ FD-P1-36：`9fc499f` 已退役旧 SSH.NET 网络设备 transport / decoder / 测
 - 在 `Catalog.CompleteTaskRunWithRawOutputs` 增加成功终态的 command plan 完整性检查：计划命令数与独立 Raw manifest 数不一致时拒绝终态提交，失败/取消仍保留已完成前缀。
 - 增加 `SuccessfulMultiCommandRunRequiresCompleteManifestSet` 回归，覆盖缺失 manifest 不改变运行状态且不落库部分命令集合。
 - H3C 事实发布专项：`H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS`；并发专项：`CONCURRENCY_P1_TESTS=5/5 PASS`；完整 Service harness：PASS。
+# 2026-11-07 R4 continuation checkpoint：2a4d65f
+
+完成 R4 scheduler scoped task lookup、configuration restore preview/dry-run/token/audit contract、AP identity lifecycle authority mutation 和 replacement scope guard。后端 Release build 0 warnings/0 errors；完整 Service harness EXIT 0；identity lifecycle 5/5、identity contract 3/3、config restore 11/11、backup 11/11、schedule 15/15、concurrency 6/6；前端 Vitest 17 files/200 tests、vue-tsc、Vite 2089 modules PASS。整体仍 `PARTIAL / REAL_DEVICE_PENDING`，设备配置写入 0，未 Push/Merge/Release。
+
+本轮没有安全凭据，因此四个授权模拟器只保留端点范围，不做登录、命令采集、HA 切换或写入。当前生产 candidate 未重建；Windows 原生 125%、跨机 TLS、目标机安装和远程 CI 未执行。

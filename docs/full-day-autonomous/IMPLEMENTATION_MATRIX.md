@@ -88,3 +88,12 @@ FD-P1-36：`9fc499f` 已退役旧 SSH.NET 网络设备 transport / decoder / 测
 以下保留原提交与候选证据，仅适用于该历史时点。
 
 最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632` 的Release Service/Tests构建0 warnings / 0 errors；Terminal reason 最终修复后的默认完整 Service harness（session `69905`）EXIT 0 PASS；`SITE_JUMP_HTTP_NETMIKO=PASS`、`SITE_JUMP_RESTART_DELETE=PASS`，首次 FAILED 即提供稳定错误码。本轮策略6组、预算6组与批量8/8分别PASS，批量已纳入默认完整harness；Web typecheck及12 files/82 tests、guard后批量HTTP14/14 PASS。当前候选 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，ProductVersion `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；`OFFLINE_BUNDLED_RUNTIME`、`STATIC_UI`、`NETMIKO_CONNECTION`、`LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 五项 PASS，STATIC_UI覆盖Linux/Jump/Terminal/Devices批量与备份/ConfigBackups；候选测试启动的 Next Service/Python 残留 0，offline-candidate 临时目录 0；用户预览 PID `90348` 保留。文档以所属提交为准；证据见对应20261106验收文档。
+# 2026-11-07 R4 continuation matrix：2a4d65f
+
+| Capability | Current evidence | Stage | Remaining boundary |
+| --- | --- | --- | --- |
+| Task lookup/scheduling | scoped run ID API, full harness, concurrency 6/6 | PASS_LOCAL |现场重启/权限变化 |
+| Identity lifecycle | persisted isolated authority, evidence/Site/SUPERADMIN/revision/audit, 5/5 | PASS_LOCAL_MUTATION |正式 schema authority、merge/split/revoke |
+| Configuration restore | preview/diff/compatibility/dry-run/token/audit, 11/11 | PARTIAL_SAFE_EXECUTE | writer、回滚、真实设备 |
+| Frontend | 17 files/200 tests, typecheck, Vite 2089 modules | PASS_LOCAL |真实设备态、跨机部署 |
+| Dual AC HA | no new device evidence; credentials unavailable | BLOCKED_EXTERNAL | role/failover/AP ownership/recovery |

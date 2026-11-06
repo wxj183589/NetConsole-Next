@@ -155,3 +155,11 @@ FD-P1-36：`9fc499f` 已退役旧 SSH.NET 网络设备 transport / decoder / 测
 2026-11-06 当前集成检查点：最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。AP Group 来源身份 `fda2a68`、候选缓存收敛 `2696390`、F10 conservative 更换隔离 `764d764`、设备配置备份入口与有界差异 `e12d062` 及Netmiko策略/预算/批量连接与Terminal reason修复 `8320e2f` 已完成各自本机验收。整体 **PARTIAL**，不 Push、Merge、Release。
 
 Netmiko轻量AUTO/legacy策略6组、worker24/24、Service实例共享worker上限16的预算6组、专用批量连接定向8/8、完整Vue12 files/82 tests/typecheck、Chrome mock4组、guard后实际HTTP→Netmiko→合成回环SSH14 checks均PASS。最终Release构建0 warnings / 0 errors；Terminal reason 最终修复后的默认完整 Service harness（session `69905`）EXIT 0 PASS；`SITE_JUMP_HTTP_NETMIKO=PASS`、`SITE_JUMP_RESTART_DELETE=PASS`，首次 FAILED 即提供稳定错误码。当前候选 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，ProductVersion `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；fresh Vite + 内置 CPython 3.13 / Netmiko 4.7 / Paramiko 4；Production、独立 cwd/隔离数据、PATH 仅 System32，无 Python/worker 覆盖；`OFFLINE_BUNDLED_RUNTIME`、`STATIC_UI`、`NETMIKO_CONNECTION`、`LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 五项 PASS；候选测试启动的 Next Service/Python 残留 0，offline-candidate 临时目录 0；用户预览 PID `90348` 保留。旧a3954a5候选只作历史，当前候选不是正式发布。
+# 2026-11-07 R4 continuation backlog：2a4d65f
+
+| ID | 任务 | 状态 | 下一步 |
+| --- | --- | --- | --- |
+| R4-IDENTITY | schema-backed identity authority、merge/split/revoke | PARTIAL_LOCAL | 保留 evidence、Site、revision、audit gates，补正式存储并发 |
+| R4-RESTORE | 白名单设备 writer、失败回滚和现场证据 | SAFE_PREVIEW_ONLY | 凭据和 baseline/recovery evidence 到位后再执行 |
+| R4-HA | 双 AC 1+1、切换恢复、AP ownership | BLOCKED_CREDENTIALS | 只访问四个授权端点，不猜凭据 |
+| R4-CANDIDATE | 当前 HEAD 离线候选 | PENDING | 独立构建、运行和清理验证 |

@@ -22,3 +22,14 @@
 ## R4 新工作流
 
 当前新建的三个分支均从 `ad3a574` 创建，尚无 R4 产品提交。每个代理必须在独立 worktree 提交代码和测试后，主协调工作流再执行 diff、构建、定向测试和本地合并。
+
+## R4 已集成提交
+
+| Commit | 类型 | 内容 | 证据 |
+| --- | --- | --- | --- |
+| `fd48fb5` | feat | 按 run ID 查询任务，Site scope 和 URL 编码保护 | 并发 `6/6`、前端 client 回归 |
+| `80e6816` | feat | 配置恢复 preview、dry-run、confirmation token、audit 和 disabled writer | `CONFIG_RESTORE_TESTS=11/11` |
+| `d253163` | feat | AP identity lifecycle authority 与 API | lifecycle `5/5`、identity contract `3/3` |
+| `2a4d65f` | fix | SUPERSEDE replacement 当前 Site 资源范围校验 | Release build 0 warnings/0 errors |
+
+当前产品 HEAD 为 `2a4d65f`。以上均为本地提交；本轮未 Push、远程 Merge 或 Release。

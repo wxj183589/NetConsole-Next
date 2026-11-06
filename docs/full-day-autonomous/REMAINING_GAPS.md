@@ -110,3 +110,6 @@ FD-P1-36：`9fc499f` 已退役旧 SSH.NET 网络设备 transport / decoder / 测
 最终 Jump Host E2E session `65279` EXIT 0：`SITE_JUMP_HTTP_NETMIKO`、`SITE_JUMP_RESTART_DELETE` 两项 PASS，包含连接测试与终端转发拒绝各只尝试一次的新断言。最终进程核验 Next Service / Python 残留 0、`test-data/offline-candidate-*` 目录 0；用户 Vite PID `90348` 与 `127.0.0.1:18792` 监听保留。结构化证据：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-9fc499f-20261106.json`。
 
 统一架构与全入口验收见 [Netmiko统一验收](../NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。
+# 2026-11-07 R4 continuation current gap：2a4d65f
+
+identity lifecycle 和 configuration restore 的本地安全合同已完成并通过定向测试。identity mutation 仅在临时隔离数据根启用，restore 默认 writer 仍拒绝设备写入。剩余最高优先级为正式 schema authority、真实 writer/回滚、双 AC HA 与实时 AP ownership；外部部署和跨机 TLS 仍待。
