@@ -65,6 +65,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
 builder.Services.AddSingleton<H3cBatchTaskService>();
 builder.Services.AddSingleton<DeviceConnectionTestService>();
 builder.Services.AddSingleton<ConfigBackupService>();
+builder.Services.AddSingleton<ConfigBackupScheduleService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
@@ -75,6 +76,7 @@ builder.Services.AddHostedService<ProcessResourceMonitor>();
 builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<FileArchiveService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ConfigBackupScheduleService>());
 
 var app = builder.Build();
 app.UseDefaultFiles();
@@ -846,6 +848,36 @@ app.MapGet("/api/system/config-backups/{baseId}/diff/{targetId}", (HttpContext c
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     var diff = backups.Diff(baseId, targetId, CurrentSiteScope(context));
     return diff is null ? Results.NotFound() : Results.Ok(diff);
+});
+app.MapGet("/api/system/config-backup-schedules", (HttpContext context, string? profileId, ConfigBackupScheduleService schedules) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(schedules.List(CurrentIdentity(context), CurrentSiteScope(context), profileId)); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/config-backup-schedules", (HttpContext context, ConfigBackupScheduleRequest request, ConfigBackupScheduleService schedules) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Created("/api/system/config-backup-schedules", schedules.Create(request, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
+app.MapPatch("/api/system/config-backup-schedules/{id}", (HttpContext context, string id, ConfigBackupScheduleEnabledRequest request, ConfigBackupScheduleService schedules) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return schedules.SetEnabled(id, request.Enabled, CurrentIdentity(context), CurrentSiteScope(context)) is { } schedule ? Results.Ok(schedule) : Results.NotFound(); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
+app.MapDelete("/api/system/config-backup-schedules/{id}", (HttpContext context, string id, ConfigBackupScheduleService schedules) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return schedules.Delete(id, CurrentIdentity(context), CurrentSiteScope(context)) ? Results.Ok(new { deleted = true }) : Results.NotFound(); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
 app.MapGet("/api/system/host-tools", (HostToolRegistry registry) => Results.Ok(registry.List()));
 app.MapPut("/api/system/host-tools/{toolId}", (HttpContext context, string toolId, HostToolRegistry registry, HostToolConfiguration request) =>

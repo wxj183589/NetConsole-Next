@@ -111,12 +111,15 @@ internal sealed class ConfigBackupService(
     private const int MaxHistory = 100;
     private const int MaxDiffLines = 256;
     private const int MaxDiffCells = 1_048_576;
+    internal const int MaximumCompletedBatchMetadata = 128;
+    private readonly object _batchGate = new();
     private readonly ConcurrentDictionary<string, BatchState> _batches = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _scheduledPins = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _profileGates = new(StringComparer.Ordinal);
     private readonly string _root = Path.Combine(settings.DataRoot, "backup", "config");
 
     public ConfigBackupBatch Start(IReadOnlyList<string> profileIds, WebUserIdentity actor,
-        P2B5SiteScopeDecision scope, string? configurationKind = null)
+        P2B5SiteScopeDecision scope, string? configurationKind = null, bool retainUntilObserved = false)
     {
         if (actor.Role != "SUPERADMIN") throw new ConfigBackupException("CONFIG_BACKUP_PERMISSION_DENIED", "只有 SUPERADMIN 可以执行配置备份。", 403);
         if (!scope.IsAuthorized) throw new ConfigBackupException("CONFIG_BACKUP_SCOPE_DENIED", scope.Detail, 403);
@@ -139,7 +142,12 @@ internal sealed class ConfigBackupService(
 
         var id = Guid.NewGuid().ToString("N");
         var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items, kind);
-        _batches[id] = batch;
+        lock (_batchGate)
+        {
+            _batches[id] = batch;
+            if (retainUntilObserved) _scheduledPins.Add(id);
+            PruneCompletedBatches();
+        }
         _ = Task.Run(() => RunBatchAsync(batch), CancellationToken.None);
         return batch.Snapshot();
     }
@@ -160,6 +168,33 @@ internal sealed class ConfigBackupService(
         if (!_batches.TryGetValue(id, out var batch) || batch.ActorUserId != actor.UserId) return null;
         if (!scope.IsAuthorized || batch.Items.Any(item => !catalog.H3cProfileIsInScope(item.ProfileId, scope))) return null;
         return batch.Snapshot();
+    }
+
+    // Internal scheduling metadata only. A removed profile can hide the public
+    // scoped view while its already admitted batch still needs to finish. This
+    // does not expose configuration output, snapshots, credentials or a new API.
+    internal ConfigBackupBatch? GetScheduledBatchStatus(string id, string ownerUserId) =>
+        _batches.TryGetValue(id, out var batch) && batch.ActorUserId == ownerUserId ? batch.Snapshot() : null;
+
+    internal bool AcknowledgeScheduledBatch(string id, string ownerUserId)
+    {
+        lock (_batchGate)
+        {
+            if (!_batches.TryGetValue(id, out var batch) || batch.ActorUserId != ownerUserId ||
+                batch.CompletedMs is null || !_scheduledPins.Remove(id)) return false;
+            PruneCompletedBatches();
+            return true;
+        }
+    }
+
+    private void PruneCompletedBatches()
+    {
+        // Called under _batchGate. Never prune running work or a schedule whose
+        // terminal result has not yet been durably observed by its scheduler.
+        foreach (var old in _batches.Values.Where(item => item.CompletedMs is not null && !_scheduledPins.Contains(item.Id))
+                     .OrderByDescending(item => item.CompletedMs).ThenByDescending(item => item.CreatedMs)
+                     .ThenBy(item => item.Id, StringComparer.Ordinal).Skip(MaximumCompletedBatchMetadata).ToArray())
+            _batches.TryRemove(old.Id, out _);
     }
 
     public IReadOnlyList<ConfigBackupSnapshot> List(string profileId, P2B5SiteScopeDecision scope,
@@ -294,7 +329,11 @@ internal sealed class ConfigBackupService(
             finally { parallel.Release(); }
         }).ToArray();
         await Task.WhenAll(tasks).ConfigureAwait(false);
-        batch.Complete();
+        lock (_batchGate)
+        {
+            batch.Complete();
+            PruneCompletedBatches();
+        }
     }
 
     private async Task RunItemAsync(BatchState batch, BatchItemState item)

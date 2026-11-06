@@ -38,6 +38,7 @@ async function render(query: LocationQueryRaw = { deviceId: 'device-b' }, role =
   const component = cached ? { render: () => h(RouterView, null, { default: ({ Component }: { Component: object }) => h(KeepAlive, null, [h(Component)]) }) } : ConfigBackupsView
   const wrapper = mount(component, { global: { plugins: [pinia, router], stubs: {
     NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
+    ConfigBackupSchedules: true,
     'el-button': { props: ['loading'], template: '<button :data-loading="loading"><slot/></button>' },
   } } })
   wrappers.push(wrapper); await flushPromises()

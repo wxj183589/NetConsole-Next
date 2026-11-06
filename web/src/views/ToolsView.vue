@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import { getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun } from '../api/client'
@@ -16,8 +16,15 @@ const inventory = ref<DeviceInventoryItem[]>([])
 const selectedDiagnosticDevices = ref<string[]>([])
 const diagnosticKinds = ref<NetworkDiagnosticKind[]>(['PING', 'TCP', 'DNS'])
 const diagnosticRun = ref<NetworkDiagnosticRun | null>(null)
-const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'TCP', 'DNS', 'LLDP']
+const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'TCP', 'DNS', 'TRACEROUTE', 'LLDP']
+const diagnosticTimeoutMs = ref(2000)
+const diagnosticStarting = ref(false)
+const diagnosticCancelling = ref(false)
+const diagnosticError = ref('')
+const diagnosticActive = computed(() => diagnosticRun.value?.state === 'QUEUED' || diagnosticRun.value?.state === 'RUNNING')
 let diagnosticPoll: ReturnType<typeof setTimeout> | undefined
+let diagnosticGeneration = 0
+let pageActive = true
 const isSuperAdmin = () => auth.user?.role === 'SUPERADMIN'
 
 async function refresh(): Promise<void> {
@@ -33,29 +40,56 @@ async function refresh(): Promise<void> {
   finally { loading.value = false }
 }
 function stopDiagnosticPolling(): void { if (diagnosticPoll) { clearTimeout(diagnosticPoll); diagnosticPoll = undefined } }
-async function pollDiagnostics(id: string): Promise<void> {
+function diagnosticCurrent(id: string, generation: number): boolean { return pageActive && diagnosticGeneration === generation && diagnosticRun.value?.id === id }
+async function pollDiagnostics(id: string, generation = diagnosticGeneration): Promise<void> {
+  stopDiagnosticPolling()
   try {
     const run = await getNetworkDiagnostics(id)
-    if (diagnosticRun.value?.id !== id) return
+    if (!diagnosticCurrent(id, generation)) return
     diagnosticRun.value = run
-    if (run.state === 'QUEUED' || run.state === 'RUNNING') diagnosticPoll = setTimeout(() => { void pollDiagnostics(id) }, 700)
-  } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '诊断进度读取失败') }
+    diagnosticError.value = ''
+    if (run.state === 'QUEUED' || run.state === 'RUNNING') diagnosticPoll = setTimeout(() => { void pollDiagnostics(id, generation) }, 700)
+  } catch (cause) {
+    if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断进度读取失败'
+  }
+}
+function selectDiagnosticKind(): void {
+  if (diagnosticKinds.value.includes('TRACEROUTE') && diagnosticTimeoutMs.value < 10000) diagnosticTimeoutMs.value = 30000
 }
 async function startDiagnostics(): Promise<void> {
+  if (diagnosticStarting.value || diagnosticActive.value) return
   if (!isSuperAdmin()) { ElMessage.warning('仅 SUPERADMIN 可启动诊断任务'); return }
   if (!selectedDiagnosticDevices.value.length) { ElMessage.warning('请选择至少一台设备'); return }
   if (!diagnosticKinds.value.length) { ElMessage.warning('请选择至少一种诊断类型'); return }
   stopDiagnosticPolling()
+  const generation = ++diagnosticGeneration
+  diagnosticStarting.value = true
+  diagnosticError.value = ''
   try {
-    diagnosticRun.value = await startNetworkDiagnostics({ deviceIds: selectedDiagnosticDevices.value, kinds: diagnosticKinds.value, timeoutMs: 2000 })
-    void pollDiagnostics(diagnosticRun.value.id)
-  } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '诊断任务启动失败') }
+    const run = await startNetworkDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value })
+    if (!pageActive || generation !== diagnosticGeneration) return
+    diagnosticRun.value = run
+    if (run.state === 'QUEUED' || run.state === 'RUNNING') void pollDiagnostics(run.id, generation)
+  } catch (cause) {
+    if (pageActive && generation === diagnosticGeneration) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务启动失败'
+  } finally { if (generation === diagnosticGeneration) diagnosticStarting.value = false }
 }
 async function cancelDiagnostics(): Promise<void> {
-  if (!diagnosticRun.value) return
-  try { await cancelNetworkDiagnostics(diagnosticRun.value.id); await pollDiagnostics(diagnosticRun.value.id) }
-  catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '诊断任务取消失败') }
+  if (!diagnosticRun.value || !diagnosticActive.value || diagnosticCancelling.value || !isSuperAdmin()) return
+  const id = diagnosticRun.value.id
+  const generation = ++diagnosticGeneration
+  stopDiagnosticPolling()
+  diagnosticCancelling.value = true
+  diagnosticError.value = ''
+  try { await cancelNetworkDiagnostics(id); if (diagnosticCurrent(id, generation)) await pollDiagnostics(id, generation) }
+  catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务取消失败' }
+  finally { if (generation === diagnosticGeneration) diagnosticCancelling.value = false }
 }
+function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticStarting.value = false; diagnosticCancelling.value = false; stopDiagnosticPolling() }
+function diagnosticKindLabel(value: string): string { return ({ PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
+function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
+function diagnosticOutcomeLabel(value?: string | null): string { return ({ OK: '检查成功', TRACEROUTE_MAX_HOPS: '达到跳数上限，尚未到达目标', TRACEROUTE_UNREACHABLE: '目标不可达', TIMEOUT: '检查总超时', CANCELLED: '已取消', DIAGNOSTIC_SCOPE_REVOKED: '设备访问权限已变化' } as Record<string, string>)[value || ''] || value || '—' }
+function hopStatusLabel(value: string): string { return ({ REACHED: '已到达目标', TTL_EXPIRED: '中间节点', TIMED_OUT: '该跳超时', UNREACHABLE: '不可达', OTHER: '其他响应' } as Record<string, string>)[value] || '未知响应' }
 async function save(tool: HostTool): Promise<void> {
   saving.value = tool.id
   try { const updated = await updateHostTool(tool.id, editing.value[tool.id] || null); tools.value = tools.value.map(item => item.id === tool.id ? updated : item); ElMessage.success(tool.displayName + ' 配置已保存') }
@@ -72,7 +106,10 @@ async function launch(tool: HostTool): Promise<void> {
 }
 function statusLabel(value: string): string { return ({ READY: '可用', NOT_CONFIGURED: '未配置', EXECUTABLE_NOT_FOUND: '程序不存在', HOST_WINDOWS_REQUIRED: '需要 Windows 宿主机', REPARSE_POINT_BLOCKED: '路径被阻断', EXECUTABLE_NOT_ALLOWED: '不是允许的程序' } as Record<string, string>)[value] || value }
 onMounted(refresh)
-onUnmounted(stopDiagnosticPolling)
+onUnmounted(suspendDiagnostics)
+onDeactivated(suspendDiagnostics)
+onActivated(() => { if (!pageActive) { pageActive = true; if (diagnosticRun.value && diagnosticActive.value) void pollDiagnostics(diagnosticRun.value.id) } })
+watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration++; stopDiagnosticPolling(); diagnosticRun.value = null; diagnosticError.value = ''; diagnosticStarting.value = false; diagnosticCancelling.value = false })
 </script>
 
 <template>
@@ -80,14 +117,28 @@ onUnmounted(stopDiagnosticPolling)
     <template #actions><el-button size="small" @click="refresh">刷新</el-button></template>
     <div class="card card--flat" style="margin-bottom:14px"><div class="card__body" style="line-height:1.8;color:var(--nc-text-secondary)">外部 SecureCRT、Xshell、PuTTY 不会在访问网页的笔记本上启动。服务只通过本机 Named Pipe 请求 Desktop Helper；密码、凭据引用和任意 shell 命令都不会进入启动参数。</div></div>
     <section class="card" style="margin-bottom:14px">
-      <div class="card__header"><div><h2>网络诊断</h2><small>只对已登记且在当前局点权限内的设备执行；LLDP 只读取已验证事实</small></div><span v-if="diagnosticRun" class="state-pill" :class="diagnosticRun.state === 'SUCCEEDED' ? 'good' : diagnosticRun.state === 'PARTIAL' ? 'warn' : ''">{{ diagnosticRun.state }} · {{ diagnosticRun.progressPercent }}%</span></div>
+      <div class="card__header"><div><h2>网络诊断</h2><small>从 NetConsole 服务所在主机检查已登记设备；LLDP 读取当前局点内已验证的事实</small></div><span v-if="diagnosticRun" class="state-pill" :class="diagnosticRun.state === 'SUCCEEDED' ? 'good' : diagnosticRun.state === 'PARTIAL' ? 'warn' : ''">{{ diagnosticStateLabel(diagnosticRun.state) }} · {{ diagnosticRun.progressPercent }}%</span></div>
       <div class="card__body">
-        <div class="toolbar" style="align-items:flex-start;gap:18px;flex-wrap:wrap">
-          <label class="form-field" style="min-width:360px"><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" multiple size="4"><option v-for="device in inventory" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
-          <div class="form-field"><span>检查类型</span><label v-for="kind in diagnosticKindOptions" :key="kind" class="check-row"><input v-model="diagnosticKinds" type="checkbox" :value="kind" />{{ kind === 'PING' ? 'Ping' : kind === 'TCP' ? 'TCP 端口' : kind === 'DNS' ? 'DNS' : 'LLDP 事实' }}</label></div>
-          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :disabled="!isSuperAdmin()" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :disabled="!diagnosticRun || !isSuperAdmin() || diagnosticRun.state === 'SUCCEEDED' || diagnosticRun.state === 'PARTIAL' || diagnosticRun.state === 'FAILED' || diagnosticRun.state === 'CANCELLED'" @click="cancelDiagnostics">取消任务</el-button></div>
+        <div class="toolbar diagnostic-controls">
+          <label class="form-field diagnostic-devices"><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" aria-label="诊断设备" multiple size="4" :disabled="diagnosticStarting || diagnosticActive"><option v-for="device in inventory" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
+          <div class="form-field"><span>检查类型</span><label v-for="kind in diagnosticKindOptions" :key="kind" class="check-row"><input v-model="diagnosticKinds" type="checkbox" :value="kind" :disabled="diagnosticStarting || diagnosticActive" @change="selectDiagnosticKind" />{{ diagnosticKindLabel(kind) }}</label></div>
+          <label class="form-field"><span>每项检查总超时</span><select v-model.number="diagnosticTimeoutMs" aria-label="每项检查总超时" :disabled="diagnosticStarting || diagnosticActive"><option :value="2000">2 秒</option><option :value="5000">5 秒</option><option :value="10000">10 秒</option><option :value="30000">30 秒</option></select><small class="muted">Traceroute 最多 30 跳，建议 30 秒。</small></label>
+          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
-        <div v-if="diagnosticRun" class="table-wrap" style="margin-top:14px"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>耗时</th><th>证据</th></tr></thead><tbody><tr v-for="item in diagnosticRun.items" :key="item.id"><td>{{ item.deviceName }}</td><td>{{ item.kind }}</td><td>{{ item.state }}</td><td>{{ item.detail || item.outcome || '—' }}</td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr></tbody></table></div>
+        <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="diagnosticRun && diagnosticActive && !diagnosticCancelling" size="small" @click="pollDiagnostics(diagnosticRun.id)">重新读取进度</el-button></div>
+        <template v-if="diagnosticRun">
+          <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
+          <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
+          <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
+            <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}</td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
+            <tr v-if="item.kind === 'TRACEROUTE'" class="trace-row"><td colspan="6"><section :aria-label="item.deviceName + ' Traceroute 路径'" class="trace-route">
+              <div class="trace-heading"><strong>逐跳路径</strong><span v-if="item.traceRoute" class="mono">目标 {{ item.traceRoute.destinationAddress }}</span><span :class="['state-pill', item.traceRoute?.destinationReached ? 'good' : 'warn']">{{ item.traceRoute?.destinationReached ? '已到达目标' : item.state === 'QUEUED' ? '等待探测' : item.state === 'RUNNING' ? '正在探测路径' : '未到达目标' }}</span><span v-if="item.traceRoute" class="muted">已记录 {{ item.traceRoute.hops.length }} / {{ item.traceRoute.maxHops }} 跳</span></div>
+              <table v-if="item.traceRoute?.hops.length" class="trace-table"><thead><tr><th>跳数</th><th>响应节点</th><th>状态</th><th>响应耗时</th></tr></thead><tbody><tr v-for="hop in item.traceRoute.hops" :key="hop.ttl"><td>{{ hop.ttl }}</td><td class="mono">{{ hop.address || '—' }}</td><td><span :class="hop.status === 'REACHED' ? 'trace-hop--good' : hop.status === 'TIMED_OUT' || hop.status === 'UNREACHABLE' ? 'trace-hop--warn' : ''">{{ hopStatusLabel(hop.status) }}</span></td><td>{{ hop.latencyMs == null ? '—' : hop.latencyMs + ' ms' }}</td></tr></tbody></table>
+              <p v-else class="muted">{{ item.state === 'RUNNING' || item.state === 'QUEUED' ? '等待逐跳响应，结果会自动更新。' : '暂无逐跳响应。' }}</p>
+              <small class="muted">超时节点可能不响应探测；未到达目标时仅展示已取得的部分路径。</small>
+            </section></td></tr>
+          </template></tbody></table></div>
+        </template>
         <div v-else class="empty-state" style="margin-top:12px"><div><strong>尚未运行诊断</strong><small>选择设备和检查类型后开始一个批量任务。</small></div></div>
       </div>
     </section>
@@ -103,3 +154,26 @@ onUnmounted(stopDiagnosticPolling)
     </div>
   </NcLayout>
 </template>
+
+<style scoped>
+.diagnostic-controls { align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+.diagnostic-devices { flex: 1 1 360px; max-width: 560px; min-width: 0; }
+.diagnostic-devices select { width: 100%; }
+.diagnostic-controls .check-row { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.diagnostic-controls .check-row input { width: auto; margin: 0; }
+.diagnostic-error { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--nc-danger, #c93442); }
+.diagnostic-progress { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; color: var(--nc-text-secondary); }
+.diagnostic-progress progress { width: 200px; height: 10px; accent-color: var(--nc-primary, #1677ff); }
+.diagnostic-results { margin-top: 12px; }
+.diagnostic-results th, .diagnostic-results td { white-space: normal; }
+.trace-row > td { padding-top: 0; }
+.trace-route { padding: 14px 18px; background: var(--nc-surface-muted); border: 1px solid var(--nc-border); border-radius: 6px; }
+.trace-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.trace-heading .mono, .trace-table .mono { overflow-wrap: anywhere; }
+.trace-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px; }
+.trace-table th, .trace-table td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--nc-border, #dce5f1); }
+.trace-table th { color: var(--nc-text-secondary); font-weight: 500; }
+.trace-table th:first-child { width: 64px; }
+.trace-hop--good { color: var(--nc-success); }
+.trace-hop--warn { color: var(--nc-warning); }
+</style>

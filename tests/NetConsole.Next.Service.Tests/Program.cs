@@ -83,10 +83,14 @@ else if (args.Length > 0 && args[0] == "--device-connection-tests")
     await DeviceConnectionTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--network-traceroute-tests")
+    await NetworkTracerouteTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
     H3cLldpTopologyTests.Run();
 else if (args.Length > 0 && args[0] == "--config-backup-tests")
     await ConfigBackupTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--config-backup-schedule-tests")
+    await ConfigBackupScheduleTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--h3c-connection-policy-tests")
 {
     await H3cConnectionPolicyTests.RunAsync();
@@ -161,6 +165,9 @@ internal static class SchedulerTests
         await TaskDiagnosticEvidenceTests.RunAsync();
         await H3cDiagnosticCaptureTests.RunAsync();
         await ConfigBackupTests.RunAsync();
+        await ConfigBackupScheduleTests.RunAsync();
+        await NetworkDiagnosticsTests.RunAsync();
+        await NetworkTracerouteTests.RunAsync();
         await ConcurrencyP1Tests.RunAsync();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();

@@ -3,6 +3,7 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, 
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
+import ConfigBackupSchedules from '../components/ConfigBackupSchedules.vue'
 import { ApiRequestError, createConfigBackup, downloadConfigBackup, getConfigBackupBatch, getConfigBackups, getDeviceInventoryDetail, getH3cProfiles, getConfigBackupDiff, getModuleStates, type ConfigBackupBatch, type ConfigBackupDiff, type ConfigBackupKind, type ConfigBackupSnapshot, type DeviceInventoryItem, type TerminalDevice } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
@@ -183,10 +184,11 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
         <p v-if="batchFailure" class="data-quality-note" role="status">{{ batchFailure }}</p>
       </div>
     </section>
+    <ConfigBackupSchedules v-if="moduleAvailable && isSuperAdmin" :selected-profile-ids="selected" :configuration-kind="configurationKind" :context-profile-id="hasDeviceContext ? profileId : undefined" />
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">
-        <table class="data-table"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" @click="download(snapshot)">下载</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
+        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" @click="download(snapshot)">下载</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
       </div>
     </section>
     <section v-if="history.length > 1" class="card">

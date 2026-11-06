@@ -514,7 +514,13 @@ export interface H3cTaskPlanReport {
   items: Array<{ item: H3cTaskPlanItem; run?: TaskRun | null; commands: TaskCommand[] }>
 }
 
-export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP'
+export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE'
+export interface NetworkTraceRoute {
+  destinationAddress: string
+  destinationReached: boolean
+  maxHops: number
+  hops: Array<{ ttl: number; address: string | null; status: string; latencyMs: number | null }>
+}
 export interface NetworkDiagnosticItem {
   id: string
   deviceId: string
@@ -529,6 +535,7 @@ export interface NetworkDiagnosticItem {
   latencyMs?: number | null
   evidenceCount: number
   evidenceSources: string[]
+  traceRoute?: NetworkTraceRoute | null
 }
 export interface NetworkDiagnosticRun {
   id: string
@@ -596,6 +603,22 @@ export interface H3cLldpClaims {
 }
 
 export type ConfigBackupKind = 'RUNNING' | 'SAVED' | 'STARTUP_INFO'
+
+export interface ConfigBackupSchedule {
+  id: string
+  ownerUserId: string
+  profileIds: string[]
+  configurationKind: ConfigBackupKind
+  intervalMinutes: number
+  enabled: boolean
+  createdMs: number
+  nextRunMs?: number | null
+  lastRunMs?: number | null
+  lastCompletedMs?: number | null
+  lastState?: string | null
+  lastError?: string | null
+  lastBatchId?: string | null
+}
 
 export interface ConfigBackupSnapshot {
   id: string
@@ -1087,6 +1110,18 @@ export async function downloadConfigBackup(id: string): Promise<Blob> {
 }
 export function getConfigBackupDiff(baseId: string, targetId: string): Promise<ConfigBackupDiff> {
   return request('/api/system/config-backups/' + encodeURIComponent(baseId) + '/diff/' + encodeURIComponent(targetId))
+}
+export function getConfigBackupSchedules(profileId?: string): Promise<ConfigBackupSchedule[]> {
+  return request('/api/system/config-backup-schedules' + (profileId ? '?profileId=' + encodeURIComponent(profileId) : ''))
+}
+export function createConfigBackupSchedule(payload: { profileIds: string[]; configurationKind: ConfigBackupKind; intervalMinutes: number }): Promise<ConfigBackupSchedule> {
+  return request('/api/system/config-backup-schedules', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function setConfigBackupScheduleEnabled(id: string, enabled: boolean): Promise<ConfigBackupSchedule> {
+  return request('/api/system/config-backup-schedules/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ enabled }) })
+}
+export function deleteConfigBackupSchedule(id: string): Promise<{ deleted: boolean }> {
+  return request('/api/system/config-backup-schedules/' + encodeURIComponent(id), { method: 'DELETE' })
 }
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))

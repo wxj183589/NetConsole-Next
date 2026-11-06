@@ -34,6 +34,7 @@ try {
     else if (endpoint === '/api/system/devices') body = { items: devices, total: 2, page: 1, pageSize: 20, hasMore: false, summary }
     else if (endpoint === '/api/system/device-sites') body = [{ id: 'local', name: '测试局点' }]
     else if (endpoint === '/api/system/device-groups') body = []
+    else if (endpoint === '/api/system/config-backup-schedules' && request.method() === 'GET') body = []
     else if (endpoint === '/api/system/terminal/devices' || endpoint === '/api/system/h3c/profiles') body = profiles
     else if (endpoint.startsWith('/api/system/devices/')) {
       const device = devices.find(item => item.id === decodeURIComponent(endpoint.split('/').at(-1)))
@@ -64,7 +65,7 @@ try {
   await dialog.getByRole('button', { name: '查看配置备份', exact: true }).click()
   await expect(page).toHaveURL(`${base}/config-backups?deviceId=device-b`)
   await expect(page.getByRole('heading', { name: '交换机乙 · 192.0.2.10 · 运行配置版本历史', exact: true })).toBeVisible()
-  await expect(page.locator('tbody tr')).toHaveCount(2)
+  await expect(page.getByRole('table', { name: '配置版本历史', exact: true }).locator('tbody tr')).toHaveCount(2)
   expect(reads).toEqual(['profile-b']); expect(posts).toEqual([])
   await page.getByRole('button', { name: '比较', exact: true }).click()
   await expect(page.locator('.diff-panel pre').filter({ hasText: '当前设备配置差异' })).toBeVisible()
@@ -78,8 +79,8 @@ try {
     const beforePosts = posts.length
     await page.getByRole('combobox', { name: '配置类别' }).selectOption(configurationKind)
     await expect(page.getByRole('heading', { name: `交换机乙 · 192.0.2.10 · ${label}版本历史`, exact: true })).toBeVisible()
-    await expect(page.locator('tbody tr')).toHaveCount(2)
-    await expect(page.locator('tbody')).not.toContainText('v99')
+    await expect(page.getByRole('table', { name: '配置版本历史', exact: true }).locator('tbody tr')).toHaveCount(2)
+    await expect(page.getByRole('table', { name: '配置版本历史', exact: true }).locator('tbody')).not.toContainText('v99')
     expect(categoryReads.at(-1)).toEqual({ profileId: 'profile-b', configurationKind })
     expect(posts.length).toBe(beforePosts)
     await page.getByRole('button', { name: '比较', exact: true }).click()
@@ -124,7 +125,7 @@ try {
   mode = 'denied'
   await page.locator('main .page-scroll').getByRole('button', { name: '刷新', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: '设备不存在或不在当前授权范围内' })).toBeVisible()
-  await expect(page.locator('tbody')).toHaveCount(0)
+  await expect(page.getByRole('table', { name: '配置版本历史', exact: true })).toHaveCount(0)
   evidence.push('scope-revocation-clears-history-and-actions')
   expect(posts).toEqual(expectedPosts)
   expect(errors).toEqual([]); expect(unexpected).toEqual([])

@@ -36,15 +36,38 @@ internal static class NetworkDiagnosticsTests
     private static async Task CancellationStopsQueuedChecks()
     {
         using var fixture = new Fixture();
-        var device = fixture.Catalog.CreateDeviceInventory(new(null, "Reserved", "192.0.2.251", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
-        var diagnostics = new NetworkDiagnosticsService(fixture.Catalog);
-        var run = diagnostics.Start(new(new[] { device.Item.Id }, new[] { "TCP", "PING", "DNS" }, 5_000), "test", P2B5SiteScopeDecision.Global);
-        Assert(diagnostics.Cancel(run.Id, "test", "SUPERADMIN", P2B5SiteScopeDecision.Global),
+        var devices = Enumerable.Range(1, 5).Select(index => fixture.Catalog.CreateDeviceInventory(
+            new(null, "Cancel fixture " + index, "127.0.0." + index, "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test").Item.Id).ToArray();
+        var probe = new CancellationProbe();
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        const string actor = "local-api-token";
+        var run = diagnostics.Start(new(devices, new[] { "DNS", "TRACEROUTE" }, 5_000), actor, P2B5SiteScopeDecision.Global);
+        using (var waiting = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
+        {
+            // Keep the running probes inside this fixture, with literal loopback
+            // DNS checks already successful and later checks still queued.
+            while (true)
+            {
+                var progress = diagnostics.Get(run.Id, P2B5SiteScopeDecision.Global)!;
+                if (progress.SucceededChecks > 0 && progress.RunningChecks == 4 && progress.QueuedChecks > 0 &&
+                    probe.SendCount == 4) break;
+                await Task.Delay(10, waiting.Token);
+            }
+        }
+        Assert(diagnostics.Cancel(run.Id, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global),
             "the owning operator should be able to cancel a diagnostic batch");
         var final = await WaitTerminal(diagnostics, run.Id);
         Assert(final.ProgressPercent == 100 && final.Items.All(item => item.State != "RUNNING" && item.State != "QUEUED"),
             "cancellation should drain running and queued diagnostic children");
         Assert(final.State is "CANCELLED" or "PARTIAL", "cancelled diagnostics must remain visibly cancelled or partial");
+        Assert(final.State == "PARTIAL" && final.SucceededChecks > 0 && final.CancelledChecks > 0 &&
+            final.FailedChecks == 0 && final.NoEvidenceChecks == 0 && probe.SendCount == 4,
+            "successful children must survive cancellation without making a mixed batch successful or starting queued probes");
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        var restored = restarted.Get(run.Id, P2B5SiteScopeDecision.Global);
+        Assert(restored?.State == "PARTIAL" && restored.CancelledChecks == final.CancelledChecks &&
+            restored.SucceededChecks == final.SucceededChecks,
+            "mixed cancellation and successful children must retain their actual terminal state across restart");
     }
 
     private static async Task LldpReportsOnlyVerifiedFacts()
@@ -91,6 +114,21 @@ internal static class NetworkDiagnosticsTests
             var run = service.Get(id, P2B5SiteScopeDecision.Global) ?? throw new InvalidOperationException("diagnostic run disappeared");
             if (run.ProgressPercent == 100 && (run.State is "SUCCEEDED" or "PARTIAL" or "FAILED" or "CANCELLED")) return run;
             await Task.Delay(20, timeout.Token);
+        }
+    }
+
+    private sealed class CancellationProbe : INetworkTracerouteProbe
+    {
+        private int _sendCount;
+        public int SendCount => Volatile.Read(ref _sendCount);
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) =>
+            Task.FromResult(new[] { IPAddress.Loopback });
+        public async Task<NetworkTracerouteProbeReply> SendAsync(IPAddress address, int ttl, int timeoutMs,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _sendCount);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("A cancelled fixture probe cannot produce a reply.");
         }
     }
 

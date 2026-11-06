@@ -25,7 +25,8 @@ internal sealed record NetworkDiagnosticItemSnapshot(
     long? EndedMs,
     long? LatencyMs,
     int EvidenceCount,
-    IReadOnlyList<string> EvidenceSources);
+    IReadOnlyList<string> EvidenceSources,
+    NetworkTracerouteSnapshot? TraceRoute = null);
 
 internal sealed record NetworkDiagnosticRunSnapshot(
     string Id,
@@ -52,21 +53,26 @@ internal sealed record NetworkDiagnosticRunSnapshot(
 internal sealed class NetworkDiagnosticsService : IDisposable
 {
     private static readonly HashSet<string> SupportedKinds = new(StringComparer.OrdinalIgnoreCase)
-        { "PING", "TCP", "DNS", "LLDP" };
+        { "PING", "TCP", "DNS", "LLDP", "TRACEROUTE" };
     private const int MaximumDevices = 128;
     private const int MaximumChecks = 512;
     private const int MaximumRuns = 128;
     private const int MaximumConcurrency = 4;
+    private const int MaximumHistoryBytes = 4 * 1024 * 1024;
     private readonly Catalog _catalog;
+    private readonly INetworkTracerouteProbe _tracerouteProbe;
     private readonly string _historyRoot;
     private readonly object _gate = new();
     private readonly Dictionary<string, DiagnosticRun> _runs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NetworkDiagnosticRunSnapshot> _history = new(StringComparer.Ordinal);
     private bool _disposed;
 
-    public NetworkDiagnosticsService(Catalog catalog)
+    public NetworkDiagnosticsService(Catalog catalog) : this(catalog, new IcmpNetworkTracerouteProbe()) { }
+
+    internal NetworkDiagnosticsService(Catalog catalog, INetworkTracerouteProbe tracerouteProbe)
     {
         _catalog = catalog;
+        _tracerouteProbe = tracerouteProbe;
         _historyRoot = Path.Combine(catalog.DataRoot, "diagnostics");
         LoadHistory();
     }
@@ -83,9 +89,9 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var requestedKinds = request.Kinds?.Select(value => value?.Trim().ToUpperInvariant() ?? string.Empty).ToArray()
             ?? Array.Empty<string>();
         if (requestedKinds.Any(kind => !SupportedKinds.Contains(kind)))
-            throw new ArgumentException("Diagnostic kinds must be PING, TCP, DNS or LLDP.", nameof(request));
+            throw new ArgumentException("Diagnostic kinds must be PING, TCP, DNS, LLDP or TRACEROUTE.", nameof(request));
         var kinds = NormalizeKinds(requestedKinds);
-        if (kinds.Count is < 1 or > 4)
+        if (kinds.Count is < 1 or > 5)
             throw new ArgumentException("At least one supported diagnostic kind is required.", nameof(request));
         if (request.TimeoutMs is < 100 or > 30_000)
             throw new ArgumentException("timeoutMs must be between 100 and 30000.", nameof(request));
@@ -110,6 +116,8 @@ internal sealed class NetworkDiagnosticsService : IDisposable
 
         if (targets.Count * kinds.Count > MaximumChecks)
             throw new ArgumentException($"A diagnostic batch cannot contain more than {MaximumChecks} checks.", nameof(request));
+        if (kinds.Contains("TRACEROUTE"))
+            foreach (var target in targets) RequireCurrentTraceTarget(actor, scope, target);
         var run = new DiagnosticRun(Guid.NewGuid().ToString("N"), actor, siteId, request.TimeoutMs, targets, kinds, scope);
         lock (_gate)
         {
@@ -137,7 +145,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
     {
         lock (_gate)
         {
-            if (!_runs.TryGetValue(id, out var run) || IsTerminal(run.State) || !CanOperate(run, actor, role, scope)) return false;
+            if (!_runs.TryGetValue(id, out var run) || IsTerminalRun(run.State) || !CanOperate(run, actor, role, scope)) return false;
             run.Cancellation.Cancel();
             return true;
         }
@@ -183,11 +191,13 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var cancelled = run.Items.Count(item => item.State == "CANCELLED");
         var failed = run.Items.Count(item => item.State == "FAILED");
         var noEvidence = run.Items.Count(item => item.State == "NO_EVIDENCE");
-        run.State = cancelled == run.Items.Count ? "CANCELLED" : failed + noEvidence == 0 ? "SUCCEEDED" : "PARTIAL";
-        if (run.State == "PARTIAL") run.FailureReason = "部分诊断未成功；请查看设备明细。";
-        if (PersistCompleted(run))
+        lock (_gate)
         {
-            lock (_gate)
+            // Publish the terminal run together with its persistence attempt.
+            // A caller observing completion may immediately restart the service.
+            run.State = cancelled == run.Items.Count ? "CANCELLED" : failed + noEvidence + cancelled == 0 ? "SUCCEEDED" : "PARTIAL";
+            if (run.State == "PARTIAL") run.FailureReason = "部分诊断未成功；请查看设备明细。";
+            if (PersistCompleted(run))
             {
                 _runs.Remove(run.Id);
                 PruneHistory();
@@ -207,6 +217,19 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         {
             switch (item.Kind)
             {
+                case "TRACEROUTE":
+                {
+                    var trace = await NetworkTraceroute.RunAsync(item.Target.Host, run.TimeoutMs, _tracerouteProbe,
+                        () => RequireCurrentTraceTarget(run.Actor, run.Scope, item.Target),
+                        snapshot => { lock (item.Gate) item.TraceRoute = snapshot; }, timeout.Token);
+                    var unreachable = trace.Hops.LastOrDefault()?.Status == "UNREACHABLE";
+                    Complete(item, trace.DestinationReached ? "SUCCEEDED" : "FAILED",
+                        trace.DestinationReached ? "OK" : unreachable ? "TRACEROUTE_UNREACHABLE" : "TRACEROUTE_MAX_HOPS",
+                        trace.DestinationReached ? $"已通过 {trace.Hops.Count} 跳到达目标" :
+                            unreachable ? "路径返回不可达；保留已观察到的跳点" : "已达到 30 跳上限；未确认到达目标",
+                        ElapsedMs(started), 0, Array.Empty<string>());
+                    break;
+                }
                 case "PING":
                 {
                     using var ping = new Ping();
@@ -259,24 +282,49 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                     break;
             }
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             Complete(item, cancellationToken.IsCancellationRequested ? "CANCELLED" : "FAILED",
                 cancellationToken.IsCancellationRequested ? "CANCELLED" : "TIMEOUT",
                 cancellationToken.IsCancellationRequested ? "已取消" : "诊断超时", ElapsedMs(started), 0, Array.Empty<string>());
         }
+        catch (DeviceSiteScopeException)
+        {
+            Complete(item, "CANCELLED", "DIAGNOSTIC_SCOPE_REVOKED", "当前账号、局点或设备目标已变化，诊断已停止",
+                ElapsedMs(started), 0, Array.Empty<string>());
+        }
         catch (PingException)
         {
-            Complete(item, "FAILED", "PING_FAILED", "Ping 未成功", ElapsedMs(started), 0, Array.Empty<string>());
+            Complete(item, "FAILED", item.Kind == "TRACEROUTE" ? "TRACEROUTE_PROBE_FAILED" : "PING_FAILED",
+                item.Kind == "TRACEROUTE" ? "ICMP 路径探测未成功" : "Ping 未成功", ElapsedMs(started), 0, Array.Empty<string>());
         }
         catch (SocketException)
         {
-            Complete(item, "FAILED", item.Kind == "DNS" ? "DNS_FAILED" : "TCP_UNREACHABLE", "网络连接未成功", ElapsedMs(started), 0, Array.Empty<string>());
+            Complete(item, "FAILED", item.Kind is "DNS" or "TRACEROUTE" ? "DNS_FAILED" : "TCP_UNREACHABLE", "网络连接未成功", ElapsedMs(started), 0, Array.Empty<string>());
         }
         catch
         {
             Complete(item, "FAILED", "DIAGNOSTIC_FAILED", "诊断执行失败", ElapsedMs(started), 0, Array.Empty<string>());
         }
+    }
+
+    private void RequireCurrentTraceTarget(string actorId, P2B5SiteScopeDecision admittedScope, DiagnosticTarget target)
+    {
+        var actor = _catalog.GetActiveTaskActor(actorId);
+        if (actor is not { Role: "SUPERADMIN" }) Deny();
+        // Diagnostics admission requires SUPERADMIN; a current actor with that
+        // role has global Site scope, and a downgrade must stop the trace.
+        var currentScope = P2B5SiteScopeDecision.Global;
+        if (!currentScope.IsAuthorized || !DeviceSiteScope.Allows(admittedScope, target.SiteId) ||
+            !DeviceSiteScope.Allows(currentScope, target.SiteId)) Deny();
+        var current = _catalog.GetDeviceInventoryDetail(target.DeviceId, currentScope);
+        var host = current?.TerminalProfile?.Host ?? current?.Item.ManagementIp;
+        var port = current?.TerminalProfile?.Port ?? current?.Item.Port;
+        if (current is null || !current.Item.Enabled || current.Item.SiteId != target.SiteId ||
+            current.TerminalProfileId != target.ProfileId || host != target.Host ||
+            (port is > 0 ? port : 22) != target.Port) Deny();
+        static void Deny() => throw new DeviceSiteScopeException("DIAGNOSTIC_SCOPE_REVOKED",
+            "当前账号、局点或设备目标已变化，无法继续诊断");
     }
 
     private static bool CanOperate(DiagnosticRun run, string actor, string role, P2B5SiteScopeDecision scope) =>
@@ -320,7 +368,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
 
     private void PruneRuns()
     {
-        foreach (var id in _runs.Values.Where(run => run.State is "SUCCEEDED" or "PARTIAL" or "FAILED" or "CANCELLED")
+        foreach (var id in _runs.Values.Where(run => IsTerminalRun(run.State))
                      .OrderBy(run => run.EndedMs ?? run.CreatedMs).Take(Math.Max(0, _runs.Count - MaximumRuns + 1)).Select(run => run.Id).ToArray())
             _runs.Remove(id);
     }
@@ -332,13 +380,15 @@ internal sealed class NetworkDiagnosticsService : IDisposable
             throw new InvalidOperationException("Diagnostic history directory cannot be a reparse point.");
         foreach (var path in Directory.EnumerateFiles(_historyRoot, "*.json", SearchOption.TopDirectoryOnly))
         {
-            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > 512 * 1024)
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > MaximumHistoryBytes)
                 continue;
             try
             {
                 var snapshot = JsonSerializer.Deserialize<NetworkDiagnosticRunSnapshot>(File.ReadAllText(path));
-                if (snapshot is not null && IsSafeId(snapshot.Id) && IsTerminal(snapshot.State) &&
-                    snapshot.Items.Count <= MaximumChecks && snapshot.TotalChecks == snapshot.Items.Count)
+                if (snapshot is not null && IsSafeId(snapshot.Id) && IsTerminalRun(snapshot.State) &&
+                    snapshot.Items.Count <= MaximumChecks && snapshot.TotalChecks == snapshot.Items.Count &&
+                    snapshot.Items.All(item => item.TraceRoute is null || item.TraceRoute is { MaxHops: NetworkTraceroute.MaximumHops } trace &&
+                        trace.Hops is { Count: <= NetworkTraceroute.MaximumHops }))
                     _history[snapshot.Id] = snapshot;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -420,6 +470,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
     private static bool IsSafeHost(string value) => value.Length is > 0 and <= 253 && !value.Any(char.IsControl) &&
         Uri.CheckHostName(value) is not UriHostNameType.Unknown and not UriHostNameType.Basic;
     private static bool IsTerminal(string state) => state is "SUCCEEDED" or "FAILED" or "NO_EVIDENCE" or "CANCELLED";
+    private static bool IsTerminalRun(string state) => state is "SUCCEEDED" or "PARTIAL" or "FAILED" or "CANCELLED";
     private static long? ElapsedMs(long started) => Math.Max(0, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(NetworkDiagnosticsService)); }
@@ -440,9 +491,13 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public long? LatencyMs { get; set; }
         public int EvidenceCount { get; set; }
         public IReadOnlyList<string> EvidenceSources { get; set; } = Array.Empty<string>();
+        public NetworkTracerouteSnapshot? TraceRoute { get; set; }
 
-        public NetworkDiagnosticItemSnapshot ToSnapshot() => new(Id, Target.DeviceId, Target.Name, Target.SiteId, Kind,
-            State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources);
+        public NetworkDiagnosticItemSnapshot ToSnapshot()
+        {
+            lock (Gate) return new(Id, Target.DeviceId, Target.Name, Target.SiteId, Kind,
+                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute);
+        }
     }
 
     private sealed class DiagnosticRun

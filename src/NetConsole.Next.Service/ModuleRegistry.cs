@@ -11,7 +11,8 @@ internal static class ModuleRegistryRouting
             value.StartsWith("/api/system/device-", StringComparison.Ordinal)) return "devices";
         if (value.StartsWith("/api/system/zte/", StringComparison.Ordinal)) return "zte";
         if (value.StartsWith("/api/system/h3c/", StringComparison.Ordinal)) return "h3c";
-        if (value.StartsWith("/api/system/config-backups", StringComparison.Ordinal)) return "config-backups";
+        if (value.StartsWith("/api/system/config-backups", StringComparison.Ordinal) ||
+            value.StartsWith("/api/system/config-backup-schedules", StringComparison.Ordinal)) return "config-backups";
         if (value.StartsWith("/api/system/network-planning/", StringComparison.Ordinal)) return "network-planning";
         if (value.StartsWith("/api/system/terminal/", StringComparison.Ordinal)) return "terminal";
         if (value.StartsWith("/api/system/tasks", StringComparison.Ordinal)) return "tasks";
