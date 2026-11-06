@@ -1,5 +1,17 @@
 # 全天候自主开发日志
 
+## 2026-11-07 本批Traceroute与定时备份检查点：253b814
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能 `2927b35`，进度并发修复 `253b814`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；仅本地提交，不 Push、Merge、Release。
+
+新增FD-P2-08最多30跳/共享期限/当前目标复核的ICMP路径诊断、FD-P2-09持久化计划与有界批次元数据。修复诊断终态持久化竞态、混合取消状态、PARTIAL历史加载，以及前端重试旧响应覆盖终态。
+
+Release Service/Tests 0 warnings/errors；完整harness89977 EXIT0；诊断4/Traceroute14/计划15/备份9均PASS。HTTP44093计划15及原备份28 PASS。2927b35前端159全量通过，253b814定向12/typecheck/build2087模块通过。Chrome计划11/路径8/备份9为API mock，截图早于最终重试修复。
+
+本批隔离fixture/回环，配置写入0，旧数据根未访问/复制；自有Service/Python已退出，用户Vite90348/18792保留。旧ef57213离线候选不含本批功能；继续独立构建当前候选、生命周期写合同及外部验收。
+
+专项：[Traceroute与定时备份](../TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。以下保留旧检查点各自的提交与验收范围。
+
 ## 2026-11-07 集成与离线最终核对：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。

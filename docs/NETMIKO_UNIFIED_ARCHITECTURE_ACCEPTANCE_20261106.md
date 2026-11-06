@@ -1,5 +1,13 @@
 # 网络设备统一 Netmiko 架构验收
 
+## 2026-11-07 Traceroute与计划增量检查点：253b814
+
+当前功能提交 `2927b35` 已补齐Traceroute和持久化定时配置备份，`253b814` 修复诊断进度重试并发。网络CLI与定时备份继续走既有CPython/Netmiko任务，普通凭据/自动Host Key/FIT-AP关系不变。本批Release完整后端harness89977、计划HTTP15/备份28与前端159全量及最终ToolsView12/typecheck/build均PASS，具体提交范围见[专项验收](TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。
+
+下方ef57213候选十门禁仍为历史通过，**不包含当前Traceroute/计划及最终进度修复**。当前准确版本候选独立验收继续推进。全部为本机隔离/回环证据；目标机安装/SCM/升级卸载、真实型号、跨机TLS与Windows原生125%仍待验收。全产品PARTIAL/REAL_DEVICE_PENDING，不Push、Merge、Release。
+
+以下保留各自提交的历史验收记录。
+
 日期：2026-11-07（接续 2026-11-06 验收）。Branch：`codex-A/netconsole-next-r3-dual-ac`。
 
 当前产品提交：`ef5721354fc56004f018a2b851b1aee9fd8b0bdd`，包含 AC 资源、三类配置备份与全机诊断 `e93b382`，以及配置下载 `Cache-Control: no-store` 修复。继承连接收口 `9fc499f`、VLAN `170bf81`、封存任务诊断 `34b524d` 与有界重连 `4ee1cb7`。本机连接架构收口及下述离线候选运行验收通过；全产品仍为 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，仅本地提交，不 Push、Merge、Release。

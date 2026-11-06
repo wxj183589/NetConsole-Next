@@ -1,5 +1,17 @@
 # 安全与局点授权报告
 
+## 2026-11-07 路径探测与定时计划权限：253b814
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能 `2927b35`，进度并发修复 `253b814`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；仅本地提交，不 Push、Merge、Release。
+
+Traceroute准入、DNS前后和每跳前后复核当前启用SUPERADMIN及精确库存UUID/Profile/Site/端点；撤权或重绑定停止后续探测，保留部分路径并返回DIAGNOSTIC_SCOPE_REVOKED。只使用.NET ICMP，不调用设备Shell。
+
+计划仅由SUPERADMIN管理自己的目标引用；到期重新读取当前所有者、模块、Site、Profile与库存关系及密码。复用既有Netmiko只读任务、Raw与脱敏；FIT-AP仍经AC。1MiB原子计划JSON不存密码/端点/会话，损坏文件保留且计划子系统503，其他Service功能继续工作。普通凭据无DPAPI中心，Host Key自动信任模型未改变。
+
+诊断4/路径14/计划15/备份9及完整harness89977，实际HTTP计划15/备份28均PASS。无远端配置写入，未触碰旧NetConsole真实数据；Chrome为Mock，真实型号/跨机TLS/目标安装仍待。
+
+专项：[Traceroute与定时备份](../TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。以下保留旧检查点各自的提交与验收范围。
+
 ## 2026-11-07 下载与脱敏补充：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。

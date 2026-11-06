@@ -1,5 +1,22 @@
 # 完整测试矩阵
 
+## 2026-11-07 Traceroute 与定时备份检查点：253b814
+
+Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `2927b35dfb6c9d5ae7e82f83548133f13b1668e6`；进度读取并发修复及当前功能检查点 `253b8144226091337227f29dca93c9378ebe99af`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；保留当前分支，仅本地提交，不 Push、Merge、Release。
+
+最终 Release Service/Tests 构建 0 warnings/errors，默认完整 Service harness session89977 EXIT0。定向诊断4/4、Traceroute14/14、定时计划15/15、原备份9/9 PASS；实际 HTTP→Service→CPython/Netmiko→合成回环SSH的计划15项和原备份28项 PASS（session44093），Traceroute HTTP使用实际回环ICMP。前端2927b35全量16 files/159 tests、typecheck/build PASS；253b814定向ToolsView12/12、typecheck及最终Vite2087模块构建PASS；计划Chrome11/11、Traceroute Chrome8/8、原备份Chrome9/9 PASS。Chrome为源码UI/API mock，DSF1.25仅是浏览器缩放证据；最终重试/取消交错由新增定向单测覆盖，浏览器截图早于253b814。
+
+本批新增验证：定时批次保存终态后才释放元数据pin，完成元数据最多128条；Profile移除不提前归还执行槽；损坏可选计划文件只隔离计划子系统。诊断成功+取消混合保持PARTIAL，终态与持久化同步发布，PARTIAL历史可重启恢复。对应回归已纳入默认完整harness。
+
+本批只用 Next Workspace 隔离fixture/回环，设备配置写入0，旧NetConsole真实数据根未访问或复制；用户Vite90348/127.0.0.1:18792保留。现有离线候选仍为ef57213，不含本批功能；本批未重新执行离线十门禁、远端CI、终端/Linux/Jump浏览器或真实设备验收，历史证据保留所属提交范围。
+
+详细功能、限制、命令和证据路径见[本批专项验收](../TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。
+
+## 以下为既有检查点（历史范围）
+
+下文原有“当前/最终”、测试数量与候选仅对各自提交有效；本批以本节和专项验收为准。
+
+
 ## 2026-11-07 当前测试矩阵：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。

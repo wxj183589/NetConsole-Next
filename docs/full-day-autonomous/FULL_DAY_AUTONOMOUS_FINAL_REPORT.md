@@ -1,5 +1,30 @@
 # 全天候自主开发最终报告
 
+## 2026-11-07 Traceroute 与定时备份检查点：253b814
+
+Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `2927b35dfb6c9d5ae7e82f83548133f13b1668e6`；进度读取并发修复及当前功能检查点 `253b8144226091337227f29dca93c9378ebe99af`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；保留当前分支，仅本地提交，不 Push、Merge、Release。
+
+| ID | 任务 | 状态 | 验收与边界 |
+| --- | --- | --- | --- |
+| FD-P2-08 | ICMP Traceroute与结构化路径历史 | COMPLETED_LOCAL | 后端14/14、诊断4/4、HTTP实际回环ICMP、Chrome8/8；最多30跳/共享总期限/当前目标复核/部分路径 |
+| FD-P2-09 | 持久化定时配置备份 | COMPLETED_LOCAL | 后端15/15、HTTP15、Chrome11/11；复用Netmiko和既有任务，60–43200分钟、不重叠/无追赶循环，元数据有界 |
+| FD-P1-26 | 当前功能SHA离线候选 | PENDING_CURRENT_BATCH | ef57213十门禁仍是历史通过，不含2927b35；当前Windows源码Service/HTTP回归通过 |
+| FD-P1-30 / FD-P1-05 / FD-P1-18 | 生命周期权威写合同、完整无线与HA | CONTRACT_PENDING / PARTIAL | 不从缺席推断ENDED，现场证据待补 |
+| FD-P3-04 | 原生125%、跨机TLS与目标机部署 | PENDING_EXTERNAL | 本机浏览器视口/DSF和回环不替代 |
+
+最终 Release Service/Tests 构建 0 warnings/errors，默认完整 Service harness session89977 EXIT0。定向诊断4/4、Traceroute14/14、定时计划15/15、原备份9/9 PASS；实际 HTTP→Service→CPython/Netmiko→合成回环SSH的计划15项和原备份28项 PASS（session44093），Traceroute HTTP使用实际回环ICMP。前端2927b35全量16 files/159 tests、typecheck/build PASS；253b814定向ToolsView12/12、typecheck及最终Vite2087模块构建PASS；计划Chrome11/11、Traceroute Chrome8/8、原备份Chrome9/9 PASS。Chrome为源码UI/API mock，DSF1.25仅是浏览器缩放证据；最终重试/取消交错由新增定向单测覆盖，浏览器截图早于253b814。
+
+本批只用 Next Workspace 隔离fixture/回环，设备配置写入0，旧NetConsole真实数据根未访问或复制；用户Vite90348/127.0.0.1:18792保留。现有离线候选仍为ef57213，不含本批功能；本批未重新执行离线十门禁、远端CI、终端/Linux/Jump浏览器或真实设备验收，历史证据保留所属提交范围。
+
+下一步：当前功能SHA离线候选独立验收、稳定厂商GroupEvidence及生命周期权威写合同；继续startup正文/restore、其他厂商结构化业务、双AC HA/实时归属及剩余工作台。Windows原生125%、跨机TLS、目标机安装/SCM/升级卸载与实际设备兼容仍待，不从缺席推断ENDED。
+
+详细功能、限制、命令和证据路径见[本批专项验收](../TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。
+
+## 以下为既有检查点（历史范围）
+
+下文原有“当前/最终”、测试数量与候选仅对各自提交有效；本批以本节和专项验收为准。
+
+
 ## 2026-11-07 当前交付：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载补充 `Cache-Control: no-store`，当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。

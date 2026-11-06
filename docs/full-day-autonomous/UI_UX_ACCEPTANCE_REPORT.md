@@ -1,5 +1,20 @@
 # UI/UX 验收报告
 
+## 2026-11-07 Traceroute与计划页面本机验收：253b814
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能 `2927b35`，进度并发修复 `253b814`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；仅本地提交，不 Push、Merge、Release。
+
+| 范围 | 结果与证据限制 |
+| --- | --- |
+| Traceroute页面 | Chrome8场景，6张1920/2560、DSF1/1.25截图；源码UI/API mock |
+| 定时计划 | Chrome11场景，3张1920/2560截图；创建/暂停/删除/故障隔离为Mock状态 |
+| 既有备份 | Chrome9场景PASS；配置版本历史表选择器已限定 |
+| 前端回归 | 2927b35全量16 files/159 tests；253b814定向ToolsView12/12、typecheck、Vite2087模块构建PASS |
+
+最终补丁覆盖重试→重复点击→取消→新终态→旧RUNNING迟到，不允许旧代响应覆盖终态；浏览器截图早于该修复，最终行为由新增交错单测验证。截图已检查，DSF1.25不代表Windows原生125%。后端重启/持久化另有实际HTTP证据。用户Vite90348保留，目标安装/原生125%/跨机TLS继续待验收。
+
+专项：[Traceroute与定时备份](../TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。以下保留旧检查点各自的提交与验收范围。
+
 ## 2026-11-07 本批前端与浏览器：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。

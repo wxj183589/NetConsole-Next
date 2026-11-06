@@ -1,5 +1,13 @@
 # Netmiko Windows 离线运行包
 
+## 2026-11-07 当前源码与离线候选范围：253b814
+
+当前功能提交 `2927b35` 已补齐Traceroute和持久化定时配置备份，`253b814` 修复诊断进度重试并发。网络CLI与定时备份继续走既有CPython/Netmiko任务，普通凭据/自动Host Key/FIT-AP关系不变。本批Release完整后端harness89977、计划HTTP15/备份28与前端159全量及最终ToolsView12/typecheck/build均PASS，具体提交范围见[专项验收](TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md)。
+
+下方ef57213候选十门禁仍为历史通过，**不包含当前Traceroute/计划及最终进度修复**。当前准确版本候选独立验收继续推进。全部为本机隔离/回环证据；目标机安装/SCM/升级卸载、真实型号、跨机TLS与Windows原生125%仍待验收。全产品PARTIAL/REAL_DEVICE_PENDING，不Push、Merge、Release。
+
+以下保留各自提交的历史验收记录。
+
 ## 当前准确版本候选（2026-11-07）
 
 当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，EXE ProductVersion 精确为 `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新运行包为 `build/netmiko-inheritance-final-20261106`，包含当前 Worker、CPython3.13、Netmiko4.7.0、Paramiko4.0.0及18个固定版本/hash wheel。运行包构建session13581、候选构建session64183均EXIT0，当前Vue源码构建2084模块与复制前后driver/Telnet/JSON smoke PASS。
