@@ -71,6 +71,10 @@ else if (args.Length > 0 && args[0] == "--h3c-vlan-tests")
     H3cVlanTests.Run();
     await H3cTaskFactPublicationTests.RunAsync();
 }
+else if (args.Length > 0 && args[0] == "--h3c-ac-resource-tests")
+    await H3cAcResourceTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-diagnostic-capture-tests")
+    await H3cDiagnosticCaptureTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
     await ConcurrencyP1Tests.RunAsync();
 else if (args.Length > 0 && args[0] == "--task-plan-tests")
@@ -152,8 +156,11 @@ internal static class SchedulerTests
         await InteractiveScopeTests.RunAsync();
         H3cFactScopeTests.Run();
         H3cVlanTests.Run();
+        await H3cAcResourceTests.RunAsync();
         await H3cTaskFactPublicationTests.RunAsync();
         await TaskDiagnosticEvidenceTests.RunAsync();
+        await H3cDiagnosticCaptureTests.RunAsync();
+        await ConfigBackupTests.RunAsync();
         await ConcurrencyP1Tests.RunAsync();
         H3cCapabilityTests.Run();
         await P2B5RailReferenceTests.RunAsync();

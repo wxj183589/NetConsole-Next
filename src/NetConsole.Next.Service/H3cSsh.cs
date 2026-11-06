@@ -170,7 +170,8 @@ internal sealed class NetmikoWorkerH3cSshTransportFactory(Catalog? catalog = nul
 
     internal static bool CanReplay(H3cDeviceProfileSnapshot profile, string vendor, string command) => vendor switch
     {
-        "h3c" when string.IsNullOrWhiteSpace(profile.DeviceType) || profile.DeviceType is "hp_comware" or "hp_comware_telnet" => H3cCommandPolicy.IsAllowed(command),
+        "h3c" when string.IsNullOrWhiteSpace(profile.DeviceType) || profile.DeviceType is "hp_comware" or "hp_comware_telnet" =>
+            command != H3cDiagnosticCapture.Command && H3cCommandPolicy.IsAllowed(command),
         "zte" when string.IsNullOrWhiteSpace(profile.DeviceType) || profile.DeviceType is "zte_zxros" or "zte_zxros_telnet" => ZteCommandPolicy.IsAllowed(command),
         _ => false
     };
@@ -307,7 +308,11 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
             _stopped.Token.ThrowIfCancellationRequested();
         }
         if (!IsConnected) throw new H3cConnectionLostException();
-        var result = await RequestAsync(new { op = "execute", command, read_timeout = 30 }, cancellationToken).ConfigureAwait(false);
+        object request = command == H3cDiagnosticCapture.Command
+            ? new { op = "execute", command, read_timeout = H3cDiagnosticCapture.ReadTimeoutSeconds,
+                confirmation_pattern = H3cDiagnosticCapture.ConfirmationPattern, confirmation_response = H3cDiagnosticCapture.ConfirmationResponse }
+            : new { op = "execute", command, read_timeout = 30 };
+        var result = await RequestAsync(request, cancellationToken).ConfigureAwait(false);
         return result.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.String
             ? output.GetString() ?? string.Empty
             : throw new H3cWorkerProtocolException();
@@ -642,9 +647,12 @@ internal sealed class H3cTaskRawResultSink(Catalog catalog, Action<Exception>? s
         var profile = catalog.GetH3cDeviceProfile(definition.Target)
             ?? throw new InvalidOperationException("H3C result references a missing device profile.");
         var capturedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (Encoding.UTF8.GetByteCount(output) > H3cRawOutput.MaximumBytesFor(command))
+            throw new InvalidDataException("H3C response exceeds the Raw output byte limit.");
         output = ConfigBackupSanitizer.Sanitize(command, output);
+        if (command == H3cDiagnosticCapture.Command) output = H3cDiagnosticCapture.Sanitize(output);
         var outputByteCount = Encoding.UTF8.GetByteCount(output);
-        if (outputByteCount > H3cRawOutput.MaximumBytes)
+        if (outputByteCount > H3cRawOutput.MaximumBytesFor(command))
             throw new InvalidDataException("H3C response exceeds the Raw output byte limit.");
 
         var writer = new RawSegmentWriterFactory().CreateH3c(catalog, profile.Id);

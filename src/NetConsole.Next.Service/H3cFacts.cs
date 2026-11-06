@@ -250,10 +250,12 @@ internal sealed partial class Catalog
                 Add("lldp.neighbor", $"{neighbor.LocalInterface}|{neighbor.NeighborInterface}|{neighbor.ChassisId}", neighbor);
         }
 
-        foreach (var command in new[] { H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress, H3cCommandPolicy.DisplayWlanServiceTemplateAll, H3cCommandPolicy.DisplayWlanClient })
+        foreach (var command in H3cAcResources.RequiredCommands.Concat(H3cAcResources.OptionalCommands)
+            .Concat(H3cAcResources.OverviewCommands.Where(H3cAcResources.IsAllowed))
+            .Concat(new[] { H3cCommandPolicy.DisplayWlanServiceTemplateAll, H3cCommandPolicy.DisplayWlanClient }))
         {
             if (!outputs.TryGetValue(command, out var output)) continue;
-            var transcript = CliTranscriptParser.Parse(output, command);
+            var transcript = H3cAcResources.ParseTranscript(command, output, completedExec: provenance is not null);
             var status = transcript.Status switch
             {
                 CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied => "UNSUPPORTED",

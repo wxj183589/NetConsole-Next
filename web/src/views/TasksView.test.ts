@@ -62,6 +62,7 @@ describe('H3C VLAN readonly task selection', () => {
     const wrapper = render('ADMIN'); await flushPromises()
     expect(wrapper.find('input[value="display vlan all"]').exists()).toBe(false)
     expect(button(wrapper, '创建并执行计划')).toBeUndefined()
+    expect(button(wrapper, '采集全机诊断')).toBeUndefined()
     expect(api.createH3cTaskDefinition).not.toHaveBeenCalled()
     expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
   })
@@ -72,6 +73,42 @@ describe('H3C VLAN readonly task selection', () => {
     await wrapper.get('input[value="display version"]').setValue(false)
     await wrapper.get('input[value="display vlan all"]').setValue(true)
     await button(wrapper, '创建并执行计划').trigger('click'); await flushPromises()
+    expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
+  })
+
+  it('selects only the three basic AC commands before explicit submission', async () => {
+    const wrapper = render(); await flushPromises()
+    await button(wrapper, '选择 AC 基础采集').trigger('click')
+    const selected = wrapper.findAll('input[type=checkbox]').filter(item => (item.element as HTMLInputElement).checked)
+    expect(selected.map(item => item.attributes('value'))).toEqual([
+      'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio',
+    ])
+    expect(api.createH3cTaskDefinition).not.toHaveBeenCalled()
+    await button(wrapper, '创建并执行计划').trigger('click'); await flushPromises()
+    expect(api.createH3cTaskDefinition).toHaveBeenCalledWith(expect.objectContaining({
+      commands: ['display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio'], timeoutMs: 60000,
+    }))
+  })
+
+  it('collects a standalone full diagnostic through saved credentials and the bounded task API', async () => {
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.text()).toContain('计划总超时')
+    expect(wrapper.text()).toContain('最多 10 分钟')
+    expect(wrapper.find('input[value="display diagnostic-information"]').exists()).toBe(false)
+    expect(api.createH3cTaskDefinition).not.toHaveBeenCalled()
+    await button(wrapper, '采集全机诊断').trigger('click'); await flushPromises()
+    const definition = api.createH3cTaskDefinition.mock.calls[0][0]
+    expect(definition).toEqual({ id: expect.any(String), profileId: 'profile-one',
+      command: 'display diagnostic-information', commands: ['display diagnostic-information'], timeoutMs: 600000, enabled: true })
+    expect(api.startH3cTaskDefinition).toHaveBeenCalledWith(definition.id)
+    expect(JSON.stringify(definition)).not.toMatch(/password|credentialReference|save|screen-length/)
+    expect((wrapper.get('input[value="display version"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('does not start diagnostic collection after a rejected definition', async () => {
+    api.createH3cTaskDefinition.mockRejectedValue(new Error('synthetic rejection'))
+    const wrapper = render(); await flushPromises()
+    await button(wrapper, '采集全机诊断').trigger('click'); await flushPromises()
     expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
   })
 })
@@ -107,7 +144,7 @@ describe('CLI diagnostic downloads', () => {
   it('uses manifest eligibility for individual downloads and excludes configuration despite successful capture', async () => {
     const wrapper = render(); await flushPromises(); await openDetails(wrapper)
     expect(wrapper.findAll('button').filter(item => item.text() === '下载 TXT')).toHaveLength(1)
-    expect(wrapper.text()).toContain('配置内容已排除'); expect(wrapper.text()).toContain('暂无输出')
+    expect(wrapper.text()).toContain('密码等敏感字段会脱敏'); expect(wrapper.text()).toContain('暂无输出')
     expect(wrapper.text()).not.toContain('never-display-this-path')
     expect((button(wrapper, '下载诊断 ZIP').element as HTMLButtonElement).disabled).toBe(false)
     expect(api.downloadTaskDiagnostics).not.toHaveBeenCalled()

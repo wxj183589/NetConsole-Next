@@ -39,6 +39,8 @@ class ConfigurationTarget(Target):
 
     def __init__(self):
         self.configuration = ""
+        self.saved_configuration = ""
+        self.startup_information = ""
         super().__init__()
 
     def serve(self, transport):
@@ -66,6 +68,10 @@ class ConfigurationTarget(Target):
                     output = command + "\r\n"
                     if command == "display current-configuration":
                         output += self.configuration.replace("\n", "\r\n")
+                    elif command == "display saved-configuration":
+                        output += self.saved_configuration.replace("\n", "\r\n")
+                    elif command == "display startup":
+                        output += self.startup_information.replace("\n", "\r\n")
                     elif command == "display version":
                         output += "H3C Comware Software, Version 7.1.070, Release 6635\r\n"
                     channel.sendall((output + "<synthetic> ").encode("utf-8"))
@@ -91,18 +97,27 @@ def onboard(client, target, site, vendor="H3C", device_type="SWITCH"):
     }, 201)["id"]
 
 
-def backup(client, profiles):
-    started = expect(client, "/api/system/config-backups", "POST", {"profileIds": profiles}, 202)
+def backup(client, profiles, kind=None, expected_state="SUCCEEDED"):
+    payload = {"profileIds": profiles}
+    if kind is not None:
+        payload["configurationKind"] = kind
+    started = expect(client, "/api/system/config-backups", "POST", payload, 202)
     assert started["total"] == len(profiles)
+    assert started["configurationKind"] == (kind or "RUNNING"), started
 
     def completed():
         view = expect(client, "/api/system/config-backups/batches/" + started["id"])
         assert view["state"] != "FAILED", view
         if view["state"] in ("QUEUED", "RUNNING"):
             return None
-        assert view["state"] == "SUCCEEDED", view
-        assert view["completed"] == view["succeeded"] == len(profiles) and view["failed"] == 0, view
-        assert all(item["state"] == "SUCCEEDED" and item["snapshotId"] for item in view["items"]), view
+        assert view["state"] == expected_state and view["configurationKind"] == (kind or "RUNNING"), view
+        assert view["completed"] == len(profiles), view
+        if expected_state == "SUCCEEDED":
+            assert view["succeeded"] == len(profiles) and view["failed"] == 0, view
+            assert all(item["state"] == "SUCCEEDED" and item["snapshotId"] for item in view["items"]), view
+        else:
+            assert view["succeeded"] == 0 and view["failed"] == len(profiles), view
+            assert all(item["state"] == "FAILED" and not item["snapshotId"] for item in view["items"]), view
         return view
 
     return eventually(completed, seconds=45)
@@ -207,6 +222,13 @@ def run():
                       and definition_count(root) == before, "MISSING_TARGET_404_BEFORE_VENDOR_CHECK")
                 check(expect(owner, f"/api/system/config-backups?profileId={profile}") == [],
                       "HISTORY_EMPTY_BEFORE_EXPLICIT_BACKUP")
+                for invalid_kind in ("", "saved", "SAVE", "RUNNING;save force"):
+                    result = expect(owner, "/api/system/config-backups", "POST", {
+                        "profileIds": [profile], "configurationKind": invalid_kind}, 400)
+                    assert result["error"] == "CONFIG_BACKUP_KIND_UNSUPPORTED", result
+                result = expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=SAVE", status=400)
+                check(result["error"] == "CONFIG_BACKUP_KIND_UNSUPPORTED" and not target.commands
+                      and definition_count(root) == before, "INVALID_CONFIGURATION_KINDS_REJECTED_WITHOUT_COMMAND")
 
                 baseline = ("#\nsysname synthetic-backup\nlocal-user reader\n"
                             " password simple synthetic-config-password\n"
@@ -256,6 +278,59 @@ def run():
                 expect(admin, "/api/system/config-backups/batches/" + first_batch["id"], status=404)
                 check(expect(admin, f"/api/system/config-backups?profileId={hidden}") == []
                       and download(owner, hidden_snapshot)[0], "ADMIN_OTHER_SITE_HISTORY_AND_ARTIFACTS_HIDDEN")
+
+                target.saved_configuration = baseline.replace("synthetic-backup", "synthetic-saved")
+                target.startup_information = ("Main startup saved-configuration file: flash:/startup.cfg\n"
+                                              "Next main startup saved-configuration file: NULL\n")
+                saved = snapshot_id(backup(owner, [profile], "SAVED"), profile)
+                startup = snapshot_id(backup(owner, [profile], "STARTUP_INFO"), profile)
+                saved_history = expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=SAVED")
+                startup_history = expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=STARTUP_INFO")
+                check(len(saved_history) == len(startup_history) == 1
+                      and saved_history[0]["id"] == saved and saved_history[0]["version"] == 1
+                      and saved_history[0]["configurationKind"] == "SAVED"
+                      and saved_history[0]["command"] == "display saved-configuration"
+                      and startup_history[0]["id"] == startup and startup_history[0]["version"] == 1
+                      and startup_history[0]["configurationKind"] == "STARTUP_INFO"
+                      and startup_history[0]["command"] == "display startup",
+                      "SAVED_AND_STARTUP_INFORMATION_HAVE_INDEPENDENT_VERSION_ONE")
+                saved_content, saved_headers = download(owner, saved)
+                startup_content, _ = download(owner, startup)
+                check(b"synthetic-saved" in saved_content and b"<REDACTED>" in saved_content
+                      and b"synthetic-config-password" not in saved_content
+                      and b"synthetic-community-password" not in saved_content
+                      and ".saved.cfg" in saved_headers.get("Content-Disposition", "")
+                      and b"flash:/startup.cfg" in startup_content and b"NULL" in startup_content,
+                      "SAVED_DOWNLOAD_REDACTED_AND_STARTUP_POINTER_NULL_PRESERVED")
+                before_reads = list(target.commands)
+                for base_id, target_id in ((first, saved), (saved, startup), (startup, fourth)):
+                    expect(owner, f"/api/system/config-backups/{base_id}/diff/{target_id}", status=404)
+                check(target.commands == before_reads, "CROSS_CATEGORY_DIFF_REJECTED_WITHOUT_RECAPTURE")
+                target.saved_configuration = target.saved_configuration.replace("description alpha", "description saved-alpha")
+                saved_second = snapshot_id(backup(owner, [profile], "SAVED"), profile)
+                saved_diff = expect(owner, f"/api/system/config-backups/{saved}/diff/{saved_second}")
+                check(saved_diff["configurationKind"] == "SAVED" and not saved_diff["identical"]
+                      and saved_diff["addedLines"] == saved_diff["removedLines"] == 1,
+                      "SAVED_VERSIONS_COMPARE_WITHIN_CATEGORY")
+                running_history = expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=RUNNING")
+                saved_history = expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=SAVED")
+                check(running_history == history and [item["version"] for item in saved_history] == [2, 1]
+                      and len(expect(owner, f"/api/system/config-backups?profileId={profile}")) == 7,
+                      "INTERLEAVED_CATEGORIES_KEEP_INDEPENDENT_VERSION_SEQUENCES")
+                target.saved_configuration = "The saved configuration file does not exist.\n"
+                missing = backup(owner, [profile], "SAVED", expected_state="PARTIAL")
+                check(missing["items"][0]["error"] == "CONFIG_BACKUP_SAVED_UNAVAILABLE"
+                      and expect(owner, f"/api/system/config-backups?profileId={profile}&configurationKind=SAVED") == saved_history,
+                      "MISSING_SAVED_CONFIGURATION_DOES_NOT_CREATE_SNAPSHOT")
+                before_reads = list(target.commands)
+                expect(admin, f"/api/system/config-backups?profileId={profile}&configurationKind=SAVED")
+                expect(admin, f"/api/system/config-backups/{saved}/diff/{saved_second}")
+                download(admin, saved_second)
+                check(target.commands == before_reads, "HISTORY_DIFF_DOWNLOAD_NEVER_RECAPTURE_DEVICE")
+                check(target.commands.count("display saved-configuration") == 3
+                      and target.commands.count("display startup") == 1
+                      and not any(command.lower().startswith(("save", "system-view")) for command in target.commands),
+                      "THREE_READONLY_CONFIGURATION_COMMANDS_WITHOUT_DEVICE_WRITES")
                 eventually(lambda: target.active == 0)
                 check(not target.errors, "NETMIKO_SESSIONS_RELEASED_WITHOUT_SIMULATOR_ERRORS")
             finally:

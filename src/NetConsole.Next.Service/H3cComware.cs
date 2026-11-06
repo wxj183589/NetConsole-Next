@@ -22,13 +22,19 @@ internal static class H3cCommandPolicy
     public const string DisplayLldpNeighborInformationVerbose = "display lldp neighbor-information verbose";
     public const string DisplayTransceiverDiagnosisInterface = "display transceiver diagnosis interface";
     public const string DisplayCurrentConfiguration = "display current-configuration";
+    public const string DisplaySavedConfiguration = "display saved-configuration";
+    public const string DisplayStartup = "display startup";
+
+    public static bool IsConfigurationCommand(string command) => command is
+        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup;
 
     public static bool IsAllowed(string command) => command is
         DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayVlanAll or DisplayWlanApAll or
         DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
         DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface or
-        DisplayCurrentConfiguration;
+        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup || H3cAcResources.IsAllowed(command) ||
+        command == H3cDiagnosticCapture.Command;
 }
 
 internal static class TerminalTextEncoding
@@ -283,6 +289,8 @@ internal static partial class H3cComwareParser
 
     public static H3cParseResult Parse(string command, string output, bool completedExec = false)
     {
+        if (command == H3cDiagnosticCapture.Command)
+            return H3cDiagnosticCapture.Parse(output, completedExec);
         if (string.IsNullOrWhiteSpace(output))
             return new("EMPTY", "{}");
         if (command == H3cCommandPolicy.DisplayVlanAll)
@@ -290,6 +298,8 @@ internal static partial class H3cComwareParser
             var result = ParseVlans(output, completedExec);
             return new(result.Status, System.Text.Json.JsonSerializer.Serialize(result));
         }
+        if (H3cAcResources.TryParse(command, output, completedExec) is { } acResult)
+            return acResult;
         if (GetTranscriptFailure(command, output, completedExec) is { } transcriptFailure)
             return transcriptFailure;
         if (command == H3cCommandPolicy.DisplayVersion)
@@ -374,7 +384,7 @@ internal static partial class H3cComwareParser
             return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
                 System.Text.Json.JsonSerializer.Serialize(result));
         }
-        if (command == H3cCommandPolicy.DisplayCurrentConfiguration)
+        if (H3cCommandPolicy.IsConfigurationCommand(command))
         {
             var transcript = CliTranscriptParser.Parse(output, command, completedExec);
             return new(transcript.Status switch
@@ -421,7 +431,8 @@ internal static partial class H3cComwareParser
             H3cCommandPolicy.DisplayWlanMeshLink or H3cCommandPolicy.DisplayWlanMeshProfile or
             H3cCommandPolicy.DisplayWlanServiceTemplateAll or H3cCommandPolicy.DisplayWlanClient or
             H3cCommandPolicy.DisplayLldpNeighborInformationList or H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or
-            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface or H3cCommandPolicy.DisplayCurrentConfiguration))
+            H3cCommandPolicy.DisplayTransceiverDiagnosisInterface or H3cCommandPolicy.DisplayCurrentConfiguration or
+            H3cCommandPolicy.DisplaySavedConfiguration or H3cCommandPolicy.DisplayStartup))
             return null;
 
         var transcript = CliTranscriptParser.Parse(output, command, completedExec);

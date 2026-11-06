@@ -24,7 +24,58 @@ internal static class TaskDiagnosticEvidenceTests
         await CurrentSessionCannotSurviveRevocation();
         await DownloadRechecksEachChunkAndCancels();
         await RedactionRemainsBoundedAndConcurrentReadsStayIndependent();
+        await FullDiagnosticKeepsItsOwnBoundAcrossSealingRecoveryAndDownload();
         Console.WriteLine($"TASK_DIAGNOSTIC_EVIDENCE_TESTS={_checks}/{_checks} PASS");
+    }
+
+    private static async Task FullDiagnosticKeepsItsOwnBoundAcrossSealingRecoveryAndDownload()
+    {
+        using var f = new Fixture();
+        const string command = H3cDiagnosticCapture.Command;
+        var sensitive = "<fixture>" + command + "\n" + new string('x', 300 * 1024) +
+            "\npassword simple synthetic-diagnostic-password\n-----BEGIN PRIVATE KEY-----\nsynthetic-key\n-----END PRIVATE KEY-----\n<fixture>";
+        var redacted = await f.Seal([command], [sensitive]);
+        var text = Encoding.UTF8.GetString(f.Download(redacted.Id, 0).Bytes);
+        using (var raw = JsonDocument.Parse(File.ReadAllText(f.Path(redacted.Raw[0]))))
+        {
+            var stored = Encoding.UTF8.GetString(raw.RootElement.GetProperty("output_utf8_base64").GetBytesFromBase64());
+            Assert(stored == text && !stored.Contains("synthetic-diagnostic-password") && !stored.Contains("synthetic-key") &&
+                stored.Contains("<REDACTED>"), "full diagnostic is sanitized before Raw sealing and remains downloadable above 256 KiB");
+        }
+        using (var zip = new ZipArchive(new MemoryStream(f.Download(redacted.Id).Bytes)))
+            Assert(zip.Entries.Select(item => item.FullName).SequenceEqual(new[] { "manifest.json", "command-001.txt" }),
+                "full diagnostic reuses the existing immutable manifest/TXT/ZIP evidence contract");
+        Assert(f.Catalog.PublishH3cTaskFacts(redacted.Id).Status == "NO_SUPPORTED_FACT_PROJECTION",
+            "large diagnostic Raw does not become structured configuration or device facts");
+
+        const string prefix = "<fixture>display diagnostic-information\n";
+        const string suffix = "\n<fixture>";
+        var bodyBytes = H3cDiagnosticCapture.MaximumOutputBytes - prefix.Length - suffix.Length;
+        var exact = prefix + string.Concat(Enumerable.Repeat(new string('x', 64) + "\n", bodyBytes / 65)) + new string('x', bodyBytes % 65) + suffix;
+        var maximum = await f.Seal([command], [exact]);
+        var bytes = f.Download(maximum.Id, 0).Bytes;
+        Assert(bytes.Length == 4 * 1024 * 1024 && Encoding.UTF8.GetString(bytes) == exact,
+            "exactly 4 MiB survives diagnostic sealing and verified download");
+        var relative = maximum.Raw[0].RelativePath.Replace("'", "''", StringComparison.Ordinal);
+        // Simulate a sealed file whose catalog/manifest transaction was absent;
+        // do not create a dangling foreign key before startup validation.
+        f.Execute($"DELETE FROM task_run_raw_outputs WHERE task_run_id='{maximum.Id}'; DELETE FROM raw_segments WHERE relative_path='{relative}'");
+        var restarted = new Catalog(f.Settings); restarted.Initialize();
+        var recovery = restarted.RecoverRawSegments();
+        Assert(recovery.FailedFiles == 0 && recovery.IndexedOrphanFiles == 1 && recovery.BytesRead >= bytes.Length &&
+            f.NewService(restarted).Download(f.Owner, maximum.Id, 0, CancellationToken.None)!.Bytes.SequenceEqual(bytes),
+            "recovery scans and reindexes a 4 MiB orphan without reducing or rejecting its verified evidence");
+        foreach (var item in new[] { (Command: command, Size: 4 * 1024 * 1024 + 1),
+            (Command: H3cCommandPolicy.DisplayVersion, Size: 256 * 1024 + 1) })
+        {
+            try
+            {
+                await f.Seal([item.Command], [new string('x', item.Size)]);
+                throw new InvalidOperationException("oversized command output was accepted");
+            }
+            catch (InvalidDataException)
+            { Assert(true, "diagnostic and ordinary output limits remain distinct at sealing"); }
+        }
     }
 
     private static async Task LegacySinglePreservesVerifiedEvidence()

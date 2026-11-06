@@ -99,7 +99,9 @@ internal sealed record ModuleStateSnapshot(string Key, string Label, bool Enable
 
 internal sealed partial class Catalog(RuntimeSettings settings)
 {
-    private const int MaximumLineBytes = 512 * 1024;
+    // One maximum diagnostic output, encoded as Base64, plus record metadata.
+    // TryReadRecord still enforces each command's own decoded byte limit.
+    private const int MaximumLineBytes = 6 * 1024 * 1024;
     private string DatabasePath => Path.Combine(settings.DataRoot, "catalog.db");
     public string DataRoot => settings.DataRoot;
     public string RawRoot => Path.Combine(settings.DataRoot, "raw");
@@ -1830,14 +1832,14 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (manifest.CaptureStatus == "PARTIAL" && terminalState == "SUCCEEDED")
             throw new InvalidOperationException("Partial H3C capture cannot transition to SUCCEEDED.");
         if (!H3cCommandPolicy.IsAllowed(manifest.Command)) throw new ArgumentException("Raw output command is not allowlisted.", nameof(manifest));
-        if (manifest.ByteCount is < 0 or > H3cRawOutput.MaximumBytes) throw new ArgumentOutOfRangeException(nameof(manifest));
+        if (manifest.ByteCount < 0 || manifest.ByteCount > H3cRawOutput.MaximumBytesFor(manifest.Command)) throw new ArgumentOutOfRangeException(nameof(manifest));
         if (!IsSha256(manifest.OutputSha256) || !IsSha256(manifest.SegmentSha256))
             throw new ArgumentException("H3C output manifest checksum is invalid.", nameof(manifest));
         using (JsonDocument.Parse(manifest.ParsedJson)) { }
         if (!TryResolveRawPath(manifest.RelativePath, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
             throw new IOException("Sealed H3C Raw output path is missing or unsafe.");
         var rawBytes = File.ReadAllBytes(fullPath);
-        if (rawBytes.Length is < 2 or > MaximumLineBytes || rawBytes[^1] != (byte)'\n' ||
+        if (rawBytes.Length < 2 || rawBytes.Length > H3cRawOutput.MaximumRecordBytesFor(manifest.Command) || rawBytes[^1] != (byte)'\n' ||
             rawBytes.AsSpan(0, rawBytes.Length - 1).Contains((byte)'\n') ||
             !TryReadRecord(rawBytes.AsSpan(0, rawBytes.Length - 1).ToArray(), out _, out var recordSourceId,
                 out var recordDeviceHost, out var rawRunId, out var rawCaptureStatus))
@@ -1956,14 +1958,14 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                 throw new ArgumentException("H3C capture and parse statuses are invalid.", nameof(manifests));
             if (manifest.CaptureStatus == "PARTIAL" && terminalState == "SUCCEEDED")
                 throw new InvalidOperationException("Partial H3C capture cannot transition to SUCCEEDED.");
-            if (!H3cCommandPolicy.IsAllowed(manifest.Command) || manifest.ByteCount is < 0 or > H3cRawOutput.MaximumBytes ||
+            if (!H3cCommandPolicy.IsAllowed(manifest.Command) || manifest.ByteCount < 0 || manifest.ByteCount > H3cRawOutput.MaximumBytesFor(manifest.Command) ||
                 !IsSha256(manifest.OutputSha256) || !IsSha256(manifest.SegmentSha256))
                 throw new InvalidDataException("Multi-command Raw manifest is invalid.");
             using (JsonDocument.Parse(manifest.ParsedJson)) { }
             if (!TryResolveRawPath(manifest.RelativePath, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
                 throw new IOException("Sealed H3C Raw output path is missing or unsafe.");
             var rawBytes = File.ReadAllBytes(fullPath);
-            if (rawBytes.Length is < 2 or > MaximumLineBytes || rawBytes[^1] != (byte)'\n' ||
+            if (rawBytes.Length < 2 || rawBytes.Length > H3cRawOutput.MaximumRecordBytesFor(manifest.Command) || rawBytes[^1] != (byte)'\n' ||
                 rawBytes.AsSpan(0, rawBytes.Length - 1).Contains((byte)'\n') ||
                 !string.Equals(Convert.ToHexString(SHA256.HashData(rawBytes)), manifest.SegmentSha256, StringComparison.OrdinalIgnoreCase) ||
                 !TryReadRecord(rawBytes.AsSpan(0, rawBytes.Length - 1).ToArray(), out _, out var recordSource,
@@ -2876,7 +2878,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                     !root.TryGetProperty("command", out var command) || command.ValueKind != JsonValueKind.String ||
                     !H3cCommandPolicy.IsAllowed(command.GetString() ?? string.Empty) ||
                     !root.TryGetProperty("output_byte_count", out var byteCount) || !byteCount.TryGetInt32(out var count) ||
-                    count is < 0 or > H3cRawOutput.MaximumBytes ||
+                    count < 0 || count > H3cRawOutput.MaximumBytesFor(command.GetString() ?? string.Empty) ||
+                    line.Length > H3cRawOutput.MaximumRecordBytesFor(command.GetString() ?? string.Empty) ||
                     !root.TryGetProperty("output_sha256", out var outputHash) || outputHash.ValueKind != JsonValueKind.String ||
                     !root.TryGetProperty("output_utf8_base64", out var output) || output.ValueKind != JsonValueKind.String)
                     return false;

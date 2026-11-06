@@ -547,5 +547,124 @@ class NetmikoWorkerTests(unittest.TestCase):
         self.assertEqual(json.loads(raw.getvalue().decode("ascii"))["result"]["output"], "设备就绪")
 
 
+class DiagnosticInteractionTests(unittest.TestCase):
+    QUESTION = "Save or display diagnostic information (Y=save, N=display)? [Y/N]:"
+
+    def setUp(self):
+        self.target = connection()
+        self.target.find_prompt.return_value = "<synthetic>"
+        self.worker = module.Worker()
+        self.worker.connection = self.target
+        self.worker.driver = "hp_comware"
+        self.request = {
+            "command": module.DIAGNOSTIC_COMMAND, "read_timeout": 10,
+            "confirmation_pattern": module.DIAGNOSTIC_CONFIRMATION_PATTERN,
+            "confirmation_response": "n",
+        }
+
+    def test_direct_output_never_sends_confirmation_and_uses_the_complete_netmiko_prompt(self):
+        transcript = "display diagnostic-information\n sysname synthetic\nDone\n<synthetic> "
+        self.target.send_command.return_value = transcript
+        self.assertEqual(self.worker.execute(self.request)["output"], transcript)
+        self.target.find_prompt.assert_called_once_with()
+        self.target.send_command.assert_called_once()
+        call = self.target.send_command.call_args
+        self.assertEqual(call.args, (module.DIAGNOSTIC_COMMAND,))
+        self.assertFalse(call.kwargs["auto_find_prompt"])
+        self.assertFalse(call.kwargs["strip_prompt"])
+        self.assertIsNone(module.re.search(call.kwargs["expect_string"], " sysname synthetic\n"))
+        self.assertIsNotNone(module.re.search(call.kwargs["expect_string"], transcript))
+        self.target.write_channel.assert_not_called()
+        self.target.read_channel.assert_not_called()
+
+    def test_known_terminal_question_sends_only_one_n_and_shares_the_deadline(self):
+        first = "display diagnostic-information\r\n" + self.QUESTION
+        final = "n\r\nDiagnostics done\r\n<synthetic> "
+        self.target.send_command.side_effect = [first, final]
+        with mock.patch.object(module.time, "monotonic", side_effect=[100, 101, 106]):
+            result = self.worker.execute(self.request)
+        self.assertEqual(result["output"], first + final)
+        calls = self.target.send_command.call_args_list
+        self.assertEqual([item.args[0] for item in calls], [module.DIAGNOSTIC_COMMAND, "n"])
+        self.assertEqual([item.kwargs["read_timeout"] for item in calls], [9, 4])
+        self.assertFalse(calls[1].kwargs["auto_find_prompt"])
+        self.target.disconnect.assert_not_called()
+
+    def test_case_and_spacing_do_not_change_the_explicit_display_semantics(self):
+        self.target.send_command.side_effect = [
+            "\nsave  or display diagnostic information (Y = save, N = display)? [Y/N]: \r\n",
+            "n\nDone\n<synthetic>",
+        ]
+        self.worker.execute(self.request)
+        self.assertEqual(self.target.send_command.call_args_list[1].args, ("n",))
+
+    def test_question_embedded_in_body_followed_by_prompt_is_not_answered(self):
+        transcript = self.QUESTION + "\nThis is stored diagnostic text\n<synthetic> "
+        self.target.send_command.return_value = transcript
+        self.worker.execute(self.request)
+        self.target.send_command.assert_called_once()
+
+    def test_unknown_or_nonterminal_question_is_never_answered(self):
+        for text in ("Save configuration? [Y/N]:", self.QUESTION + "\nUnexpected extra text"):
+            with self.subTest(text=text):
+                self.setUp()
+                self.target.send_command.return_value = text
+                with self.assertRaises(ReadTimeout):
+                    self.worker.execute(self.request)
+                self.target.send_command.assert_called_once()
+                self.target.disconnect.assert_called_once()
+
+    def test_remaining_time_expired_does_not_send_n(self):
+        self.target.send_command.return_value = self.QUESTION
+        with mock.patch.object(module.time, "monotonic", side_effect=[100, 101, 111]):
+            with self.assertRaises(ReadTimeout):
+                self.worker.execute(self.request)
+        self.target.send_command.assert_called_once()
+        self.target.disconnect.assert_called_once()
+
+    def test_post_confirmation_timeout_or_disconnect_is_not_replayed(self):
+        for error in (ReadTimeout("synthetic-secret"), ConnectionResetError("synthetic-secret")):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.target.send_command.side_effect = [self.QUESTION, error]
+                with self.assertRaises((ReadTimeout, module.CommandInterruptedError)):
+                    self.worker.execute(self.request)
+                self.assertEqual(self.target.send_command.call_count, 2)
+                self.target.disconnect.assert_called_once()
+
+    def test_confirmation_without_final_prompt_is_incomplete(self):
+        self.target.send_command.side_effect = [self.QUESTION, "n\nOnly partial output"]
+        with self.assertRaises(ReadTimeout):
+            self.worker.execute(self.request)
+        self.target.disconnect.assert_called_once()
+
+    def test_combined_output_limit_applies_across_both_netmiko_reads(self):
+        self.target.send_command.side_effect = [self.QUESTION, "n\n" + "a" * module.MAX_OUTPUT_BYTES + "\n<synthetic>"]
+        with self.assertRaises(module.OutputLimitError):
+            self.worker.execute(self.request)
+        self.target.disconnect.assert_called_once()
+
+    def test_unsupported_driver_command_response_and_pattern_are_rejected_without_send(self):
+        for change in ({"command": "save"}, {"confirmation_response": "y"}, {"confirmation_pattern": ".*"}, {"read_timeout": 541}):
+            with self.subTest(change=change):
+                self.setUp()
+                with self.assertRaises(ValueError):
+                    self.worker.execute(dict(self.request, **change))
+                self.target.send_command.assert_not_called()
+                self.target.disconnect.assert_called_once()
+        self.setUp()
+        self.worker.driver = "zte_zxros"
+        with self.assertRaises(ValueError):
+            self.worker.execute(self.request)
+        self.target.send_command.assert_not_called()
+
+    def test_ordinary_execution_retains_existing_netmiko_call(self):
+        self.target.send_command.return_value = "version output"
+        self.worker.execute({"command": "display version"})
+        self.target.find_prompt.assert_not_called()
+        self.target.send_command.assert_called_once_with("display version", read_timeout=30,
+            cmd_verify=False, strip_prompt=False, strip_command=False)
+
+
 if __name__ == "__main__":
     unittest.main()

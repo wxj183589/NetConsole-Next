@@ -205,7 +205,7 @@ internal sealed partial class Catalog
         {
             cancellationToken.ThrowIfCancellationRequested();
             var command = plan[index];
-            var availability = command == H3cCommandPolicy.DisplayCurrentConfiguration ? "CONFIG_EXCLUDED" :
+            var availability = H3cCommandPolicy.IsConfigurationCommand(command) ? "CONFIG_EXCLUDED" :
                 !IsDiagnosticCommand(command) ? "UNSUPPORTED_COMMAND" : !terminal ? "TASK_ACTIVE" :
                 invalidLedger ? "RAW_INVALID" : rows.All(item => item.Index != index) ? "NO_RAW" : "READY";
             var safeCommand = H3cCommandPolicy.IsAllowed(command) ? command : "（不支持的命令）";
@@ -221,7 +221,7 @@ internal sealed partial class Catalog
                 var text = new UTF8Encoding(false, true).GetString(rawOutput);
                 var sanitized = DiagnosticSecretLine.Replace(DiagnosticPrivateKey.Replace(text, "<REDACTED>"), "<REDACTED>");
                 var bytes = Encoding.UTF8.GetBytes(sanitized);
-                if (bytes.Length > H3cRawOutput.MaximumBytes)
+                if (bytes.Length > H3cRawOutput.MaximumBytesFor(command))
                     throw new TaskDiagnosticException("DIAGNOSTIC_SIZE_LIMIT", "脱敏后的诊断内容超过大小上限。", 413);
                 outputs[index] = bytes;
                 commands.Add(new(index, command, "READY", true, row.Capture, row.Parse, row.CapturedMs, row.Bytes,
@@ -245,7 +245,8 @@ internal sealed partial class Catalog
         H3cCommandPolicy.DisplayDevice or H3cCommandPolicy.DisplayVlanAll or H3cCommandPolicy.DisplayWlanApAll or
         H3cCommandPolicy.DisplayWlanApAllAddress or H3cCommandPolicy.DisplayWlanApAllRadio or H3cCommandPolicy.DisplayWlanMeshLink or
         H3cCommandPolicy.DisplayWlanClient or H3cCommandPolicy.DisplayLldpNeighborInformationList or
-        H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or H3cCommandPolicy.DisplayTransceiverDiagnosisInterface;
+        H3cCommandPolicy.DisplayLldpNeighborInformationVerbose or H3cCommandPolicy.DisplayTransceiverDiagnosisInterface or
+        H3cDiagnosticCapture.Command;
 
     private sealed record DiagnosticRawRow(int Index, string Command, string Path, long Bytes, string OutputSha,
         string SegmentSha, long CapturedMs, string Capture, string Parse, string? SegmentState, long? SegmentRecords,
@@ -275,7 +276,8 @@ internal sealed partial class Catalog
 
     private byte[] ReadDiagnosticOutput(DiagnosticRawRow row, string runId, TaskDiagnosticAccess access, CancellationToken cancellationToken)
     {
-        if (row.Bytes is < 0 or > H3cRawOutput.MaximumBytes || row.SegmentBytes is < 2 or > MaximumLineBytes)
+        if (row.Bytes < 0 || row.Bytes > H3cRawOutput.MaximumBytesFor(row.Command) ||
+            row.SegmentBytes < 2 || row.SegmentBytes > H3cRawOutput.MaximumRecordBytesFor(row.Command))
             throw new TaskDiagnosticException("DIAGNOSTIC_SIZE_LIMIT", "诊断证据超过大小上限。", 413);
         if (row.SegmentState != "FINALIZED" || row.SegmentRecords != 1 || row.Source != access.SourceId || row.Run != runId ||
             !IsSha256(row.OutputSha) || !IsSha256(row.SegmentSha) || !string.Equals(row.SegmentSha, row.CatalogSha, StringComparison.OrdinalIgnoreCase) ||
@@ -283,7 +285,7 @@ internal sealed partial class Catalog
             !TryResolveRawPath(row.Path, out var fullPath) || ContainsReparsePoint(fullPath))
             throw new InvalidDataException("Invalid sealed diagnostic evidence.");
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
-        if (stream.Length is < 2 or > MaximumLineBytes)
+        if (stream.Length < 2 || stream.Length > H3cRawOutput.MaximumRecordBytesFor(row.Command))
             throw new TaskDiagnosticException("DIAGNOSTIC_SIZE_LIMIT", "诊断证据超过大小上限。", 413);
         if (stream.Length != row.SegmentBytes) throw new InvalidDataException("Diagnostic record length differs from its sealed manifest.");
         var bytes = new byte[(int)stream.Length];

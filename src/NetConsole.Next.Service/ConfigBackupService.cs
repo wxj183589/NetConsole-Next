@@ -30,7 +30,9 @@ internal sealed record ConfigBackupSnapshot(
     string? TaskRunId,
     string? Error,
     bool CanDownload,
-    string? DownloadName);
+    string? DownloadName,
+    string ConfigurationKind = ConfigBackupKinds.Running,
+    string? Command = null);
 
 internal sealed record ConfigBackupBatchItem(
     string ProfileId,
@@ -48,7 +50,8 @@ internal sealed record ConfigBackupBatch(
     int Completed,
     int Succeeded,
     int Failed,
-    IReadOnlyList<ConfigBackupBatchItem> Items);
+    IReadOnlyList<ConfigBackupBatchItem> Items,
+    string ConfigurationKind = ConfigBackupKinds.Running);
 
 internal sealed record ConfigBackupDiff(
     string BaseId,
@@ -59,17 +62,39 @@ internal sealed record ConfigBackupDiff(
     int RemovedLines,
     int ChangedLines,
     IReadOnlyList<string> Added,
-    IReadOnlyList<string> Removed);
+    IReadOnlyList<string> Removed,
+    string ConfigurationKind = ConfigBackupKinds.Running);
+
+internal static class ConfigBackupKinds
+{
+    public const string Running = "RUNNING";
+    public const string Saved = "SAVED";
+    public const string StartupInfo = "STARTUP_INFO";
+
+    public static bool IsSupported(string? kind) => kind is Running or Saved or StartupInfo;
+    public static string CommandFor(string kind) => kind switch
+    {
+        Running => H3cCommandPolicy.DisplayCurrentConfiguration,
+        Saved => H3cCommandPolicy.DisplaySavedConfiguration,
+        StartupInfo => H3cCommandPolicy.DisplayStartup,
+        _ => throw new ConfigBackupException("CONFIG_BACKUP_KIND_UNSUPPORTED", "请选择运行配置、保存配置或启动配置指向。", 400)
+    };
+
+}
 
 internal static class ConfigBackupSanitizer
 {
     private static readonly Regex SecretLine = new(
-        @"(?i)^\s*(?<prefix>.*?(?:password|passphrase|pass-phrase|pre-shared-key|community|private-key|secret)\b).*?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        @"^\s*(?<prefix>.*?\b(?:password|passwd|passphrase|pass-phrase|pre-shared-key|community|private-key|secret|credential|authorization|token|psk)\b).*?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex PrivateKeyBlock = new(
+        @"-----BEGIN [^\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^\r\n]*PRIVATE KEY-----|\z)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     public static string Sanitize(string command, string output) =>
-        command == H3cCommandPolicy.DisplayCurrentConfiguration
-            ? string.Join('\n', output.Replace("\r\n", "\n", StringComparison.Ordinal)
+        H3cCommandPolicy.IsConfigurationCommand(command)
+            ? string.Join('\n', PrivateKeyBlock.Replace(output, "<REDACTED>")
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
                 .Split('\n').Select(line => SecretLine.IsMatch(line)
                     ? SecretLine.Replace(line, "${prefix} <REDACTED>")
                     : line))
@@ -91,10 +116,12 @@ internal sealed class ConfigBackupService(
     private readonly string _root = Path.Combine(settings.DataRoot, "backup", "config");
 
     public ConfigBackupBatch Start(IReadOnlyList<string> profileIds, WebUserIdentity actor,
-        P2B5SiteScopeDecision scope)
+        P2B5SiteScopeDecision scope, string? configurationKind = null)
     {
         if (actor.Role != "SUPERADMIN") throw new ConfigBackupException("CONFIG_BACKUP_PERMISSION_DENIED", "只有 SUPERADMIN 可以执行配置备份。", 403);
         if (!scope.IsAuthorized) throw new ConfigBackupException("CONFIG_BACKUP_SCOPE_DENIED", scope.Detail, 403);
+        var kind = configurationKind ?? ConfigBackupKinds.Running;
+        _ = ConfigBackupKinds.CommandFor(kind);
         var normalized = (profileIds ?? Array.Empty<string>()).Where(item => !string.IsNullOrWhiteSpace(item))
             .Select(item => item.Trim()).Distinct(StringComparer.Ordinal).ToArray();
         if (normalized.Length is < 1 or > MaxProfilesPerBatch)
@@ -111,7 +138,7 @@ internal sealed class ConfigBackupService(
         }
 
         var id = Guid.NewGuid().ToString("N");
-        var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items);
+        var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items, kind);
         _batches[id] = batch;
         _ = Task.Run(() => RunBatchAsync(batch), CancellationToken.None);
         return batch.Snapshot();
@@ -135,16 +162,20 @@ internal sealed class ConfigBackupService(
         return batch.Snapshot();
     }
 
-    public IReadOnlyList<ConfigBackupSnapshot> List(string profileId, P2B5SiteScopeDecision scope)
+    public IReadOnlyList<ConfigBackupSnapshot> List(string profileId, P2B5SiteScopeDecision scope,
+        string? configurationKind = null)
     {
         if (!scope.IsAuthorized || !catalog.H3cProfileIsInScope(profileId, scope)) return Array.Empty<ConfigBackupSnapshot>();
+        if (configurationKind is not null) _ = ConfigBackupKinds.CommandFor(configurationKind);
         var directory = ProfileDirectory(profileId);
         if (!Directory.Exists(directory) || IsReparse(directory)) return Array.Empty<ConfigBackupSnapshot>();
         var snapshots = Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
             .Select(ReadSnapshot)
-            .Where(item => item is not null && IsValidSnapshot(item) && item.State == "SUCCEEDED")
+            .Where(item => item is not null && IsValidSnapshot(item) && item.ProfileId == profileId &&
+                item.State == "SUCCEEDED" && (configurationKind is null || item.ConfigurationKind == configurationKind))
             .Cast<ConfigBackupSnapshot>()
-            .OrderByDescending(item => item.Version)
+            .OrderByDescending(item => item.CapturedMs ?? item.CreatedMs)
+            .ThenByDescending(item => item.Version)
             .Take(MaxHistory)
             .ToArray();
         return snapshots.Select(item => item with { CanDownload = true }).ToArray();
@@ -179,7 +210,8 @@ internal sealed class ConfigBackupService(
     {
         var baseline = Get(baseId, scope);
         var target = Get(targetId, scope);
-        if (baseline is null || target is null || baseline.ProfileId != target.ProfileId) return null;
+        if (baseline is null || target is null || baseline.ProfileId != target.ProfileId ||
+            baseline.ConfigurationKind != target.ConfigurationKind) return null;
         var baseLines = ReadLines(SnapshotPath(baseline));
         var targetLines = ReadLines(SnapshotPath(target));
         var start = 0;
@@ -249,7 +281,7 @@ internal sealed class ConfigBackupService(
         // Counts describe the complete edit; each ordered preview is capped.
         // ChangedLines pairs removals with additions and is not added to either total.
         return new(baseId, targetId, target.ProfileId, addedCount == 0 && removedCount == 0,
-            addedCount, removedCount, Math.Min(addedCount, removedCount), added, removed);
+            addedCount, removedCount, Math.Min(addedCount, removedCount), added, removed, target.ConfigurationKind);
     }
 
     private async Task RunBatchAsync(BatchState batch)
@@ -276,7 +308,7 @@ internal sealed class ConfigBackupService(
             var definitionId = $"config-backup-{batch.Id[..16]}-{Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(item.ProfileId))).ToLowerInvariant()[..12]}";
             catalog.CreateTaskDefinition(definitionId, "H3C_SSH_READONLY",
-                item.ProfileId, H3cCommandPolicy.DisplayCurrentConfiguration, TimeSpan.FromMinutes(10),
+                item.ProfileId, ConfigBackupKinds.CommandFor(batch.ConfigurationKind), TimeSpan.FromMinutes(10),
                 scopeSnapshot: item.Scope);
             if (!scheduler.TryScheduleDefinition(definitionId, out var runId, batch.ActorUserId))
             {
@@ -311,11 +343,12 @@ internal sealed class ConfigBackupService(
                     Array.Empty<string>(), item.Error);
                 return;
             }
-            var snapshot = WriteSnapshot(item.ProfileId, item.Scope.DeviceId, item.Scope.SiteId, runId, raw);
+            var snapshot = WriteSnapshot(item.ProfileId, item.Scope.DeviceId, item.Scope.SiteId, runId, raw,
+                batch.ConfigurationKind);
             item.SnapshotId = snapshot.Id;
             item.State = "SUCCEEDED";
             catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "SUCCEEDED", item.ProfileId, runId,
-                Array.Empty<string>(), $"snapshot={snapshot.Id};version={snapshot.Version}");
+                Array.Empty<string>(), $"snapshot={snapshot.Id};kind={snapshot.ConfigurationKind};version={snapshot.Version}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -333,17 +366,32 @@ internal sealed class ConfigBackupService(
     }
 
     private ConfigBackupSnapshot WriteSnapshot(string profileId, string deviceId, string siteId,
-        string runId, ConfigBackupRaw raw)
+        string runId, ConfigBackupRaw raw, string configurationKind)
     {
+        var command = ConfigBackupKinds.CommandFor(configurationKind);
+        if (raw.Command != command || raw.ProfileId != profileId || raw.RunId != runId)
+            throw new ConfigBackupException("CONFIG_BACKUP_RAW_MISMATCH", "配置采集来源不一致，未生成备份。", 409);
+        var transcript = CliTranscriptParser.Parse(raw.Output, command, completedExec: true);
+        if (transcript.Status is CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied or
+            CliTranscriptStatus.Paged or CliTranscriptStatus.Empty ||
+            (transcript.Status == CliTranscriptStatus.Incomplete && transcript.Prompt.Length > 0) ||
+            string.IsNullOrWhiteSpace(transcript.Output))
+            throw new ConfigBackupException("CONFIG_BACKUP_OUTPUT_INCOMPLETE", "配置命令未返回完整有效内容，未生成备份。", 409);
+        if (configurationKind == ConfigBackupKinds.Saved && Regex.IsMatch(transcript.Output,
+            @"(?im)^\s*(?:(?:%|Error:|Info:)\s*)?(?:The\s+)?(?:saved\s+|startup\s+|next\s+)?(?:configuration|config)(?:\s+file)?\s+(?:does\s+not\s+exist|doesn't\s+exist|is\s+(?:not\s+(?:found|exist)|empty))\b|^\s*(?:No\s+(?:saved\s+|startup\s+)?configuration(?:\s+file)?\b|.*(?:配置文件不存在|没有保存的配置))",
+            RegexOptions.CultureInvariant))
+            throw new ConfigBackupException("CONFIG_BACKUP_SAVED_UNAVAILABLE", "设备没有可读取的保存配置，未生成备份。", 409);
         var directory = ProfileDirectory(profileId);
         Directory.CreateDirectory(directory);
         var version = Directory.EnumerateFiles(directory, "*.json")
             .Select(ReadSnapshot)
-            .Count(item => item is not null && IsValidSnapshot(item) && item.State == "SUCCEEDED") + 1;
+            .Where(item => item is not null && IsValidSnapshot(item) && item.ProfileId == profileId &&
+                item.State == "SUCCEEDED" && item.ConfigurationKind == configurationKind)
+            .Select(item => item!.Version).DefaultIfEmpty(0).Max() + 1;
         var id = Guid.NewGuid().ToString("N");
-        var fileName = $"{id}.cfg";
+        var fileName = $"{id}.{configurationKind.ToLowerInvariant()}.cfg";
         var path = Path.Combine(directory, fileName);
-        var bytes = Encoding.UTF8.GetBytes(raw.Output);
+        var bytes = Encoding.UTF8.GetBytes(ConfigBackupSanitizer.Sanitize(command, raw.Output));
         if (bytes.Length is < 1 or > H3cRawOutput.MaximumBytes)
             throw new InvalidDataException("Configuration backup exceeds the bounded Raw limit.");
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
@@ -351,7 +399,8 @@ internal sealed class ConfigBackupService(
         File.WriteAllBytes(part, bytes);
         File.Move(part, path, true);
         var snapshot = new ConfigBackupSnapshot(id, profileId, deviceId, siteId, version, "SUCCEEDED",
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), raw.CapturedMs, sha, bytes.Length, runId, null, true, fileName);
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), raw.CapturedMs, sha, bytes.Length, runId, null, true, fileName,
+            configurationKind, command);
         var manifest = Path.Combine(directory, id + ".json");
         var manifestPart = manifest + ".part";
         File.WriteAllText(manifestPart, JsonSerializer.Serialize(snapshot, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
@@ -378,8 +427,14 @@ internal sealed class ConfigBackupService(
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            return JsonSerializer.Deserialize<ConfigBackupSnapshot>(document.RootElement.GetRawText(),
+            var snapshot = JsonSerializer.Deserialize<ConfigBackupSnapshot>(document.RootElement.GetRawText(),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            // Existing manifests contain running configurations and predate both
+            // fields. Do not infer a different type from a filename or content.
+            return snapshot is not null && !document.RootElement.TryGetProperty("configurationKind", out _)
+                ? snapshot with { ConfigurationKind = ConfigBackupKinds.Running,
+                    Command = snapshot.Command ?? H3cCommandPolicy.DisplayCurrentConfiguration }
+                : snapshot;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         { return null; }
@@ -411,7 +466,11 @@ internal sealed class ConfigBackupService(
 
     private static bool IsValidSnapshot(ConfigBackupSnapshot snapshot) =>
         IsSafeId(snapshot.Id) && IsSafeId(snapshot.ProfileId) &&
-        string.Equals(snapshot.DownloadName, snapshot.Id + ".cfg", StringComparison.Ordinal) &&
+        ConfigBackupKinds.IsSupported(snapshot.ConfigurationKind) &&
+        snapshot.Command == ConfigBackupKinds.CommandFor(snapshot.ConfigurationKind) &&
+        (string.Equals(snapshot.DownloadName, $"{snapshot.Id}.{snapshot.ConfigurationKind.ToLowerInvariant()}.cfg", StringComparison.Ordinal) ||
+            (snapshot.ConfigurationKind == ConfigBackupKinds.Running &&
+                string.Equals(snapshot.DownloadName, snapshot.Id + ".cfg", StringComparison.Ordinal))) &&
         snapshot.ByteCount is > 0 and <= H3cRawOutput.MaximumBytes &&
         !string.IsNullOrWhiteSpace(snapshot.Sha256) && snapshot.Sha256.Length == 64 &&
         snapshot.Sha256.All(Uri.IsHexDigit);
@@ -421,19 +480,21 @@ internal sealed class ConfigBackupService(
 
     internal sealed class BatchState
     {
-        public BatchState(string id, string actorUserId, long createdMs, IReadOnlyList<BatchItemState> items)
-            => (Id, ActorUserId, CreatedMs, Items) = (id, actorUserId, createdMs, items);
+        public BatchState(string id, string actorUserId, long createdMs, IReadOnlyList<BatchItemState> items,
+            string configurationKind)
+            => (Id, ActorUserId, CreatedMs, Items, ConfigurationKind) = (id, actorUserId, createdMs, items, configurationKind);
         public string Id { get; }
         public string ActorUserId { get; }
         public long CreatedMs { get; }
         public IReadOnlyList<BatchItemState> Items { get; }
+        public string ConfigurationKind { get; }
         public long? CompletedMs { get; private set; }
         public void Complete() => CompletedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         public ConfigBackupBatch Snapshot() => new(Id, ActorUserId,
             CompletedMs is null ? "RUNNING" : Items.Any(item => item.State == "FAILED") ? "PARTIAL" : "SUCCEEDED",
             CreatedMs, CompletedMs, Items.Count, Items.Count(item => item.State is "SUCCEEDED" or "FAILED"),
             Items.Count(item => item.State == "SUCCEEDED"), Items.Count(item => item.State == "FAILED"),
-            Items.Select(item => new ConfigBackupBatchItem(item.ProfileId, item.State, item.SnapshotId, item.Error)).ToArray());
+            Items.Select(item => new ConfigBackupBatchItem(item.ProfileId, item.State, item.SnapshotId, item.Error)).ToArray(), ConfigurationKind);
     }
 
     internal sealed class BatchItemState(string profileId, TaskScopeSnapshot scope, string state,

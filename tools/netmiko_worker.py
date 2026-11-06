@@ -13,7 +13,9 @@ import base64
 import errno
 import hashlib
 import json
+import re
 import sys
+import time
 from typing import Any
 
 import paramiko
@@ -23,6 +25,8 @@ from netmiko.ssh_dispatcher import CLASS_MAPPER
 
 
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
+DIAGNOSTIC_COMMAND = "display diagnostic-information"
+DIAGNOSTIC_CONFIRMATION_PATTERN = r"(?im)^[ \t]*Save[ \t]+or[ \t]+display[ \t]+diagnostic[ \t]+information[ \t]*\(Y[ \t]*=[ \t]*save,[ \t]*N[ \t]*=[ \t]*display\)[ \t]*\?[ \t]*\[Y/N\][ \t]*:[ \t\r\n]*$"
 
 
 class UnsupportedDeviceTypeError(ValueError):
@@ -283,13 +287,16 @@ class Worker:
             if not self.connection.is_alive():
                 raise ConnectionLostError()
             try:
-                output = self.connection.send_command(
-                    request["command"],
-                    read_timeout=float(request.get("read_timeout", 30)),
-                    cmd_verify=False,
-                    strip_prompt=False,
-                    strip_command=False,
-                )
+                if request.get("confirmation_pattern") is not None:
+                    output = self._execute_diagnostic(request)
+                else:
+                    output = self.connection.send_command(
+                        request["command"],
+                        read_timeout=float(request.get("read_timeout", 30)),
+                        cmd_verify=False,
+                        strip_prompt=False,
+                        strip_command=False,
+                    )
             except Exception as error:
                 if isinstance(error, ReadTimeout):
                     raise
@@ -302,6 +309,46 @@ class Worker:
             self.close()
             raise
         return {"output": output, "driver": self.driver}
+
+    def _execute_diagnostic(self, request: dict[str, Any]) -> str:
+        # Policy and this narrowly declared interaction come from the service.
+        # Netmiko still owns login, paging, prompt detection and all channel reads.
+        if (self.driver not in ("hp_comware", "hp_comware_telnet") or
+                request.get("command") != DIAGNOSTIC_COMMAND or
+                request.get("confirmation_pattern") != DIAGNOSTIC_CONFIRMATION_PATTERN or
+                request.get("confirmation_response") != "n"):
+            raise ValueError("unsupported diagnostic interaction")
+        timeout = float(request.get("read_timeout", 540))
+        if not 0 < timeout <= 540:
+            raise ValueError("diagnostic deadline is outside the supported range")
+        deadline = time.monotonic() + timeout
+
+        def remaining() -> float:
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise ReadTimeout("diagnostic read deadline expired")
+            return seconds
+
+        # Comware's base_prompt omits its brackets and may appear in the body.
+        # Use the complete prompt returned by Netmiko's official detection.
+        prompt = self.connection.find_prompt()
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 256 or "\n" in prompt or "\r" in prompt:
+            raise ValueError("Netmiko did not return a bounded prompt")
+        prompt_pattern = r"(?m:^[ \t]*" + re.escape(prompt.strip()) + r"[ \t\r\n]*\Z)"
+        confirmation = re.compile(request["confirmation_pattern"])
+        expect = "(?:" + prompt_pattern + "|" + DIAGNOSTIC_CONFIRMATION_PATTERN.replace("(?im)", "(?im:", 1) + "))"
+        options = dict(auto_find_prompt=False, cmd_verify=False, strip_prompt=False, strip_command=False)
+        output = self.connection.send_command(DIAGNOSTIC_COMMAND, expect_string=expect,
+                                              read_timeout=remaining(), **options)
+        if len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
+            raise OutputLimitError("command output exceeded worker limit")
+        question = confirmation.search(output)
+        if question is not None and question.end() == len(output):
+            output += self.connection.send_command("n", expect_string=prompt_pattern,
+                                                  read_timeout=remaining(), **options)
+        if re.search(prompt_pattern, output) is None:
+            raise ReadTimeout("diagnostic did not reach its terminal prompt")
+        return output
 
     def shell_read(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.connection is None or not self.interactive:

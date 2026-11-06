@@ -208,3 +208,77 @@ describe('H3C VLAN collected snapshots', () => {
     expect(wrapper.get('.inventory-summary').text()).toContain('1 条事实')
   })
 })
+
+describe('H3C AC command evidence', () => {
+  const radioCommand = 'display wlan ap all radio'
+  const lldpCommand = 'display wlan ap all lldp'
+  function acFact(command = radioCommand, changes: Partial<H3cFact> = {}, output = 'AP-ONE 1 149 80 17') {
+    return fact('ac-radio', { kind: `command.${command.replaceAll(' ', '.')}`,
+      payloadJson: JSON.stringify({ command, status: 'COMPLETE', output, notice: null }), ...changes })
+  }
+  beforeEach(() => {
+    vi.resetAllMocks()
+    api.getH3cProfiles.mockResolvedValue([profile])
+    api.getH3cLldpRelations.mockResolvedValue([])
+    api.getH3cLldpClaims.mockResolvedValue(null)
+    api.getH3cFacts.mockResolvedValue([])
+  })
+
+  it('reads Radio independently of a full general fact page and preserves raw time and source', async () => {
+    const sample = acFact()
+    api.getH3cFacts.mockImplementation((_id: string, options: { kind?: string }) => Promise.resolve(
+      options.kind === sample.kind ? [sample] : options.kind ? [] : Array.from({ length: 100 }, (_, index) =>
+        fact(`interface-${index}`, { kind: 'interface', payloadJson: '{}' })),
+    ))
+    const wrapper = render(); await flushPromises()
+    const snapshot = wrapper.get('.ac-snapshot')
+    expect(snapshot.text()).toContain('AP Radio · 当前回显')
+    expect(snapshot.text()).toContain('采集回显已校验')
+    expect(snapshot.text()).toContain('基础采集')
+    expect(snapshot.text()).toContain(new Date(sample.capturedMs).toLocaleString('zh-CN', { hour12: false }))
+    expect(snapshot.text()).toContain(sample.source)
+    expect(snapshot.get('pre').text()).toBe('AP-ONE 1 149 80 17')
+    expect(wrapper.get('.inventory-summary').text()).toContain('101 条事实')
+    expect(api.createH3cTaskDefinition).not.toHaveBeenCalled()
+    expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
+  })
+
+  it.each([['PARTIAL', '部分输出'], ['UNSUPPORTED', '命令不支持/未识别'], ['EMPTY', '无数据'], ['FAILED', '采集失败']])(
+    'keeps %s optional evidence distinct from successful collection and escapes device output', async (status, label) => {
+      const output = '<img src=x onerror="alert(1)"><script>device text</script>'
+      const sample = acFact(lldpCommand, { status }, output)
+      api.getH3cFacts.mockImplementation((_id: string, options: { kind?: string }) => Promise.resolve(options.kind === sample.kind ? [sample] : []))
+      const wrapper = render(); await flushPromises()
+      const snapshot = wrapper.get('.ac-snapshot')
+      expect(snapshot.text()).toContain('AP LLDP · 当前回显')
+      expect(snapshot.text()).toContain('按需采集')
+      expect(snapshot.get('.state-pill').text()).toBe(label)
+      expect(snapshot.text()).not.toContain('采集回显已校验')
+      expect(snapshot.get('pre').text()).toBe(output)
+      expect(snapshot.find('img').exists()).toBe(false)
+      expect(snapshot.find('script').exists()).toBe(false)
+    },
+  )
+
+  it('keeps failed current and previous optional output separate when opening history', async () => {
+    const current = acFact(lldpCommand, { id: 'failed-current', status: 'FAILED' }, '')
+    const older = acFact(lldpCommand, { id: 'older', isCurrent: false, capturedMs: 1_700_000_000_000 }, 'previous AP LLDP')
+    api.getH3cFacts.mockImplementation((_id: string, options: { kind?: string }) => Promise.resolve(options.kind === current.kind ? [older, current] : []))
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.findAll('.ac-snapshot')).toHaveLength(1)
+    expect(wrapper.get('.ac-facts').text()).not.toContain('previous AP LLDP')
+    await button(wrapper, '查看历史').trigger('click'); await flushPromises()
+    const snapshots = wrapper.findAll('.ac-snapshot')
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots[0].text()).toContain('采集失败')
+    expect(snapshots[1].text()).toContain('历史回显')
+    expect(snapshots[1].text()).toContain('previous AP LLDP')
+    expect(api.getH3cFacts).toHaveBeenCalledWith(profile.id, { kind: current.kind, history: true, limit: 20 })
+    api.getH3cFacts.mockRejectedValue(new Error('synthetic read denied'))
+    await button(wrapper, '仅当前').trigger('click')
+    expect(wrapper.findAll('.ac-snapshot')).toHaveLength(0)
+    await flushPromises()
+    expect(wrapper.get('.ac-facts').text()).toContain('AC 采集回显暂不可用')
+    expect(wrapper.text()).not.toContain('previous AP LLDP')
+  })
+})

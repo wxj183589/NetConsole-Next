@@ -339,6 +339,14 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
                 if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_COMMAND");
                 var command = commandPlan[currentCommandIndex];
                 var output = await session.ExecuteAsync(command, linked.Token);
+                if (command == H3cDiagnosticCapture.Command)
+                {
+                    if (System.Text.Encoding.UTF8.GetByteCount(output) > H3cDiagnosticCapture.MaximumOutputBytes)
+                        throw new H3cOutputLimitException();
+                    output = H3cDiagnosticCapture.Sanitize(output);
+                    if (H3cDiagnosticCapture.GetFailure(output) is { } diagnosticFailure)
+                        throw new H3cPartialOutputException(output, diagnosticFailure, false);
+                }
                 commandOutputs.Add((command, ConfigBackupSanitizer.Sanitize(command, output), currentCommandIndex, "COMPLETE"));
             }
             result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
@@ -354,7 +362,10 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         {
             H3cCollectionMetrics.RecordFailure(ex);
             if (!string.IsNullOrEmpty(ex.Output))
-                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ConfigBackupSanitizer.Sanitize(commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output),
+                commandOutputs.Add((commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)],
+                    commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)] == H3cDiagnosticCapture.Command
+                        ? H3cDiagnosticCapture.Sanitize(ex.Output)
+                        : ConfigBackupSanitizer.Sanitize(commandPlan[Math.Min(currentCommandIndex, commandPlan.Count - 1)], ex.Output),
                     Math.Min(currentCommandIndex, commandPlan.Count - 1), "PARTIAL"));
             result = commandOutputs.Count == 1 ? commandOutputs[0].Output : null;
             terminalState = ex.IsCancellation ? timeout.IsCancellationRequested ? "TIMED_OUT" : "CANCELLED" : "FAILED";

@@ -23,6 +23,9 @@ function detail(id = 'device-b', profile = profileB, vendor = 'H3C', type = 'SWI
 function snapshots(profileId: string) {
   return [2, 1].map(version => ({ id: `${profileId}-v${version}`, profileId, version, byteCount: 1024, sha256: 'fixture-sha256', capturedMs: 1000 }))
 }
+function kindSnapshots(profileId: string, configurationKind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') {
+  return snapshots(profileId).map(item => ({ ...item, id: `${profileId}-${configurationKind}-v${item.version}`, configurationKind }))
+}
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 const wrappers: VueWrapper[] = []
 async function render(query: LocationQueryRaw = { deviceId: 'device-b' }, role = 'SUPERADMIN', cached = false) {
@@ -58,7 +61,7 @@ describe('device configuration backup context', () => {
     const { wrapper } = await render()
     expect(api.getDeviceInventoryDetail).toHaveBeenCalledWith('device-b')
     expect(api.getConfigBackups).toHaveBeenCalledTimes(1)
-    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-b')
+    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-b', 'RUNNING')
     expect(wrapper.text()).toContain('交换机乙 · 192.0.2.10')
     expect(wrapper.findAll('input[type=checkbox]')).toHaveLength(1)
     expect((wrapper.get('input[type=checkbox]').element as HTMLInputElement).checked).toBe(true)
@@ -67,17 +70,116 @@ describe('device configuration backup context', () => {
     expect(api.createConfigBackup).not.toHaveBeenCalled()
     await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
     expect(api.createConfigBackup).toHaveBeenCalledTimes(1)
-    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'])
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'RUNNING')
   })
 
   it('preserves the standalone page when there is no device query', async () => {
     const { wrapper } = await render({})
     expect(api.getDeviceInventoryDetail).not.toHaveBeenCalled()
-    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-a')
+    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-a', 'RUNNING')
     expect(wrapper.findAll('input[type=checkbox]')).toHaveLength(2)
     expect(button(wrapper, '开始配置备份').attributes('disabled')).toBeDefined()
     await wrapper.get('select[aria-label=备份设备]').setValue('profile-b'); await flushPromises()
-    expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b')
+    expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'RUNNING')
+  })
+
+  it('reads and starts the selected configuration category while retaining the exact device association', async () => {
+    api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') => Promise.resolve(kindSnapshots(id, kind)))
+    api.createConfigBackup.mockResolvedValue({ id: 'saved-batch', configurationKind: 'SAVED', state: 'SUCCEEDED', succeeded: 1, total: 1 })
+    const { wrapper } = await render()
+    await wrapper.get('select[aria-label=配置类别]').setValue('SAVED'); await flushPromises()
+    expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'SAVED')
+    expect(wrapper.text()).toContain('保存配置版本历史')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(2)
+    expect(api.createConfigBackup).not.toHaveBeenCalled()
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'SAVED')
+    expect(wrapper.text()).toContain('保存配置 · 批次 1/1 · SUCCEEDED')
+  })
+
+  it('filters mixed category history and only compares distinct versions of the selected category', async () => {
+    api.getConfigBackups.mockResolvedValue([
+      ...kindSnapshots('profile-b', 'RUNNING'),
+      ...kindSnapshots('profile-b', 'SAVED'),
+      ...kindSnapshots('profile-b', 'STARTUP_INFO'),
+    ])
+    const { wrapper } = await render()
+    expect(wrapper.findAll('tbody tr').map(row => row.findAll('td')[0].text())).toEqual(['运行配置', '运行配置'])
+    await wrapper.get('select[aria-label=配置类别]').setValue('SAVED'); await flushPromises()
+    expect(wrapper.findAll('tbody tr').map(row => row.findAll('td')[0].text())).toEqual(['保存配置', '保存配置'])
+    expect(wrapper.get('select[aria-label=比较基线]').findAll('option').map(option => option.attributes('value')))
+      .toEqual(['profile-b-SAVED-v2', 'profile-b-SAVED-v1'])
+    await button(wrapper, '比较').trigger('click'); await flushPromises()
+    expect(api.getConfigBackupDiff).toHaveBeenCalledWith('profile-b-SAVED-v1', 'profile-b-SAVED-v2')
+    await wrapper.get('select[aria-label=比较基线]').setValue('profile-b-SAVED-v2')
+    expect(button(wrapper, '比较').attributes('disabled')).toBeDefined()
+    await button(wrapper, '比较').trigger('click'); await flushPromises()
+    expect(api.getConfigBackupDiff).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a pending running-configuration history after switching to saved configuration', async () => {
+    const old = deferred<ReturnType<typeof kindSnapshots>>()
+    api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') =>
+      kind === 'RUNNING' ? old.promise : Promise.resolve(kindSnapshots(id, kind)))
+    const { wrapper } = await render()
+    const selector = wrapper.get('select[aria-label=配置类别]')
+    expect(selector.attributes('disabled')).toBeUndefined()
+    await selector.setValue('SAVED'); await flushPromises()
+    expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'SAVED')
+    old.resolve(kindSnapshots('profile-b', 'RUNNING').map(item => ({ ...item, version: 99 }))); await flushPromises()
+    expect(wrapper.text()).toContain('保存配置版本历史')
+    expect(wrapper.text()).not.toContain('v99')
+    expect(wrapper.findAll('tbody tr').map(row => row.findAll('td')[0].text())).toEqual(['保存配置', '保存配置'])
+  })
+
+  it('keeps a later backup busy when the initial history request completes', async () => {
+    const history = deferred<ReturnType<typeof snapshots>>()
+    const backup = deferred<object>()
+    api.getConfigBackups.mockReturnValueOnce(history.promise)
+    api.createConfigBackup.mockReturnValue(backup.promise)
+    const { wrapper } = await render()
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'RUNNING')
+    history.resolve(snapshots('profile-b')); await flushPromises()
+    expect(button(wrapper, '开始配置备份').attributes('data-loading')).toBe('true')
+    expect(wrapper.get('select[aria-label=配置类别]').attributes('disabled')).toBeDefined()
+    backup.resolve({ id: 'later-batch', configurationKind: 'RUNNING', state: 'SUCCEEDED', succeeded: 1, total: 1 }); await flushPromises()
+    expect(button(wrapper, '开始配置备份').attributes('data-loading')).toBe('false')
+  })
+
+  it('clears an old difference and ignores its response after the configuration category changes', async () => {
+    const old = deferred<object>()
+    api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') => Promise.resolve(kindSnapshots(id, kind)))
+    api.getConfigBackupDiff.mockReturnValue(old.promise)
+    const { wrapper } = await render()
+    await button(wrapper, '比较').trigger('click')
+    await wrapper.get('select[aria-label=配置类别]').setValue('SAVED'); await flushPromises()
+    old.resolve({ addedLines: 1, removedLines: 0, added: ['旧运行配置差异'], removed: [] }); await flushPromises()
+    expect(wrapper.text()).not.toContain('旧运行配置差异')
+    expect(wrapper.text()).toContain('保存配置版本差异')
+  })
+
+  it('describes startup information as file pointer metadata and explicitly collects that category', async () => {
+    api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') => Promise.resolve(kindSnapshots(id, kind)))
+    const { wrapper } = await render()
+    await wrapper.get('select[aria-label=配置类别]').setValue('STARTUP_INFO'); await flushPromises()
+    expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'STARTUP_INFO')
+    expect(wrapper.text()).toContain('启动配置指向仅记录设备报告的启动文件信息，不包含文件正文，也不表示可以恢复配置。')
+    expect(wrapper.findAll('tbody tr').map(row => row.findAll('td')[0].text())).toEqual(['启动配置指向', '启动配置指向'])
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'STARTUP_INFO')
+  })
+
+  it('explains an unavailable saved configuration without displaying a successful backup', async () => {
+    api.getConfigBackups.mockResolvedValue([])
+    api.createConfigBackup.mockResolvedValue({ id: 'missing-saved', configurationKind: 'SAVED', state: 'PARTIAL', succeeded: 0, total: 1,
+      items: [{ profileId: 'profile-b', state: 'FAILED', error: 'CONFIG_BACKUP_SAVED_UNAVAILABLE' }] })
+    const { wrapper } = await render()
+    await wrapper.get('select[aria-label=配置类别]').setValue('SAVED'); await flushPromises()
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('设备没有可读取的保存配置，未生成备份。')
+    expect(wrapper.text()).toContain('暂无保存配置记录')
+    expect(ElMessage.success).not.toHaveBeenCalledWith('配置备份完成')
   })
 
   it.each([null, '', ['device-a', 'device-b']])('blocks malformed deviceId %j without falling back', async deviceId => {
@@ -151,7 +253,7 @@ describe('device configuration backup context', () => {
     expect(wrapper.text()).toContain('交换机乙')
     expect(wrapper.text()).not.toContain('交换机甲')
     expect(api.getConfigBackups).toHaveBeenCalledTimes(1)
-    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-b')
+    expect(api.getConfigBackups).toHaveBeenCalledWith('profile-b', 'RUNNING')
   })
 
   it('clears target history immediately and ignores late history responses', async () => {

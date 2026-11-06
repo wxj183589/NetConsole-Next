@@ -595,6 +595,8 @@ export interface H3cLldpClaims {
   relations: H3cLldpRelation[]
 }
 
+export type ConfigBackupKind = 'RUNNING' | 'SAVED' | 'STARTUP_INFO'
+
 export interface ConfigBackupSnapshot {
   id: string
   profileId: string
@@ -610,6 +612,8 @@ export interface ConfigBackupSnapshot {
   error?: string | null
   canDownload: boolean
   downloadName?: string | null
+  configurationKind?: ConfigBackupKind
+  command?: string | null
 }
 
 export interface ConfigBackupBatch {
@@ -623,6 +627,7 @@ export interface ConfigBackupBatch {
   succeeded: number
   failed: number
   items: Array<{ profileId: string; state: string; snapshotId?: string | null; error?: string | null }>
+  configurationKind?: ConfigBackupKind
 }
 
 export interface ConfigBackupDiff {
@@ -635,6 +640,7 @@ export interface ConfigBackupDiff {
   changedLines: number
   added: string[]
   removed: string[]
+  configurationKind?: ConfigBackupKind
 }
 
 export interface WirelessScope {
@@ -1064,14 +1070,15 @@ export function getH3cLldpRelations(id: string, params: { history?: boolean; lim
 export function getH3cLldpClaims(id: string, params: { history?: boolean; limit?: number } = {}): Promise<H3cLldpClaims> {
   return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-claims?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
 }
-export function createConfigBackup(profileIds: string[]): Promise<ConfigBackupBatch> {
-  return request('/api/system/config-backups', { method: 'POST', body: JSON.stringify({ profileIds }) })
+export function createConfigBackup(profileIds: string[], configurationKind: ConfigBackupKind = 'RUNNING'): Promise<ConfigBackupBatch> {
+  return request('/api/system/config-backups', { method: 'POST', body: JSON.stringify({ profileIds, configurationKind }) })
 }
 export function getConfigBackupBatch(id: string): Promise<ConfigBackupBatch> {
   return request('/api/system/config-backups/batches/' + encodeURIComponent(id))
 }
-export function getConfigBackups(profileId: string): Promise<ConfigBackupSnapshot[]> {
-  return request('/api/system/config-backups?profileId=' + encodeURIComponent(profileId))
+export function getConfigBackups(profileId: string, configurationKind?: ConfigBackupKind): Promise<ConfigBackupSnapshot[]> {
+  return request('/api/system/config-backups?profileId=' + encodeURIComponent(profileId) +
+    (configurationKind ? '&configurationKind=' + encodeURIComponent(configurationKind) : ''))
 }
 export async function downloadConfigBackup(id: string): Promise<Blob> {
   const response = await fetch('/api/system/config-backups/' + encodeURIComponent(id) + '/download', { credentials: 'include' })

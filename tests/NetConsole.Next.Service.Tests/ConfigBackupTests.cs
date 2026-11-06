@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 internal static class ConfigBackupTests
 {
@@ -48,7 +49,172 @@ internal static class ConfigBackupTests
         RejectUnsupportedTargets(actor);
         RejectManagedFitApTargets(actor);
         await VerifyLineDiffs(actor);
-        Console.WriteLine("CONFIG_BACKUP_TESTS=6/6 PASS");
+        await VerifyConfigurationKinds(actor);
+        await VerifyInvalidSavedOutputs(actor);
+        await VerifyPrivateKeyRedaction(actor);
+        Console.WriteLine("CONFIG_BACKUP_TESTS=9/9 PASS");
+    }
+
+    private static async Task VerifyPrivateKeyRedaction(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var labels = new[] { "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY" };
+        var keywords = new[] { "password", "passwd", "passphrase", "pass-phrase", "pre-shared-key", "community", "private-key", "secret", "credential", "authorization", "token", "psk" };
+        var lineSecrets = keywords.Select((keyword, index) => $"synthetic-line-value-{index}").ToArray();
+        var blockSecrets = labels.Select((label, index) => $"SYNTHETIC_PEM_BODY_{index}").ToArray();
+        var output = "#\r\nsysname redaction-fixture\r\n" +
+            string.Join("\r\n", keywords.Select((keyword, index) => $" {keyword.ToUpperInvariant()} {lineSecrets[index]}")) + "\r\n" +
+            string.Join("\r\n", labels.Select((label, index) =>
+                $"-----BEGIN {label}-----\r\n{blockSecrets[index]}\r\nSECOND_SYNTHETIC_PEM_LINE\r\n-----END {label}-----")) +
+            "\r\ninterface GigabitEthernet1/0/1\r\n description visible\r\nreturn\r\n";
+        var allSecrets = lineSecrets.Concat(blockSecrets).Append("SECOND_SYNTHETIC_PEM_LINE").ToArray();
+        foreach (var kind in new[] { ConfigBackupKinds.Running, ConfigBackupKinds.Saved, ConfigBackupKinds.StartupInfo })
+        {
+            fixture.Factory.Output = output;
+            var first = await fixture.Backup(actor, kind);
+            Assert(first is { State: "SUCCEEDED", Succeeded: 1 }, "redaction fixtures must complete for every configuration category");
+            var snapshot = fixture.Backups.Get(first.Items.Single().SnapshotId!, P2B5SiteScopeDecision.Global)!;
+            var raw = fixture.Catalog.ReadCompleteH3cTaskRaw(snapshot.TaskRunId!)!;
+            var opened = fixture.Backups.OpenDownload(snapshot.Id, P2B5SiteScopeDecision.Global)!.Value;
+            string downloaded;
+            using (var reader = new StreamReader(opened.Stream)) downloaded = reader.ReadToEnd();
+            foreach (var sanitized in new[] { raw.Output, downloaded })
+                Assert(allSecrets.All(secret => !sanitized.Contains(secret, StringComparison.Ordinal)) &&
+                    !sanitized.Contains("-----BEGIN", StringComparison.Ordinal) &&
+                    !sanitized.Contains("-----END", StringComparison.Ordinal) &&
+                    sanitized.Contains("<REDACTED>", StringComparison.Ordinal) &&
+                    sanitized.Contains("description visible", StringComparison.Ordinal),
+                    $"{kind} Raw and downloads must redact entire private key blocks and diagnostic secret keywords while retaining ordinary configuration");
+
+            fixture.Factory.Output = output.Replace("SYNTHETIC_PEM_BODY_", "CHANGED_PEM_BODY_", StringComparison.Ordinal)
+                .Replace("synthetic-line-value-", "changed-line-value-", StringComparison.Ordinal);
+            var second = await fixture.Backup(actor, kind);
+            var difference = fixture.Backups.Diff(snapshot.Id, second.Items.Single().SnapshotId!, P2B5SiteScopeDecision.Global);
+            Assert(difference is { Identical: true, AddedLines: 0, RemovedLines: 0 },
+                $"{kind} differences must never reveal changes within secret lines or private key bodies");
+
+            foreach (var label in labels)
+            {
+                var truncated = $"#\nsysname visible\n-----BEGIN {label}-----\nSYNTHETIC_TRUNCATED_BODY\nANOTHER_PRIVATE_BODY_LINE";
+                var sanitized = ConfigBackupSanitizer.Sanitize(ConfigBackupKinds.CommandFor(kind), truncated);
+                Assert(sanitized == "#\nsysname visible\n<REDACTED>",
+                    $"{kind} must redact a truncated private key block through the end of partial output");
+            }
+        }
+        Assert(ConfigBackupSanitizer.Sanitize(H3cCommandPolicy.DisplayVersion, output) == output,
+            "configuration sanitization must remain limited to the configuration command boundary");
+    }
+
+    private static async Task VerifyConfigurationKinds(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        foreach (var kind in new[] { "SAVE", "saved", "", "RUNNING;save force" })
+        {
+            try
+            {
+                fixture.Backups.Start(new[] { fixture.Profile }, actor, P2B5SiteScopeDecision.Global, kind);
+                throw new InvalidOperationException("unsupported backup kinds must fail before scheduling");
+            }
+            catch (ConfigBackupException ex)
+            {
+                Assert(ex.Code == "CONFIG_BACKUP_KIND_UNSUPPORTED" && ex.StatusCode == 400,
+                    "unknown backup kinds must return a bounded validation error");
+            }
+        }
+        Assert(fixture.Factory.Commands.Count == 0, "invalid kinds must not execute a device command");
+        var running = await fixture.Backup(actor);
+        fixture.Factory.Output = "#\nsysname saved-switch\nlocal-user reader password hash saved-only-secret\nreturn\n";
+        var saved = await fixture.Backup(actor, ConfigBackupKinds.Saved);
+        var savedSnapshot = fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.Saved).Single();
+        Assert(saved is { State: "SUCCEEDED", ConfigurationKind: ConfigBackupKinds.Saved } &&
+            savedSnapshot is { Version: 1, ConfigurationKind: ConfigBackupKinds.Saved,
+                Command: H3cCommandPolicy.DisplaySavedConfiguration },
+            "saved configuration must retain its command and start its own version sequence");
+        Assert(savedSnapshot.DownloadName!.EndsWith(".saved.cfg", StringComparison.Ordinal),
+            "saved download names must identify their category");
+        var savedRaw = fixture.Catalog.ReadCompleteH3cTaskRaw(savedSnapshot.TaskRunId!)!;
+        Assert(!savedRaw.Output.Contains("saved-only-secret", StringComparison.Ordinal),
+            "saved configuration secrets must be removed before Raw persistence");
+        var download = fixture.Backups.OpenDownload(savedSnapshot.Id, P2B5SiteScopeDecision.Global)!.Value;
+        using (var reader = new StreamReader(download.Stream))
+            Assert(!reader.ReadToEnd().Contains("saved-only-secret", StringComparison.Ordinal),
+                "saved configuration downloads must not expose secrets");
+
+        fixture.Factory.Output = "Main startup saved-configuration file: flash:/startup.cfg\nNext main startup saved-configuration file: NULL\n";
+        var startup = await fixture.Backup(actor, ConfigBackupKinds.StartupInfo);
+        var startupSnapshot = fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.StartupInfo).Single();
+        Assert(startup is { State: "SUCCEEDED", ConfigurationKind: ConfigBackupKinds.StartupInfo } &&
+            startupSnapshot is { Version: 1, ConfigurationKind: ConfigBackupKinds.StartupInfo, Command: H3cCommandPolicy.DisplayStartup },
+            "startup file pointers, including NULL, must be separate metadata with their own versions");
+        Assert(fixture.Backups.Diff(savedSnapshot.Id, startupSnapshot.Id, P2B5SiteScopeDecision.Global) is null &&
+            fixture.Backups.Diff(running.Items.Single().SnapshotId!, savedSnapshot.Id, P2B5SiteScopeDecision.Global) is null,
+            "different configuration kinds must never be compared as version history");
+
+        fixture.Factory.Output = "#\nsysname running-new\nreturn\n";
+        var runningSecond = await fixture.Backup(actor);
+        var runningHistory = fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.Running);
+        Assert(runningHistory.Select(item => item.Version).Order().SequenceEqual(new[] { 1, 2 }) &&
+            fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global).Count == 4,
+            "interleaved kinds must retain independent version sequences and an optional combined listing");
+        var runningFirst = runningHistory.Single(item => item.Version == 1);
+        var directory = Path.Combine(fixture.Root, "backup", "config", fixture.Profile);
+        var manifestPath = Path.Combine(directory, runningFirst.Id + ".json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest.Remove("configurationKind");
+        manifest.Remove("command");
+        File.Move(Path.Combine(directory, runningFirst.DownloadName!), Path.Combine(directory, runningFirst.Id + ".cfg"));
+        manifest["downloadName"] = runningFirst.Id + ".cfg";
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var legacy = fixture.Backups.Get(runningFirst.Id, P2B5SiteScopeDecision.Global);
+        Assert(legacy is { ConfigurationKind: ConfigBackupKinds.Running, Command: H3cCommandPolicy.DisplayCurrentConfiguration },
+            "old manifests without kind or command must remain running configurations");
+        var legacyDownload = fixture.Backups.OpenDownload(runningFirst.Id, P2B5SiteScopeDecision.Global);
+        Assert(legacyDownload is not null, "legacy id.cfg downloads must remain compatible");
+        legacyDownload!.Value.Stream.Dispose();
+        Assert(fixture.Backups.Diff(runningFirst.Id, runningSecond.Items.Single().SnapshotId!,
+                P2B5SiteScopeDecision.Global) is { ConfigurationKind: ConfigBackupKinds.Running } &&
+            fixture.Backups.Diff(runningFirst.Id, savedSnapshot.Id, P2B5SiteScopeDecision.Global) is null,
+            "legacy running records must compare only with running records");
+
+        var savedManifestPath = Path.Combine(directory, savedSnapshot.Id + ".json");
+        var savedManifest = JsonNode.Parse(File.ReadAllText(savedManifestPath))!.AsObject();
+        savedManifest["command"] = H3cCommandPolicy.DisplayCurrentConfiguration;
+        File.WriteAllText(savedManifestPath, savedManifest.ToJsonString());
+        Assert(fixture.Backups.Get(savedSnapshot.Id, P2B5SiteScopeDecision.Global) is null &&
+            fixture.Backups.OpenDownload(savedSnapshot.Id, P2B5SiteScopeDecision.Global) is null &&
+            fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.Saved).Count == 0,
+            "manifest command and kind mismatches must never permit list, diff or download");
+        Assert(fixture.Factory.Commands.All(H3cCommandPolicy.IsConfigurationCommand) &&
+            fixture.Factory.Commands.Contains(H3cCommandPolicy.DisplaySavedConfiguration) &&
+            fixture.Factory.Commands.Contains(H3cCommandPolicy.DisplayStartup),
+            "backup collection must use only the three read-only configuration commands");
+        Assert(fixture.Catalog.QueryH3cFacts(fixture.Profile, history: true)
+            .All(item => !item.Kind.StartsWith("command.display.saved-configuration", StringComparison.Ordinal) &&
+                !item.Kind.StartsWith("command.display.startup", StringComparison.Ordinal)),
+            "saved configuration and startup information must not enter general Facts");
+    }
+
+    private static async Task VerifyInvalidSavedOutputs(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        foreach (var output in new[]
+        {
+            "The saved configuration file does not exist.\n", "The configuration file doesn't exist.\n",
+            "No saved configuration file.\n", "Error: Unrecognized command found at '^' position.\n",
+            "Permission denied.\n", "#\nsysname incomplete\n---- More ----\n", "\n"
+        })
+        {
+            fixture.Factory.Output = output;
+            var batch = await fixture.Backup(actor, ConfigBackupKinds.Saved);
+            Assert(batch is { State: "PARTIAL", Succeeded: 0, Failed: 1 } &&
+                fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.Saved).Count == 0,
+                "missing, unsupported, denied, paged or empty saved configurations must not create a successful snapshot");
+        }
+        fixture.Factory.Failure = new H3cPartialOutputException("#\nsysname interrupted\n", "H3C_DISCONNECTED_PARTIAL", false);
+        var partial = await fixture.Backup(actor, ConfigBackupKinds.Saved);
+        Assert(partial is { State: "PARTIAL", Succeeded: 0, Failed: 1 } &&
+            fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global).Count == 0,
+            "a partial Raw capture must not become a complete saved configuration backup");
     }
 
     private static async Task VerifyLineDiffs(WebUserIdentity actor)
@@ -204,7 +370,7 @@ internal static class ConfigBackupTests
 
     private sealed class Fixture : IDisposable
     {
-        public string Root { get; } = Path.Combine(Path.GetTempPath(), "next-config-backup-" + Guid.NewGuid().ToString("N"));
+        public string Root { get; }
         public string Profile { get; } = Guid.NewGuid().ToString("N");
         public RuntimeSettings Settings { get; }
         public Catalog Catalog { get; }
@@ -214,6 +380,10 @@ internal static class ConfigBackupTests
 
         public Fixture()
         {
+            var repository = new DirectoryInfo(AppContext.BaseDirectory);
+            while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
+                repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
+            Root = Path.Combine(repository.Parent!.FullName, "test-data", "next-config-backup-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
             Settings = new() { DataRoot = Root, WebPort = 18771, SyslogPort = 0,
                 SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
@@ -228,9 +398,9 @@ internal static class ConfigBackupTests
             Backups = new ConfigBackupService(Catalog, _scheduler, authorizer, Settings);
         }
 
-        public async Task<ConfigBackupBatch> Backup(WebUserIdentity actor)
+        public async Task<ConfigBackupBatch> Backup(WebUserIdentity actor, string? configurationKind = null)
         {
-            var batch = Backups.Start(new[] { Profile }, actor, P2B5SiteScopeDecision.Global);
+            var batch = Backups.Start(new[] { Profile }, actor, P2B5SiteScopeDecision.Global, configurationKind);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             while (true)
             {
@@ -251,12 +421,17 @@ internal static class ConfigBackupTests
     private sealed class Factory : IDeviceSessionFactory
     {
         public string Output { get; set; } = "<H3C>sysname initial\nlocal-user admin password hash super-secret\ninterface GigabitEthernet1/0/1\n description initial\n</H3C>\n";
+        public Exception? Failure { get; set; }
+        public List<string> Commands { get; } = new();
         public IDeviceSession Create(string target) => new Session(this);
         private sealed class Session(Factory owner) : IDeviceSession
         {
             public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-            public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken) =>
-                Task.FromResult(owner.Output);
+            public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+            {
+                owner.Commands.Add(command);
+                return owner.Failure is not null ? Task.FromException<string>(owner.Failure) : Task.FromResult(owner.Output);
+            }
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }

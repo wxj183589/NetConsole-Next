@@ -54,9 +54,10 @@ internal sealed partial class Catalog
         if (!TryResolveRawPath(relativePath, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
             return new("RAW_UNAVAILABLE", 0);
         var info = new FileInfo(fullPath);
-        if (info.Length is < 2 or > MaximumLineBytes) throw new InvalidDataException("H3C fact Raw evidence exceeds its record bound.");
+        if (info.Length < 2 || info.Length > H3cRawOutput.MaximumRecordBytesFor(commandText))
+            throw new InvalidDataException("H3C fact Raw evidence exceeds its record bound.");
         var bytes = File.ReadAllBytes(fullPath);
-        if (bytes.Length is < 2 or > MaximumLineBytes || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
+        if (bytes.Length < 2 || bytes.Length > H3cRawOutput.MaximumRecordBytesFor(commandText) || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
             !string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), segmentSha, StringComparison.OrdinalIgnoreCase) ||
             !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out var source, out var host, out var recordRun, out var capture) ||
             source != target.SourceId || host != target.Host || recordRun != runId || capture != "COMPLETE")
@@ -114,8 +115,11 @@ internal sealed partial class Catalog
                     return new("COMMAND_PLAN_MISMATCH", 0);
                 if (!TryResolveRawPath(relative, out var fullPath) || !File.Exists(fullPath) || ContainsReparsePoint(fullPath))
                     return new("RAW_UNAVAILABLE", 0);
+                var length = new FileInfo(fullPath).Length;
+                if (length < 2 || length > H3cRawOutput.MaximumRecordBytesFor(command))
+                    return new("RAW_UNAVAILABLE", 0);
                 var bytes = File.ReadAllBytes(fullPath);
-                if (bytes.Length < 2 || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
+                if (bytes.Length < 2 || bytes.Length > H3cRawOutput.MaximumRecordBytesFor(command) || bytes[^1] != (byte)'\n' || bytes.AsSpan(0, bytes.Length - 1).Contains((byte)'\n') ||
                     !string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), reader.GetString(4), StringComparison.OrdinalIgnoreCase) ||
                     !TryReadRecord(bytes.AsSpan(0, bytes.Length - 1).ToArray(), out _, out var recordSource, out var recordHost,
                         out var recordRun, out var capture) || recordSource != profile.SourceId || recordHost != profile.Host ||

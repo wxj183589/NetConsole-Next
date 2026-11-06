@@ -8,6 +8,22 @@ const profiles = ref<TerminalDevice[]>([])
 const selected = ref<TerminalDevice | null>(null)
 const facts = ref<H3cFact[]>([])
 const vlanFacts = ref<H3cFact[]>([])
+const acFacts = ref<H3cFact[]>([])
+const acCommands = [
+  { command: 'display wlan ap all', label: 'AP 列表', required: true },
+  { command: 'display wlan ap all address', label: 'AP 地址', required: true },
+  { command: 'display wlan ap all radio', label: 'AP Radio', required: true },
+  { command: 'display wlan ap all radio verbose filter bbssid', label: 'AP BSSID', required: false },
+  { command: 'display wlan ap all connection-record', label: 'AP 连接记录', required: false },
+  { command: 'display wlan ap all radio type', label: 'AP 射频类型', required: false },
+  { command: 'display wlan ap unauthenticated', label: '未认证 AP', required: false },
+  { command: 'display wlan ap all lldp', label: 'AP LLDP', required: false },
+  { command: 'display wlan ap all verbose', label: 'AP 详细信息', required: false },
+  { command: 'display cpu-usage', label: 'AC CPU', required: false },
+  { command: 'display memory', label: 'AC 内存', required: false },
+  { command: 'display device manuinfo', label: 'AC 制造信息', required: false },
+].map(item => ({ ...item, kind: `command.${item.command.replaceAll(' ', '.')}` }))
+const acKinds = new Set(acCommands.map(item => item.kind))
 const relations = ref<H3cLldpRelation[]>([])
 const claims = ref<H3cLldpClaims | null>(null)
 const history = ref(false)
@@ -23,9 +39,10 @@ const of = (kind: string): H3cFact[] => selectedFacts.value.filter(fact => fact.
 const time = (value?: number | null): string => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
 const statusLabel = (fact: H3cFact): string => ({
   OFFLINE_REAL_FIXTURE_VERIFIED: '离线黄金样本已验证',
+  COLLECTED_RAW_VERIFIED: '采集回显已校验',
   EMPTY: '无数据', UNSUPPORTED: '命令不支持/未识别', PARTIAL: '部分输出', FAILED: '采集失败',
   STALE: '已采集（按捕获时间查看）', LIVE_VERIFIED: '实时采集成功',
-} as Record<string, string>)[fact.dataState || fact.status] || fact.status
+} as Record<string, string>)[['EMPTY', 'UNSUPPORTED', 'PARTIAL', 'FAILED'].includes(fact.status) ? fact.status : fact.dataState || fact.status] || fact.status
 
 interface VlanRow {
   vlanId: number
@@ -63,8 +80,18 @@ function vlanSnapshot(fact: H3cFact) {
 }
 const vlanSnapshots = computed(() => vlanFacts.value.filter(fact => history.value || fact.isCurrent)
   .map(vlanSnapshot).sort((left, right) => right.fact.capturedMs - left.fact.capturedMs))
+const acSnapshots = computed(() => acFacts.value.filter(fact => history.value || fact.isCurrent)
+  .flatMap(fact => {
+    const command = acCommands.find(item => item.kind === fact.kind)
+    let payload: Record<string, unknown> = {}
+    try { const value: unknown = JSON.parse(fact.payloadJson); if (record(value)) payload = value } catch { /* unavailable output */ }
+    return command ? [{ fact, ...command,
+      output: payload.command === command.command && typeof payload.output === 'string' ? payload.output : '',
+      notice: typeof payload.notice === 'string' ? payload.notice : '',
+    }] : []
+  }).sort((left, right) => right.fact.capturedMs - left.fact.capturedMs || left.command.localeCompare(right.command)))
 
-function clearFacts(): void { facts.value = []; vlanFacts.value = []; relations.value = []; claims.value = null }
+function clearFacts(): void { facts.value = []; vlanFacts.value = []; acFacts.value = []; relations.value = []; claims.value = null }
 
 async function loadFacts(profileId = selected.value?.id, generation = selectionGeneration): Promise<void> {
   const requestGeneration = ++factsRequestGeneration
@@ -73,16 +100,18 @@ async function loadFacts(profileId = selected.value?.id, generation = selectionG
   if (!profileId) { loading.value = false; return }
   loading.value = true
   try {
-    const [nextFacts, nextVlanFacts, nextRelations, nextClaims] = await Promise.all([
+    const [nextFacts, nextAcFacts, nextVlanFacts, nextRelations, nextClaims] = await Promise.all([
       getH3cFacts(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
+      Promise.all(acCommands.map(item => getH3cFacts(profileId, { kind: item.kind, history: history.value, limit: history.value ? 20 : 1 }))),
       getH3cFacts(profileId, { kind: 'vlan.table', history: history.value, limit: history.value ? 500 : 100 }),
       getH3cLldpRelations(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
       getH3cLldpClaims(profileId, { history: history.value, limit: history.value ? 500 : 100 }),
     ])
     if (generation === selectionGeneration && requestGeneration === factsRequestGeneration && selected.value?.id === profileId)
       {
-        facts.value = nextFacts.filter(fact => fact.kind !== 'vlan.table')
+        facts.value = nextFacts.filter(fact => fact.kind !== 'vlan.table' && !acKinds.has(fact.kind))
         vlanFacts.value = nextVlanFacts.filter(fact => fact.kind === 'vlan.table')
+        acFacts.value = nextAcFacts.flatMap((items, index) => items.filter(fact => fact.kind === acCommands[index].kind))
         relations.value = nextRelations
         claims.value = nextClaims
       }
@@ -127,7 +156,21 @@ onMounted(() => { void refresh() })
     <section class="card"><div class="card__body"><div v-if="!profiles.length" class="empty-state"><strong>暂无 H3C profile</strong><small>服务未配置 H3C profile 或当前环境没有事实回放。</small></div><div v-for="profile in profiles" :key="profile.id" class="overview-footer" :class="{ 'is-selected': selected?.id === profile.id }"><span><b>{{ profile.host }}</b> · {{ profile.username }}</span><el-button size="small" @click="selectProfile(profile)">查看事实</el-button></div></div></section>
     <p v-if="factsError" role="alert" class="data-quality-note">{{ factsError }}</p>
     <template v-if="selected">
-      <section class="card"><div class="card__body"><div class="inventory-summary"><span class="summary-chip"><b>{{ selected.host }}</b></span><span class="summary-chip">{{ history ? '当前与历史' : '仅当前' }}</span><span class="summary-chip">{{ facts.length + vlanFacts.length }} 条事实</span></div><p class="data-quality-note">数据时间与来源按每条事实显示。历史记录不代表设备当前实时状态，离线样本保留其来源标记。</p></div></section>
+      <section class="card"><div class="card__body"><div class="inventory-summary"><span class="summary-chip"><b>{{ selected.host }}</b></span><span class="summary-chip">{{ history ? '当前与历史' : '仅当前' }}</span><span class="summary-chip">{{ facts.length + vlanFacts.length + acFacts.length }} 条事实</span></div><p class="data-quality-note">数据时间与来源按每条事实显示。历史记录不代表设备当前实时状态，离线样本保留其来源标记。</p></div></section>
+      <section class="card ac-facts">
+        <div class="card__header"><h2>AC / FIT-AP 采集回显</h2><span class="state-pill">{{ acSnapshots.length }} 份回显</span></div>
+        <div class="card__body">
+          <p class="data-quality-note">AP 列表、地址、Radio 为基础采集；其余按需采集。前往任务中心选择 AC 基础采集计划。AP 由所属 AC 采集，组名称按来源 AC 查看。</p>
+          <p v-if="history" class="muted">每条命令最多显示最近 20 份回显。</p>
+          <p v-if="!acSnapshots.length" class="muted">{{ loading ? '正在读取 AC 采集回显…' : factsError ? 'AC 采集回显暂不可用。' : '暂无 AC / FIT-AP 采集回显。' }}</p>
+          <article v-for="snapshot in acSnapshots" :key="snapshot.fact.id" class="ac-snapshot">
+            <div class="overview-footer"><h3>{{ snapshot.label }} · {{ snapshot.fact.isCurrent ? '当前回显' : '历史回显' }}</h3><span class="state-pill">{{ statusLabel(snapshot.fact) }}</span></div>
+            <p class="muted">{{ snapshot.required ? '基础采集' : '按需采集' }} · 捕获时间：{{ time(snapshot.fact.capturedMs) }} · 来源：{{ snapshot.fact.source }}</p>
+            <p v-if="snapshot.notice" class="data-quality-note">{{ snapshot.notice }}</p>
+            <details><summary class="mono">{{ snapshot.command }}</summary><pre class="ac-output">{{ snapshot.output || '没有可展示的命令回显。' }}</pre></details>
+          </article>
+        </div>
+      </section>
       <section class="card"><div class="card__header"><h2>设备身份 / Mesh Profile</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>事实</th><th>状态</th><th>时间</th><th>来源</th><th>数据</th></tr></thead><tbody><tr v-for="fact in [...of('device.identity'), ...of('mesh.profile')]" :key="fact.id"><td>{{ fact.kind }}</td><td>{{ statusLabel(fact) }}</td><td>{{ time(fact.capturedMs) }}</td><td>{{ fact.source }}</td><td class="mono">{{ JSON.stringify(decode(fact)) }}</td></tr><tr v-if="!of('device.identity').length && !of('mesh.profile').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
       <section class="card"><div class="card__header"><h2>Radio</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>接口</th><th>状态</th><th>模式</th><th>信道</th><th>时间 / 来源</th></tr></thead><tbody><tr v-for="fact in of('radio')" :key="fact.id"><td>{{ decode(fact).interfaceName }}</td><td>{{ decode(fact).linkStatus }}</td><td>{{ decode(fact).radioMode || '—' }}</td><td>{{ decode(fact).channel || '—' }}</td><td>{{ time(fact.capturedMs) }} · {{ fact.source }}</td></tr><tr v-if="!of('radio').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
       <section class="card"><div class="card__header"><h2>接口 / LLDP / Mesh Peer</h2></div><div class="card__body table-wrap"><table class="data-table"><thead><tr><th>类型</th><th>稳定键</th><th>状态</th><th>关键字段</th><th>时间 / 来源</th></tr></thead><tbody><tr v-for="fact in [...of('interface'), ...of('lldp.neighbor'), ...of('mesh.peer')]" :key="fact.id"><td>{{ fact.kind }}</td><td class="mono">{{ fact.identityKey }}</td><td>{{ statusLabel(fact) }}</td><td class="mono">{{ JSON.stringify(decode(fact)) }}</td><td>{{ time(fact.capturedMs) }} · {{ fact.source }}</td></tr><tr v-if="!of('interface').length && !of('lldp.neighbor').length && !of('mesh.peer').length"><td colspan="5" class="muted">无数据</td></tr></tbody></table></div></section>
@@ -157,4 +200,6 @@ onMounted(() => { void refresh() })
 
 <style scoped>
 .vlan-snapshot + .vlan-snapshot { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--nc-border); }
+.ac-snapshot + .ac-snapshot { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--nc-border); }
+.ac-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; }
 </style>

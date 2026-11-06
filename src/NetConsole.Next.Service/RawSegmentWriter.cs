@@ -130,8 +130,8 @@ internal sealed class RawSegmentWriter
             if (_records != 0) throw new InvalidOperationException("An H3C result segment accepts exactly one command result.");
             _taskRunId = taskRunId;
             var outputBytes = Encoding.UTF8.GetBytes(output);
-            if (outputBytes.Length > H3cRawOutput.MaximumBytes)
-                throw new InvalidDataException($"H3C output exceeds the {H3cRawOutput.MaximumBytes}-byte storage limit.");
+            if (outputBytes.Length > H3cRawOutput.MaximumBytesFor(command))
+                throw new InvalidDataException($"H3C output exceeds the {H3cRawOutput.MaximumBytesFor(command)}-byte storage limit.");
             var outputSha = SHA256.HashData(outputBytes);
             var outputShaHex = Convert.ToHexString(outputSha).ToLowerInvariant();
             _jsonBytes.Clear();
@@ -266,4 +266,13 @@ internal sealed class RawSegmentWriter
 internal static class H3cRawOutput
 {
     public const int MaximumBytes = 256 * 1024;
+
+    // Full-device diagnostics can be larger than ordinary command responses.
+    // Keep admission command-specific throughout collection, sealing and recovery.
+    public const int MaximumDiagnosticBytes = H3cDiagnosticCapture.MaximumOutputBytes;
+    public static int MaximumBytesFor(string command) => command == H3cDiagnosticCapture.Command
+        ? MaximumDiagnosticBytes : MaximumBytes;
+
+    public static int MaximumRecordBytesFor(string command) => command == H3cDiagnosticCapture.Command
+        ? 6 * 1024 * 1024 : 512 * 1024;
 }

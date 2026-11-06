@@ -16,17 +16,18 @@ const result = { status: 'RUNNING', evidenceType: 'CHROME_SOURCE_UI_MOCKED_API_F
   viewports, deviceScaleFactor: 1, screenshotMode: 'VIEWPORT', scenarios, screenshots, requests, errors, unexpected, downloads,
   resources: { vitePort: null, ownedViteClosed: false, ownedChromeClosed: false } }
 const runId = 'mock-diagnostic-run'; const otherId = 'mock-other-run'
-const commands = ['display version', 'display vlan all', 'display current-configuration', 'display wlan mesh-profile', 'display device']
-const raw = ['<mock>display version\nH3C Comware Software (synthetic fixture)\n<mock>\n', '<mock>display vlan all\nSynthetic partial VLAN output\n']
-const details = commands.map((command, index) => ({ index, command, state: index === 4 ? 'FAILED' : 'SUCCEEDED',
-  captureStatus: index === 4 ? null : 'COMPLETE', parseStatus: index === 0 ? 'UNRECOGNIZED' : index === 1 ? 'PARTIAL' : 'PARSED' }))
+const commands = ['display version', 'display vlan all', 'display diagnostic-information', 'display current-configuration', 'display wlan mesh-profile', 'display device']
+const raw = ['<mock>display version\nH3C Comware Software (synthetic fixture)\n<mock>\n', '<mock>display vlan all\nSynthetic partial VLAN output\n',
+  '<mock>display diagnostic-information\nSynthetic full diagnostic\n<REDACTED>\n<mock>\n']
+const details = commands.map((command, index) => ({ index, command, state: index === 5 ? 'FAILED' : 'SUCCEEDED',
+  captureStatus: index === 5 ? null : 'COMPLETE', parseStatus: index === 0 ? 'UNRECOGNIZED' : index === 1 ? 'PARTIAL' : 'PARSED' }))
 function manifest(id = runId) {
   return { version: 1, runId: id, taskState: 'PARTIAL', status: id === runId ? 'PARTIAL' : 'UNAVAILABLE', canDownload: id === runId,
     commands: id !== runId ? [] : details.map(item => ({ index: item.index, command: item.command,
-      availability: ['READY', 'READY', 'CONFIG_EXCLUDED', 'UNSUPPORTED_COMMAND', 'NO_RAW'][item.index], canDownload: item.index < 2,
+      availability: ['READY', 'READY', 'READY', 'CONFIG_EXCLUDED', 'UNSUPPORTED_COMMAND', 'NO_RAW'][item.index], canDownload: item.index < 3,
       captureStatus: item.captureStatus, parseStatus: item.parseStatus, capturedMs: 1_800_000_000_000,
-      byteCount: item.index < 2 ? Buffer.byteLength(raw[item.index]) : null, outputSha256: null, segmentSha256: null,
-      downloadByteCount: item.index < 2 ? Buffer.byteLength(raw[item.index]) : null, downloadSha256: null, redacted: false })) }
+      byteCount: item.index < 3 ? Buffer.byteLength(raw[item.index]) : null, outputSha256: null, segmentSha256: null,
+      downloadByteCount: item.index < 3 ? Buffer.byteLength(raw[item.index]) : null, downloadSha256: null, redacted: item.index === 2 })) }
 }
 const zipBytes = execFileSync('python', ['-c', 'import io,json,sys,zipfile\np=json.load(sys.stdin)\nb=io.BytesIO()\nwith zipfile.ZipFile(b,"w",zipfile.ZIP_STORED) as z:\n z.writestr("manifest.json",json.dumps(p["manifest"],ensure_ascii=False))\n for i,text in enumerate(p["raw"]): z.writestr(f"command-{i+1:03}.txt",text)\nsys.stdout.buffer.write(b.getvalue())'],
   { input: JSON.stringify({ manifest: manifest(), raw }) })
@@ -43,14 +44,16 @@ try {
   await page.route('**/api/**', async route => {
     const request = route.request(); const url = new URL(request.url()); const endpoint = url.pathname
     if (!endpoint.startsWith('/api/')) return route.continue()
-    requests.push({ method: request.method(), endpoint, query: url.search })
+    requests.push({ method: request.method(), endpoint, query: url.search, ...(request.method() === 'POST' ? { payload: request.postDataJSON() } : {}) })
     let status = 200; let body
     if (endpoint === '/api/auth/me') body = { username: 'fixture-reader', role: 'SUPERADMIN' }
     else if (endpoint === '/api/auth/csrf') body = { csrfToken: 'synthetic-diagnostic-csrf' }
     else if (endpoint === '/api/system/health') body = { status: 'running', healthState: 'HEALTHY', collectionState: 'running', instanceId: 'synthetic-diagnostics-ui' }
     else if (endpoint === '/api/system/modules') body = ['tasks', 'devices'].map(key => ({ key, enabled: true }))
     else if (endpoint === '/api/system/devices') body = { items: [], total: 0, page: 1, pageSize: 1, hasMore: false, summary: { totalRecords: 0 } }
-    else if (endpoint === '/api/system/h3c/profiles') body = []
+    else if (endpoint === '/api/system/h3c/profiles') body = [{ id: 'mock-h3c-profile', host: '192.0.2.44', port: 22, username: 'reader' }]
+    else if (endpoint === '/api/system/h3c/task-definitions' && request.method() === 'POST') { status = 201; body = {} }
+    else if (/^\/api\/system\/tasks\/[^/]+\/runs$/.test(endpoint) && request.method() === 'POST') { status = 202; body = { runId: 'synthetic-submitted-diagnostic' } }
     else if (endpoint === '/api/system/tasks') body = [runId, otherId].map(id => ({ id, taskType: 'H3C_SSH_READONLY', state: 'PARTIAL', captureStatus: 'PARTIAL', parseStatus: 'PARTIAL', queuedMs: 1_800_000_000_000 }))
     else if (/\/commands$/.test(endpoint)) body = endpoint.includes(runId) ? details : []
     else if (/\/diagnostics$/.test(endpoint)) {
@@ -87,12 +90,13 @@ try {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '命令明细', exact: true })).toHaveCount(2)
   await open()
-  await expect(dialog.getByRole('button', { name: '下载 TXT', exact: true })).toHaveCount(2)
-  await expect(dialog).toContainText('配置内容已排除'); await expect(dialog).toContainText('暂不支持下载'); await expect(dialog).toContainText('暂无输出')
+  await expect(dialog.getByRole('button', { name: '下载 TXT', exact: true })).toHaveCount(3)
+  await expect(dialog).toContainText('密码等敏感字段会脱敏'); await expect(dialog).toContainText('暂不支持下载'); await expect(dialog).toContainText('暂无输出')
+  await expect(dialog).toContainText('display diagnostic-information')
   await expect(dialog).toContainText('格式未识别'); await expect(dialog).toContainText('识别不完整')
   expect(requests.filter(item => item.method !== 'GET')).toEqual([])
   expect(requests.filter(item => item.endpoint.endsWith('/download'))).toEqual([])
-  scenarios.push('manifest-authorizes-only-ready-readonly-commands-and-excludes-configuration')
+  scenarios.push('manifest-authorizes-full-diagnostic-and-ready-readonly-commands-and-excludes-configuration')
   for (const viewport of viewports) {
     await page.setViewportSize(viewport)
     const box = await dialog.boundingBox()
@@ -112,8 +116,8 @@ try {
   const zip = await zipEvent; expect(zip.suggestedFilename()).toBe(`diagnostics-${runId}.zip`)
   await zip.saveAs(path.join(output, zip.suggestedFilename()))
   const members = JSON.parse(execFileSync('python', ['-c', 'import json,sys,zipfile\nwith zipfile.ZipFile(sys.argv[1]) as z:\n print(json.dumps({"names":z.namelist(),"text":z.read("command-001.txt").decode(),"manifest":json.loads(z.read("manifest.json"))}))', path.join(output, zip.suggestedFilename())], { encoding: 'utf8' }))
-  expect(members.names).toEqual(['manifest.json', 'command-001.txt', 'command-002.txt']); expect(members.text).toBe(raw[0]); expect(members.manifest).toEqual(manifest())
-  scenarios.push('actual-chrome-zip-download-contains-only-two-eligible-commands-and-manifest')
+  expect(members.names).toEqual(['manifest.json', 'command-001.txt', 'command-002.txt', 'command-003.txt']); expect(members.text).toBe(raw[0]); expect(members.manifest).toEqual(manifest())
+  scenarios.push('actual-chrome-zip-download-contains-full-diagnostic-and-other-eligible-commands-with-manifest')
   await close(); mode = 'corrupt'; await open()
   await dialog.getByRole('button', { name: '下载 TXT', exact: true }).first().click()
   await expect(dialog.getByRole('alert')).toHaveText('诊断输出校验失败，暂不可下载。')
@@ -144,6 +148,17 @@ try {
   await expect(dialog.getByRole('button', { name: '下载诊断 ZIP', exact: true })).toBeDisabled(); expect(downloads).toHaveLength(2)
   scenarios.push('late-first-task-manifest-cannot-enable-downloads-in-second-task')
   expect(requests.filter(item => item.method !== 'GET')).toEqual([])
+  await close()
+  await expect(page.getByRole('button', { name: '采集全机诊断', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: '采集全机诊断', exact: true }).click()
+  await expect.poll(() => requests.filter(item => item.method === 'POST').length).toBe(2)
+  const submitted = requests.filter(item => item.method === 'POST')
+  expect(submitted[0].endpoint).toBe('/api/system/h3c/task-definitions')
+  expect(submitted[0].payload).toEqual({ id: expect.any(String), profileId: 'mock-h3c-profile',
+    command: 'display diagnostic-information', commands: ['display diagnostic-information'], timeoutMs: 600000, enabled: true })
+  expect(submitted[1].endpoint).toBe(`/api/system/tasks/${submitted[0].payload.id}/runs`)
+  expect(JSON.stringify(submitted)).not.toMatch(/password|credentialReference|screen-length/)
+  scenarios.push('full-diagnostic-button-submits-only-the-fixed-command-and-ten-minute-task-without-credentials')
   expect(errors).toEqual([]); expect(unexpected).toEqual([])
   expect(requests.filter(item => item.endpoint.endsWith('/download')).every(item => !item.query || item.query === '?commandIndex=0')).toBe(true)
   result.status = 'PASS'; fs.rmSync(path.join(output, 'failure.png'), { force: true })

@@ -812,7 +812,7 @@ app.MapPost("/api/system/config-backups", (HttpContext context, ConfigBackupRequ
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     try
     {
-        var batch = backups.Start(request.ProfileIds ?? Array.Empty<string>(), CurrentIdentity(context), CurrentSiteScope(context));
+        var batch = backups.Start(request.ProfileIds ?? Array.Empty<string>(), CurrentIdentity(context), CurrentSiteScope(context), request.ConfigurationKind);
         return Results.Accepted($"/api/system/config-backups/batches/{batch.Id}", batch);
     }
     catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
@@ -824,11 +824,12 @@ app.MapGet("/api/system/config-backups/batches/{id}", (HttpContext context, stri
     return backups.GetBatch(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } batch
         ? Results.Ok(batch) : Results.NotFound();
 });
-app.MapGet("/api/system/config-backups", (HttpContext context, string profileId,
+app.MapGet("/api/system/config-backups", (HttpContext context, string profileId, string? configurationKind,
     ConfigBackupService backups) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
-    return Results.Ok(backups.List(profileId, CurrentSiteScope(context)));
+    try { return Results.Ok(backups.List(profileId, CurrentSiteScope(context), configurationKind)); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
 app.MapGet("/api/system/config-backups/{id}/download", (HttpContext context, string id,
     ConfigBackupService backups) =>
@@ -2138,7 +2139,7 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cH
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true, IReadOnlyList<string>? Commands = null);
-internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds);
+internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds, string? ConfigurationKind = null);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference = "", string HostKeySha256 = "", bool Enabled = true,
