@@ -2,17 +2,21 @@
 
 ## 2026-11-06 当前交付与边界
 
-整体状态：**PARTIAL**。Branch：`codex-A/netconsole-next-r3-dual-ac`。本批功能已本地提交 `a3954a5e95590782a576272d4e4b3c526eab248b`，文档以所属 commit 为准；起点 `4dac9fc`。未 Push、Merge、Release。
+整体 **PARTIAL**。Branch：`codex-A/netconsole-next-r3-dual-ac`。最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`；文档以所属提交为准。保留当前分支，不 Push、Merge、Release。
 
-网络设备 CLI 的采集、连接测试与 Web Shell 统一 CPython + Netmiko；显式驱动映射、按 Profile 自动读密码、认证后首次/变化指纹自动保存、旧 STRICT 自动化策略、原子设备/Profile onboarding 和 ZTE 凭据 UI 已集成。普通密码为受数据根 ACL 保护的 SQLite 明文字段，不使用普通设备 DPAPI 中心；API 普通查询不回显密码。Linux 服务器终端采用独立 SSH.NET ShellStream，Site Jump Host 已通过实际回环转发和 Chrome 设置页验证。
+网络设备CLI采集、连接测试与Web Shell统一CPython + Netmiko；显式SSH/Telnet驱动、Profile密码自动读取、认证后Host Key自动信任/轮换及原子onboarding已有本机验收。普通密码是受ACL保护的SQLite明文字段，无普通设备DPAPI中心。Linux仍采用独立SSH.NET ShellStream；Site Jump实际回环转发与Settings页、ZTE凭据UI已有证据。AC1/AC2/SW经Netmiko自动认证及只读命令PASS；FIT-AP由AC管理，旧SW Exec/独立FIT-AP登录结论只作历史。
 
-当前 AC1/AC2/SW 经 Netmiko 自动认证及只读版本/AP/接口/LLDP 命令 PASS；FIT-AP 由 AC 管理。证据 `D:\study\NetConsole-Next-Workspace\reports\netmiko-simulator-20261106.json`。配置写入 0，旧 SW Exec/独立 FIT-AP Telnet/DPAPI 结论不再作为当前阻断。
+最新本机增量：`fda2a68` AP Group来源身份/schema24；`2696390` FULL授权投影内按来源水位收敛候选缓存；`764d764` F10 conservative更换隔离；`e12d062` 设备UUID→明确Profile配置备份入口与保序/重复次数有界diff；`8320e2f` Netmiko策略、共享进程预算、专用批量连接及Terminal reason修复。缓存退役不表示业务ENDED；F10验证identity/runtime/离线输出/来源隔离，不构建正式replacement link，也未产生实时Raw分段完整性证据。
 
-最终 Service build（0 warning/error）和完整 harness、Vue typecheck、8 files/23 tests、worker 20 tests、离线工具 7 tests、网络终端完整 E2E、Linux 最终 Edge/HTTP/WebSocket/restart-idle-delete（含完全静默撤权/SSH 释放）、Jump 实际回环转发与 Settings Chrome 均 PASS。最终离线候选 fresh Vite/CPython 构建和隔离运行 PASS：独立 cwd/Production 数据，PATH 仅 System32，内置 Netmiko 4.7/Paramiko 4，当前静态页面 hash、回环 H3C SSH 和 Linux WS，EXE ProductVersion 含完整 `a3954a5e95590782a576272d4e4b3c526eab248b`，最终五项门禁 PASS，Service/Python 进程及本轮临时目录残留均为 0。不是目标机安装/SCM/GUI 证据。
+Group合同/Projection PASS、Runtime13/13、cache4/4、F10 3/3 PASS。配置备份独立6/6、Chrome源码UI+API mock6场景、实际HTTP Service→CPython/Netmiko→合成回环SSH备份19 checks PASS。完整Web12 files/82 tests/typecheck PASS，最终Release Service/Tests构建0 warnings / 0 errors。浏览器mock/离线fixture/合成SSH均有各自范围，不代表真实型号兼容。
 
-仍待正式 AP candidate/replacement 与 Domain/group 生命周期、双 AC HA/切换/恢复/实时 AP 归属、完整模块工作台、Windows 原生 125%、跨机 Web/TLS 和目标机安装。真实网络设备、Linux 与堡垒机 `REAL_DEVICE_PENDING`；当前 Web 限 loopback，离线候选依赖目标机 .NET 10 ASP.NET Core Runtime。未触碰旧 NetConsole 真实数据根。
+本轮Netmiko轻量AUTO/legacy策略6组、worker24/24、Service实例共享worker上限16的预算6组PASS。专用批量连接API/UI已补齐：明确库存UUID及精确Profile、整批可见性优先、复用既有任务计划/调度器/Netmiko，固定只读display version；定向8/8、Chrome mock4组、guard后实际HTTP→Netmiko→合成回环SSH14 checks PASS。仅SUPERADMIN与启用的独立H3C，FIT-AP仍经AC管理。Terminal reason 最终修复后的默认完整 Service harness（session `69905`）EXIT 0 PASS；`SITE_JUMP_HTTP_NETMIKO=PASS`、`SITE_JUMP_RESTART_DELETE=PASS`，首次 FAILED 即提供稳定错误码。批量8组已纳入默认完整harness；资源预算不构成SSH连接池或第二套调度器。
 
-当前入口：`AUTONOMOUS_RUN_STATE.json`、`COMPLETE_TEST_MATRIX.md`、`IMPLEMENTATION_MATRIX.md`、`REMAINING_GAPS.md` 和 `FINAL_HANDOVER.md`。架构审计见 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md`，本批验收见 `docs/WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md`。
+当前离线候选 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；fresh Vite + 内置 CPython 3.13 / Netmiko 4.7 / Paramiko 4；Production、独立 cwd/隔离数据、PATH 仅 System32，无 Python/worker 覆盖。`OFFLINE_BUNDLED_RUNTIME`、`STATIC_UI`、`NETMIKO_CONNECTION`、`LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 五项 PASS；STATIC_UI覆盖Linux/Jump/Terminal/Devices批量与备份/ConfigBackups。候选测试启动的 Next Service/Python 残留 0，offline-candidate 临时目录 0；用户预览 PID `90348` 保留。历史a3954a5候选仅保留原范围；当前8320e2f候选通过本机隔离验收，候选不是正式发布。
+
+尚待正式candidate确认/拒绝、identity合并/拆分、replacement权威写入/撤销与revision并发合同，以及可靠终止证据与Domain/group生命周期；不从缺席推断ENDED。VLAN实时CLI采集、完整多厂商结构化业务/原版AC命令及组证据、双AC HA/切换/恢复/实时归属、真实来源键/共享组、剩余工作台、原生Windows125%、跨机Web/TLS、目标机安装/SCM/升级卸载均待验收。通用断线自动重连/退避/命令重放尚未实现。Web继续loopback，离线候选需要目标机.NET10 ASP.NET Core Runtime；真实网络设备/Linux/堡垒机保持`REAL_DEVICE_PENDING`。无设备配置写入，未访问旧NetConsole数据根。
+
+当前入口：`AUTONOMOUS_RUN_STATE.json`、`COMPLETE_TEST_MATRIX.md`、`IMPLEMENTATION_MATRIX.md`、`REMAINING_GAPS.md`、`FINAL_HANDOVER.md`。连接架构审计与原批次见 `../NETMIKO_CONNECTION_AUDIT_20261106.md` / `../WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md`；本轮证据见 `../AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md`、`../AP_GROUP_CACHE_ACCEPTANCE_20261106.md`、`../AP_REPLACEMENT_F10_ACCEPTANCE_20261106.md`、`../CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md`、`../NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md`、`../DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md`。
 
 ## 以下为 2026-11-05 历史报告
 

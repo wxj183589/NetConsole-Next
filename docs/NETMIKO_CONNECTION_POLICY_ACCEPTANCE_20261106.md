@@ -116,7 +116,7 @@ worker 禁用用户 `known_hosts` 读写和交互确认，登录及 Netmiko 准�
 
 预算测试复用测试程序集作为 JSON worker 子进程，不依赖外部 Python 安装，也不使用真实设备。它验证生产 C# 进程启动和释放路径；实际 CPython/Netmiko 协议及 Jump 转发仍由 Python 单元测试和根任务 E2E 覆盖。
 
-已有 Windows 离线证据覆盖 CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装、隔离运行包搬迁和 loopback Telnet，以及此前的候选组合测试。这些既有包不能证明已包含本批连接修复；应以根任务随后生成的新候选及其证据为准。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；当前 framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
+本批准确功能提交为 `8320e2f0653c0f295700883c1900eef0a0690632`；当前候选 `build/service-8320e2f-20261106` 的 ProductVersion 已核验包含该完整 SHA。CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装与复制前后隔离 driver/Telnet smoke 均 PASS；候选 Production/独立 cwd-data/PATH 仅 System32 的五项运行门禁均 PASS，详见 [当前候选验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；当前 framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
 
 已有 `reports/netmiko-simulator-20261106.json` 记录 HCL AC1 `192.168.56.2`、AC2 `192.168.56.5` 和 SW `192.168.56.3` 的只读命令返回；这是前序批次证据，本次连接策略审计未重新登录这些模拟器。远端配置写入为 0。
 

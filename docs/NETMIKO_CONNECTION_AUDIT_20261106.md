@@ -75,7 +75,11 @@
 
 原始入口盘点仅进行了源码读取和入口搜索。批量连接入口在本批新增，已补充前端验证；其后端与设备验收状态以 [专项验收](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md) 为准，不覆盖下列历史 checkpoint 的验证范围。
 
-## 验证范围
+## 当前集成验证范围
+
+功能提交 `8320e2f0653c0f295700883c1900eef0a0690632` 的最终完整 Service harness 为 EXIT 0（session69905），包含共享预算及终端首次 FAILED 稳定原因码修复。当前策略 6 组、共享 worker16 预算 6 组、worker 24/24、批量连接服务 8/8、实际 HTTP→Netmiko→合成 SSH 14/14、Vue 12 files/82 tests/typecheck、Chrome 批量 mock 4 组均 PASS。最终 Jump 转发与重启删除两项 PASS。准确 SHA 候选的五项隔离运行门禁均 PASS，版本及清理见 [当前候选验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。这些证据不关闭上述业务及实机缺口。
+
+## 前序连接批次验证范围（历史）
 
 完整 Service harness PASS；Vue 类型检查和 8 files / 23 tests PASS；`netmiko_worker_test.py` 20 项、离线打包单元测试 4 项、Service 候选组合测试 3 项 PASS。Windows 离线包隔离运行、搬迁清单和回环 Telnet 通过。网络终端浏览器测试使用 loopback 合成 SSH/Telnet 服务，覆盖登录、命令、中文、AUTO 回退、COM、分屏、resize、重连及录制回放。Linux 使用当前 Vue Webroot 和 loopback Paramiko 模拟器通过 HTTP/WebSocket 与 Edge 浏览器门禁；Jump 使用真实回环 SSH 转发通过 HTTP/Netmiko/WebSocket/重启门禁，Settings Chrome 浏览器另使用 mock API 验证界面。以上模拟环境证据不等同真实设备、真实 Linux 主机、现场网络或其他 Windows 环境验收。
 

@@ -39,6 +39,8 @@
 
 ## 已有测试证据
 
+最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`；完整 Service harness 在库存关联 guard、共享预算及终端原因码最终修复后 EXIT 0（session69905）。准确 SHA 离线候选通过当前页面可达、静态 hash 和回环 SSH/Linux 运行门禁，见 [当前候选验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)；运行测试不会扩大下表的浏览器 mock 或合成设备证据范围。
+
 | 验证 | 结果与范围 |
 | --- | --- |
 | Vue 完整测试 | root 执行：12 files / 82 tests PASS。其中新批量专项 17 tests；批量专项与原设备详情定向运行 23/23 PASS |

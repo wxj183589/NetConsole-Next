@@ -2,9 +2,17 @@
 
 ## 2026-11-06 当前状态补充
 
-本批功能已本地提交 `a3954a5`，文档以所属 commit 为准。配置备份继续复用既有任务/Raw/claims，设备 CLI 当前统一 Netmiko；普通密码存于受 ACL 保护的 Profile SQLite 字段，自动读取，不使用普通设备 DPAPI 凭据中心。
+配置备份增量已本地提交 `e12d062`，完整验收见 `../CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md`。最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。整体PARTIAL，不Push、Merge、Release。继续复用任务/Raw/claims、统一Netmiko连接和Profile密码自动读取；普通密码为受ACL保护的SQLite字段，无普通设备DPAPI中心。
 
-配置备份 1/1 隔离证据保持；当前 HCL AC1/AC2/SW 只读连接/命令 PASS 不代表配置备份真实业务已全部验收。Service harness、Vue typecheck、8 files/23 tests 和离线候选运行 PASS；真实设备、HA 与目标机安装仍待完成。没有设备配置写入。
+设备详情按库存UUID打开明确Profile的备份；进入只加载历史，明确点击才采集，不按名称/IP/首条记录猜关联。当前仅支持独立H3C，FIT-AP经AC管理；隐藏目标先404，不支持厂商/FIT-AP返回409，整批预检拒绝时不创建部分任务。ADMIN只读历史/差异/下载，SUPERADMIN负责写入；设备切换、撤权与迟到响应不能回灌旧设备状态。
+
+差异对既有256KiB上限内完整行序列比较，保留顺序与重复次数，不再限前16384行。先去共同前后缀，中段LCS预算1048576单元；超预算保守替换整个中段，不保证最短编辑。AddedLines/RemovedLines为完整计数，ChangedLines=min(AddedLines, RemovedLines)为配对替换数而非总数；每侧预览最多256行并提示截断。
+
+备份批次Release Service/Tests 0 warnings/errors、默认完整Service harness PASS；备份使用独立入口`CONFIG_BACKUP_TESTS=6/6 PASS`。该批次Web11 files/65 tests/typecheck PASS；Chrome源码UI+API mock6场景PASS，1920×1080 DPR1。`CONFIG_BACKUP_HTTP_NETMIKO_E2E=PASS (19 checks)`：实际HTTP Service→CPython/Netmiko→合成回环SSH，覆盖双目标显式采集、相同/重排/重复备份、版本/脱敏下载/hash、ADMIN授权、跨Site隔离与不支持目标零任务/零命令。HTTP SUPERADMIN为全局；隐藏且不支持目标先404的非全局边界由直接Service scope测试验证。
+
+当前整体Web结果12 files/82 tests/typecheck PASS；AUTO/legacy策略6组、共享worker16预算6组、批量8/8及guard后HTTP14/14 PASS。最终Release构建0 warnings / 0 errors；Terminal reason 最终修复后的默认完整 Service harness（session `69905`）EXIT 0 PASS；`SITE_JUMP_HTTP_NETMIKO=PASS`、`SITE_JUMP_RESTART_DELETE=PASS`，首次 FAILED 即提供稳定错误码。当前 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106` 候选的`OFFLINE_BUNDLED_RUNTIME`、`STATIC_UI`、`NETMIKO_CONNECTION`、`LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 五项 PASS，ProductVersion `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；本节备份证据保持原业务范围。
+
+旧a3954a5候选仅作历史记录；当前8320e2f候选已在隔离环境通过本机验收。这些均不是现场H3C或其他型号兼容证据。仅Next Workspace隔离fixture，未访问旧数据根，未写设备配置，真实设备保持REAL_DEVICE_PENDING。
 
 ## 以下为 2026-11-05 原批次历史记录
 

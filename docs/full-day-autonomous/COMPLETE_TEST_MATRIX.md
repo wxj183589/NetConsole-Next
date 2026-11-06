@@ -1,12 +1,37 @@
 # 完整测试矩阵
 
-2026-11-06 检查点 N：`AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md` 为本批证据；Group合同10场景、Projection、Runtime13/13、schema24初始化/降级/幂等/回滚、HTTP16 marker、完整Service harness、前端9 files/29 tests、typecheck/Vite、Chrome15状态均PASS。HTTP为真实隔离Service＋离线fixture，浏览器为API mock；1920/2560 DPR1。完整57场景/正式生命周期/实时HA并未据此通过。旧离线候选保持绑定 `a3954a5`，不包含本批。
+2026-11-06 当前集成检查点：功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。本轮 AUTO/legacy 策略、共享 worker 预算、专用批量连接、Terminal reason 修复和当前离线候选均已完成本机最终验证。整体 **PARTIAL**，实机保持 **REAL_DEVICE_PENDING**。
 
-下表为连接批次验收，未改动项目的证据继续按原范围有效。
+| 门禁 | 当前证据 | 证据边界 |
+| --- | --- | --- |
+| Release Service / Tests build | PASS，0 warnings / 0 errors | 最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632` |
+| 默认完整 Service harness | session `69905`，EXIT 0 PASS；Terminal reason 最终修复后 | 含策略6组、共享worker预算6组、批量连接8组及既有AP Group/cache/F10/runtime/Raw/并发/迁移/崩溃恢复；配置备份6组保留独立入口 |
+| 配置备份定向 harness | CONFIG_BACKUP_TESTS=6/6 PASS | 完整行序/重复次数、超过16384行、大输入分配预算、目标预检/权限与既有备份回归 |
+| Web typecheck / Vitest | PASS；12 files / 82 tests PASS | 包含配置备份与专用批量连接；批量专项17 tests，加既有设备详情定向23/23 PASS，不替代后端连接验证 |
+| 配置备份 Chrome UI | 6 scenarios PASS | 1920×1080 DPR1；源码 UI + API mock，不表示现场采集 |
+| 配置备份 HTTP→Netmiko | CONFIG_BACKUP_HTTP_NETMIKO_E2E=PASS (19 checks) | 实际 HTTP Service→CPython/Netmiko→合成回环 SSH，非真实设备兼容 |
+| AP Group 来源身份/schema24 | 合同10场景、迁移/回滚、HTTP16、浏览器15 PASS | fda2a68；HTTP为隔离Service+离线fixture，浏览器为API mock |
+| AP Group 候选缓存 | WIRELESS_GROUP_CACHE_TESTS=4/4 PASS | 2696390；仅可重建缓存收敛，不代表业务 ENDED |
+| F10 conservative 更换隔离 | WIRELESS_REPLACEMENT_TESTS=3/3 PASS | 764d764；真实隔离SQLite、离线command output与fact: provenance；未生成实时Raw分段 |
+| Wireless projection / runtime | Projection/Group合同 PASS；Runtime13/13 PASS | F10与缓存定向回归及完整harness；不代表正式mutation或HA |
+| Netmiko AUTO/legacy策略 | H3C_CONNECTION_POLICY_TESTS=PASS (6 groups)；worker24/24 PASS | 显式允许AUTO仅协商/连接超时一次Telnet尝试；认证/HostKey/Jump/取消等不回退；H3C legacy限定条件一次兼容尝试，无通用命令重放 |
+| Service实例共享worker预算 | NETMIKO_WORKER_BUDGET_TESTS=PASS (6 groups, shared limit 16) | 真实本机合成子进程；采集/单台测试/网络WebShell/Jump探测共享，等待可取消，进程实际退出后归还；不跨Service实例 |
+| 专用批量连接harness | DEVICE_CONNECTION_TESTS=8/8 PASS；已纳入默认完整harness | 精确库存UUID、404优先、409零写入、权限/取消、关联重绑及映射完整性；最终完整Service回归PASS |
+| 专用批量连接Chrome | 4 groups PASS | 真实Chrome源码Vue/Vite + 业务API mock；创建/刷新/取消、Site迟到隔离、ADMIN隐藏及1920/2560视口 |
+| 专用批量连接HTTP→Netmiko | guard后最终复验14/14 PASS | 实际HTTP Service→CPython/Netmiko→合成loopback SSH；凭据/指纹、双目标报告、权限/模块、取消释放，不代表真实设备 |
+| 本轮最终整合/提交 | PASS；功能提交 `8320e2f0653c0f295700883c1900eef0a0690632` | Terminal reason 最终修复后的默认完整 Service harness（session `69905`）EXIT 0 PASS；`SITE_JUMP_HTTP_NETMIKO=PASS`、`SITE_JUMP_RESTART_DELETE=PASS`，首次 FAILED 即提供稳定错误码 |
+| 当前离线候选 | `OFFLINE_BUNDLED_RUNTIME`、`STATIC_UI`、`NETMIKO_CONNECTION`、`LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE` 五项 PASS | 路径 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`；ProductVersion `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；fresh Vite + 内置 CPython 3.13 / Netmiko 4.7 / Paramiko 4；Production、独立 cwd/隔离数据、PATH 仅 System32，无 Python/worker 覆盖；STATIC_UI覆盖Linux/Jump/Terminal/Devices批量与备份/ConfigBackups；候选测试启动的 Next Service/Python 残留 0，offline-candidate 临时目录 0；用户预览 PID `90348` 保留 |
+
+本轮提交：`fda2a68` → `2696390` → `764d764` → `e12d062` → `8320e2f`；文档以所属提交为准。详见 `../AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md`、`../AP_GROUP_CACHE_ACCEPTANCE_20261106.md`、`../AP_REPLACEMENT_F10_ACCEPTANCE_20261106.md`、`../CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md`、`../NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md`、`../DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md`。没有设备配置写入，未访问旧NetConsole数据根，不Push、Merge、Release。候选本机运行通过不替代目标机安装或实机兼容验收。
+
+## a3954a5 连接批次历史验收
+
+下表保留原批次结果。其“最终/当前”均只指该历史时点；候选未包含后续 Group/cache/F10/配置备份及最新协商补强，不作为当前候选 PASS。未改动能力的既有证据继续按原范围有效。
+
 
 日期：2026-11-06。本批功能已本地提交 `a3954a5`，文档以所属 commit 为准（起点 `4dac9fc`）；整体 PARTIAL。下表中的本机或模拟证据不等于真实硬件兼容。
 
-| 门禁 | 当前结果 | 证据边界 |
+| 门禁 | 当时结果 | 证据边界 |
 | --- | --- | --- |
 | Service Release build | PASS，0 warning/error | 最后 scope 修复后 |
 | 完整 Service harness | PASS | 含 ACL/Linux/凭据/Jump、原子 onboarding、任务/Raw/权限回归；旧并发重试失败已由当前通过结果替代 |

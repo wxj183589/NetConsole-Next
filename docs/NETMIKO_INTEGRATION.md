@@ -50,6 +50,14 @@ H3C profile 的密码存于设备 profile 记录，按 profile ID 读取；共�
 
 ## 本轮定向回归
 
+2026-11-06 当前连接增量：采集、连接测试与网络 Web Shell 共用有界 AUTO 协议策略；显式允许的 H3C 旧 Host Key 协商兼容最多再尝试一次。所有网络 worker 与 Jump probe 共享每 Service 进程 16 个名额，等待可取消，实际子进程退出后才归还。没有新增连接池或任意命令重放，通用断线自动重连仍未实现。策略与原版差异见 [连接策略验收](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md)。
+
+设备页现有专用批量连接入口，按精确库存 ID 创建固定只读 `display version` 任务计划，复用已有调度、报告与取消；只支持已关联有效档案的独立 H3C。预检和执行 scope 捕获间的库存重绑会在任务写入前拒绝。详见 [批量连接验收](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md)。
+
+本批功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`；Release 构建 0 warnings / 0 errors；终端原因码修复后的最终默认 Service harness EXIT 0（session69905）；连接策略 6 组、共享预算 6 组、批量连接 8/8、Netmiko worker 24/24、Vue 12 files / 82 tests 与 typecheck、Chrome 批量页面 mock 4 组及真实 Service→Netmiko→合成 SSH 14/14 均 PASS。Jump 最终回环/重启删除两项 PASS，首次 FAILED 原因码有确定性回归。当前准确 SHA 离线候选五项运行门禁 PASS，见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)；下列旧计数保留为历史。
+
+以下为前序 Linux/Jump 批次的历史测试记录，计数保留当时范围：
+
 - Linux server catalog/concurrency/migration：`dotnet run --project tests/NetConsole.Next.Service.Tests/NetConsole.Next.Service.Tests.csproj -c Release --no-restore -- --linux-server-tests`，PASS。并发相同 Host Key 现按同一配置版本幂等成功，历史只记录一次。
 - Linux HTTP/WebSocket + Paramiko loopback SSH simulator：`py -3.13 tests/linux_ssh_e2e.py`，PASS；没有连接真实 Linux 主机。
 - ZTE 凭据 HTTP 回归：`py -3.13 tests/zte_credential_e2e.py`，PASS。

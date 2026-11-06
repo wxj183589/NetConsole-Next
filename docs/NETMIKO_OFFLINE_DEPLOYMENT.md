@@ -28,6 +28,8 @@ py -3.13 tools/publish_windows_offline.py --name service-offline-candidate --bun
 
 组合工具还要求构建机已有 Node.js 及准备好的 `web/node_modules`。它直接调用本地 Vite，在 Workspace `build/` 临时目录从当前 Vue 源码构建页面，再覆盖候选的 Webroot；不会下载 npm 依赖，也不修改源码 `wwwroot`。缺少入口文件或入口引用的资源时构建失败，避免新服务意外附带旧 Linux/终端/中转页面。目标机运行候选无需 Node.js 或系统 Python。
 
-2026-11-06 候选为 Workspace `build/service-web-linux-jump-a3954a5-20261106`，程序集 ProductVersion 为 `1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b`，内含 `tools/netmiko/`；构建时前后隔离 driver/Telnet smoke PASS。实际候选启动与回环连接验收记录见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。这不替代目标机安装、Windows SCM 生命周期或升级卸载验收。
+历史连接批次候选为 Workspace `build/service-web-linux-jump-a3954a5-20261106`，程序集 ProductVersion 为 `1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b`，内含 `tools/netmiko/`；构建时前后隔离 driver/Telnet smoke PASS。此包早于 Group/cache/F10/配置备份及最新连接/批量测试增量，不作为当前候选。最新准确功能提交的候选及运行证据见 [本批验收](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md)。这不替代目标机安装、Windows SCM 生命周期或升级卸载验收。
+
+当前本机候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`；配套 bundle 为 `build/netmiko-8320e2f-20261106`。当前 Vue 源码构建、复制前后 driver/Telnet smoke，以及 Production/独立 cwd-data/PATH 仅 System32 的候选运行五项门禁均 PASS，覆盖内置依赖、HTTP 资源 hash、设备批量与备份页面可达、回环 SSH Netmiko 登录和 Linux WebSocket。Service/Python 及该轮临时目录残留为 0；准确证据见上述专项文档和 Workspace `reports/netmiko-final-8320e2f-20261106.json`。此结果仅为本机候选运行验收，未安装 SCM，未发布。
 
 服务实际运行账户也必须能读取这些路径。重新构建以更新 worker 或依赖；包内 worker 必须与服务版本一起交付。构建与导入检查不连接设备，不代表设备兼容性、模拟器验收或生产验收。当前脚本只验证 Windows x64 CPython 3.13，其他平台和版本需要分别验证。

@@ -19,7 +19,7 @@
 
 SmartHub 只读参考为 `D:\study\h3cai-smarthub\ui-reconstruction` 的布局、导航与设计 token；保留 Next 的 Vue 3/Element Plus 和既有业务，不迁移 AI 模块。Linux/中转表单及终端与现有布局和主题合并。
 
-## 当前测试证据
+## 前序 Linux/Jump 批次测试证据
 
 | 层级 | 结果与边界 |
 | --- | --- |
@@ -29,12 +29,30 @@ SmartHub 只读参考为 `D:\study\h3cai-smarthub\ui-reconstruction` 的布局�
 | 网络终端完整 E2E | PASS；loopback SSH/Telnet/AUTO、中文、resize、重连、分屏、COM、ticket、历史/回放/导出；无效 resize 不再断开 WebSocket |
 | Linux HTTP/WebSocket/SSH + Edge | 最后权限修复后完整复验 PASS；真实 loopback SSH 认证，CRUD、空密码保留、控制键/中文/ANSI、resize、多会话、两种重连、Site 隔离、指纹、并发限制、录制与重启/idle/delete；完全静默撤权后关闭 WS 并释放 SSH |
 | Jump 真实转发与 Settings 浏览器 | `SITE_JUMP_HTTP_NETMIKO`、`SITE_JUMP_RESTART_DELETE` PASS：真实 loopback direct-tcpip、两 Site、采集/连接测试/Web Shell、并发释放/取消、指纹/凭据/错误分类、Telnet 绕过及重启；Chrome Settings mock API 页面门禁另 PASS |
-| 最终离线候选运行 | `OFFLINE_CANDIDATE=PASS`；候选 EXE 从自身目录启动，清除 Python/worker 覆盖且 PATH 无系统 Python；内置依赖、HTTP 静态资源 hash、当前 Linux/Jump/Terminal 入口、Netmiko SSH 自动登录/命令及 Linux WS ANSI/中文/原始键盘/resize/close 均通过 |
+| 历史 a3954a5 离线候选运行 | `OFFLINE_CANDIDATE=PASS`；候选 EXE 从自身目录启动，清除 Python/worker 覆盖且 PATH 无系统 Python；内置依赖、HTTP 静态资源 hash、当时 Linux/Jump/Terminal 入口、Netmiko SSH 自动登录/命令及 Linux WS ANSI/中文/原始键盘/resize/close 均通过 |
 | 授权 HCL 模拟器 | AC1/AC2/SW 通过当前 Netmiko 执行只读命令；FIT-AP 保持 AC 管理；配置写入 0 |
 
 模拟器证据：Workspace `reports/netmiko-simulator-20261106.json`。AC1 `192.168.56.2:22`、AC2 `192.168.56.5:22` 使用 `hp_comware` 执行版本及 AC AP 查询；SW `192.168.56.3:22` 执行版本、接口摘要和 LLDP 查询。此证据确认登录和命令返回，不证明 AP 身份、实时归属、主备状态或 HA。历史 SW Exec 与 FIT-AP 独立 Telnet 结果保留为历史记录，不再作为当前连接路径的阻断。
 
-最终候选路径：`D:\study\NetConsole-Next-Workspace\build\service-web-linux-jump-a3954a5-20261106`。程序集 ProductVersion 为 `1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b`。包含隔离 CPython 3.13、Netmiko 4.7.0、Paramiko 4.0.0 和本批最新 Vue 页面。复验入口为 `py -3.13 -B tests/offline_candidate_e2e.py --candidate <上述目录>`；测试驱动 Python 只运行模拟器和 HTTP 客户端，候选服务使用自身运行包。候选 Service/worker 无残留，隔离临时数据已回收；未执行 Windows SCM 安装、升级或卸载。
+历史候选路径：`D:\study\NetConsole-Next-Workspace\build\service-web-linux-jump-a3954a5-20261106`。程序集 ProductVersion 为 `1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b`。包含隔离 CPython 3.13、Netmiko 4.7.0、Paramiko 4.0.0 和当时 Vue 页面，不覆盖后续 Group/cache/F10/备份及连接策略/批量入口。复验入口为 `py -3.13 -B tests/offline_candidate_e2e.py --candidate <目录>`；测试驱动 Python 只运行模拟器和 HTTP 客户端，候选服务使用自身运行包。历史候选 Service/worker 无残留，隔离临时数据已回收；未执行 Windows SCM 安装、升级或卸载。
+
+最新连接策略、共享 worker 预算与批量连接入口的源码和回归证据分别见 [连接策略](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md) 与 [批量测试](DEVICE_CONNECTION_BATCH_ACCEPTANCE_20261106.md)。
+
+## 当前准确功能提交候选
+
+功能提交：`8320e2f0653c0f295700883c1900eef0a0690632`。最终终端首次 FAILED 原因码修复后的 Release 构建为 0 warnings / 0 errors；完整默认 Service harness 为 EXIT 0（session69905）。Jump 最终复验 `SITE_JUMP_HTTP_NETMIKO` 与 `SITE_JUMP_RESTART_DELETE` 均 PASS；测试仍在首次 FAILED 时断言稳定原因码。确定性回归阻塞录制收尾，验证内存及 Catalog 在收尾前后保持一致。
+
+当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-8320e2f-20261106`，EXE ProductVersion 已逐字核对为 `1.0.0+8320e2f0653c0f295700883c1900eef0a0690632`。离线 bundle 为 `build/netmiko-8320e2f-20261106`，使用本地 18 个固定版本/hash wheel，`--no-index --require-hashes` 安装。组合构建从当前 Vue 源码生成 Webroot，未改源码静态资源；复制前后隔离 driver/Telnet smoke 均 PASS。
+
+`py -3.13 -B tests/offline_candidate_e2e.py --candidate <当前候选>` 的五项门禁均 PASS：
+
+- `OFFLINE_BUNDLED_RUNTIME`：内置 CPython 3.13、Netmiko 4.7.0、Paramiko 4.0.0。
+- `OFFLINE_STATIC_UI`：HTTP 字节 hash 与候选一致，入口可达 Linux、Jump 设置、终端、设备批量连接/备份及配置备份页面。
+- `OFFLINE_NETMIKO_CONNECTION`：候选服务通过内置 worker 自动登录合成回环 SSH 并执行只读命令。
+- `OFFLINE_LINUX_WEBSOCKET`：保存密码自动读取，ANSI/中文、原始控制键、resize 与关闭通过。
+- `OFFLINE_CANDIDATE`：Production 环境、独立 cwd/数据根、PATH 仅 System32，清除系统 Python/worker 覆盖。
+
+结束后核验 Next Service/Python 残留为 0，`offline-candidate-*` 临时目录为 0；用户 Vite PID90348 保留。结构化证据为 Workspace `reports/netmiko-final-8320e2f-20261106.json`。候选在 `build/`，没有安装 SCM，没有执行 Push、Merge 或 Release。目标机仍需 .NET 10 ASP.NET Core Runtime，安装/升级/卸载与实机验收继续 pending。
 
 ## 保留边界
 
