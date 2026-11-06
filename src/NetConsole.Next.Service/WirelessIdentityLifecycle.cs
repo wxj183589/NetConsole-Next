@@ -118,6 +118,7 @@ internal sealed class WirelessIdentityLifecycleService(RuntimeSettings settings,
             if (!string.Equals(expected, review.IdentityRevision, StringComparison.Ordinal))
                 throw new WirelessIdentityLifecycleException("IDENTITY_STALE_REVIEW", "The review is stale and must be refreshed.");
             if (decision == "ACCEPT") EnsureUniqueIdentity(request.ResourceId, resources);
+            if (decision == "SUPERSEDE") EnsureReplacementVisible(request.ResourceId, request.ReplacementResourceId, resources);
             var next = NextState(current.State, decision, review, request.ReplacementResourceId);
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var nextRevision = WirelessProjectionEngine.Fingerprint(new[] {
@@ -193,6 +194,16 @@ internal sealed class WirelessIdentityLifecycleService(RuntimeSettings settings,
             !string.Equals(item.Id, resourceId, StringComparison.Ordinal) && item.NormalizedMacSet.Contains(mac, StringComparer.Ordinal)));
         if (duplicateSerial || duplicateMac)
             throw new WirelessIdentityLifecycleException("IDENTITY_SERIAL_MAC_CONFLICT", "Serial and MAC evidence must be unique before acceptance.");
+    }
+
+    private static void EnsureReplacementVisible(string resourceId, string? replacementResourceId,
+        IReadOnlyList<WirelessApResourceView> resources)
+    {
+        if (string.IsNullOrWhiteSpace(replacementResourceId) ||
+            string.Equals(resourceId, replacementResourceId, StringComparison.Ordinal) ||
+            !resources.Any(item => string.Equals(item.Id, replacementResourceId, StringComparison.Ordinal)))
+            throw new WirelessIdentityLifecycleException("IDENTITY_REPLACEMENT_NOT_VISIBLE",
+                "SUPERSEDE requires a different replacement identity visible in the current Site scope.", 403);
     }
 
     private WirelessIdentityLifecycleStore ReadStore()
