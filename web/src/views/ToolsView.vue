@@ -20,10 +20,12 @@ const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'TCP', 'DNS', 'T
 const diagnosticTimeoutMs = ref(2000)
 const diagnosticStarting = ref(false)
 const diagnosticCancelling = ref(false)
+const diagnosticReading = ref(false)
 const diagnosticError = ref('')
 const diagnosticActive = computed(() => diagnosticRun.value?.state === 'QUEUED' || diagnosticRun.value?.state === 'RUNNING')
 let diagnosticPoll: ReturnType<typeof setTimeout> | undefined
 let diagnosticGeneration = 0
+let diagnosticReadGeneration = -1
 let pageActive = true
 const isSuperAdmin = () => auth.user?.role === 'SUPERADMIN'
 
@@ -42,7 +44,10 @@ async function refresh(): Promise<void> {
 function stopDiagnosticPolling(): void { if (diagnosticPoll) { clearTimeout(diagnosticPoll); diagnosticPoll = undefined } }
 function diagnosticCurrent(id: string, generation: number): boolean { return pageActive && diagnosticGeneration === generation && diagnosticRun.value?.id === id }
 async function pollDiagnostics(id: string, generation = diagnosticGeneration): Promise<void> {
+  if (!diagnosticCurrent(id, generation) || diagnosticReadGeneration === generation) return
   stopDiagnosticPolling()
+  diagnosticReadGeneration = generation
+  diagnosticReading.value = true
   try {
     const run = await getNetworkDiagnostics(id)
     if (!diagnosticCurrent(id, generation)) return
@@ -51,6 +56,8 @@ async function pollDiagnostics(id: string, generation = diagnosticGeneration): P
     if (run.state === 'QUEUED' || run.state === 'RUNNING') diagnosticPoll = setTimeout(() => { void pollDiagnostics(id, generation) }, 700)
   } catch (cause) {
     if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断进度读取失败'
+  } finally {
+    if (diagnosticReadGeneration === generation) { diagnosticReadGeneration = -1; diagnosticReading.value = false }
   }
 }
 function selectDiagnosticKind(): void {
@@ -85,7 +92,7 @@ async function cancelDiagnostics(): Promise<void> {
   catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务取消失败' }
   finally { if (generation === diagnosticGeneration) diagnosticCancelling.value = false }
 }
-function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticStarting.value = false; diagnosticCancelling.value = false; stopDiagnosticPolling() }
+function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
 function diagnosticKindLabel(value: string): string { return ({ PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
 function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
 function diagnosticOutcomeLabel(value?: string | null): string { return ({ OK: '检查成功', TRACEROUTE_MAX_HOPS: '达到跳数上限，尚未到达目标', TRACEROUTE_UNREACHABLE: '目标不可达', TIMEOUT: '检查总超时', CANCELLED: '已取消', DIAGNOSTIC_SCOPE_REVOKED: '设备访问权限已变化' } as Record<string, string>)[value || ''] || value || '—' }
@@ -109,7 +116,7 @@ onMounted(refresh)
 onUnmounted(suspendDiagnostics)
 onDeactivated(suspendDiagnostics)
 onActivated(() => { if (!pageActive) { pageActive = true; if (diagnosticRun.value && diagnosticActive.value) void pollDiagnostics(diagnosticRun.value.id) } })
-watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration++; stopDiagnosticPolling(); diagnosticRun.value = null; diagnosticError.value = ''; diagnosticStarting.value = false; diagnosticCancelling.value = false })
+watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration++; stopDiagnosticPolling(); diagnosticRun.value = null; diagnosticError.value = ''; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false })
 </script>
 
 <template>
@@ -125,7 +132,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { diagnosticGeneration
           <label class="form-field"><span>每项检查总超时</span><select v-model.number="diagnosticTimeoutMs" aria-label="每项检查总超时" :disabled="diagnosticStarting || diagnosticActive"><option :value="2000">2 秒</option><option :value="5000">5 秒</option><option :value="10000">10 秒</option><option :value="30000">30 秒</option></select><small class="muted">Traceroute 最多 30 跳，建议 30 秒。</small></label>
           <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
-        <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="diagnosticRun && diagnosticActive && !diagnosticCancelling" size="small" @click="pollDiagnostics(diagnosticRun.id)">重新读取进度</el-button></div>
+        <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="diagnosticRun && diagnosticActive && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(diagnosticRun.id)">重新读取进度</el-button></div>
         <template v-if="diagnosticRun">
           <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
