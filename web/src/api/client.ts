@@ -631,7 +631,7 @@ export interface H3cLldpClaims {
   relations: H3cLldpRelation[]
 }
 
-export type ConfigBackupKind = 'RUNNING' | 'SAVED' | 'STARTUP_INFO'
+export type ConfigBackupKind = 'RUNNING' | 'SAVED' | 'STARTUP_INFO' | 'STARTUP_BODY'
 
 export interface ConfigBackupSchedule {
   id: string
@@ -1123,7 +1123,9 @@ export function getH3cLldpClaims(id: string, params: { history?: boolean; limit?
   return request('/api/system/h3c/profiles/' + encodeURIComponent(id) + '/lldp-claims?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString())
 }
 export function createConfigBackup(profileIds: string[], configurationKind: ConfigBackupKind = 'RUNNING'): Promise<ConfigBackupBatch> {
-  return request('/api/system/config-backups', { method: 'POST', body: JSON.stringify({ profileIds, configurationKind }) })
+  return request(configurationKind === 'STARTUP_BODY' ? '/api/system/config-backups/startup-body' : '/api/system/config-backups', {
+    method: 'POST', body: JSON.stringify(configurationKind === 'STARTUP_BODY' ? { profileIds } : { profileIds, configurationKind })
+  })
 }
 export function getConfigBackupBatch(id: string): Promise<ConfigBackupBatch> {
   return request('/api/system/config-backups/batches/' + encodeURIComponent(id))

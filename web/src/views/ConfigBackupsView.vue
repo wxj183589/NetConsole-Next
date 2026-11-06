@@ -42,7 +42,7 @@ let active = true
 function time(value?: number | null): string { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function size(value: number): string { return (value / 1024).toFixed(1) + ' KB' }
 function kindOf(snapshot: ConfigBackupSnapshot): ConfigBackupKind { return snapshot.configurationKind ?? 'RUNNING' }
-function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行配置', SAVED: '保存配置', STARTUP_INFO: '启动配置指向' }[kind] }
+function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行配置', SAVED: '保存配置', STARTUP_INFO: '启动配置指向', STARTUP_BODY: '启动配置正文' }[kind] }
 function saveBlob(blob: Blob, name: string): void { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(link.href) }
 function clearHistory(): void {
   ++historySequence; ++diffSequence
@@ -175,16 +175,17 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
       <div class="card__body">
         <div class="form-grid"><label v-for="profile in profiles" :key="profile.id" class="check-row"><input v-model="selected" type="checkbox" :value="profile.id" :disabled="!isSuperAdmin || loading" />{{ device ? deviceLabel : profile.host + ' · ' + profile.username }}</label></div>
         <div class="toolbar" style="margin-top:12px">
-          <label class="form-field"><span>配置类别</span><select v-model="configurationKind" aria-label="配置类别" :disabled="loading" @change="changeKind"><option value="RUNNING">运行配置</option><option value="SAVED">保存配置</option><option value="STARTUP_INFO">启动配置指向</option></select></label>
+          <label class="form-field"><span>配置类别</span><select v-model="configurationKind" aria-label="配置类别" :disabled="loading" @change="changeKind"><option value="RUNNING">运行配置</option><option value="SAVED">保存配置</option><option value="STARTUP_INFO">启动配置指向</option><option value="STARTUP_BODY">启动配置正文</option></select></label>
           <el-button type="primary" :disabled="!selected.length || !isSuperAdmin || loading" :loading="loading" @click="startBackup">开始配置备份</el-button>
           <span v-if="batch" class="muted">{{ kindLabel(batch.configurationKind || 'RUNNING') }} · 批次 {{ batch.succeeded }}/{{ batch.total }} · {{ batch.state }}</span>
         </div>
         <p class="muted">仅查询设备配置；版本历史和差异限同一类别。</p>
         <p v-if="configurationKind === 'STARTUP_INFO'" class="data-quality-note">启动配置指向仅记录设备报告的启动文件信息，不包含文件正文，也不表示可以恢复配置。</p>
+        <p v-else-if="configurationKind === 'STARTUP_BODY'" class="data-quality-note">启动配置正文先读取设备报告的启动文件指向，再读取该指向的配置文件；恢复写入仍需独立授权。</p>
         <p v-if="batchFailure" class="data-quality-note" role="status">{{ batchFailure }}</p>
       </div>
     </section>
-    <ConfigBackupSchedules v-if="moduleAvailable && isSuperAdmin" :selected-profile-ids="selected" :configuration-kind="configurationKind" :context-profile-id="hasDeviceContext ? profileId : undefined" />
+    <ConfigBackupSchedules v-if="moduleAvailable && isSuperAdmin && configurationKind !== 'STARTUP_BODY'" :selected-profile-ids="selected" :configuration-kind="configurationKind" :context-profile-id="hasDeviceContext ? profileId : undefined" />
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">

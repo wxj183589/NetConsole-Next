@@ -10,7 +10,7 @@ const error = ref('')
 let sequence = 0
 const canCreate = computed(() => !busy.value && props.selectedProfileIds.length > 0 && props.selectedProfileIds.length <= 32)
 function time(value?: number | null): string { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
-function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行配置', SAVED: '保存配置', STARTUP_INFO: '启动配置指向' }[kind] }
+function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行配置', SAVED: '保存配置', STARTUP_INFO: '启动配置指向', STARTUP_BODY: '启动配置正文' }[kind] }
 function intervalLabel(minutes: number): string { return minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : `每 ${minutes / 60} 小时` }
 function stateLabel(state?: string | null): string {
   return ({ NEVER_RUN: '尚未执行', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', BLOCKED: '无法执行', INTERRUPTED: '服务重启中断', SKIPPED: '已跳过' } as Record<string, string>)[state || ''] || (state ? '待检查' : '尚未执行')

@@ -98,6 +98,15 @@ describe('device configuration backup context', () => {
     expect(wrapper.text()).toContain('保存配置 · 批次 1/1 · SUCCEEDED')
   })
 
+  it('starts startup body collection through the dedicated backend route', async () => {
+    api.getConfigBackups.mockResolvedValue([])
+    const { wrapper } = await render()
+    await wrapper.get('select[aria-label=配置类别]').setValue('STARTUP_BODY'); await flushPromises()
+    expect(wrapper.text()).toContain('启动配置正文版本历史')
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'STARTUP_BODY')
+  })
+
   it('filters mixed category history and only compares distinct versions of the selected category', async () => {
     api.getConfigBackups.mockResolvedValue([
       ...kindSnapshots('profile-b', 'RUNNING'),
