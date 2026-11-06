@@ -4,11 +4,14 @@ import * as echarts from 'echarts'
 import { Bell, CircleCheck, DataLine, List, Monitor, TrendCharts, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
-import { getDeviceInventory, getHealth, getTasks, type DeviceInventoryPage, type HealthSnapshot, type TaskRun } from '../api/client'
+import { getDeviceInventory, getHealth, getTasks, getWirelessAcDomains, getWirelessApResources, type DeviceInventoryPage, type HealthSnapshot, type TaskRun, type WirelessPage, type WirelessAcDomain, type WirelessApResource } from '../api/client'
 
 const health = ref<HealthSnapshot | null>(null)
 const inventory = ref<DeviceInventoryPage | null>(null)
 const tasks = ref<TaskRun[]>([])
+const wirelessDomains = ref<WirelessPage<WirelessAcDomain> | null>(null)
+const wirelessResources = ref<WirelessPage<WirelessApResource> | null>(null)
+const wirelessError = ref('')
 const loading = ref(true)
 const statusChartHost = ref<HTMLElement | null>(null)
 let statusChart: echarts.ECharts | undefined
@@ -18,11 +21,19 @@ const summary = computed(() => inventory.value?.summary || {
   onlineDevices: 0, offlineDevices: 0, unknownStatus: 0,
 })
 const runningTasks = computed(() => tasks.value.filter(task => ['QUEUED', 'CONNECTING', 'RUNNING'].includes(task.state)).length)
+const failedTasks = computed(() => tasks.value.filter(task => ['FAILED', 'PARTIAL_FAILED', 'FAULTED'].includes(task.state)).length)
+const wirelessAcCount = computed(() => wirelessDomains.value?.total ?? null)
+const wirelessApCount = computed(() => wirelessResources.value?.total ?? null)
+const wirelessRuntimeStates = computed(() => {
+  const states = wirelessDomains.value?.items.flatMap(domain => domain.members.map(member => member.runtimeState)) || []
+  return { running: states.filter(state => state === 'RUNNING_MASTER' || state === 'RUNNING_BACKUP').length, unknown: states.filter(state => state === 'UNKNOWN').length }
+})
 const diagnosticAlerts = computed(() => {
   const items: Array<{ time: string; level: string; content: string }> = []
   if (health.value?.healthError) items.push({ time: '当前', level: health.value.healthState, content: health.value.healthError })
   if (health.value?.collectionError) items.push({ time: '当前', level: 'COLLECTION', content: health.value.collectionError })
   if ((health.value?.unresolvedIntegrityIssues || 0) > 0) items.push({ time: '当前', level: 'RAW', content: `${health.value?.unresolvedIntegrityIssues} 个 Raw 完整性问题待处理` })
+  if (wirelessError.value) items.push({ time: '当前', level: 'WIRELESS', content: wirelessError.value })
   return items
 })
 const cpuPercent = computed(() => health.value?.resources?.processCpuPercent ?? null)
@@ -62,8 +73,20 @@ function renderStatusChart(): void {
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const result = await Promise.all([getHealth(), getTasks(), getDeviceInventory({ page: 1, pageSize: 1 })])
-    health.value = result[0]; tasks.value = result[1]; inventory.value = result[2]
+    wirelessError.value = ''
+    wirelessDomains.value = null
+    wirelessResources.value = null
+    const result = await Promise.allSettled([
+      getHealth(), getTasks(), getDeviceInventory({ page: 1, pageSize: 1 }),
+      getWirelessAcDomains({ page: 1, pageSize: 100 }), getWirelessApResources({ page: 1, pageSize: 1 }),
+    ])
+    if (result[0].status === 'fulfilled') health.value = result[0].value
+    if (result[1].status === 'fulfilled') tasks.value = result[1].value
+    if (result[2].status === 'fulfilled') inventory.value = result[2].value
+    if (result[3].status === 'fulfilled') wirelessDomains.value = result[3].value
+    else wirelessError.value = '无线 AC 数据暂不可用'
+    if (result[4].status === 'fulfilled') wirelessResources.value = result[4].value
+    else wirelessError.value = wirelessError.value ? `${wirelessError.value}，AP 数据暂不可用` : '无线 AP 数据暂不可用'
     await nextTick(); renderStatusChart()
   } catch { ElMessage.error('无法读取运行状态，请检查服务是否仍在运行') }
   finally { loading.value = false }
@@ -80,6 +103,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); stat
     <div v-loading="loading" class="stats-grid">
       <article class="card stat-card"><span class="stat-card__icon"><el-icon><Monitor /></el-icon></span><div class="stat-card__label">登记设备</div><div class="stat-card__value">{{ summary.totalRecords }}</div><div class="stat-card__meta">有效 {{ summary.validDevices }} · 无效 {{ summary.invalidRecords }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--green"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">采集任务</div><div class="stat-card__value">{{ tasks.length }}</div><div class="stat-card__meta">运行中 {{ runningTasks }} · 来源于真实 Task API</div></article>
+      <article class="card stat-card"><span class="stat-card__icon stat-card__icon--green"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">无线 AP</div><div class="stat-card__value">{{ wirelessApCount === null ? '—' : wirelessApCount }}</div><div class="stat-card__meta">来自 AC 采集资源 API · {{ wirelessError ? '部分不可用' : `运行 ${wirelessRuntimeStates.running}` }}</div></article>
+      <article class="card stat-card"><span class="stat-card__icon stat-card__icon--amber"><el-icon><Monitor /></el-icon></span><div class="stat-card__label">AC Domain</div><div class="stat-card__value">{{ wirelessAcCount === null ? '—' : wirelessAcCount }}</div><div class="stat-card__meta">当前页运行 {{ wirelessRuntimeStates.running }} · 未知 {{ wirelessRuntimeStates.unknown }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--red"><el-icon><Bell /></el-icon></span><div class="stat-card__label">服务告警</div><div class="stat-card__value">{{ diagnosticAlerts.length || '—' }}</div><div class="stat-card__meta" :class="diagnosticAlerts.length ? 'bad-text' : 'good-text'">{{ diagnosticAlerts.length ? '需要关注诊断信息' : '暂无可用告警记录' }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--violet"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">系统资源</div><div class="stat-card__value">{{ cpuPercent === null ? '—' : `${cpuPercent.toFixed(0)}%` }}</div><div class="stat-card__meta">进程 CPU · 工作集 {{ workingSet }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--amber"><el-icon><CircleCheck /></el-icon></span><div class="stat-card__label">实例健康</div><div class="stat-card__value"><span :class="['state-pill', statusClass(health?.healthState)]">{{ health?.healthState || '—' }}</span></div><div class="stat-card__meta">数据卷可用空间 {{ freeDisk }}</div></article>
@@ -92,7 +117,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); stat
     </div>
 
     <div class="dashboard-grid dashboard-grid--wide">
-      <section class="card"><div class="card__header"><h2>最近任务</h2><span class="state-pill info">{{ tasks.length }} 条</span></div><div v-if="tasks.length" class="table-wrap"><table class="data-table"><thead><tr><th>任务</th><th>状态</th><th>开始时间</th><th>结果</th></tr></thead><tbody><tr v-for="task in tasks.slice(0, 8)" :key="task.id"><td><span class="device-name">{{ task.taskType }}</span><span class="device-subline mono">{{ task.id }}</span></td><td><span :class="['state-pill', statusClass(task.state)]">{{ task.state }}</span></td><td>{{ formatTime(task.startedMs) }}</td><td>{{ task.failureReason || task.parseStatus || '—' }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><el-icon><List /></el-icon><strong>暂无任务记录</strong><small>任务中心只展示服务端实际创建的任务，不使用模拟任务填充。</small></div></div></section>
+      <section class="card"><div class="card__header"><h2>最近任务</h2><span class="state-pill info">{{ tasks.length }} 条 · 失败 {{ failedTasks }}</span></div><div v-if="tasks.length" class="table-wrap"><table class="data-table"><thead><tr><th>任务</th><th>状态</th><th>开始时间</th><th>结果</th></tr></thead><tbody><tr v-for="task in tasks.slice(0, 8)" :key="task.id"><td><span class="device-name">{{ task.taskType }}</span><span class="device-subline mono">{{ task.id }}</span></td><td><span :class="['state-pill', statusClass(task.state)]">{{ task.state }}</span></td><td>{{ formatTime(task.startedMs) }}</td><td>{{ task.failureReason || task.parseStatus || '—' }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><el-icon><List /></el-icon><strong>暂无任务记录</strong><small>任务中心只展示服务端实际创建的任务，不使用模拟任务填充。</small></div></div></section>
       <section class="card"><div class="card__header"><h2>系统资源</h2><span class="state-pill">进程采样</span></div><div class="card__body resource-list"><div class="resource-row"><span>CPU</span><div class="resource-track"><span :style="{ width: `${Math.min(100, cpuPercent || 0)}%` }" /></div><b>{{ cpuPercent === null ? '—' : `${cpuPercent.toFixed(0)}%` }}</b></div><div class="resource-row"><span>内存</span><div class="resource-track"><span class="resource-track--green" :style="{ width: health?.resources?.workingSetBytes ? '100%' : '0%' }" /></div><b>{{ workingSet }}</b></div><div class="resource-row"><span>磁盘</span><div class="resource-track"><span class="resource-track--violet" :style="{ width: freeDisk === '—' ? '0%' : '100%' }" /></div><b>{{ freeDisk }}</b></div><div class="overview-footer"><span><el-icon><CircleCheck /></el-icon>线程 {{ health?.resources?.threadCount ?? '—' }}</span><span><el-icon><Warning /></el-icon>未解决 Raw {{ health?.unresolvedIntegrityIssues ?? 0 }}</span></div></div></section>
     </div>
 
