@@ -27,6 +27,7 @@ export const moduleRegistry: readonly ModuleDefinition[] = [
   { key: 'config-backups', path: '/config-backups', label: '配置备份', status: 'READY', icon: FolderOpened, component: () => import('./views/ConfigBackupsView.vue') },
   { key: 'network-planning', path: '/network-planning', label: '网络规划', status: 'READY', icon: Share, component: () => import('./views/NetworkPlanningView.vue') },
   { key: 'terminal', path: '/terminal', label: '终端控制台', status: 'READY', icon: Connection, component: () => import('./views/TerminalView.vue') },
+  { key: 'linux', path: '/linux', label: 'Linux 服务器', status: 'READY', icon: Monitor, component: () => import('./views/LinuxServersView.vue') },
   { key: 'tasks', path: '/tasks', label: '任务中心', status: 'READY', icon: List, component: () => import('./views/TasksView.vue') },
   { key: 'wireless', path: '/wireless', label: '无线业务', status: 'READY', icon: TrendCharts, component: () => import('./views/WirelessView.vue') },
   {

@@ -36,6 +36,7 @@ builder.Services.AddSingleton<IH3cCredentialProvider>(sp =>
 builder.Services.AddSingleton<H3cConnectionTestService>();
 builder.Services.AddSingleton<NetmikoJumpHostProbe>();
 builder.Services.AddSingleton<TerminalSessionManager>();
+builder.Services.AddSingleton<LinuxServerConnectionTests>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
 builder.Services.AddSingleton<TerminalExportService>();
@@ -881,6 +882,7 @@ globalFileRoutes.MapGet("/archive-jobs/{id}/download", (HttpContext context, str
 });
 if (settings.TerminalEnabled)
 {
+    app.MapLinuxServers();
     var sessionRoutes = app.MapGroup("/api/system/terminal/sessions");
     sessionRoutes.AddEndpointFilter(async (invocation, next) =>
     {
@@ -1032,9 +1034,11 @@ if (settings.TerminalEnabled)
         }
         var send = SendTerminalOutputAsync(socket, session, StillAuthorized, cancellation.Token);
         var receive = ReceiveTerminalInputAsync(socket, session, StillAuthorized, cancellation.Token);
-        await Task.WhenAny(send, receive).ConfigureAwait(false);
+        var scopeMonitor = MonitorTerminalScopeAsync(session, StillAuthorized, cancellation.Token);
+        await Task.WhenAny(send, receive, scopeMonitor).ConfigureAwait(false);
         cancellation.Cancel();
-        try { await Task.WhenAll(send, receive).ConfigureAwait(false); } catch { }
+        try { await Task.WhenAll(send, receive, scopeMonitor).ConfigureAwait(false); } catch { }
+        if (!StillAuthorized()) await session.CloseForScopeRevocationAsync().ConfigureAwait(false);
         if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None); } catch { }
@@ -1082,15 +1086,18 @@ if (settings.H3cEnabled)
         var id = Guid.NewGuid().ToString("N");
         try
         {
+            var inventory = request.Inventory ?? new DeviceInventoryWriteRequest(null, request.Host.Trim(), request.Host.Trim(),
+                "H3C", "", "NETWORK_DEVICE", siteId, null, "", true, null);
             rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),
                 string.Empty, string.Empty, true, 0, 0,
                 H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback,
-                request.Password, SiteId: siteId));
+                request.Password, SiteId: siteId), inventory, CurrentIdentity(context).Username);
             return rawCatalog.GetH3cDeviceProfile(id) is { } profile
                 ? Results.Created($"/api/system/h3c/profiles/{id}", profile.ToView())
                 : Results.NotFound();
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
@@ -1318,6 +1325,21 @@ app.MapPost("/api/system/zte/profiles", (HttpContext context, ZteProfileRequest 
     catch (Microsoft.Data.Sqlite.SqliteException ex) { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
 });
 
+app.MapPut("/api/system/zte/profiles/{id}/credential", (HttpContext context, string id,
+    ZteCredentialRequest request, Catalog catalog, ZteCollectionService zte, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_PROFILE_CREDENTIAL_PERMISSION_DENIED", id);
+    var scope = scopes.Resolve(CurrentIdentity(context));
+    if (!scope.IsAuthorized || !zte.ProfileIsInScope(id, scope)) return Results.NotFound();
+    try
+    {
+        catalog.UpdateZteCredential(id, request.Password, request.ClearPassword);
+        return zte.Profile(id) is { } profile ? Results.Ok(profile) : Results.NotFound();
+    }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+
 app.MapGet("/api/system/sites/{siteId}/ssh-jump-host", (HttpContext context, string siteId,
     Catalog catalog, P2B5SiteScopeStore scopes) =>
 {
@@ -1334,9 +1356,12 @@ app.MapPut("/api/system/sites/{siteId}/ssh-jump-host", (HttpContext context, str
     try
     {
         catalog.UpsertSiteSshJumpHost(new(siteId, request.Host, request.Port, request.Username,
-            request.CredentialReference, request.Password, request.HostKeySha256 ?? string.Empty,
+            string.IsNullOrWhiteSpace(request.CredentialReference)
+                ? "JUMP_" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(siteId)))[..32]
+                : request.CredentialReference, request.Password, request.HostKeySha256 ?? string.Empty,
             request.Enabled, 0, request.ClearPassword));
-        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+        return catalog.GetSiteSshJumpHost(siteId, includePassword: false) is { } saved
+            ? Results.Ok(saved.ToView()) : Results.NotFound();
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
@@ -1359,12 +1384,22 @@ app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/test", async (HttpContext 
         var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
         if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256, jump))
             return Results.Conflict(new { error = "JUMP_HOST_CONFIGURATION_CHANGED" });
-        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+        return catalog.GetSiteSshJumpHost(siteId, includePassword: false) is { } saved
+            ? Results.Ok(saved.ToView()) : Results.NotFound();
     }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
     { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
     catch (NetmikoJumpHostProbeException ex)
     { return Results.Conflict(new { error = ex.Code, detail = ex.Message }); }
+});
+app.MapDelete("/api/system/sites/{siteId}/ssh-jump-host/fingerprint", (HttpContext context, string siteId,
+    Catalog catalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "SITE_JUMP_HOST_FINGERPRINT_DELETE_PERMISSION_DENIED", siteId);
+    if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
+    if (!catalog.ClearSiteSshJumpHostFingerprint(siteId)) return Results.NotFound();
+    return catalog.GetSiteSshJumpHost(siteId, includePassword: false) is { } saved
+        ? Results.Ok(saved.ToView()) : Results.NotFound();
 });
 app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/refresh-fingerprint", async (HttpContext context, string siteId,
     Catalog catalog, NetmikoJumpHostProbe probe) =>
@@ -1378,7 +1413,8 @@ app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/refresh-fingerprint", asyn
         var result = await probe.ProbeAsync(jump, context.RequestAborted).ConfigureAwait(false);
         if (!catalog.UpdateSiteSshJumpHostFingerprint(siteId, result.HostKeySha256, jump))
             return Results.Conflict(new { error = "JUMP_HOST_CONFIGURATION_CHANGED" });
-        return Results.Ok(catalog.GetSiteSshJumpHost(siteId, includePassword: false)!.ToView());
+        return catalog.GetSiteSshJumpHost(siteId, includePassword: false) is { } saved
+            ? Results.Ok(saved.ToView()) : Results.NotFound();
     }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
     { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
@@ -1927,6 +1963,17 @@ static CookieOptions WebCookieOptions(bool httpOnly) => new()
     MaxAge = TimeSpan.FromHours(12),
 };
 
+static async Task MonitorTerminalScopeAsync(TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+    while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+    {
+        if (isAuthorized()) continue;
+        await session.CloseForScopeRevocationAsync().ConfigureAwait(false);
+        return;
+    }
+}
+
 static async Task SendTerminalOutputAsync(WebSocket socket, TerminalSessionRuntime session, Func<bool> isAuthorized, CancellationToken cancellationToken)
 {
     if (!isAuthorized()) return;
@@ -1959,7 +2006,10 @@ static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRun
             switch (type)
             {
                 case "input":
-                    await session.SendCommandAsync(root.GetProperty("text").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
+                    if (root.TryGetProperty("data", out var keyboardData))
+                        await session.SendRawInputAsync(keyboardData.GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
+                    else
+                        await session.SendCommandAsync(root.GetProperty("text").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
                     break;
                 case "control":
                     await session.SendControlAsync(root.GetProperty("signal").GetString() ?? string.Empty, cancellationToken).ConfigureAwait(false);
@@ -1973,7 +2023,7 @@ static async Task ReceiveTerminalInputAsync(WebSocket socket, TerminalSessionRun
                     throw new InvalidOperationException("Unsupported terminal message type.");
             }
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or ArgumentException)
         {
             try
             {
@@ -2003,7 +2053,8 @@ internal sealed record H3cProfileRequest(string Id, string Host, int Port, strin
     string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false, string TerminalEncoding = "AUTO",
     string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false, string? Password = null, bool ClearPassword = false);
 internal sealed record H3cOnboardRequest(string Host, string Username, string? CredentialReference = null,
-    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false, string? Password = null, string? SiteId = null);
+    string? Protocol = "SSH", int? Port = null, bool AllowTelnetFallback = false, string? Password = null, string? SiteId = null,
+    DeviceInventoryWriteRequest? Inventory = null);
 internal sealed record H3cCredentialRequest(string? Password = null, bool ClearPassword = false);
 internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cHostKeyPolicy.Automatic, bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string TerminalProtocol = "AUTO", bool AllowTelnetFallback = false);
@@ -2015,8 +2066,9 @@ internal sealed record ZteProfileRequest(string Id, string Host, int Port, strin
     string CredentialReference = "", string HostKeySha256 = "", bool Enabled = true,
     string HostKeyUpdatePolicy = "STRICT", bool AllowLegacyAlgorithms = false,
     string TerminalEncoding = "AUTO", string SiteId = "local", string? Password = null, bool ClearPassword = false);
+internal sealed record ZteCredentialRequest(string? Password = null, bool ClearPassword = false);
 internal sealed record SiteSshJumpHostRequest(string Host, int Port, string Username,
-    string CredentialReference, string? Password = null, string? HostKeySha256 = null,
+    string CredentialReference = "", string? Password = null, string? HostKeySha256 = null,
     bool Enabled = true, bool ClearPassword = false);
 internal sealed record TerminalDeviceView(string Id, string Host, int Port, string Username, bool Enabled,
     IReadOnlyList<string> SupportedProtocols, string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms,

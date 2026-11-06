@@ -24,7 +24,7 @@ internal sealed record ZteProfileRequest(string Id, string Host, int Port, strin
     string TerminalEncoding = "AUTO", string SiteId = "local");
 
 internal sealed record ZteProfileView(string Id, string Host, int Port, string Username, bool Enabled,
-    long CreatedMs, long UpdatedMs, string TerminalEncoding, string SiteId);
+    long CreatedMs, long UpdatedMs, string TerminalEncoding, string SiteId, bool CredentialConfigured);
 
 internal sealed class ZteCollectionRejectedException(string message) : InvalidOperationException(message);
 
@@ -163,9 +163,9 @@ internal sealed class ZteCollectionService
         _catalog.GetZteDeviceProfile(id) is { } profile &&
         (scope.IsGlobal || scope.AllowedSiteReferences.Contains(profile.SiteId));
 
-    private static ZteProfileView ToView(ZteDeviceProfileSnapshot profile) => new(profile.Id, profile.Host,
+    private ZteProfileView ToView(ZteDeviceProfileSnapshot profile) => new(profile.Id, profile.Host,
         profile.Port, profile.Username, profile.Enabled, profile.CreatedMs, profile.UpdatedMs,
-        profile.TerminalEncoding, profile.SiteId);
+        profile.TerminalEncoding, profile.SiteId, _catalog.HasZteCredentialPassword(profile.Id));
     public ZteCollectionRunSnapshot? GetRun(string id) => _runs.TryGetValue(id, out var run) ? run : _catalog.GetZteCollectionRun(id);
 
     public string Start(string profileId)
@@ -361,6 +361,29 @@ internal sealed partial class Catalog
         command.CommandText = "SELECT credential_password FROM zte_device_profiles WHERE id=$id";
         command.Parameters.AddWithValue("$id", id);
         return command.ExecuteScalar() is string value && value.Length > 0 ? value : null;
+    }
+
+    internal bool HasZteCredentialPassword(string id)
+    {
+        using var db = Open(); using var command = db.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM zte_device_profiles WHERE id=$id AND COALESCE(credential_password,'')<>'')";
+        command.Parameters.AddWithValue("$id", id);
+        return Convert.ToInt64(command.ExecuteScalar()) == 1;
+    }
+
+    public void UpdateZteCredential(string id, string? password, bool clearPassword)
+    {
+        if (!clearPassword && password is { Length: > 4096 })
+            throw new ArgumentException("Device password is too long.", nameof(password));
+        using var db = Open(); using var command = db.CreateCommand();
+        command.CommandText = @"UPDATE zte_device_profiles
+            SET credential_password=CASE WHEN $clear=1 THEN NULL WHEN $password IS NULL OR $password='' THEN credential_password ELSE $password END,
+                updated_ms=CASE WHEN $now<=updated_ms THEN updated_ms+1 ELSE $now END WHERE id=$id";
+        command.Parameters.AddWithValue("$clear", clearPassword ? 1 : 0);
+        command.Parameters.AddWithValue("$password", clearPassword ? DBNull.Value : (object?)password ?? DBNull.Value);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.Parameters.AddWithValue("$id", id);
+        if (command.ExecuteNonQuery() != 1) throw new KeyNotFoundException("ZTE device profile was not found.");
     }
 
     internal bool CommitZteHostKey(ZteDeviceProfileSnapshot profile, string keyType, string fingerprint)

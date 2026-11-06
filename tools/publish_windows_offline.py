@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 
 import package_netmiko_offline as package
 from workspace_paths import workspace_path
@@ -34,6 +35,23 @@ def validate_bundle(bundle: Path) -> None:
         raise ValueError("Bundle Python runtime is missing")
 
 
+def build_webroot(output: Path) -> None:
+    """Build current Vue sources offline, without rewriting tracked wwwroot assets."""
+    web = package.REPO / "web"
+    vite = web / "node_modules" / "vite" / "bin" / "vite.js"
+    if not vite.is_file():
+        raise ValueError("Offline frontend dependencies are missing; prepare web/node_modules first")
+    subprocess.run([
+        "node", str(vite), "build", "--outDir", str(output), "--emptyOutDir",
+    ], check=True, cwd=web)
+    index = output / "index.html"
+    if not index.is_file():
+        raise ValueError("Frontend build did not produce index.html")
+    assets = re.findall(r'(?:src|href)="(/app/assets/[^"?#]+)"', index.read_text(encoding="utf-8"))
+    if not assets or any(not (output / asset.lstrip("/")).is_file() for asset in assets):
+        raise ValueError("Frontend entry assets are missing")
+
+
 def publish(name: str, bundle: Path, artifacts_name: str | None = None) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or name in (".", ".."):
         raise ValueError("Output name must be a single safe directory name")
@@ -55,7 +73,13 @@ def publish(name: str, bundle: Path, artifacts_name: str | None = None) -> Path:
     validate_bundle(bundle)
     package.smoke(bundle)
     output.mkdir(parents=True, exist_ok=False)
-    subprocess.run(command, check=True, cwd=package.REPO)
+    with tempfile.TemporaryDirectory(prefix="publish-web-", dir=output.parent) as temporary:
+        webroot = Path(temporary)
+        build_webroot(webroot)
+        subprocess.run(command, check=True, cwd=package.REPO)
+        # Keep the service's legacy static routes, but replace the Vue entry and
+        # its chunks with this build. Source wwwroot remains untouched.
+        shutil.copytree(webroot, output / "wwwroot", dirs_exist_ok=True)
     target = output / "tools" / "netmiko"
     shutil.copytree(bundle, target)
     validate_bundle(target)

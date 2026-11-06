@@ -184,17 +184,17 @@ class NetmikoWorkerTests(unittest.TestCase):
                     self.assertFalse(worker.interactive)
 
     def test_jump_auth_and_channel_failures_do_not_attempt_target(self):
-        for phase, error in (("auth", module.paramiko.AuthenticationException("auth")), ("channel", TimeoutError("timeout"))):
+        for phase, error, expected in (("auth", module.paramiko.AuthenticationException("auth"), module.JumpHostAuthenticationError), ("channel", TimeoutError("timeout"), module.JumpHostChannelError), ("connect", ConnectionRefusedError("refused"), module.JumpHostConnectionError)):
             with self.subTest(phase=phase):
                 jump = jump_client()
-                if phase == "auth":
+                if phase in ("auth", "connect"):
                     jump.connect.side_effect = error
                 else:
                     jump.get_transport.return_value.open_channel.side_effect = error
                 with mock.patch.object(module.paramiko, "SSHClient", return_value=jump), \
                      mock.patch.object(module, "ConnectHandler") as handler:
                     worker = module.Worker()
-                    with self.assertRaises(type(error)):
+                    with self.assertRaises(expected):
                         worker.connect(request(jump_host=jump_request()))
                     handler.assert_not_called()
                     jump.close.assert_called_once_with()

@@ -129,6 +129,7 @@ internal sealed class H3cConnectionTestService(
 
     private static (string Code, string Message) MapFailure(Exception exception) => exception switch
     {
+        H3cJumpHostConnectionException jump => (jump.Code, jump.Message),
         H3cCredentialUnavailableException => ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"),
         H3cAuthenticationFailedException => ("AUTHENTICATION_FAILED", "账号认证失败"),
         H3cHostKeyMismatchException or H3cHostKeyMissingException or H3cJumpHostKeyMismatchException or H3cJumpHostKeyMissingException

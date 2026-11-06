@@ -10,7 +10,8 @@ if (!baseUrl || !sshPort || !telnetPort) throw new Error('E2E base URL and simul
 const executablePath = process.env.NETCONSOLE_E2E_BROWSER
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), args: ['--no-sandbox', ...(process.env.NETCONSOLE_E2E_WEBROOT ? ['--disable-features=LocalNetworkAccessChecks'] : [])] })
 const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
-if (process.env.NETCONSOLE_E2E_WEBROOT) {
+async function installWebroot(context) {
+  if (!process.env.NETCONSOLE_E2E_WEBROOT) return
   const webroot = process.env.NETCONSOLE_E2E_WEBROOT
   await context.route('**/*', async (route) => {
     const url = new URL(route.request().url())
@@ -25,6 +26,7 @@ if (process.env.NETCONSOLE_E2E_WEBROOT) {
     } catch { await route.continue() }
   })
 }
+await installWebroot(context)
 const page = await context.newPage()
 const consoleErrors = []
 const failedRequests = []
@@ -32,15 +34,27 @@ const badResponses = []
 const apiErrors = []
 const sessionIds = []
 const sshResizeFrames = []
+const socketEvents = []
+const validationSockets = new Set()
 let terminalSockets = 0
 page.on('websocket', (socket) => {
   if (!socket.url().includes('/api/system/terminal/sessions/')) return
-  terminalSockets += 1
-  if (terminalSockets !== 1) return
+  const id = ++terminalSockets
+  socketEvents.push({ id, event: 'open', path: new URL(socket.url()).pathname })
+  socket.on('close', () => socketEvents.push({ id, event: 'close' }))
+  socket.on('socketerror', (error) => socketEvents.push({ id, event: 'error', error }))
+  socket.on('framereceived', (event) => {
+    if (typeof event.payload !== 'string') return
+    try {
+      const message = JSON.parse(event.payload)
+      socketEvents.push({ id, event: 'received', type: message.type, state: message.session?.state, error: message.error })
+    } catch { /* terminal output is binary */ }
+  })
   socket.on('framesent', (event) => {
     try {
       const message = JSON.parse(event.payload)
-      if (message.type === 'resize') sshResizeFrames.push([message.columns, message.rows])
+      socketEvents.push({ id, event: 'sent', type: message.type, columns: message.columns, rows: message.rows })
+      if (id === 1 && message.type === 'resize') sshResizeFrames.push([message.columns, message.rows])
     } catch { /* binary and non-JSON frames are irrelevant */ }
   })
 })
@@ -103,6 +117,43 @@ async function typeCommand(command) {
   await page.keyboard.press('Enter')
 }
 
+async function verifyResizeValidation(sessionId) {
+  const csrf = await (await context.request.get(`${baseUrl}/api/auth/csrf`)).json()
+  const response = await context.request.post(`${baseUrl}/api/system/terminal/sessions/${sessionId}/ticket`, {
+    headers: { Origin: baseUrl, 'X-NC-CSRF': csrf.csrfToken },
+  })
+  if (!response.ok()) throw new Error(`resize validation ticket returned ${response.status()}`)
+  const { ticket } = await response.json()
+  validationSockets.add(terminalSockets + 1)
+  const result = await page.evaluate(({ url }) => new Promise((resolve) => {
+    const invalidSizes = [[0, 24], [501, 24], [80, 0], [80, 301]]
+    const socket = new WebSocket(url)
+    let rejected = 0
+    const timer = setTimeout(() => { socket.close(); resolve('timeout') }, 5000)
+    const sendNext = () => {
+      const [columns, rows] = invalidSizes[rejected]
+      socket.send(JSON.stringify({ type: 'resize', columns, rows }))
+    }
+    socket.onopen = sendNext
+    socket.onmessage = (event) => {
+      if (typeof event.data !== 'string' || JSON.parse(event.data).type !== 'error') return
+      rejected += 1
+      if (rejected < invalidSizes.length) sendNext()
+      else {
+        socket.send(JSON.stringify({ type: 'resize', columns: 80, rows: 24 }))
+        setTimeout(() => {
+          clearTimeout(timer)
+          const state = socket.readyState === WebSocket.OPEN ? 'accepted-after-errors' : 'closed'
+          socket.close()
+          resolve(state)
+        }, 200)
+      }
+    }
+    socket.onclose = () => { if (rejected < invalidSizes.length) { clearTimeout(timer); resolve(`closed-after-${rejected}-errors`) } }
+  }), { url: `${baseUrl.replace('http', 'ws')}/api/system/terminal/sessions/${sessionId}/stream?ticket=${encodeURIComponent(ticket)}` })
+  if (result !== 'accepted-after-errors') throw new Error(`resize validation was ${result}`)
+}
+
 try {
   await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' })
   await page.getByLabel('用户名').fill('admin')
@@ -147,9 +198,10 @@ try {
   await waitForTerminal('simulated-ssh:display interface brief')
   await waitForTerminal('设备正常')
 
-  await selectDevice(telnetId, 'TELNET')
+  const telnetSession = await selectDevice(telnetId, 'TELNET')
   await typeCommand('display interface brief')
   await waitForTerminal('simulated-telnet:display interface brief')
+  await verifyResizeValidation(telnetSession)
 
   if (process.env.NETCONSOLE_E2E_SKIP_AUTO !== '1') {
     const autoSession = await selectDevice(autoId, 'AUTO')
@@ -160,19 +212,29 @@ try {
     await page.getByRole('button', { name: '断开', exact: true }).click()
   }
 
-  const expectedHosts = process.env.NETCONSOLE_E2E_SKIP_AUTO === '1' ? 2 : 3
-  if (await page.locator('.terminal-host').count() !== expectedHosts) throw new Error('terminal hosts must remain mounted for all tabs')
+  await page.waitForFunction(() => document.querySelectorAll('.terminal-host').length === 2)
   await page.locator('.terminal-tab').filter({ hasText: 'SSH' }).last().click()
   await waitForVisibleTerminal('simulated-ssh:display interface brief')
+  const socketsBeforeReconnect = terminalSockets
   await page.getByRole('button', { name: '重连', exact: true }).click()
+  const reconnectDeadline = Date.now() + 15000
+  while (terminalSockets === socketsBeforeReconnect && Date.now() < reconnectDeadline) await page.waitForTimeout(50)
+  if (terminalSockets === socketsBeforeReconnect) throw new Error('reconnect did not open a new terminal socket')
   await page.locator('.terminal-status').filter({ hasText: '受限只读' }).waitFor({ timeout: 15000 })
   await typeCommand('display interface brief')
   await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane')]
     .filter((pane) => getComputedStyle(pane).display !== 'none')
-    .some((pane) => (pane.innerText.match(/simulated-ssh:display interface brief/g) || []).length >= 2), { timeout: 15000 })
+    .some((pane) => (pane.innerText.match(/simulated-ssh:display interface brief/g) || []).length >= 2), undefined, { timeout: 15000 })
+
+  const resizeMessages = socketEvents.filter((event) => event.type === 'resize' && !validationSockets.has(event.id))
+  if (resizeMessages.some(({ columns, rows }) => columns < 1 || columns > 500 || rows < 1 || rows > 300)) {
+    throw new Error(`terminal layout produced unsupported dimensions: ${JSON.stringify(resizeMessages)}`)
+  }
+  const consoleHeight = await page.locator('.terminal-console').evaluate((element) => element.getBoundingClientRect().height)
+  if (consoleHeight > 850) throw new Error(`terminal content expanded its layout to ${consoleHeight}px`)
 
   await page.getByRole('button', { name: '分屏', exact: true }).click()
-  if (await page.locator('.terminal-panes.split .terminal-pane').count() !== 2) throw new Error('split view did not show two panes')
+  if (await page.locator('.terminal-panes.split .terminal-pane:visible').count() !== 2) throw new Error('split view did not show two panes')
   const terminalSearch = page.locator('.terminal-console__toolbar input[placeholder="搜索终端"]')
   await terminalSearch.fill('synthetic')
   await terminalSearch.press('Enter')
@@ -182,6 +244,7 @@ try {
 
   // Serial targets are global resources, so exercise them with the seeded SUPERADMIN.
   const serialContext = await browser.newContext()
+  await installWebroot(serialContext)
   const serialPage = await serialContext.newPage()
   await serialPage.goto(`${baseUrl}/login`, { waitUntil: 'networkidle' })
   await serialPage.getByLabel('用户名').fill('superadmin')
@@ -244,7 +307,7 @@ try {
     terminals: document.querySelector('.terminal-console')?.innerText || '',
     sessions: document.querySelector('.terminal-history-body')?.innerText || '',
   })).catch(() => ({}))
-  console.error(`E2E diagnostics: ${JSON.stringify({ error: String(error), diagnostics, sessionDiagnostics, consoleErrors, failedRequests, badResponses, apiErrors })}`)
+  console.error(`E2E diagnostics: ${JSON.stringify({ error: String(error), diagnostics, sessionDiagnostics, socketEvents, consoleErrors, failedRequests, badResponses, apiErrors })}`)
   throw error
 } finally {
   await context.close()

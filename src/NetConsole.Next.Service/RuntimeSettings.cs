@@ -13,6 +13,7 @@ internal sealed class RuntimeSettings
     public required int SyslogReceiveBufferBytes { get; init; }
     public bool H3cEnabled { get; init; }
     public bool TerminalEnabled { get; init; }
+    public int TerminalIdleTimeoutSeconds { get; init; } = 900;
     public bool TerminalDevelopmentSimulationEnabled { get; init; }
     public bool H3cDevelopmentEnvironmentCredentialsEnabled { get; init; }
 
@@ -68,6 +69,7 @@ internal sealed class RuntimeSettings
             SyslogReceiveBufferBytes = receiveBuffer,
             H3cEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_ENABLED") == "1",
             TerminalEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_ENABLED") == "1",
+            TerminalIdleTimeoutSeconds = ParseBoundedInt("NETCONSOLE_NEXT_TERMINAL_IDLE_TIMEOUT_SECONDS", 900, 1, 86_400),
             TerminalDevelopmentSimulationEnabled = IsDevelopmentEnvironment() &&
                 Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_DEV_SIMULATION") == "1",
             H3cDevelopmentEnvironmentCredentialsEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS") == "1",

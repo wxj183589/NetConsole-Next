@@ -57,16 +57,49 @@ class NetmikoPublishTests(unittest.TestCase):
 
             def run(command, **kwargs):
                 self.assertIn("--no-restore", command)
+                (output / "wwwroot").mkdir()
+                (output / "wwwroot" / "index.html").write_text("stale UI")
                 (output / "NetConsole.Next.Service.exe").write_bytes(b"service")
+
+            def build_webroot(destination):
+                (destination / "app").mkdir()
+                (destination / "app" / "current.js").write_text("current Vue build")
+                (destination / "index.html").write_text('<script src="/app/current.js"></script>')
 
             with patch.object(publish, "workspace_path", return_value=output), \
                  patch.object(publish.package, "smoke") as smoke, \
+                 patch.object(publish, "build_webroot", side_effect=build_webroot) as web_build, \
                  patch.object(publish.subprocess, "run", side_effect=run):
                 self.assertEqual(publish.publish("candidate", bundle), output)
                 publish.validate_bundle(output / "tools" / "netmiko")
                 self.assertEqual(smoke.call_count, 2)
+                self.assertEqual(web_build.call_count, 1)
+                self.assertIn("current.js", (output / "wwwroot" / "index.html").read_text())
+                self.assertEqual((output / "wwwroot" / "app" / "current.js").read_text(), "current Vue build")
                 with self.assertRaises(FileExistsError):
                     publish.publish("candidate", bundle)
+
+    def test_frontend_build_requires_a_complete_entry(self):
+        with tempfile.TemporaryDirectory(dir=TEST_DATA) as temp:
+            root = Path(temp)
+            web = root / "web"
+            vite = web / "node_modules" / "vite" / "bin" / "vite.js"
+            vite.parent.mkdir(parents=True)
+            vite.write_text("offline fixture")
+            output = root / "built"
+            output.mkdir()
+
+            def run(command, **kwargs):
+                self.assertEqual(kwargs["cwd"], web)
+                self.assertIn("--emptyOutDir", command)
+                (output / "index.html").write_text('<script src="/app/assets/current.js"></script>')
+
+            with patch.object(package, "REPO", root), patch.object(publish.subprocess, "run", side_effect=run):
+                with self.assertRaisesRegex(ValueError, "assets"):
+                    publish.build_webroot(output)
+                (output / "app" / "assets").mkdir(parents=True)
+                (output / "app" / "assets" / "current.js").write_text("current UI")
+                publish.build_webroot(output)
 
 
 if __name__ == "__main__":

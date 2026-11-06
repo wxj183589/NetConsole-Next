@@ -41,12 +41,19 @@ internal static class ZteCollectionTests
             var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), new FixtureTransportFactory());
             var visibleProfile = service.Profiles(P2B5SiteScopeDecision.Global).Single();
             var visibleJson = JsonSerializer.Serialize(visibleProfile);
-            Assert(!visibleJson.Contains("credential", StringComparison.OrdinalIgnoreCase) &&
-                   !visibleJson.Contains("hostKey", StringComparison.OrdinalIgnoreCase),
+            using var visibleDocument = JsonDocument.Parse(visibleJson);
+            var fieldNames = visibleDocument.RootElement.EnumerateObject().Select(field => field.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert(!fieldNames.Contains("CredentialReference") && !fieldNames.Contains("Password") &&
+                   !fieldNames.Contains("CredentialPassword") && !fieldNames.Contains("HostKeySha256"),
                 "ZTE profile API view must not expose credential references or host-key pins");
+            Assert(visibleProfile.CredentialConfigured && !visibleJson.Contains("synthetic", StringComparison.Ordinal),
+                "ZTE profile view must expose only whether a password is configured");
             Assert(service.Profiles(new P2B5SiteScopeDecision("AUTHORIZED", false,
                        new HashSet<string>(["other-site"], StringComparer.Ordinal), "test scope")).Count == 0,
                 "ZTE profile reads must exclude sites outside the authenticated scope");
+            Assert(!service.ProfileIsInScope(profileId, new P2B5SiteScopeDecision("AUTHORIZED", false,
+                       new HashSet<string>(["other-site"], StringComparer.Ordinal), "test scope")),
+                "ZTE credential operations must exclude profiles outside the authenticated scope");
 
             var interfaces = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "zte", "phase9_c89e4_show_interface_brief.txt"));
             var parsed = ZteZxr10Parser.ParseInterfaces(interfaces);
@@ -106,8 +113,38 @@ internal static class ZteCollectionTests
             Assert(catalog.CommitZteHostKey(trusted, "ssh-ed25519", rotated), "changed key must update automatically");
             Assert(!catalog.CommitZteHostKey(initial, "ssh-ed25519", trusted.HostKeySha256), "stale session must not overwrite a newer key");
             Assert(catalog.GetZteDeviceProfile(profileId)!.HostKeySha256 == rotated, "rotated key must persist");
-            catalog.CreateZteDeviceProfile(catalog.GetZteDeviceProfile(profileId)!, clearPassword: true);
+            var beforeCredentialUpdate = catalog.GetZteDeviceProfile(profileId)!;
+            catalog.UpdateZteCredential(profileId, "updated-synthetic", false);
+            var afterCredentialUpdate = catalog.GetZteDeviceProfile(profileId)!;
+            Assert(catalog.GetZteCredentialPassword(profileId) == "updated-synthetic" && service.Profile(profileId)!.CredentialConfigured,
+                "credential-only updates must save the password and report its presence");
+            Assert(afterCredentialUpdate.UpdatedMs > beforeCredentialUpdate.UpdatedMs &&
+                   afterCredentialUpdate with { UpdatedMs = beforeCredentialUpdate.UpdatedMs } == beforeCredentialUpdate,
+                "credential-only updates must advance revision without changing identity, Site, host key or compatibility");
+            catalog.UpdateZteCredential(profileId, "", false);
+            catalog.UpdateZteCredential(profileId, null, false);
+            Assert(catalog.GetZteCredentialPassword(profileId) == "updated-synthetic",
+                "empty and omitted credential updates must preserve the saved password");
+            var beforeInvalidCredential = catalog.GetZteDeviceProfile(profileId)!;
+            try
+            {
+                catalog.UpdateZteCredential(profileId, new string('x', 4097), false);
+                throw new InvalidOperationException("oversized credentials must be rejected");
+            }
+            catch (ArgumentException) { }
+            Assert(catalog.GetZteDeviceProfile(profileId) == beforeInvalidCredential &&
+                   catalog.GetZteCredentialPassword(profileId) == "updated-synthetic",
+                "invalid credentials must leave both profile and password unchanged");
+            try
+            {
+                catalog.UpdateZteCredential(Guid.NewGuid().ToString("N"), "unused", false);
+                throw new InvalidOperationException("missing profile credential updates must be rejected");
+            }
+            catch (KeyNotFoundException) { }
+            catalog.UpdateZteCredential(profileId, "ignored-on-explicit-clear", true);
             Assert(catalog.GetZteCredentialPassword(profileId) is null, "explicit clear must remove the stored password");
+            Assert(!service.Profile(profileId)!.CredentialConfigured,
+                "credential status must immediately reflect an explicit clear");
             Assert(catalog.QueryZteFacts(profileId, "optical", false, 10).Count == 1 &&
                    catalog.QueryZteFacts(profileId, "lldp", false, 10).Count == 1,
                 "ZTE runtime fixture session must persist optical and LLDP current facts");

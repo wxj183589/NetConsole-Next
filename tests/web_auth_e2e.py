@@ -14,6 +14,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.workspace_paths import workspace_path
 
 
 def free_port():
@@ -72,7 +76,9 @@ def main():
     dll = repo / "src" / "NetConsole.Next.Service" / "bin" / "Release" / "net10.0" / "NetConsole.Next.Service.dll"
     if not dll.is_file():
         raise RuntimeError("Run dotnet build -c Release first")
-    with tempfile.TemporaryDirectory(prefix="netconsole-next-auth-") as temp:
+    test_parent = workspace_path("test-data")
+    test_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="netconsole-next-auth-", dir=test_parent) as temp:
         root = Path(temp) / "data"
         port = free_port()
         env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root), NETCONSOLE_NEXT_WEB_PORT=str(port), NETCONSOLE_NEXT_SYSLOG_PORT="0")
@@ -121,9 +127,8 @@ def main():
                        "enabled": True, "hostKeyUpdatePolicy": "AUTO_UPDATE"}
             assert admin_a.request("/api/system/h3c/profiles", "POST", profile)[0] == 403
             assert superadmin.request("/api/system/h3c/profiles", "POST", profile)[0] == 201
-            # The simplified onboarding route accepts only a DPAPI reference,
-            # never a password.  It supplies SSH's default port and returns
-            # the same redacted profile view as the explicit route.
+            # Profile, credentials, inventory and audit are one transaction.
+            # Passwords are device-bound and absent from all returned views.
             onboard_request = {
                 "host": "192.0.2.12", "username": "reader",
                 "credentialReference": "E2E_ONBOARD", "protocol": "SSH"
@@ -137,6 +142,31 @@ def main():
             test_status, test_result = superadmin.request(
                 f"/api/system/h3c/profiles/{onboard['id']}/test-connection", "POST", {})
             assert test_status == 200 and test_result["status"] == "CREDENTIAL_UNAVAILABLE", (test_status, test_result)
+            default_device = superadmin.request(f"/api/system/devices/{onboard['id']}")[1]["item"]
+            assert default_device["managementIp"] == "192.0.2.12" and default_device["terminalProfileId"] == onboard["id"]
+            atomic_request = {
+                "host": "192.0.2.14", "username": "reader", "password": "synthetic-onboard-only",
+                "protocol": "SSH", "inventory": {
+                    "name": "Synthetic IOS-XE", "managementIp": "192.0.2.14", "vendor": "Cisco",
+                    "model": "fixture", "deviceType": "IOS_XE", "siteId": "local", "enabled": True,
+                    "description": "Atomic onboarding fixture"
+                }
+            }
+            atomic_status, atomic = superadmin.request("/api/system/h3c/profiles/onboard", "POST", atomic_request)
+            assert atomic_status == 201, (atomic_status, atomic)
+            device_status, device = superadmin.request(f"/api/system/devices/{atomic['id']}")
+            assert device_status == 200 and device["item"]["name"] == "Synthetic IOS-XE"
+            assert device["item"]["vendor"] == "Cisco" and device["item"]["deviceType"] == "IOS_XE"
+            assert device["item"]["credentialConfigured"] is True
+            assert device["item"]["terminalProfileId"] == atomic["id"] and "synthetic-onboard-only" not in json.dumps([atomic, device])
+            tables = ("h3c_device_profiles", "collection_sources", "ssh_host_keys", "device_inventory", "audit_events")
+            def counts():
+                with closing(sqlite3.connect(root / "catalog.db")) as db:
+                    return {table: db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] for table in tables}
+            before_duplicate = counts()
+            assert superadmin.request("/api/system/h3c/profiles/onboard", "POST", atomic_request)[0] == 409
+            assert counts() == before_duplicate, "duplicate onboarding left partial records"
+            print("ATOMIC_ONBOARD_METADATA_AND_ROLLBACK=PASS")
             telnet_status, telnet = superadmin.request("/api/system/h3c/profiles/onboard", "POST", {
                 "host": "192.0.2.13", "username": "reader",
                 "credentialReference": "E2E_TELNET", "protocol": "TELNET"

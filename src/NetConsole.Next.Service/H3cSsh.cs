@@ -32,6 +32,11 @@ internal sealed class H3cJumpHostKeyMismatchException() : InvalidOperationExcept
 internal sealed class H3cJumpHostKeyMissingException() : InvalidOperationException(
     "SSH Jump Host connection completed without a verifiable host key.") { }
 
+internal sealed class H3cJumpHostConnectionException(string code, string message) : IOException(message)
+{
+    public string Code { get; } = code;
+}
+
 internal sealed class H3cAuthenticationFailedException() : InvalidOperationException(
     "SSH authentication failed for the configured H3C profile.") { }
 
@@ -236,6 +241,8 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
     public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(verifyHostKey);
+        if (_jumpHost is not null && string.IsNullOrEmpty(_jumpHost.Password))
+            throw new H3cJumpHostConnectionException("JUMP_HOST_CREDENTIAL_UNAVAILABLE", "当前局点未保存 SSH 中转密码。");
         StartWorker();
         try
         {
@@ -403,6 +410,9 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
 
     private static Exception MapWorkerFailure(string? error) => error switch
     {
+        "JumpHostAuthenticationError" => new H3cJumpHostConnectionException("JUMP_HOST_AUTHENTICATION_FAILED", "SSH 中转服务器认证失败，请检查中转用户名和密码。"),
+        "JumpHostConnectionError" => new H3cJumpHostConnectionException("JUMP_HOST_UNREACHABLE", "SSH 中转服务器不可达，请检查地址、端口和 SSH 服务。"),
+        "JumpHostChannelError" => new H3cJumpHostConnectionException("JUMP_HOST_CHANNEL_FAILED", "SSH 中转已连接，但无法转发到目标设备，请检查路由和转发权限。"),
         "AuthenticationException" or "NetmikoAuthenticationException" => new H3cAuthenticationFailedException(),
         "TimeoutError" or "NetmikoTimeoutException" or "ReadTimeout" or "socket.timeout" => new H3cConnectionTimeoutException(),
         "UnsupportedDeviceTypeError" or "ValueError" => new ArgumentException("设备驱动或连接参数不受支持。"),

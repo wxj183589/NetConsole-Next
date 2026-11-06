@@ -123,18 +123,14 @@ async function onboardDevice(): Promise<void> {
   saving.value = true
   try {
     const selectedSiteId = siteId.value || 'local'
-    const profile = await onboardH3cProfile({ host: onboardForm.host.trim(), siteId: selectedSiteId, protocol: onboardForm.protocol, port: onboardForm.port, username: onboardForm.username.trim(), password: onboardForm.password, allowTelnetFallback: onboardForm.allowTelnetFallback })
+    const profile = await onboardH3cProfile({
+      host: onboardForm.host.trim(), siteId: selectedSiteId, protocol: onboardForm.protocol, port: onboardForm.port,
+      username: onboardForm.username.trim(), password: onboardForm.password, allowTelnetFallback: onboardForm.allowTelnetFallback,
+      inventory: { name: onboardForm.name.trim() || onboardForm.host.trim(), managementIp: onboardForm.host.trim(), vendor: onboardForm.vendor, model: '', deviceType: onboardForm.vendor === 'Cisco' ? onboardForm.platform : 'NETWORK_DEVICE', siteId: selectedSiteId, groupId: null, description: onboardForm.description.trim(), enabled: true, terminalProfileId: null },
+    })
     onboardForm.password = ''
-    let inventoryCreated = true
-    try {
-      await updateDevice(profile.id, {
-        name: onboardForm.name.trim() || onboardForm.host.trim(), managementIp: onboardForm.host.trim(), vendor: onboardForm.vendor, model: '', deviceType: onboardForm.vendor === 'Cisco' ? onboardForm.platform : 'NETWORK_DEVICE',
-        siteId: selectedSiteId, groupId: null, description: onboardForm.description.trim(), enabled: true, terminalProfileId: profile.id,
-      })
-    } catch { inventoryCreated = false }
     showOnboard.value = false
     await Promise.all([refresh(), refreshProfiles()])
-    if (!inventoryCreated) { ElMessage.warning('连接资料已创建，设备库存未完成更新，请检查设备地址和局点。'); return }
     const test = await testH3cConnection(profile.id)
     if (test.status === 'CONNECTED') ElMessage.success('设备已添加，连接测试成功')
     else ElMessage.warning(`设备已添加：${test.message}`)

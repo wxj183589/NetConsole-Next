@@ -24,13 +24,16 @@ internal sealed class NetmikoJumpHostProbe
         if (jumpHost.Password is null)
             throw new NetmikoJumpHostProbeException(
                 "JUMP_HOST_CREDENTIAL_UNAVAILABLE",
-                "Jump Host password is not configured for this Site.");
+                "当前局点未保存 SSH 中转密码。");
 
         Process? process = null;
         StreamWriter? input = null;
         StreamReader? output = null;
         try
         {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(30));
+            var token = deadline.Token;
             var script = FindWorkerScript();
             var start = new ProcessStartInfo
             {
@@ -43,6 +46,9 @@ internal sealed class NetmikoJumpHostProbe
                 WorkingDirectory = Path.GetDirectoryName(script)!
             };
             start.ArgumentList.Add(script);
+            start.StandardInputEncoding = new System.Text.UTF8Encoding(false);
+            start.StandardOutputEncoding = System.Text.Encoding.UTF8;
+            start.Environment["PYTHONIOENCODING"] = "utf-8";
             process = Process.Start(start) ?? throw new InvalidOperationException("Netmiko worker could not start.");
             input = process.StandardInput;
             output = process.StandardOutput;
@@ -63,9 +69,9 @@ internal sealed class NetmikoJumpHostProbe
                 auth_timeout = 10,
                 banner_timeout = 10
             });
-            await input.WriteLineAsync(request).WaitAsync(cancellationToken).ConfigureAwait(false);
-            await input.FlushAsync(cancellationToken).ConfigureAwait(false);
-            var line = await output.ReadLineAsync(cancellationToken).ConfigureAwait(false)
+            await input.WriteLineAsync(request).WaitAsync(token).ConfigureAwait(false);
+            await input.FlushAsync(token).ConfigureAwait(false);
+            var line = await output.ReadLineAsync(token).ConfigureAwait(false)
                 ?? throw new IOException("Netmiko worker exited before returning a Jump Host probe result.");
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
@@ -85,11 +91,13 @@ internal sealed class NetmikoJumpHostProbe
                 throw new NetmikoJumpHostProbeException("JUMP_HOST_KEY_MISSING", "Jump Host did not return a verifiable host key.");
             return new(keyType!, H3cHostKeyFingerprint.Normalize(fingerprint!));
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { throw new NetmikoJumpHostProbeException("JUMP_HOST_CONNECTION_TIMEOUT", "SSH 中转连接超时。"); }
         catch (OperationCanceledException) { throw; }
         catch (NetmikoJumpHostProbeException) { throw; }
         catch (Exception ex)
         {
-            throw new NetmikoJumpHostProbeException("JUMP_HOST_PROBE_FAILED", "Jump Host probe failed.", ex);
+            throw new NetmikoJumpHostProbeException("JUMP_HOST_PROBE_FAILED", "SSH 中转连接失败，请检查服务器地址、端口和 SSH 服务。", ex);
         }
         finally
         {
@@ -103,10 +111,10 @@ internal sealed class NetmikoJumpHostProbe
     private static NetmikoJumpHostProbeException MapWorkerFailure(string? error) => error switch
     {
         "AuthenticationException" or "NetmikoAuthenticationException" =>
-            new("JUMP_HOST_AUTHENTICATION_FAILED", "Jump Host authentication failed."),
+            new("JUMP_HOST_AUTHENTICATION_FAILED", "SSH 中转服务器认证失败，请检查用户名和密码。"),
         "TimeoutError" or "NetmikoTimeoutException" or "socket.timeout" =>
-            new("JUMP_HOST_CONNECTION_TIMEOUT", "Jump Host connection timed out."),
-        _ => new("JUMP_HOST_PROBE_FAILED", "Jump Host probe failed.")
+            new("JUMP_HOST_CONNECTION_TIMEOUT", "SSH 中转连接超时。"),
+        _ => new("JUMP_HOST_PROBE_FAILED", "SSH 中转连接失败，请检查服务器地址、端口和 SSH 服务。")
     };
 
     private static string FindWorkerScript()

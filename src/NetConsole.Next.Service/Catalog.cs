@@ -122,12 +122,13 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         {
             if (Directory.EnumerateFileSystemEntries(settings.DataRoot).Any())
                 throw new InvalidOperationException("Refusing a nonempty unmarked data directory.");
-            File.WriteAllText(marker, "NETCONSOLE_NEXT_V1\n");
         }
         else if (File.ReadAllText(marker).Trim() != "NETCONSOLE_NEXT_V1")
         {
             throw new InvalidOperationException("Data directory marker is unknown.");
         }
+        DataRootPermissions.Restrict(settings.DataRoot);
+        if (!File.Exists(marker)) File.WriteAllText(marker, "NETCONSOLE_NEXT_V1\n");
         _ = LocalApiTokenStore.GetOrCreate(settings.DataRoot);
 
         foreach (var directoryName in new[] { "raw", "published", "inbox", "archive", "backup", "terminal-recordings" })
@@ -176,6 +177,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV21Migration(db);
         ApplyV22Migration(db);
         ZteCollectionSchema.Apply(db);
+        LinuxServerSchema.Apply(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
 
@@ -1111,7 +1113,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         RecoveryWasInterrupted = false;
     }
 
-    public void CreateH3cDeviceProfile(H3cDeviceProfileSnapshot profile)
+    public void CreateH3cDeviceProfile(H3cDeviceProfileSnapshot profile,
+        DeviceInventoryWriteRequest? onboardInventory = null, string? actor = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         var hostKeyPolicy = H3cHostKeyPolicy.Normalize(profile.HostKeyUpdatePolicy);
@@ -1143,9 +1146,20 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (fingerprint.Length == 0 && hostKeyPolicy != H3cHostKeyPolicy.Automatic)
             throw new ArgumentException("A STRICT H3C profile requires an initial SHA256 host-key fingerprint.", nameof(profile));
         var sourceId = "h3c-" + profile.Id;
+        var inventoryInput = onboardInventory is null ? null : NormalizeDeviceInput(onboardInventory with
+        {
+            Id = profile.Id, ManagementIp = profile.Host, SiteId = profile.SiteId, TerminalProfileId = profile.Id
+        }, null);
         var now = UtcNowMs();
         using var db = Open();
         using var transaction = db.BeginTransaction();
+        if (inventoryInput is not null)
+        {
+            EnsureSite(db, transaction, inventoryInput.SiteId);
+            EnsureGroup(db, transaction, inventoryInput.GroupId, inventoryInput.SiteId);
+            EnsureDeviceIdAvailable(db, transaction, profile.Id);
+            EnsureUniqueManagementIp(db, transaction, inventoryInput.SiteId, inventoryInput.ManagementIp, null);
+        }
         using (var existing = db.CreateCommand())
         {
             existing.Transaction = transaction;
@@ -1234,6 +1248,18 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using (var inventory = db.CreateCommand())
         {
             inventory.Transaction = transaction;
+            if (inventoryInput is not null)
+            {
+                inventory.CommandText = @"INSERT INTO device_inventory
+                    (id,name,management_ip,vendor,model,device_type,site_id,group_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
+                    VALUES($id,$name,$ip,$vendor,$model,$type,$site,$group,$description,$enabled,$created,$updated,$profile)";
+                AddDeviceParameters(inventory, inventoryInput, now, now);
+                inventory.ExecuteNonQuery();
+                InsertDeviceAudit(db, transaction, actor ?? "collector", "DEVICE_CREATE", profile.Id,
+                    new { inventoryInput.Name, inventoryInput.ManagementIp, inventoryInput.SiteId, inventoryInput.GroupId, inventoryInput.Enabled, inventoryInput.TerminalProfileId });
+            }
+            else
+            {
             inventory.CommandText = @"INSERT OR IGNORE INTO device_inventory
                 (id,name,management_ip,vendor,model,device_type,site_id,description,enabled,created_ms,updated_ms,terminal_profile_id)
                 SELECT $id,$name,$host,'H3C','', 'H3C_TERMINAL',$site,'Created from terminal profile', $enabled,$created,$updated,$id
@@ -1246,6 +1272,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             inventory.Parameters.AddWithValue("$created", profile.CreatedMs > 0 ? profile.CreatedMs : now);
             inventory.Parameters.AddWithValue("$updated", now);
             inventory.ExecuteNonQuery();
+            }
         }
         transaction.Commit();
     }
@@ -1290,7 +1317,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (!reader.Read()) return null;
         return new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3),
             reader.GetString(4), includePassword && !reader.IsDBNull(5) ? reader.GetString(5) : null,
-            reader.IsDBNull(6) ? string.Empty : reader.GetString(6), reader.GetInt32(7) != 0, reader.GetInt64(8));
+            reader.IsDBNull(6) ? string.Empty : reader.GetString(6), reader.GetInt32(7) != 0, reader.GetInt64(8),
+            CredentialConfigured: !reader.IsDBNull(5) && reader.GetString(5).Length > 0);
     }
 
     public void UpsertSiteSshJumpHost(SiteSshJumpHostSnapshot jump)
@@ -1303,7 +1331,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             throw new ArgumentException("Jump Host username is invalid.", nameof(jump));
         if (!H3cCredentialReference.IsValid(jump.CredentialReference))
             throw new ArgumentException("Jump Host credential reference is invalid.", nameof(jump));
-        if (jump.Password is { Length: > 4096 }) throw new ArgumentException("Jump Host password is too long.", nameof(jump));
+        if (!jump.ClearPassword && jump.Password is { Length: > 4096 }) throw new ArgumentException("Jump Host password is too long.", nameof(jump));
         var fingerprint = string.IsNullOrWhiteSpace(jump.HostKeySha256) ? string.Empty : H3cHostKeyFingerprint.Normalize(jump.HostKeySha256);
         using var db = Open();
         using var command = db.CreateCommand();
@@ -1312,14 +1340,16 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             ON CONFLICT(site_id) DO UPDATE SET host=excluded.host,port=excluded.port,username=excluded.username,
                 credential_reference=excluded.credential_reference,
                 credential_password=CASE WHEN $clear=1 THEN NULL WHEN $password IS NULL THEN site_ssh_jump_hosts.credential_password ELSE excluded.credential_password END,
-                host_key_sha256=CASE WHEN excluded.host_key_sha256='' THEN site_ssh_jump_hosts.host_key_sha256 ELSE excluded.host_key_sha256 END,
+                host_key_sha256=CASE WHEN excluded.host_key_sha256<>'' THEN excluded.host_key_sha256
+                    WHEN excluded.host<>site_ssh_jump_hosts.host OR excluded.port<>site_ssh_jump_hosts.port THEN ''
+                    ELSE site_ssh_jump_hosts.host_key_sha256 END,
                 enabled=excluded.enabled,updated_ms=excluded.updated_ms";
         command.Parameters.AddWithValue("$site", jump.SiteId.Trim());
         command.Parameters.AddWithValue("$host", jump.Host.Trim());
         command.Parameters.AddWithValue("$port", jump.Port);
         command.Parameters.AddWithValue("$user", jump.Username.Trim());
         command.Parameters.AddWithValue("$reference", jump.CredentialReference.Trim().ToUpperInvariant());
-        command.Parameters.AddWithValue("$password", (object?)jump.Password ?? DBNull.Value);
+        command.Parameters.AddWithValue("$password", jump.ClearPassword || string.IsNullOrEmpty(jump.Password) ? DBNull.Value : jump.Password);
         command.Parameters.AddWithValue("$clear", jump.ClearPassword ? 1 : 0);
         command.Parameters.AddWithValue("$fingerprint", fingerprint);
         command.Parameters.AddWithValue("$enabled", jump.Enabled ? 1 : 0);
@@ -1334,6 +1364,27 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         command.CommandText = "DELETE FROM site_ssh_jump_hosts WHERE site_id=$site";
         command.Parameters.AddWithValue("$site", siteId);
         return command.ExecuteNonQuery() == 1;
+    }
+
+    internal bool ClearSiteSshJumpHostFingerprint(string siteId)
+    {
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        using var read = db.CreateCommand();
+        read.Transaction = transaction;
+        read.CommandText = "SELECT host_key_sha256 FROM site_ssh_jump_hosts WHERE site_id=$site";
+        read.Parameters.AddWithValue("$site", siteId);
+        if (read.ExecuteScalar() is not string previous) return false;
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE site_ssh_jump_hosts SET host_key_sha256='',updated_ms=$now WHERE site_id=$site";
+        command.Parameters.AddWithValue("$site", siteId);
+        command.Parameters.AddWithValue("$now", UtcNowMs());
+        command.ExecuteNonQuery();
+        InsertDeviceAudit(db, transaction, "SYSTEM", "SITE_JUMP_HOST_KEY_DELETED", siteId,
+            new { oldFingerprint = previous });
+        transaction.Commit();
+        return true;
     }
 
     internal bool UpdateSiteSshJumpHostFingerprint(string siteId, string fingerprint, SiteSshJumpHostSnapshot? expected = null)

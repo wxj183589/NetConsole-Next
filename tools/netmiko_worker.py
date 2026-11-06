@@ -31,6 +31,18 @@ class OutputLimitError(ValueError):
     """The bounded worker channel cannot accept the payload."""
 
 
+class JumpHostAuthenticationError(ConnectionError):
+    """Jump Host credentials were rejected before connecting to the target."""
+
+
+class JumpHostConnectionError(ConnectionError):
+    """The configured Jump Host is unavailable."""
+
+
+class JumpHostChannelError(ConnectionError):
+    """The Jump Host could not forward to the target."""
+
+
 DRIVER_ALIASES = {
     ("h3c", "ssh"): "hp_comware",
     ("h3c", "telnet"): "hp_comware_telnet",
@@ -108,24 +120,32 @@ class Worker:
         if jump:
             self.jump_client = paramiko.SSHClient()
             self.jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            self.jump_client.connect(
-                hostname=jump["host"], port=int(jump.get("port", 22)),
-                username=jump["username"], password=jump.get("password"),
-                timeout=float(request.get("conn_timeout", 10)),
-                auth_timeout=float(request.get("auth_timeout", 10)),
-                banner_timeout=float(request.get("banner_timeout", 10)),
-                allow_agent=False, look_for_keys=False,
-            )
+            try:
+                self.jump_client.connect(
+                    hostname=jump["host"], port=int(jump.get("port", 22)),
+                    username=jump["username"], password=jump.get("password"),
+                    timeout=float(request.get("conn_timeout", 10)),
+                    auth_timeout=float(request.get("auth_timeout", 10)),
+                    banner_timeout=float(request.get("banner_timeout", 10)),
+                    allow_agent=False, look_for_keys=False,
+                )
+            except paramiko.AuthenticationException as exc:
+                raise JumpHostAuthenticationError() from exc
+            except (OSError, paramiko.SSHException) as exc:
+                raise JumpHostConnectionError() from exc
             jump_key = self.jump_client.get_transport().get_remote_server_key()
             jump_key_type, jump_key_fingerprint = key_details(jump_key)
             target_addr = (request["host"], int(request.get("port", 22)))
             # Preserve the existing forwarding source tuple.  Host-key trust
             # and rotation are persisted by the parent after authentication.
             source_addr = (jump["host"], int(jump.get("port", 22)))
-            self.jump_channel = self.jump_client.get_transport().open_channel(
-                "direct-tcpip", target_addr, source_addr,
-                timeout=float(request.get("conn_timeout", 10)),
-            )
+            try:
+                self.jump_channel = self.jump_client.get_transport().open_channel(
+                    "direct-tcpip", target_addr, source_addr,
+                    timeout=float(request.get("conn_timeout", 10)),
+                )
+            except (OSError, paramiko.SSHException) as exc:
+                raise JumpHostChannelError() from exc
         params = {
             "device_type": self.driver,
             "host": request["host"],

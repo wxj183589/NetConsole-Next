@@ -124,6 +124,7 @@ export interface ZteProfile {
   updatedMs: number
   terminalEncoding: string
   siteId: string
+  credentialConfigured: boolean
 }
 export interface ZteCollectionRun {
   id: string
@@ -413,6 +414,33 @@ export interface TerminalSession {
   outputBytes: number
   recordingBytes: number
   disconnectReason?: string | null
+}
+
+export interface LinuxServer {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  groupName: string
+  siteId: string
+  enabled: boolean
+  credentialConfigured: boolean
+  hostKeySha256: string
+  lastConnectedMs?: number | null
+  lastUsedMs?: number | null
+  lastResult?: string | null
+}
+export interface LinuxServerWrite {
+  name: string
+  host: string
+  port: number
+  username: string
+  password?: string
+  clearPassword?: boolean
+  groupName: string
+  siteId: string
+  enabled: boolean
 }
 
 export interface TaskRun {
@@ -920,10 +948,40 @@ export function getDeviceInventory(params: { page?: number; pageSize?: number; s
   return request('/api/system/devices?' + query.toString())
 }
 export function getDeviceSites(): Promise<DeviceSite[]> { return request('/api/system/device-sites') }
+export interface SiteSshJumpHost {
+  siteId: string
+  host: string
+  port: number
+  username: string
+  enabled: boolean
+  hostKeySha256: string
+  credentialConfigured: boolean
+  runtimeStatus: 'DISABLED' | 'ON_DEMAND' | 'CREDENTIAL_MISSING'
+  updatedMs: number
+}
+export async function getSiteSshJumpHost(siteId: string): Promise<SiteSshJumpHost | null> {
+  try { return await request(`/api/system/sites/${encodeURIComponent(siteId)}/ssh-jump-host`) }
+  catch (error) { if (error instanceof ApiRequestError && error.status === 404) return null; throw error }
+}
+export function saveSiteSshJumpHost(siteId: string, payload: { host: string; port: number; username: string; enabled: boolean; password?: string; clearPassword?: boolean }): Promise<SiteSshJumpHost> {
+  return request(`/api/system/sites/${encodeURIComponent(siteId)}/ssh-jump-host`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function testSiteSshJumpHost(siteId: string): Promise<SiteSshJumpHost> {
+  return request(`/api/system/sites/${encodeURIComponent(siteId)}/ssh-jump-host/test`, { method: 'POST', body: '{}' })
+}
+export function refreshSiteSshJumpHostFingerprint(siteId: string): Promise<SiteSshJumpHost> {
+  return request(`/api/system/sites/${encodeURIComponent(siteId)}/ssh-jump-host/refresh-fingerprint`, { method: 'POST', body: '{}' })
+}
+export function clearSiteSshJumpHostFingerprint(siteId: string): Promise<SiteSshJumpHost> {
+  return request(`/api/system/sites/${encodeURIComponent(siteId)}/ssh-jump-host/fingerprint`, { method: 'DELETE' })
+}
 export function getDeviceInventoryDetail(id: string): Promise<DeviceInventoryDetail> { return request('/api/system/devices/' + encodeURIComponent(id)) }
 export function getZteProfiles(): Promise<ZteProfile[]> { return request('/api/system/zte/profiles') }
 export function createZteProfile(payload: Record<string, unknown>): Promise<ZteProfile> {
   return request('/api/system/zte/profiles', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateZteCredential(id: string, payload: { password?: string; clearPassword?: boolean }): Promise<ZteProfile> {
+  return request(`/api/system/zte/profiles/${encodeURIComponent(id)}/credential`, { method: 'PUT', body: JSON.stringify(payload) })
 }
 export function startZteCollection(id: string): Promise<{ runId: string }> {
   return request(`/api/system/zte/profiles/${encodeURIComponent(id)}/collect`, { method: 'POST', body: JSON.stringify({}) })
@@ -1160,6 +1218,7 @@ export interface H3cOnboardRequest {
   credentialReference?: string
   password?: string
   allowTelnetFallback?: boolean
+  inventory?: Record<string, unknown>
 }
 export function onboardH3cProfile(payload: H3cOnboardRequest): Promise<TerminalDevice> {
   return request('/api/system/h3c/profiles/onboard', { method: 'POST', body: JSON.stringify(payload) })
@@ -1174,6 +1233,22 @@ export function updateH3cCredential(profileId: string, payload: { password?: str
 export function createTerminalSession(payload: Record<string, unknown>): Promise<{ sessionId: string }> {
   return request('/api/system/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) })
 }
+export function getLinuxServers(): Promise<LinuxServer[]> { return request('/api/system/linux/servers') }
+export function createLinuxServer(payload: LinuxServerWrite): Promise<LinuxServer> {
+  return request('/api/system/linux/servers', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function updateLinuxServer(id: string, payload: LinuxServerWrite): Promise<LinuxServer> {
+  return request(`/api/system/linux/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function deleteLinuxServer(id: string): Promise<void> {
+  return request(`/api/system/linux/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+export function testLinuxServer(id: string): Promise<{ status: string; message: string }> {
+  return request(`/api/system/linux/servers/${encodeURIComponent(id)}/test`, { method: 'POST', body: '{}' })
+}
+export function createLinuxServerSession(id: string): Promise<{ sessionId: string; mode: 'LINUX_INTERACTIVE' }> {
+  return request(`/api/system/linux/servers/${encodeURIComponent(id)}/sessions`, { method: 'POST', body: '{}' })
+}
 export function issueTerminalTicket(sessionId: string): Promise<{ ticket: string; expiresAtMs: number }> {
   return request(`/api/system/terminal/sessions/${encodeURIComponent(sessionId)}/ticket`, { method: 'POST' })
 }
@@ -1182,6 +1257,9 @@ export function closeTerminalSession(sessionId: string): Promise<void> {
 }
 export function getTerminalSessions(): Promise<{ items: TerminalSession[]; total: number }> {
   return request('/api/system/terminal/sessions?page=1&pageSize=100')
+}
+export function getTerminalSession(sessionId: string): Promise<TerminalSession> {
+  return request(`/api/system/terminal/sessions/${encodeURIComponent(sessionId)}`)
 }
 export function getTerminalEvents(sessionId: string): Promise<Array<{ atMs: number; eventType: string; detailJson: string }>> {
   return request(`/api/system/terminal/sessions/${encodeURIComponent(sessionId)}/events?limit=500`)

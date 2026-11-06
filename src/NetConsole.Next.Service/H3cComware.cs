@@ -239,14 +239,16 @@ internal sealed record H3cDeviceProfileSnapshot(
 internal sealed record SiteSshJumpHostSnapshot(
     string SiteId, string Host, int Port, string Username, string CredentialReference,
     string? Password, string HostKeySha256, bool Enabled, long UpdatedMs,
-    bool ClearPassword = false)
+    bool ClearPassword = false, bool CredentialConfigured = false)
 {
-    public SiteSshJumpHostView ToView() => new(SiteId, Host, Port, Username, Enabled, HostKeySha256, UpdatedMs);
+    public SiteSshJumpHostView ToView() => new(SiteId, Host, Port, Username, Enabled, HostKeySha256, UpdatedMs,
+        CredentialConfigured || !string.IsNullOrEmpty(Password),
+        !Enabled ? "DISABLED" : CredentialConfigured || !string.IsNullOrEmpty(Password) ? "ON_DEMAND" : "CREDENTIAL_MISSING");
 }
 
 internal sealed record SiteSshJumpHostView(
     string SiteId, string Host, int Port, string Username, bool Enabled,
-    string HostKeySha256, long UpdatedMs);
+    string HostKeySha256, long UpdatedMs, bool CredentialConfigured, string RuntimeStatus);
 
 // Credential references and host-key fingerprints are internal connection facts;
 // keep them out of the authenticated read DTO returned by the HTTP API.

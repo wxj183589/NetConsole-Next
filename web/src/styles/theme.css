@@ -352,7 +352,7 @@ button, input, select { color: inherit; }
 .app-shell--terminal .card { border-color: #243c56; background: #122237; box-shadow: none; }
 .app-shell--terminal .card__header { border-bottom-color: #243c56; }
 .app-shell--terminal .page { max-width: none; }
-.terminal-workbench { display: grid; grid-template-columns: 238px minmax(275px, 300px) minmax(0, 1fr); grid-template-rows: minmax(440px, 1fr) 185px; gap: 8px; min-height: calc(100vh - 120px); }
+.terminal-workbench { display: grid; grid-template-columns: 238px minmax(275px, 300px) minmax(0, 1fr); grid-template-rows: minmax(440px, 1fr) 185px; gap: 8px; height: calc(100vh - 120px); min-height: 633px; }
 .terminal-device-panel, .terminal-inspector, .terminal-console, .terminal-history-dock { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #263e59; border-radius: 7px; background: #122237; }
 .terminal-panel-head { display: flex; align-items: center; justify-content: space-between; min-height: 47px; padding: 0 12px; border-bottom: 1px solid #263e59; color: #e5effc; }
 .terminal-panel-head h2 { margin: 0; font-size: 13px; }
@@ -392,8 +392,8 @@ button, input, select { color: inherit; }
 .terminal-tabs { min-height: 36px; padding: 3px 5px 0; background: #0e1d2e; }
 .terminal-tab { padding: 7px 10px; color: #85a0bd; }
 .terminal-tab.active { color: #ebf5ff; background: #1b3550; }
-.terminal-panes { flex: 1; min-height: 0; }
-.terminal-pane { min-height: 0; padding: 9px; }
+.terminal-panes { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.terminal-pane { min-height: 0; padding: 9px; overflow: hidden; }
 .terminal-host { min-height: 0; height: 100%; }
 .terminal-placeholder { min-height: 0; flex: 1; color: #607894; }
 .terminal-history-dock { grid-column: 1 / -1; display: flex; flex-direction: column; background: #102238; }

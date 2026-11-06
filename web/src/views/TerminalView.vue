@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, markRaw, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Connection, Document, Monitor, Search, Setting, SwitchButton } from '@element-plus/icons-vue'
 import { Terminal } from '@xterm/xterm'
@@ -10,12 +10,14 @@ import NcLayout from '../components/NcLayout.vue'
 import {
   closeTerminalSession, createTerminalSession, downloadExport, getRecordingIntegrity, getReplay, getSerialPorts,
   getTerminalDevices, getTerminalEvents, getTerminalSessions, issueTerminalTicket,
-  type TerminalDevice, type TerminalSession,
+  createLinuxServerSession, getLinuxServers, getTerminalSession,
+  type LinuxServer, type TerminalDevice, type TerminalSession,
 } from '../api/client'
 
 interface TerminalTab {
   id: string; label: string; targetId: string; protocol: string; sessionId?: string; socket?: WebSocket
   terminal?: Terminal; fit?: FitAddon; search?: SearchAddon; inputBuffer: string; connected: boolean; socketGeneration: number
+  mode?: 'RESTRICTED_READONLY' | 'LINUX_INTERACTIVE'
 }
 interface ReplayEntry { atMs: number; direction: string; dataB64: string }
 
@@ -24,6 +26,9 @@ const deviceSearch = ref('')
 const activeDeviceId = ref('')
 const selectedProtocol = ref('AUTO')
 const route = useRoute()
+const router = useRouter()
+const linuxServers = ref<LinuxServer[]>([])
+const selectedLinuxId = ref('')
 const sessions = ref<TerminalSession[]>([])
 const tabs = reactive<TerminalTab[]>([])
 const activeId = ref('')
@@ -51,13 +56,15 @@ const filteredDevices = computed(() => {
   return devices.value.filter(device => !query || `${device.id} ${device.host} ${device.username}`.toLowerCase().includes(query))
 })
 const selectedDevice = computed(() => devices.value.find(device => device.id === activeDeviceId.value) || null)
+const activeLinuxServer = computed(() => linuxServers.value.find(server => server.id === selectedLinuxId.value) || null)
 function activeTab(): TerminalTab | undefined { return tabs.find((tab) => tab.id === activeId.value) }
 function isPaneVisible(tab: TerminalTab): boolean { const active = activeTab(); if (!active) return false; if (!split.value) return tab.id === active.id; const peer = tabs.find((candidate) => candidate.id !== active.id); return tab.id === active.id || tab.id === peer?.id }
 function setPaneRef(id: string, element: Element | null): void {
   if (element instanceof HTMLElement) {
+    if (paneRefs.get(id) === element) return
     paneRefs.set(id, element)
     const tab = tabs.find((candidate) => candidate.id === id)
-    if (tab?.terminal) tab.fit?.fit()
+    if (tab?.terminal) { if (isPaneVisible(tab)) tab.fit?.fit() }
     else mountTerminal(tab)
   } else paneRefs.delete(id)
 }
@@ -69,10 +76,11 @@ function mountTerminal(tab?: TerminalTab): void {
   const fit = new FitAddon(); const searchAddon = new SearchAddon()
   terminal.loadAddon(fit); terminal.loadAddon(searchAddon); tab.terminal = markRaw(terminal); tab.fit = markRaw(fit); tab.search = markRaw(searchAddon)
   terminal.open(paneRefs.get(tab.id)!); fit.fit(); terminal.onResize((size) => sendSocket(tab, { type: 'resize', columns: size.cols, rows: size.rows }))
-  terminal.onData((data) => handleInput(tab, data)); terminal.writeln(`\x1b[90m${tab.label} · RESTRICTED_READONLY\x1b[0m`)
+  terminal.onData((data) => handleInput(tab, data)); terminal.writeln(`\x1b[90m${tab.label} · ${tab.mode === 'LINUX_INTERACTIVE' ? 'Linux SSH' : 'RESTRICTED_READONLY'}\x1b[0m`)
 }
 function handleInput(tab: TerminalTab, data: string): void {
   if (!tab.connected) return
+  if (tab.mode === 'LINUX_INTERACTIVE') { sendSocket(tab, { type: 'input', data }); return }
   if (data === '\u0003') { tab.inputBuffer = ''; tab.terminal?.writeln('^C'); sendSocket(tab, { type: 'control', signal: 'CTRL_C' }); return }
   if (data === '\r' || data === '\n') { const command = tab.inputBuffer; tab.inputBuffer = ''; tab.terminal?.write('\r\n'); if (command) sendSocket(tab, { type: 'input', text: command }); return }
   if (data === '\u007f' || data === '\b') { if (tab.inputBuffer.length) { tab.inputBuffer = tab.inputBuffer.slice(0, -1); tab.terminal?.write('\b \b') }; return }
@@ -82,18 +90,34 @@ function handleInput(tab: TerminalTab, data: string): void {
 }
 function sendSocket(tab: TerminalTab, message: Record<string, unknown>): void { const socket = liveSockets.get(tab.id)?.socket; if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)) }
 function selectDevice(device: TerminalDevice): void {
+  selectedLinuxId.value = ''
   activeDeviceId.value = device.id
   selectedProtocol.value = device.supportedProtocols.includes('SSH') ? 'SSH' : device.supportedProtocols[0] || 'AUTO'
+}
+function selectTerminalTab(tab: TerminalTab): void {
+  activeId.value = tab.id
+  selectedLinuxId.value = tab.mode === 'LINUX_INTERACTIVE' ? tab.targetId : ''
+  const device = devices.value.find(item => item.id === tab.targetId)
+  if (device) { selectDevice(device); selectedProtocol.value = tab.protocol }
 }
 async function openSelectedDevice(): Promise<void> { if (selectedDevice.value) await openDevice(selectedDevice.value, selectedProtocol.value) }
 async function openDevice(device: TerminalDevice, protocol: string): Promise<void> {
   selectDevice(device); selectedProtocol.value = protocol
-  const tab: TerminalTab = { id: crypto.randomUUID(), label: `${device.host} · ${protocol}`, targetId: device.id, protocol, inputBuffer: '', connected: false, socketGeneration: 0 }
+  const tab: TerminalTab = reactive({ id: crypto.randomUUID(), label: `${device.host} · ${protocol}`, targetId: device.id, protocol, inputBuffer: '', connected: false, socketGeneration: 0 })
   tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
   try {
     const session = await createTerminalSession({ targetId: device.id, protocol, mode: 'RESTRICTED_READONLY' }); tab.sessionId = session.sessionId
     await connectSocket(tab)
   } catch (cause) { tab.terminal?.writeln(`\r\n\x1b[31m${cause instanceof Error ? cause.message : '连接失败'}\x1b[0m`); ElMessage.error('终端会话创建失败') }
+}
+async function openLinuxServer(server: LinuxServer): Promise<void> {
+  selectedLinuxId.value = server.id
+  const existing = tabs.find(tab => tab.mode === 'LINUX_INTERACTIVE' && tab.targetId === server.id)
+  if (existing) { activeId.value = existing.id; return }
+  const tab: TerminalTab = reactive({ id: crypto.randomUUID(), label: `${server.name} · Linux SSH`, targetId: server.id, protocol: 'SSH', mode: 'LINUX_INTERACTIVE', inputBuffer: '', connected: false, socketGeneration: 0 })
+  tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
+  try { tab.sessionId = (await createLinuxServerSession(server.id)).sessionId; await connectSocket(tab) }
+  catch (cause) { tab.terminal?.writeln(`\r\n\x1b[31m${cause instanceof Error ? cause.message : 'Linux SSH 连接失败'}\x1b[0m`); ElMessage.error('Linux SSH 会话创建失败') }
 }
 function isCurrentSocket(tab: TerminalTab, socket: WebSocket, generation: number): boolean { const current = liveSockets.get(tab.id); return current?.socket === socket && current.generation === generation && tab.socketGeneration === generation }
 function installSocketHandlers(tab: TerminalTab, socket: WebSocket, generation: number): void {
@@ -132,13 +156,23 @@ async function closeTab(tab: TerminalTab): Promise<void> {
   const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; tab.connected = false; socket?.close()
   if (tab.sessionId) { try { await closeTerminalSession(tab.sessionId) } catch { /* session may already be closed */ } }
   tab.terminal?.dispose(); paneRefs.delete(tab.id); const index = tabs.indexOf(tab); if (index >= 0) tabs.splice(index, 1); if (activeId.value === tab.id) activeId.value = tabs[Math.max(0, index - 1)]?.id || tabs[0]?.id || ''
+  if (activeTab()) selectTerminalTab(activeTab()!)
   await refreshHistory()
 }
-async function reconnect(): Promise<void> { const tab = activeTab(); if (!tab?.sessionId) return; try { await connectSocket(tab) } catch { ElMessage.error('重连失败') } }
+async function reconnect(): Promise<void> {
+  const tab = activeTab(); if (!tab) return
+  try {
+    if (tab.mode === 'LINUX_INTERACTIVE') {
+      const previous = tab.sessionId ? await getTerminalSession(tab.sessionId).catch(() => null) : null
+      if (!previous || !['CONNECTED', 'CONNECTING'].includes(previous.state)) tab.sessionId = (await createLinuxServerSession(tab.targetId)).sessionId
+    }
+    if (tab.sessionId) await connectSocket(tab)
+  } catch { ElMessage.error('重连失败') }
+}
 async function openSerial(): Promise<void> { try { serialPorts.value = await getSerialPorts(); if (!serialPorts.value.length) { ElMessage.info('服务端未发现可用 COM 端口'); return }; selectedSerialPort.value = serialPorts.value[0]; serialDialog.value = true } catch { ElMessage.error('COM 端口读取失败') } }
 async function openSerialSession(): Promise<void> {
   serialDialog.value = false
-  const tab: TerminalTab = { id: crypto.randomUUID(), label: selectedSerialPort.value, targetId: `serial:${selectedSerialPort.value}`, protocol: 'SERIAL', inputBuffer: '', connected: false, socketGeneration: 0 }
+  const tab: TerminalTab = reactive({ id: crypto.randomUUID(), label: selectedSerialPort.value, targetId: `serial:${selectedSerialPort.value}`, protocol: 'SERIAL', inputBuffer: '', connected: false, socketGeneration: 0 })
   tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
   try { const session = await createTerminalSession({ targetId: tab.targetId, protocol: 'SERIAL', mode: 'RESTRICTED_READONLY', serialPort: selectedSerialPort.value }); tab.sessionId = session.sessionId; await connectSocket(tab) } catch { ElMessage.error('COM 会话创建失败') }
 }
@@ -155,24 +189,42 @@ function stopReplay(): void { if (replayTimer) clearTimeout(replayTimer); replay
 function playReplay(): void { stopReplay(); if (replayIndex.value >= replayEntries.value.length) replayIndex.value = 0; const step = () => { if (replayIndex.value >= replayEntries.value.length) return; const current = replayEntries.value[replayIndex.value]; replayIndex.value += 1; replayTimer = setTimeout(step, Math.max(12, ((replayEntries.value[replayIndex.value]?.atMs || current.atMs + 120) - current.atMs) / replaySpeed.value)) }; step() }
 async function exportSession(format: string): Promise<void> { if (!historySession.value) return; try { const blob = await downloadExport(historySession.value.id, format); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `terminal-${historySession.value.id}.${format.toLowerCase()}`; link.click(); URL.revokeObjectURL(link.href) } catch { ElMessage.error('导出失败') } }
 function closeHistory(): void { stopReplay(); historyDialog.value = false }
-async function refreshAll(): Promise<void> { loading.value = true; try { devices.value = await getTerminalDevices(); if (!activeDeviceId.value && devices.value[0]) selectDevice(devices.value[0]); await refreshHistory() } catch { devices.value = []; sessions.value = []; ElMessage.info('当前服务未提供可用终端设备，页面保留真实空状态') } finally { loading.value = false } }
+async function refreshAll(): Promise<void> { loading.value = true; try { [devices.value, linuxServers.value] = await Promise.all([getTerminalDevices(), getLinuxServers().catch(() => [])]); if (!activeDeviceId.value && devices.value[0]) selectDevice(devices.value[0]); await refreshHistory() } catch { devices.value = []; sessions.value = []; ElMessage.info('当前服务未提供可用终端设备，页面保留真实空状态') } finally { loading.value = false } }
 function handleWindowResize(): void { void fitVisibleTerminals() }
-onMounted(async () => { window.addEventListener('resize', handleWindowResize); await refreshAll(); const requested = String(route.query.deviceId || ''); const device = devices.value.find(item => item.id === requested); if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) } })
+let initialized = false
+let lastRequestedPath = ''
+async function openRequestedTarget(): Promise<void> {
+  if (route.path !== '/terminal' || lastRequestedPath === route.fullPath) return
+  lastRequestedPath = route.fullPath
+  const linuxId = String(route.query.linuxServerId || '')
+  if (linuxId) {
+    linuxServers.value = await getLinuxServers().catch(() => [])
+    const server = linuxServers.value.find(item => item.id === linuxId)
+    if (server) await openLinuxServer(server)
+    else ElMessage.error('Linux 服务器不存在或当前账户无权访问')
+    return
+  }
+  const device = devices.value.find(item => item.id === String(route.query.deviceId || ''))
+  if (device) { selectDevice(device); await openDevice(device, selectedProtocol.value) }
+}
+watch(() => route.fullPath, () => { if (route.path !== '/terminal') lastRequestedPath = ''; else if (initialized) void openRequestedTarget() })
+onMounted(async () => { window.addEventListener('resize', handleWindowResize); await refreshAll(); initialized = true; await openRequestedTarget() })
 onBeforeUnmount(() => { window.removeEventListener('resize', handleWindowResize); stopReplay(); tabs.forEach((tab) => { const socket = liveSockets.get(tab.id)?.socket; liveSockets.delete(tab.id); tab.socket = undefined; tab.socketGeneration += 1; socket?.close(); tab.terminal?.dispose() }) })
 </script>
 
 <template>
-  <NcLayout title="终端控制台" description="SSH / Telnet / COM · 受控只读会话 · 录制、回放与导出">
+  <NcLayout title="终端控制台" description="网络设备只读会话 · Linux 交互式 SSH · 录制、回放与导出">
     <div class="terminal-workbench">
       <aside class="terminal-device-panel">
         <div class="terminal-panel-head"><div><h2>设备列表</h2><small>{{ devices.length }} 条当前可用记录</small></div><el-button text size="small" :loading="loading" @click="refreshAll">刷新</el-button></div>
         <div class="terminal-device-search"><label class="global-search"><el-icon><Search /></el-icon><input v-model="deviceSearch" placeholder="搜索设备、地址…" /></label></div>
-        <div class="terminal-device-list"><button v-for="device in filteredDevices" :key="device.id" data-testid="terminal-device-row" :data-device-id="device.id" :class="['terminal-device-row', { 'is-active': activeDeviceId === device.id }]" type="button" @click="selectDevice(device)"><strong>{{ device.host || '未命名设备' }}</strong><small>{{ device.username || '—' }} · {{ device.enabled ? '已授权' : '已禁用' }}</small><span class="terminal-device-row__meta"><span>{{ device.terminalProtocol || 'AUTO' }}</span><span :class="['state-pill', device.enabled ? 'good' : 'bad']">{{ device.enabled ? '可用' : '禁用' }}</span></span></button><div v-if="!filteredDevices.length" class="terminal-history-empty"><div><el-icon><Monitor /></el-icon><p>暂无可用设备</p><small>服务端必须先登记真实设备。</small></div></div></div>
+        <div class="terminal-device-list"><button v-for="device in filteredDevices" :key="device.id" data-testid="terminal-device-row" :data-device-id="device.id" :class="['terminal-device-row', { 'is-active': activeDeviceId === device.id }]" type="button" @click="selectDevice(device)"><strong>{{ device.host || '未命名设备' }}</strong><small>{{ device.username || '—' }} · {{ device.enabled ? '已授权' : '已禁用' }}</small><span class="terminal-device-row__meta"><span>{{ device.terminalProtocol || 'AUTO' }}</span><span :class="['state-pill', device.enabled ? 'good' : 'bad']">{{ device.enabled ? '可用' : '禁用' }}</span></span></button><div v-if="!filteredDevices.length" class="terminal-history-empty"><div><el-icon><Monitor /></el-icon><p>暂无可用设备</p><small>服务端必须先登记真实设备。</small></div></div><div class="terminal-panel-head"><h2>Linux 服务器</h2><el-button text size="small" @click="router.push('/linux')">管理</el-button></div><button v-for="server in linuxServers.filter(item => !deviceSearch || `${item.name} ${item.host}`.toLowerCase().includes(deviceSearch.toLowerCase()))" :key="server.id" class="terminal-device-row" data-testid="linux-terminal-target" :disabled="!server.enabled || !server.credentialConfigured" @click="openLinuxServer(server)"><strong>{{ server.name }}</strong><small>{{ server.host }} · {{ server.username }}</small><span class="terminal-device-row__meta"><span>Linux SSH</span><span>{{ server.enabled ? '已启用' : '已禁用' }}</span></span></button></div>
       </aside>
 
       <section class="terminal-inspector">
         <div class="terminal-panel-head"><div><h2>连接配置</h2><small>根据登记 Profile 展示</small></div><el-icon><Setting /></el-icon></div>
-        <div v-if="selectedDevice" class="terminal-inspector__body">
+        <div v-if="activeLinuxServer" class="terminal-inspector__body"><div class="terminal-device-title"><el-icon><Monitor /></el-icon><div><h2>{{ activeLinuxServer.name }}</h2><p>{{ activeLinuxServer.host }}:{{ activeLinuxServer.port }} · {{ activeLinuxServer.username }}</p></div></div><dl class="terminal-detail-list"><div class="terminal-detail-row"><dt>协议</dt><dd>Linux SSH</dd></div><div class="terminal-detail-row"><dt>分组</dt><dd>{{ activeLinuxServer.groupName || '未分组' }}</dd></div><div class="terminal-detail-row"><dt>局点</dt><dd>{{ activeLinuxServer.siteId }}</dd></div><div class="terminal-detail-row"><dt>模式</dt><dd>交互式终端</dd></div><div class="terminal-detail-row"><dt>凭据</dt><dd>{{ activeLinuxServer.credentialConfigured ? '自动登录' : '未保存密码' }}</dd></div></dl><p class="form-hint">键盘输入实时发送至服务器，支持 Ctrl+C、方向键和交互式应用。</p><el-button @click="router.push('/linux')">管理服务器</el-button></div>
+        <div v-else-if="selectedDevice" class="terminal-inspector__body">
           <div class="terminal-device-title"><el-icon><Connection /></el-icon><div><h2>{{ selectedDevice.id }}</h2><p>{{ selectedDevice.host }}:{{ selectedDevice.port }} · {{ selectedDevice.username }}</p></div></div>
           <dl class="terminal-detail-list"><div class="terminal-detail-row"><dt>协议</dt><dd>{{ selectedDevice.terminalProtocol || 'AUTO' }}</dd></div><div class="terminal-detail-row"><dt>Host Key</dt><dd>{{ selectedDevice.hostKeyUpdatePolicy }}</dd></div><div class="terminal-detail-row"><dt>编码</dt><dd>{{ selectedDevice.terminalEncoding }}</dd></div><div class="terminal-detail-row"><dt>凭据</dt><dd>{{ selectedDevice.username ? '由服务端引用' : '未配置' }}</dd></div></dl>
           <div class="protocol-switch" data-testid="protocol-switch"><button v-for="protocol in selectedDevice.supportedProtocols" :key="protocol" :class="{ 'is-active': selectedProtocol === protocol }" type="button" @click="selectedProtocol = protocol">{{ protocol === 'SERIAL' ? 'COM / Console' : protocol }}</button></div>
@@ -183,8 +235,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleWindowResize)
       </section>
 
       <section class="terminal-console">
-        <div class="terminal-console__toolbar"><span v-if="activeTab()" class="terminal-status"><i class="status-dot status-dot--success" />{{ activeTab()?.connected ? '受限只读' : '未连接' }}</span><span v-else class="terminal-status"><i class="status-dot" />等待会话</span><span class="toolbar-spacer" /><el-button size="small" :disabled="!tabs.length" @click="split = !split">{{ split ? '取消分屏' : '分屏' }}</el-button><el-button size="small" :disabled="!activeTab()" @click="reconnect">重连</el-button><el-button size="small" :disabled="!activeTab()" @click="activeTab() && closeTab(activeTab()!)"><el-icon><SwitchButton /></el-icon>断开</el-button><el-button size="small" @click="openSerial">COM</el-button><input v-model="search" placeholder="搜索终端" @keydown.enter="activeTab()?.search?.findNext(search)" /></div>
-        <div class="terminal-tabs"><button v-for="tab in tabs" :key="tab.id" :class="['terminal-tab', { active: activeId === tab.id }]" type="button" @click="activeId = tab.id"><span>{{ tab.label }} {{ tab.connected ? '●' : '○' }}</span><span class="terminal-tab__close" @click.stop="closeTab(tab)">×</span></button><span v-if="!tabs.length" style="padding:8px 10px;color:#758aa8;font-size:11px">从左侧选择设备打开受控终端</span></div>
+        <div class="terminal-console__toolbar"><span v-if="activeTab()" class="terminal-status"><i :class="['status-dot', { 'status-dot--success': activeTab()?.connected }]" />{{ activeTab()?.connected ? activeTab()?.mode === 'LINUX_INTERACTIVE' ? 'Linux 交互' : '受限只读' : '未连接' }}</span><span v-else class="terminal-status"><i class="status-dot" />等待会话</span><span class="toolbar-spacer" /><el-button size="small" :disabled="!tabs.length" @click="split = !split">{{ split ? '取消分屏' : '分屏' }}</el-button><el-button size="small" :disabled="!activeTab()" @click="reconnect">重连</el-button><el-button size="small" :disabled="!activeTab()" @click="activeTab() && closeTab(activeTab()!)"><el-icon><SwitchButton /></el-icon>断开</el-button><el-button size="small" @click="openSerial">COM</el-button><input v-model="search" placeholder="搜索终端" @keydown.enter="activeTab()?.search?.findNext(search)" /></div>
+        <div class="terminal-tabs"><button v-for="tab in tabs" :key="tab.id" :class="['terminal-tab', { active: activeId === tab.id }]" type="button" @click="selectTerminalTab(tab)"><span>{{ tab.label }} {{ tab.connected ? '●' : '○' }}</span><span class="terminal-tab__close" @click.stop="closeTab(tab)">×</span></button><span v-if="!tabs.length" style="padding:8px 10px;color:#758aa8;font-size:11px">从左侧选择设备打开受控终端</span></div>
         <div :class="['terminal-panes', { split }]" v-if="tabs.length"><div v-for="tab in tabs" :key="tab.id" v-show="isPaneVisible(tab)" class="terminal-pane"><div :ref="(element) => setPaneRef(tab.id, element as Element | null)" class="terminal-host" /></div></div><div v-else class="terminal-placeholder"><div><el-icon><Connection /></el-icon><p>内置终端尚未打开会话</p><small>SSH、Telnet、COM 都必须经过服务端受控会话。</small></div></div>
       </section>
 

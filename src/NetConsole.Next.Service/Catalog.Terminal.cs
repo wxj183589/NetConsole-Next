@@ -10,8 +10,9 @@ internal sealed partial class Catalog
     public string CreateTerminalSession(TerminalSessionSnapshot session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        if (session.Mode != "RESTRICTED_READONLY")
-            throw new ArgumentException("Only RESTRICTED_READONLY terminal sessions are enabled.", nameof(session));
+        if (session.Mode is not ("RESTRICTED_READONLY" or "LINUX_INTERACTIVE") ||
+            session.Mode == "LINUX_INTERACTIVE" && (session.Protocol != "SSH" || GetLinuxServer(session.TargetId) is null))
+            throw new ArgumentException("Terminal session mode is invalid for this target.", nameof(session));
         var now = TerminalNowMs();
         using var db = Open();
         using var transaction = db.BeginTransaction();
@@ -19,9 +20,9 @@ internal sealed partial class Catalog
         insert.Transaction = transaction;
         insert.CommandText = @"INSERT INTO terminal_sessions
             (id,target_id,target_name,protocol,mode,host,port,serial_port,serial_config,state,
-             started_ms,last_activity_ms,recording_relative_path,recording_complete)
+             started_ms,last_activity_ms,recording_relative_path,recording_complete,operator_identity,site_name)
             VALUES($id,$target,$name,$protocol,$mode,$host,$port,$serialPort,$serialConfig,$state,
-                   $started,$activity,$recordingPath,0)";
+                   $started,$activity,$recordingPath,0,$operator,$site)";
         insert.Parameters.AddWithValue("$id", session.Id);
         insert.Parameters.AddWithValue("$target", session.TargetId);
         insert.Parameters.AddWithValue("$name", session.TargetName);
@@ -35,6 +36,8 @@ internal sealed partial class Catalog
         insert.Parameters.AddWithValue("$started", session.StartedMs > 0 ? session.StartedMs : now);
         insert.Parameters.AddWithValue("$activity", session.LastActivityMs > 0 ? session.LastActivityMs : now);
         insert.Parameters.AddWithValue("$recordingPath", (object?)session.RecordingRelativePath ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$operator", session.OperatorIdentity);
+        insert.Parameters.AddWithValue("$site", (object?)session.SiteName ?? DBNull.Value);
         insert.ExecuteNonQuery();
         InsertTerminalEvent(db, transaction, session.Id, now, "CONNECTING", "{}");
         transaction.Commit();
@@ -174,7 +177,8 @@ internal sealed partial class Catalog
     {
         var session = GetTerminalSession(sessionId);
         return session is not null && (scope.IsGlobal || scope.IsAuthorized &&
-            session.Protocol is "SSH" or "TELNET" && H3cProfileIsInScope(session.TargetId, scope));
+            (session.Mode == "LINUX_INTERACTIVE" ? session.SiteName is not null && DeviceSiteScope.Allows(scope, session.SiteName) :
+                session.Protocol is "SSH" or "TELNET" && H3cProfileIsInScope(session.TargetId, scope)));
     }
 
     public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query, P2B5SiteScopeDecision? scope = null)
@@ -199,7 +203,8 @@ internal sealed partial class Catalog
         {
             var scopeParameters = new List<(string Name, object? Value)>();
             var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
-            where.Add($"protocol IN ('SSH','TELNET') AND EXISTS (SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=terminal_sessions.target_id AND {scopeFilter})");
+            var linuxFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "terminal_sessions.site_name", "$linuxScopeSite");
+            where.Add($"((mode='LINUX_INTERACTIVE' AND {linuxFilter}) OR (mode='RESTRICTED_READONLY' AND protocol IN ('SSH','TELNET') AND EXISTS (SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=terminal_sessions.target_id AND {scopeFilter})))");
             DeviceSiteScope.AddParameters(command, scopeParameters);
         }
         var filter = where.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", where);
