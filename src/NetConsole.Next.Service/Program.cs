@@ -76,6 +76,8 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
 builder.Services.AddSingleton<H3cBatchTaskService>();
 builder.Services.AddSingleton<DeviceConnectionTestService>();
 builder.Services.AddSingleton<ConfigBackupService>();
+builder.Services.AddSingleton<IConfigRestoreWriter, DisabledConfigRestoreWriter>();
+builder.Services.AddSingleton<ConfigRestoreService>();
 builder.Services.AddSingleton<ConfigBackupScheduleService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
@@ -888,6 +890,22 @@ app.MapGet("/api/system/config-backups/{id}/startup-reference", (HttpContext con
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     var reference = backups.GetStartupReference(id, CurrentSiteScope(context));
     return reference is null ? Results.NotFound() : Results.Ok(reference);
+});
+app.MapPost("/api/system/config-backups/restore/preview", (HttpContext context,
+    ConfigRestorePreviewRequest request, ConfigRestoreService restores) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(restores.Preview(request, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/config-backups/restore/execute", async (HttpContext context,
+    ConfigRestoreExecutionRequest request, ConfigRestoreService restores, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(await restores.ExecuteAsync(request, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
 app.MapPost("/api/system/config-backups/{id}/restore", (HttpContext context, string id,
     ConfigBackupService backups) =>
@@ -2243,6 +2261,9 @@ internal sealed record H3cCompatibilityRequest(string HostKeyUpdatePolicy = H3cH
 internal sealed record H3cTaskDefinitionRequest(string Id, string ProfileId, string Command,
     long TimeoutMs = 30000, bool Enabled = true, IReadOnlyList<string>? Commands = null);
 internal sealed record ConfigBackupRequest(IReadOnlyList<string>? ProfileIds, string? ConfigurationKind = null);
+internal sealed record ConfigRestorePreviewRequest(string SnapshotId, string TargetProfileId,
+    string? ExpectedCurrentSnapshotId = null);
+internal sealed record ConfigRestoreExecutionRequest(string PreviewId, string ConfirmationToken, bool Apply);
   internal sealed record H3cOfflineReplayRequest(IReadOnlyDictionary<string, string> CommandOutputs, long CapturedMs);
 internal sealed record ZteProfileRequest(string Id, string Host, int Port, string Username,
     string CredentialReference = "", string HostKeySha256 = "", bool Enabled = true,
