@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -22,11 +23,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.parse
+import zipfile
 
 from linux_ssh_e2e import LinuxSimulator, PASSWORD as LINUX_PASSWORD
 from linux_ssh_e2e import eventually, expect, read_until, session, websocket
 from p2b3_read_api_e2e import free_port, stop_service
-from ssh_jump_host_e2e import Target, connection_test, create_profile
+from ssh_jump_host_e2e import Target, connection_test, create_profile, task
 from terminal_e2e import PASSWORD as NETWORK_PASSWORD
 from web_auth_e2e import Client
 
@@ -124,6 +126,8 @@ def verify_ui(client: Client, candidate: Path) -> None:
         "TerminalView": ("LINUX_INTERACTIVE",),
         "DevicesView": ("查看配置备份", "批量测试连接"),
         "ConfigBackupsView": ("当前配置备份仅支持 H3C 设备",),
+        "TasksView": ("下载诊断 ZIP", "下载 TXT", "VLAN 信息"),
+        "H3cView": ("VLAN 采集快照", "Tagged 端口", "Untagged 端口"),
     }
     reachable = set()
     for entry, script in scripts:
@@ -135,7 +139,31 @@ def verify_ui(client: Client, candidate: Path) -> None:
                 assert all(marker in text for marker in markers), f"Published {component} lacks the current feature"
                 reachable.add(component)
     assert reachable == set(view_markers), "Vue entry does not reach the current feature views"
-    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux/Jump/terminal, device batch connection and configuration backup views)")
+    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux/Jump/terminal, device batch/backup, VLAN and task diagnostics views)")
+
+
+def verify_diagnostics(client: Client, profile: str, target: Target) -> None:
+    run_id = task(client, profile, "offline-diagnostic-version", "display version")
+    path = f"/api/system/tasks/{run_id}/diagnostics"
+    manifest = expect(client, path)
+    assert manifest["status"] == "COMPLETE" and manifest["canDownload"], manifest
+    command = manifest["commands"][0]
+    assert command["availability"] == "READY" and command["command"] == "display version", command
+    previous_commands = list(target.commands)
+    with client.opener.open(client.base + path + "/download?commandIndex=0", timeout=10) as response:
+        text = response.read()
+        assert "attachment" in response.headers["Content-Disposition"]
+        assert response.headers["Cache-Control"] == "no-store"
+    assert hashlib.sha256(text).hexdigest() == command["downloadSha256"]
+    assert b"H3C Comware Software" in text and NETWORK_PASSWORD.encode() not in text
+    with client.opener.open(client.base + path + "/download", timeout=10) as response:
+        archive = response.read()
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        assert set(bundle.namelist()) == {"manifest.json", "command-001.txt"}
+        assert bundle.read("command-001.txt") == text
+        assert json.loads(bundle.read("manifest.json")) == manifest
+    assert target.commands == previous_commands, "Diagnostic downloads issued new device commands"
+    print("OFFLINE_TASK_DIAGNOSTICS=PASS (bundled Netmiko collection, sealed TXT/ZIP hashes, no recollection)")
 
 
 def wait_ready(service: subprocess.Popen, base: str) -> None:
@@ -184,6 +212,7 @@ def run(candidate: Path) -> None:
                     assert result["status"] == "CONNECTED" and result["protocol"] == "SSH", result
                     assert "display version" in network.commands, "Netmiko did not execute the probe on the simulator"
                     print("OFFLINE_NETMIKO_CONNECTION=PASS (candidate cwd, no Python PATH or worker override, real loopback SSH login and command)")
+                    verify_diagnostics(owner, profile, network)
 
                     server = expect(owner, "/api/system/linux/servers", "POST", {
                         "name": "Offline Linux simulator", "host": "127.0.0.1", "port": linux.port,

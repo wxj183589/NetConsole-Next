@@ -467,6 +467,29 @@ export interface TaskCommand {
   parseStatus?: string | null
   capturedMs?: number | null
 }
+export interface TaskDiagnosticCommand {
+  index: number
+  command: string
+  availability: 'READY' | 'NO_RAW' | 'CONFIG_EXCLUDED' | 'UNSUPPORTED_COMMAND' | 'TASK_ACTIVE' | 'RAW_INVALID'
+  canDownload: boolean
+  captureStatus: string | null
+  parseStatus: string | null
+  capturedMs: number | null
+  byteCount: number | null
+  outputSha256: string | null
+  segmentSha256: string | null
+  downloadByteCount?: number | null
+  downloadSha256?: string | null
+  redacted?: boolean
+}
+export interface TaskDiagnosticManifest {
+  version: number
+  runId: string
+  taskState: string
+  status: 'COMPLETE' | 'PARTIAL' | 'UNAVAILABLE'
+  canDownload: boolean
+  commands: TaskDiagnosticCommand[]
+}
 export interface H3cTaskPlanItem {
   ordinal: number
   target: string
@@ -1203,8 +1226,17 @@ export function createH3cTaskDefinition(payload: H3cTaskDefinitionRequest): Prom
 export function startH3cTaskDefinition(definitionId: string): Promise<{ runId: string }> {
   return request(`/api/system/tasks/${encodeURIComponent(definitionId)}/runs`, { method: 'POST', body: JSON.stringify({}) })
 }
-export function getTaskCommands(runId: string): Promise<TaskCommand[]> {
-  return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`)
+export function getTaskCommands(runId: string, signal?: AbortSignal): Promise<TaskCommand[]> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/commands`, { signal })
+}
+export function getTaskDiagnostics(runId: string, signal?: AbortSignal): Promise<TaskDiagnosticManifest> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}/diagnostics`, { signal, cache: 'no-store' })
+}
+export async function downloadTaskDiagnostics(runId: string, commandIndex?: number, signal?: AbortSignal): Promise<Blob> {
+  const query = commandIndex === undefined ? '' : '?' + new URLSearchParams({ commandIndex: String(commandIndex) })
+  const response = await fetch(`/api/system/tasks/${encodeURIComponent(runId)}/diagnostics/download${query}`, { credentials: 'include', cache: 'no-store', signal })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
 }
 export function cancelTask(runId: string): Promise<{ cancelled: boolean; runId: string }> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })

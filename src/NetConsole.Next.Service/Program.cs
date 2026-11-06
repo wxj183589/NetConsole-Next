@@ -708,6 +708,43 @@ app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string ru
     if (rawCatalog.GetTaskRun(runId, CurrentSiteScope(context)) is null) return Results.NotFound();
     return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
 });
+app.MapGet("/api/system/tasks/{runId}/diagnostics", (HttpContext context, string runId, Catalog rawCatalog,
+    P2B5SiteScopeStore scopes, InteractiveScopeAuthorizer principals) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var diagnostics = new TaskDiagnosticEvidenceService(rawCatalog, scopes, principals);
+    try
+    {
+        var manifest = diagnostics.Manifest(CurrentIdentity(context), runId, context.RequestAborted);
+        return manifest is null ? Results.NotFound(new { error = "RESOURCE_NOT_VISIBLE", detail = "任务不可见或设备归属已变化。" }) : Results.Ok(manifest);
+    }
+    catch (TaskDiagnosticException ex) { return ex.Result(); }
+});
+app.MapGet("/api/system/tasks/{runId}/diagnostics/download", (HttpContext context, string runId, Catalog rawCatalog,
+    P2B5SiteScopeStore scopes, InteractiveScopeAuthorizer principals) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    int? commandIndex = null;
+    if (context.Request.Query.TryGetValue("commandIndex", out var requested))
+    {
+        if (requested.Count != 1 || !int.TryParse(requested[0], System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+            return new TaskDiagnosticException("INVALID_COMMAND_INDEX", "命令序号无效。", 400).Result();
+        commandIndex = parsed;
+    }
+    var diagnostics = new TaskDiagnosticEvidenceService(rawCatalog, scopes, principals);
+    var original = CurrentIdentity(context);
+    try
+    {
+        var download = diagnostics.Download(original, runId, commandIndex, context.RequestAborted);
+        if (download is null) return Results.NotFound(new { error = "RESOURCE_NOT_VISIBLE", detail = "任务不可见或设备归属已变化。" });
+        var access = download.Access;
+        return (IResult)new TaskDiagnosticDownloadResult(download, () => diagnostics.CanRead(original, runId, access));
+    }
+    catch (TaskDiagnosticException ex) { return ex.Result(); }
+});
 app.MapPost("/api/system/tasks/{runId}/cancel", (HttpContext context, string runId, Catalog rawCatalog,
     BoundedCollectionScheduler scheduler) =>
 {
