@@ -10,6 +10,7 @@ runtime override. All device targets are synthetic loopback SSH servers.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import io
 import json
@@ -17,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -26,7 +28,8 @@ import urllib.parse
 import zipfile
 
 from config_backup_e2e import (
-    ConfigurationTarget, backup, download as download_configuration,
+    ConfigurationTarget, backup, definition_count, download as download_configuration,
+    expect as config_expect,
     onboard, snapshot_id,
 )
 from h3c_ac_e2e import AcTarget, COMMANDS as AC_COMMANDS, collect as collect_ac, payload, verify_raw
@@ -132,7 +135,8 @@ def verify_ui(client: Client, candidate: Path) -> None:
         "SettingsView": ("site-ssh-jump-host",),
         "TerminalView": ("LINUX_INTERACTIVE",),
         "DevicesView": ("查看配置备份", "批量测试连接"),
-        "ConfigBackupsView": ("当前配置备份仅支持 H3C 设备", "SAVED", "STARTUP_INFO"),
+        "ConfigBackupsView": ("当前配置备份仅支持 H3C 设备", "SAVED", "STARTUP_INFO", "定时配置备份", "为所选设备创建计划"),
+        "ToolsView": ("TRACEROUTE", "TTL_EXPIRED", "Traceroute 路径", "取消任务"),
         "TasksView": ("下载诊断 ZIP", "下载 TXT", "VLAN 信息", "采集全机诊断", "选择 AC 基础采集"),
         "H3cView": ("VLAN 采集快照", "Tagged 端口", "Untagged 端口", "AC / FIT-AP 采集回显", "AP BSSID"),
     }
@@ -146,7 +150,7 @@ def verify_ui(client: Client, candidate: Path) -> None:
                 assert all(marker in text for marker in markers), f"Published {component} lacks the current feature"
                 reachable.add(component)
     assert reachable == set(view_markers), "Vue entry does not reach the current feature views"
-    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux/Jump/terminal, device batch/backup, VLAN and task diagnostics views)")
+    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux/Jump/terminal, backup schedules, Traceroute, VLAN and task diagnostics views)")
 
 
 def verify_diagnostics(client: Client, profile: str, target: Target) -> None:
@@ -254,6 +258,178 @@ def verify_full_diagnostic(client: Client, target: DiagnosticTarget, profile: st
     print("OFFLINE_FULL_DIAGNOSTIC=PASS (direct/confirmed output above 256KiB, display-only n, redacted sealed TXT/ZIP; 12 checks)")
 
 
+def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
+    # The published EXE owns every startup and run. Only this stopped synthetic
+    # fixture's due time is advanced; no source DLL, test clock or worker override.
+    target, service = ConfigurationTarget(), None
+    target.saved_configuration = ("#\nsysname offline-scheduled\nlocal-user reader\n"
+                                  " password simple offline-synthetic-config-secret\nreturn\n")
+    root = temporary / "scheduled-backups"
+    store = root / "backup/config-schedules.json"
+    plans = "/api/system/config-backup-schedules"
+    log_path = temporary / "scheduled-backups.log"
+
+    with log_path.open("w", encoding="utf-8") as log:
+        def start() -> tuple[Client, Client]:
+            nonlocal service
+            assert service is None, "Stop this candidate before restarting its fixture"
+            port = free_port()
+            service = subprocess.Popen(
+                [str(candidate / "NetConsole.Next.Service.exe")], cwd=candidate,
+                env=isolated_environment(root, temporary, port), stdout=log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+            base = f"http://127.0.0.1:{port}"
+            wait_ready(service, base)
+            owner, admin = Client(base), Client(base)
+            owner.login("superadmin", "superadmin")
+            admin.login("admin", "admin")
+            return owner, admin
+
+        def stop() -> None:
+            nonlocal service
+            if service is not None:
+                current, service = service, None
+                stop_service(current)
+
+        try:
+            owner, admin = start()
+            profile = onboard(owner, target, "local")
+            before = definition_count(root)
+            payload = {"profileIds": [profile], "configurationKind": "SAVED", "intervalMinutes": 60}
+            plan = config_expect(owner, plans, "POST", payload, 201)
+            plan_path = plans + "/" + plan["id"]
+            assert plan["enabled"] and plan["lastState"] == "NEVER_RUN"
+            assert plan["nextRunMs"] == plan["createdMs"] + 3_600_000
+            assert config_expect(owner, plans + "?profileId=" + profile) == [plan]
+            assert config_expect(owner, plans + "?profileId=missing-profile") == []
+            raw = store.read_text(encoding="utf-8").lower()
+            assert all(value not in raw for value in
+                       ("password", "credential", "session", "127.0.0.1", NETWORK_PASSWORD.lower(),
+                        "offline-synthetic-config-secret")), "Plan persisted credentials or endpoints"
+            for path, method, body in ((plans, "GET", None), (plans, "POST", payload),
+                                       (plan_path, "PATCH", {"enabled": False}), (plan_path, "DELETE", None)):
+                config_expect(admin, path, method, body, 403)
+            for invalid in (0, 59, 43201):
+                result = config_expect(owner, plans, "POST", payload | {"intervalMinutes": invalid}, 400)
+                assert result["error"] == "CONFIG_BACKUP_SCHEDULE_INTERVAL_INVALID", result
+            config_expect(owner, plans, "POST", payload | {"configurationKind": "SAVE_FORCE"}, 400)
+            config_expect(owner, plans, "POST", payload | {"profileIds": []}, 400)
+            config_expect(owner, plans, "POST", payload | {"profileIds": ["missing-profile"]}, 404)
+            assert config_expect(owner, plans) == [plan]
+            assert not target.commands and definition_count(root) == before, "Plan CRUD started device work"
+            paused = config_expect(owner, plan_path, "PATCH", {"enabled": False})
+            assert not paused["enabled"] and paused["nextRunMs"] is None
+            resumed = config_expect(owner, plan_path, "PATCH", {"enabled": True})
+            assert resumed["enabled"] and resumed["nextRunMs"] >= int(time.time() * 1000) + 3_590_000
+            stop()
+            owner, admin = start()
+            assert config_expect(owner, plans) == [resumed] and not target.commands
+
+            # An overdue record must remain dormant while the real module is off.
+            config_expect(owner, "/api/system/modules/config-backups", "PUT", {"enabled": False})
+            stop()
+            document = json.loads(store.read_text(encoding="utf-8"))
+            document["schedules"][0]["nextRunMs"] = int(time.time() * 1000) - 7 * 86_400_000
+            store.write_text(json.dumps(document), encoding="utf-8")
+            owner, admin = start()
+            config_expect(owner, plans, status=404)
+            assert not target.commands and definition_count(root) == before
+            assert json.loads(store.read_text(encoding="utf-8"))["schedules"][0]["lastState"] == "NEVER_RUN"
+            config_expect(owner, "/api/system/modules/config-backups", "PUT", {"enabled": True})
+
+            def completed_plan():
+                current = config_expect(owner, plans)[0]
+                if current["lastState"] in ("NEVER_RUN", "RUNNING"):
+                    return None
+                assert current["lastState"] == "SUCCEEDED", current
+                return current
+
+            completed = eventually(completed_plan, seconds=65)
+            assert completed["lastBatchId"] and completed["lastRunMs"] and completed["lastCompletedMs"]
+            assert completed["lastError"] is None and completed["nextRunMs"] > int(time.time() * 1000)
+            assert target.commands.count("display saved-configuration") == 1
+            assert "display current-configuration" not in target.commands and definition_count(root) == before + 1
+            batch = config_expect(owner, "/api/system/config-backups/batches/" + completed["lastBatchId"])
+            history_path = f"/api/system/config-backups?profileId={profile}&configurationKind=SAVED"
+            history = config_expect(owner, history_path)
+            assert len(history) == 1 and history[0]["configurationKind"] == "SAVED" and history[0]["version"] == 1
+            assert batch["state"] == "SUCCEEDED" and batch["items"][0]["snapshotId"] == history[0]["id"]
+            content, _ = download_configuration(owner, history[0]["id"])
+            assert hashlib.sha256(content).hexdigest() == history[0]["sha256"]
+            assert b"offline-scheduled" in content and b"<REDACTED>" in content
+            assert b"offline-synthetic-config-secret" not in content
+            previous_commands = list(target.commands)
+
+            # Exercise the published Windows ICMP implementation, not an SSH
+            # command or a fake probe. The destination is only our loopback row.
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                device = db.execute("SELECT id FROM device_inventory WHERE terminal_profile_id=?", (profile,)).fetchone()[0]
+            request = {"deviceIds": [device], "kinds": ["TRACEROUTE"], "timeoutMs": 3000, "siteId": "local"}
+            config_expect(admin, "/api/system/diagnostics/runs", "POST", request, 403)
+            trace = config_expect(owner, "/api/system/diagnostics/runs", "POST", request, 202)
+            trace_path = "/api/system/diagnostics/runs/" + trace["id"]
+
+            def traced():
+                result = config_expect(owner, trace_path)
+                return result if result["endedMs"] else None
+
+            result = eventually(traced)
+            hops = result["items"][0]["traceRoute"]
+            assert result["state"] == "SUCCEEDED" and result["succeededChecks"] == result["totalChecks"] == 1
+            assert hops["destinationReached"] and hops["destinationAddress"] == "127.0.0.1" and hops["maxHops"] == 30
+            assert len(hops["hops"]) == 1 and hops["hops"][0]["ttl"] == 1
+            assert hops["hops"][0]["address"] == "127.0.0.1" and hops["hops"][0]["status"] == "REACHED"
+            assert hops["hops"][0]["latencyMs"] >= 0 and target.commands == previous_commands
+            stop()
+            owner, admin = start()
+            assert config_expect(owner, plans) == [completed]
+            assert config_expect(owner, trace_path)["items"][0]["traceRoute"] == hops
+            assert target.commands == previous_commands and definition_count(root) == before + 1
+            print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no CLI commands)", flush=True)
+
+            assert config_expect(owner, plan_path, "DELETE") == {"deleted": True}
+            config_expect(owner, plan_path, "PATCH", {"enabled": True}, 404)
+            stop()
+            owner, admin = start()
+            assert config_expect(owner, plans) == [], "Deleted plan reappeared after candidate restart"
+            stop()
+            valid_store = store.read_bytes()
+            corrupted = b'{"version":1,"schedules":[broken-offline-fixture'
+            store.write_bytes(corrupted)
+            owner, admin = start()
+            for path, method, body in ((plans, "GET", None), (plans, "POST", payload),
+                                       (plan_path, "PATCH", {"enabled": False}), (plan_path, "DELETE", None)):
+                failure = config_expect(owner, path, method, body, 503)
+                assert failure["error"] == "CONFIG_BACKUP_SCHEDULE_STORE_UNAVAILABLE", failure
+            assert config_expect(owner, "/api/system/health") and store.read_bytes() == corrupted
+            assert config_expect(owner, history_path) == history
+            assert download_configuration(owner, history[0]["id"])[0] == content
+            assert config_expect(owner, trace_path)["items"][0]["traceRoute"] == hops
+            assert target.commands == previous_commands and definition_count(root) == before + 1
+            stop()
+            store.write_bytes(valid_store)
+            owner, admin = start()
+            assert config_expect(owner, plans) == [] and config_expect(owner, history_path) == history
+            assert target.commands == previous_commands and definition_count(root) == before + 1
+            eventually(lambda: target.active == 0)
+            assert not target.errors, target.errors
+            print("OFFLINE_BACKUP_SCHEDULES=PASS (CRUD/role/input, durable restart, disabled/overdue once via bundled Netmiko, sanitized SAVED snapshot, delete, corrupt-store isolation/repair)", flush=True)
+        except Exception:
+            log.flush()
+            tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+            for secret in (NETWORK_PASSWORD, LINUX_PASSWORD, "offline-synthetic-config-secret"):
+                tail = tail.replace(secret, "[redacted]")
+            print("CANDIDATE_SCHEDULE_LOG_TAIL=" + tail, file=sys.stderr)
+            raise
+        finally:
+            try:
+                stop()
+            finally:
+                target.close()
+                eventually(lambda: target.active == 0)
+
+
 def verify_feature(candidate: Path, temporary: Path, feature: str, target_type, verify, device_type="SWITCH") -> None:
     # Each feature uses a fresh isolated service/catalog. This preserves the
     # production one-management-IP-per-Site invariant for loopback fixtures.
@@ -301,8 +477,10 @@ def run(candidate: Path) -> None:
     test_parent.mkdir(parents=True, exist_ok=True)
     network, linux = ReconnectTarget(), LinuxSimulator()
     try:
-        with tempfile.TemporaryDirectory(prefix="offline-candidate-", dir=test_parent) as temporary_name:
+        with tempfile.TemporaryDirectory(prefix="offline-candidate-", dir=test_parent, delete=False) as temporary_name:
+            # Retain SQLite fixtures under Workspace for acceptance evidence.
             temporary = Path(temporary_name)
+            print("OFFLINE_FIXTURE=" + str(temporary), flush=True)
             root, port = temporary / "data", free_port()
             env = isolated_environment(root, temporary, port)
             verify_runtime(candidate, env)
@@ -360,7 +538,8 @@ def run(candidate: Path) -> None:
             verify_feature(candidate, temporary, "ac-resources", AcTarget, verify_ac_resources, "AC")
             verify_feature(candidate, temporary, "configuration-kinds", ConfigurationTarget, verify_configuration_kinds)
             verify_feature(candidate, temporary, "full-diagnostic", DiagnosticTarget, verify_full_diagnostic)
-        print("OFFLINE_CANDIDATE=PASS (synthetic targets only; REAL_DEVICE_PENDING)")
+            verify_scheduled_backups(candidate, temporary)
+        print("OFFLINE_CANDIDATE=PASS (including persisted schedules and Windows loopback Traceroute; synthetic targets only; REAL_DEVICE_PENDING)")
     finally:
         network.close()
         linux.close()
