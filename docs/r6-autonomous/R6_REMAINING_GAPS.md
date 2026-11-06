@@ -7,4 +7,3 @@
 - 智能配置、完整资产/拓扑工作台、ARP/路由/WLAN/Mesh 诊断尚无完整用户闭环。
 - 跨机器 TLS、Windows Service 安装、升级/回滚和原生 125% 仍属外部验收。
 - 当前 workspace 规则引用的检查脚本缺失，需后续由仓库维护者补齐或更新 canonical 文档。
-

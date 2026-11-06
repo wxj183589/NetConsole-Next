@@ -16,4 +16,3 @@
 | 系统治理 | `feature_registry.py`、`backend/api/system_settings_router.py`、审计仓储 | Feature 开关、权限、日志和系统设置 | P1 |
 
 已证实的 H3C 只读命令集中在 `adapters/h3c/h3c_command_profile.py` 和 `services/command_guard.py`，包括 `display version`、接口、LLDP、WLAN AP、Mesh 相关显示命令和 `display current-configuration`。命令清单不代表每个现场型号都已互操作通过。
-

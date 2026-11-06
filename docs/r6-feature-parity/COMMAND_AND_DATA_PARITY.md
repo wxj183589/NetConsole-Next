@@ -13,4 +13,3 @@
 | 事实数据 | parser/repository facts | `H3cFactPublication.cs`、Current/History | 不把未解析回显伪装为事实 |
 
 密码、token、私钥和连接凭据不能进入命令 URL、前端状态、日志或 Git。设备在线状态必须来自真实会话或采集证据；采集失败不能直接派生为 AP 离线。
-

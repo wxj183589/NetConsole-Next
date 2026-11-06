@@ -9,4 +9,3 @@
 - `git diff --check`：PASS。
 
 未执行的现场设备、GUI 安装、跨机器 TLS、生产数据和配置写入测试不得标记为 PASS。
-

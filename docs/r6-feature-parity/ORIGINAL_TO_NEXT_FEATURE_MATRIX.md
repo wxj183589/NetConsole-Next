@@ -16,4 +16,3 @@
 | 文件/报表/导出 | `FileManagerService.cs`、前端 Files | PARTIAL | 原版报表和跨域导出仍需对齐 | 导出契约与报告任务 |
 | 权限/审计 | `WebAuthStore.cs`、Site scope、Catalog audit | PARTIAL | 远程 TLS 和完整 mutation audit | 安全审计收口 |
 | 部署升级 | LocalManager/Windows Service 基础 | BLOCKED_EXTERNAL | 安装、TLS、升级/回滚未验 | 离线候选与目标机门禁 |
-

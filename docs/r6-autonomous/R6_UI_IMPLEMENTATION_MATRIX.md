@@ -13,4 +13,3 @@ SmartHub 仅作为 clean-room 结构参考。当前实现必须通过 `NcLayout`
 | 工具/拓扑 | PARTIAL | diagnostics、traceroute、LLDP | ARP/路由/WLAN/Mesh 诊断视图 |
 
 必须显式显示 `UNKNOWN`、`CONFLICT`、`NOT_COLLECTED`、`DISABLED`、`NOT_IMPLEMENTED`；空数据和 API 失败不能被渲染成绿色零值或 fake record。关键页面后续需补 1920x1080、2560x1440 的浏览器状态证据。
-

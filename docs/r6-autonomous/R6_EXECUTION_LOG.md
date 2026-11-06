@@ -10,4 +10,3 @@
 - 完成本地前端全量测试、typecheck 和 Vite/静态资源构建；构建产物随工作台改动提交。
 - 产品闭环本地提交：`87d19cd`；文档检查点另行提交，以 Git HEAD 为准。
 - R6 总状态仍为 PARTIAL；未执行模拟器写操作、远端 push/merge 或 release。
-

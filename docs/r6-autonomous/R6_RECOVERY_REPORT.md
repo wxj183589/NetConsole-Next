@@ -9,4 +9,3 @@
 - 现有 45 个 worktree 已盘点；4 个历史 worktree dirty，均保留未修改。
 - `docs/development/workspace-layout.md` 与 `scripts.check_workspace_layout` 在当前 checkout 不存在；实际 canonical 规则为 `docs/WORKSPACE_LAYOUT.md`，缺失工具已记录，不新建替代工具。
 - 旧版 NetConsole 和 SmartHub 均只读审计，真实数据根未访问、复制或修改。
-

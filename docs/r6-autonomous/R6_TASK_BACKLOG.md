@@ -10,4 +10,3 @@
 | P1 | 配置恢复 writer | BLOCKED_EXTERNAL | 当前默认拒绝设备写入 |
 | P1 | 终端/跳板真实互操作 | PARTIAL | 本地 session 通过，目标机待验 |
 | P2 | 安装、TLS、升级回滚 | BLOCKED_EXTERNAL | 生成离线候选后再做目标机门禁 |
-
