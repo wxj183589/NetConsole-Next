@@ -118,18 +118,24 @@ def verify_ui(client: Client, candidate: Path) -> None:
         if asset.endswith(".js"):
             scripts.append((asset, body.decode("utf-8")))
     assert scripts, "Vue entry script is missing"
+    view_markers = {
+        "LinuxServersView": ("保存服务器",),
+        "SettingsView": ("site-ssh-jump-host",),
+        "TerminalView": ("LINUX_INTERACTIVE",),
+        "DevicesView": ("查看配置备份", "批量测试连接"),
+        "ConfigBackupsView": ("当前配置备份仅支持 H3C 设备",),
+    }
     reachable = set()
     for entry, script in scripts:
-        for component in ("LinuxServersView", "SettingsView", "TerminalView"):
+        for component, markers in view_markers.items():
             matches = re.findall(r'import\(["\'](\./' + component + r'-[^"\']+\.js)["\']\)', script)
             for match in matches:
                 asset = urllib.parse.urljoin(entry, match)
                 text = fetch_static(client, candidate, asset).decode("utf-8")
-                marker = {"LinuxServersView": "保存服务器", "SettingsView": "site-ssh-jump-host", "TerminalView": "LINUX_INTERACTIVE"}[component]
-                assert marker in text, f"Published {component} lacks the current feature"
+                assert all(marker in text for marker in markers), f"Published {component} lacks the current feature"
                 reachable.add(component)
-    assert reachable == {"LinuxServersView", "SettingsView", "TerminalView"}, "Vue entry does not reach current Linux/Jump/terminal views"
-    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux management, SSH Jump settings, Linux terminal)")
+    assert reachable == set(view_markers), "Vue entry does not reach the current feature views"
+    print("OFFLINE_STATIC_UI=PASS (HTTP asset hashes, reachable Linux/Jump/terminal, device batch connection and configuration backup views)")
 
 
 def wait_ready(service: subprocess.Popen, base: str) -> None:

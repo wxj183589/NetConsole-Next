@@ -63,6 +63,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
         sp.GetRequiredService<RuntimeStatus>().SetFaulted($"TASK_STATE_PERSISTENCE_FAILED: {ex.GetType().Name}");
     }, sp.GetRequiredService<ITaskResultSink>(), sp.GetRequiredService<ITaskScopeAuthorizer>()));
 builder.Services.AddSingleton<H3cBatchTaskService>();
+builder.Services.AddSingleton<DeviceConnectionTestService>();
 builder.Services.AddSingleton<ConfigBackupService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<IngressStats>();
@@ -1259,6 +1260,22 @@ if (settings.H3cEnabled)
                 return Results.Problem("The bounded collection queue is full or shutting down.", statusCode: StatusCodes.Status429TooManyRequests);
             return Results.Accepted("/api/system/tasks", new { runId });
         }
+        catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+        catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    });
+    app.MapPost("/api/system/devices/connection-tests", (HttpContext context, DeviceConnectionTestRequest request,
+        Catalog rawCatalog, DeviceConnectionTestService tests) =>
+    {
+        if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "DEVICE_CONNECTION_TEST_PERMISSION_DENIED");
+        if (!rawCatalog.IsModuleEnabled("h3c")) return Results.NotFound();
+        try
+        {
+            var plan = tests.Start(request, CurrentIdentity(context), CurrentSiteScope(context));
+            return Results.Created($"/api/system/h3c/task-plans/{plan.Id}", plan);
+        }
+        catch (DeviceConnectionTestException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
         catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }

@@ -19,6 +19,7 @@ internal static class TerminalCoreTests
         await VerifiesRecordingCatalogBusyAndDiskFaultsAsync();
         await VerifiesSshHostKeyLifecycleAsync();
         await VerifiesConnectionTestResultBoundariesAsync();
+        await VerifiesFailureReasonBeforeRecordingCompletionAsync();
         VerifiesTerminalTextEncoding();
         VerifiesStreamingTerminalTextDecoder();
         await VerifiesLegacyV6SingleFileReadAsync();
@@ -400,8 +401,7 @@ internal static class TerminalCoreTests
                 "SSH Exec host-key verification should retain the concrete SSH key type");
 
             var connectionTest = new H3cConnectionTestService(catalog,
-                new H3cSshDeviceSessionFactory(catalog, new TerminalCoreFixedH3cCredentialProvider("synthetic"), execFactory),
-                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+                new H3cSshDeviceSessionFactory(catalog, new TerminalCoreFixedH3cCredentialProvider("synthetic"), execFactory));
             var summary = await connectionTest.TestAsync(deviceId, CancellationToken.None);
             Assert(summary is not null && summary.Status == "CONNECTED" && summary.Vendor == "H3C Comware" &&
                    summary.Version == "7.1.070",
@@ -468,8 +468,7 @@ internal static class TerminalCoreTests
             var commandFailure = new H3cConnectionTestService(catalog,
                 new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
                     () => Task.CompletedTask,
-                    (_, _) => Task.FromException<string>(new IOException("exec channel closed")))),
-                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+                    (_, _) => Task.FromException<string>(new IOException("exec channel closed")))));
             var failedInfo = await commandFailure.TestAsync(deviceId, CancellationToken.None);
             Assert(failedInfo is not null && failedInfo.Status == "CONNECTED" &&
                    failedInfo.Message.Contains("设备信息识别失败", StringComparison.Ordinal),
@@ -478,8 +477,7 @@ internal static class TerminalCoreTests
             var commandTimeout = new H3cConnectionTestService(catalog,
                 new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
                     () => Task.CompletedTask,
-                    (_, _) => Task.FromException<string>(new OperationCanceledException()))),
-                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+                    (_, _) => Task.FromException<string>(new OperationCanceledException()))));
             var timedOutInfo = await commandTimeout.TestAsync(deviceId, CancellationToken.None);
             Assert(timedOutInfo is not null && timedOutInfo.Status == "CONNECTED" &&
                    timedOutInfo.Message.Contains("设备信息识别超时", StringComparison.Ordinal),
@@ -488,11 +486,73 @@ internal static class TerminalCoreTests
             var authenticationFailure = new H3cConnectionTestService(catalog,
                 new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
                     () => Task.FromException(new H3cAuthenticationFailedException()),
-                    (_, _) => Task.FromResult("unused"))),
-                new TerminalCoreFixedH3cCredentialProvider("synthetic"));
+                    (_, _) => Task.FromResult("unused"))));
             var failedLogin = await authenticationFailure.TestAsync(deviceId, CancellationToken.None);
             Assert(failedLogin is not null && failedLogin.Status == "AUTHENTICATION_FAILED",
                 "a failure during ConnectAsync must remain an authentication failure");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static async Task VerifiesFailureReasonBeforeRecordingCompletionAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "netconsole-next-terminal-failure-reason-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            const string reason = "JUMP_HOST_CHANNEL_FAILED";
+            var credentials = new TerminalCoreFailingCredentialProvider(
+                new H3cJumpHostConnectionException(reason, "跳板机拒绝转发目标连接"));
+            await using var manager = new TerminalSessionManager(catalog, settings, credentials);
+            using var releaseCompletion = new ManualResetEventSlim();
+            var completionReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var recording = new TerminalRecordingWriter(root, "failed-session", new TerminalRecordingFaults
+            {
+                BeforeIndexPublish = _ =>
+                {
+                    completionReached.TrySetResult(true);
+                    if (!releaseCompletion.Wait(TimeSpan.FromSeconds(10)))
+                        throw new TimeoutException("The test did not release recording completion.");
+                }
+            });
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "127.0.0.1", 22,
+                "reader", "TEST_CREDENTIAL", "", true, 0, 0, "AUTO_UPDATE", false);
+            var snapshot = new TerminalSessionSnapshot("failed-session", profile.Id, profile.Id, "SSH",
+                "RESTRICTED_READONLY", "127.0.0.1", 22, null, null, "CONNECTING", now, null, now,
+                null, null, null, null, recording.RelativePath, 0, null, false);
+            catalog.CreateTerminalSession(snapshot);
+            var runtime = new TerminalSessionRuntime(manager, catalog, credentials, root, snapshot, profile, null, recording);
+            try
+            {
+                runtime.Start();
+                await completionReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                AssertFailure(runtime.Snapshot, completed: false);
+                AssertFailure(catalog.GetTerminalSession(snapshot.Id), completed: false);
+            }
+            finally
+            {
+                releaseCompletion.Set();
+                await runtime.DisposeAsync();
+            }
+            AssertFailure(runtime.Snapshot, completed: true);
+            AssertFailure(catalog.GetTerminalSession(snapshot.Id), completed: true);
+
+            static void AssertFailure(TerminalSessionSnapshot? actual, bool completed)
+            {
+                Assert(actual is not null && actual.State == "FAILED" && actual.ConnectionResult == reason &&
+                       actual.DisconnectReason == reason,
+                    $"FAILED must expose its final reason code before and after recording completion: {actual}");
+                Assert(actual!.RecordingComplete == completed,
+                    "the regression must observe FAILED while recording completion is still blocked");
+            }
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }
@@ -528,6 +588,11 @@ internal static class TerminalCoreTests
     private sealed class TerminalCoreFixedH3cCredentialProvider(string? value) : IH3cCredentialProvider
     {
         public string? GetPassword(string reference) => value;
+    }
+
+    private sealed class TerminalCoreFailingCredentialProvider(Exception failure) : IH3cCredentialProvider
+    {
+        public string? GetPassword(string reference) => throw failure;
     }
 
     private sealed class ConnectionTestFakeSessionFactory(Func<IDeviceSession> create) : IDeviceSessionFactory

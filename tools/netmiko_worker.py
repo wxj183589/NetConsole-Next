@@ -17,6 +17,7 @@ from typing import Any
 
 import paramiko
 from netmiko import ConnectHandler
+from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
 from netmiko.ssh_dispatcher import CLASS_MAPPER
 
 
@@ -93,6 +94,22 @@ def host_key_details(connection: Any) -> tuple[str | None, str | None]:
     return key.get_name(), "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
 
 
+def is_host_key_negotiation_error(error: Exception) -> bool:
+    """Original NetConsole's scoped H3C ssh-rsa compatibility condition."""
+    text = str(error).strip().casefold()
+    wrapped = "a paramiko sshexception occurred during connection creation:" in text
+    if isinstance(error, (paramiko.AuthenticationException, NetmikoAuthenticationException)):
+        return False
+    if isinstance(error, (TimeoutError, NetmikoTimeoutException)) and not wrapped:
+        return False
+    if not isinstance(error, paramiko.SSHException) and not wrapped:
+        return False
+    markers = ("no matching host key", "no acceptable host key", "host key algorithm",
+               "hostkey algorithm", "server only offered ssh-rsa")
+    return any(marker in text for marker in markers) or text.rstrip(".") == "negotiation failed" or (
+        wrapped and text.rsplit(":", 1)[-1].strip().rstrip(".") == "negotiation failed")
+
+
 class Worker:
     def __init__(self) -> None:
         self.connection: Any = None
@@ -111,7 +128,7 @@ class Worker:
             self.close()
             raise
 
-    def _connect(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _connect(self, request: dict[str, Any], legacy_host_key: bool = False) -> dict[str, Any]:
         self.driver = resolve_driver(request.get("vendor", ""), request.get("protocol", "ssh"), request.get("device_type"))
         # SSH forwarding is never applied to Telnet sessions.
         jump = request.get("jump_host") if not self.driver.endswith("_telnet") else None
@@ -171,11 +188,23 @@ class Worker:
         self.interactive = bool(request.get("interactive", False))
         if self.jump_channel is not None:
             params["sock"] = self.jump_channel
-        self.connection = ConnectHandler(**params)
-        # Pinned Netmiko 4.7's normal constructor calls _open().  Retaining the
-        # object first lets failed Telnet auth and preparation close reliably.
-        # Netmiko owns login, prompt discovery and all session preparation.
-        self.connection._open()
+        if legacy_host_key:
+            # Same Netmiko/Paramiko option as original NetConsole. This changes
+            # host-key selection only; it does not implement another SSH login.
+            params["disabled_algorithms"] = {"keys": ["rsa-sha2-512", "rsa-sha2-256"]}
+        try:
+            self.connection = ConnectHandler(**params)
+            # Retain the object before _open so failed authentication or
+            # preparation closes reliably. Netmiko owns the complete login.
+            self.connection._open()
+        except Exception as error:
+            if (legacy_host_key or request.get("allow_legacy_algorithms") is not True or
+                    self.driver != "hp_comware" or not is_host_key_negotiation_error(error)):
+                raise
+            # A failed target invalidates its direct-tcpip channel. Release
+            # everything before the single compatibility retry, including Jump.
+            self.close()
+            return self._connect(request, legacy_host_key=True)
         key_type, key_fingerprint = host_key_details(self.connection)
         return {
             "driver": self.driver,

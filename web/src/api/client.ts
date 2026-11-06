@@ -467,6 +467,29 @@ export interface TaskCommand {
   parseStatus?: string | null
   capturedMs?: number | null
 }
+export interface H3cTaskPlanItem {
+  ordinal: number
+  target: string
+  definitionId: string
+  runId?: string | null
+  state: string
+  error?: string | null
+}
+export interface H3cTaskPlan {
+  id: string
+  taskType: string
+  state: string
+  actorUserId: string
+  commandPlan: string[]
+  claimsRevision: string
+  createdMs: number
+  updatedMs: number
+  items: H3cTaskPlanItem[]
+}
+export interface H3cTaskPlanReport {
+  plan: H3cTaskPlan
+  items: Array<{ item: H3cTaskPlanItem; run?: TaskRun | null; commands: TaskCommand[] }>
+}
 
 export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP'
 export interface NetworkDiagnosticItem {
@@ -1153,6 +1176,18 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export function createDeviceConnectionTests(deviceIds: string[]): Promise<H3cTaskPlan> {
+  return request('/api/system/devices/connection-tests', { method: 'POST', body: JSON.stringify({ deviceIds }) })
+}
+export function getH3cTaskPlan(id: string): Promise<H3cTaskPlan> {
+  return request('/api/system/h3c/task-plans/' + encodeURIComponent(id))
+}
+export function getH3cTaskPlanReport(id: string): Promise<H3cTaskPlanReport> {
+  return request('/api/system/h3c/task-plans/' + encodeURIComponent(id) + '/report')
+}
+export function cancelH3cTaskPlan(id: string): Promise<H3cTaskPlan> {
+  return request('/api/system/h3c/task-plans/' + encodeURIComponent(id) + '/cancel', { method: 'POST' })
+}
 export interface H3cTaskDefinitionRequest {
   id: string
   profileId: string

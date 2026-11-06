@@ -22,8 +22,7 @@ internal sealed record H3cConnectionTestResult(
 /// </summary>
 internal sealed class H3cConnectionTestService(
     Catalog catalog,
-    IDeviceSessionFactory sessions,
-    IH3cCredentialProvider credentials)
+    IDeviceSessionFactory sessions)
 {
     // A connection check must remain a bounded login probe.  Some older HCL
     // images accept SSH authentication but never close an exec channel for
@@ -36,13 +35,16 @@ internal sealed class H3cConnectionTestService(
         var profile = catalog.GetH3cDeviceProfile(deviceId);
         if (profile is null) return null;
         var started = Stopwatch.GetTimestamp();
+        var protocol = ProtocolFor(profile);
         try
         {
-            if (string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase))
-                return await TestTelnetAsync(profile, started, cancellationToken).ConfigureAwait(false);
-
             await using var session = sessions.Create(deviceId);
-            await session.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            try { await session.ConnectAsync(cancellationToken).ConfigureAwait(false); }
+            finally { protocol = session.Protocol; }
+            // Explicit Telnet and AUTO fallback use the same authenticated
+            // session as collection. A login probe need not run another command.
+            if (protocol == "TELNET")
+                return Success(profile, started, protocol, new H3cVersionInfo("unknown", string.Empty, null, false));
             using var deviceInfoTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deviceInfoTimeout.CancelAfter(DeviceInfoTimeout);
             try
@@ -50,7 +52,7 @@ internal sealed class H3cConnectionTestService(
                 var versionOutput = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, deviceInfoTimeout.Token)
                     .ConfigureAwait(false);
                 var version = H3cComwareParser.ParseVersion(versionOutput);
-                return Success(profile, started, "SSH", version);
+                return Success(profile, started, protocol, version);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -70,39 +72,18 @@ internal sealed class H3cConnectionTestService(
                     "连接成功，但设备信息识别失败");
             }
         }
-        catch (H3cProtocolNegotiationException) when (
-            string.Equals(profile.TerminalProtocol, "AUTO", StringComparison.OrdinalIgnoreCase) &&
-            profile.AllowTelnetFallback)
-        {
-            try { return await TestTelnetAsync(profile, started, cancellationToken).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            { return Failure(profile, started, "TELNET", MapFailure(ex)); }
-        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Failure(profile, started, ProtocolFor(profile), MapFailure(ex));
+            return Failure(profile, started, protocol, MapFailure(ex));
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // Telnet login uses a short internal read window.  Translate that
             // timeout to the same safe connection result as SSH instead of
             // letting the request pipeline emit an unhandled 500.
-            return Failure(profile, started, ProtocolFor(profile),
+            return Failure(profile, started, protocol,
                 ("CONNECT_TIMEOUT", "连接超时"));
         }
-    }
-
-    private async Task<H3cConnectionTestResult> TestTelnetAsync(
-        H3cDeviceProfileSnapshot profile, long started, CancellationToken cancellationToken)
-    {
-        var password = credentials.GetPassword(profile);
-        if (string.IsNullOrEmpty(password))
-            return Failure(profile, started, "TELNET", ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"));
-        await using var transport = new NetmikoTerminalTransport(profile with { TerminalProtocol = "TELNET" }, password, catalog);
-        await transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
-        // Telnet's login handshake is the connection check.  Avoid storing or
-        // returning the initial prompt because it may contain device details.
-        return Success(profile, started, "TELNET", new H3cVersionInfo("unknown", string.Empty, null, false));
     }
 
     private static H3cConnectionTestResult Success(H3cDeviceProfileSnapshot profile, long started,

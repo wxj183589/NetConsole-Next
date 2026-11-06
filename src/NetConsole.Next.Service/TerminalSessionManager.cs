@@ -287,8 +287,8 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             {
                 await _transport.ConnectAsync(_stop.Token).ConfigureAwait(false);
             }
-            catch (Exception ex) when ((ex is H3cProtocolNegotiationException or H3cConnectionTimeoutException) && _allowProtocolFallback &&
-                _profile?.TerminalProtocol == "AUTO" && _profile.AllowTelnetFallback && Snapshot.Protocol == "SSH")
+            catch (Exception ex) when (!_stop.IsCancellationRequested && _allowProtocolFallback &&
+                _profile is not null && H3cConnectionPolicy.CanFallbackToTelnet(_profile, ex) && Snapshot.Protocol == "SSH")
             {
                 await _transport.DisposeAsync().ConfigureAwait(false);
                 _transport = new NetmikoTerminalTransport(_profile with { TerminalProtocol = "TELNET" }, _credentials.GetPassword(_profile) ?? string.Empty, _catalog);
@@ -335,12 +335,11 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
             };
             try
             {
-                _catalog.UpdateTerminalState(Snapshot.Id, "FAILED", reason, _linuxServer is null ? ex.Message : LinuxSshTerminalTransport.Failure(ex).Message);
+                _catalog.UpdateTerminalState(Snapshot.Id, "FAILED", reason, reason);
                 _catalog.RecordTerminalEvent(Snapshot.Id, new("DISCONNECTED", new { reason }));
             }
             catch { }
-            Snapshot = Snapshot with { State = "FAILED", ConnectionResult = reason,
-                DisconnectReason = _linuxServer is null ? ex.Message : LinuxSshTerminalTransport.Failure(ex).Message };
+            Snapshot = Snapshot with { State = "FAILED", ConnectionResult = reason, DisconnectReason = reason };
             await CloseAsync(reason, "FAILED").ConfigureAwait(false);
         }
         finally { _transportReady.TrySetResult(false); }

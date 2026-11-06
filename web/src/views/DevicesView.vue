@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CircleCheck, Document, Filter, Monitor, Search, Upload, Warning } from '@element-plus/icons-vue'
@@ -7,11 +7,12 @@ import NcLayout from '../components/NcLayout.vue'
 import {
   ApiRequestError, cancelDeviceBatch, commitDeviceImport, confirmDeviceBatch, createDevice, createDeviceBatch, createDeviceGroup,
   getDeviceBatchOperation, getDeviceGroups, getDeviceInventory, getDeviceInventoryDetail, getDeviceSites, getModuleStates, getTerminalDevices, previewDeviceImport, updateDevice,
-  onboardH3cProfile, testH3cConnection, updateH3cCredential,
+  cancelH3cTaskPlan, createDeviceConnectionTests, getH3cTaskPlanReport, onboardH3cProfile, testH3cConnection, updateH3cCredential,
   type DeviceBatchKind, type DeviceBatchOperation, type DeviceBatchRequest, type DeviceGroup, type DeviceImportPreview, type DeviceInventoryDetail,
-  type DeviceInventoryItem, type DeviceInventoryPage, type DeviceSite, type TerminalDevice,
+  type DeviceInventoryItem, type DeviceInventoryPage, type DeviceSite, type H3cTaskPlan, type H3cTaskPlanReport, type TerminalDevice,
 } from '../api/client'
 import { useAuthStore } from '../stores/auth'
+import { canCancelTask, taskFailureLabel, taskStateLabel } from '../taskViewModel'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore()
 const result = ref<DeviceInventoryPage | null>(null); const sites = ref<DeviceSite[]>([]); const groups = ref<DeviceGroup[]>([]); const profiles = ref<TerminalDevice[]>([])
@@ -30,6 +31,10 @@ const backupUnavailableReason = computed(() => {
 })
 const connectionTesting = ref(false); const connectionResult = ref<{ status: string; message: string; protocol: string; vendor?: string | null; version?: string | null; elapsedMs: number } | null>(null)
 const selectedIds = ref<string[]>([]); const showBatchDialog = ref(false); const showBatchPreview = ref(false)
+type ConnectionTarget = { id: string; name: string; profileId?: string | null }
+const selectedTargets = new Map<string, ConnectionTarget>()
+const connectionPlan = ref<H3cTaskPlan | null>(null); const connectionReport = ref<H3cTaskPlanReport | null>(null)
+const connectionPlanBusy = ref(false); const connectionPlanMessage = ref(''); const connectionTargets = ref<ConnectionTarget[]>([])
 const batchOperation = ref<DeviceBatchOperation | null>(null); const batchLoading = ref(false); const operationId = ref('')
 const batchKind = ref<DeviceBatchKind>('BATCH_ENABLE'); const batchSite = ref('local'); const batchGroup = ref('')
 const batchMetadata = reactive({ name: '', vendor: '', model: '', deviceType: '', description: '' })
@@ -37,6 +42,12 @@ const form = reactive({ id: '', name: '', managementIp: '', vendor: '', model: '
 const onboardForm = reactive({ host: '', protocol: 'SSH' as 'SSH' | 'TELNET' | 'AUTO', port: 22, username: '', password: '', allowTelnetFallback: false, vendor: 'H3C', platform: '', name: '', description: '' })
 const groupForm = reactive({ siteId: 'local', name: '', description: '' })
 const canWrite = computed(() => auth.user?.role === 'SUPERADMIN')
+const connectionPlanRunning = computed(() => Boolean(connectionPlan.value && canCancelTask(connectionPlan.value.state)))
+const connectionPlanCompleted = computed(() => connectionPlan.value?.items.filter(item => !canCancelTask(item.state)).length || 0)
+const connectionPlanRows = computed(() => connectionPlan.value?.items.map(item => ({
+  item, target: connectionTargets.value.find(target => target.profileId === item.target),
+  report: connectionReport.value?.items.find(report => report.item.ordinal === item.ordinal),
+})) || [])
 const rows = computed(() => result.value?.items || [])
 const siteScopeLabel = computed(() => siteId.value ? sites.value.find(site => site.id === siteId.value)?.name || rows.value.find(row => row.siteId === siteId.value)?.site || siteId.value : '全部已授权局点')
 const selectedGroup = computed(() => groups.value.find(group => group.id === groupId.value))
@@ -51,6 +62,89 @@ const batchDialogKindLabel = computed(() => batchKindLabels[batchKind.value])
 const operationStateLabel = computed(() => ({ PENDING_CONFIRM: '待确认', RUNNING: '执行中', SUCCEEDED: '已完成', FAILED: '失败可重试', CONFLICT: '发生冲突', CANCELLED: '已取消', INTERRUPTED: '服务重启中断', PREVIEWED: '待确认' } as Record<string, string>)[batchOperation.value?.state || ''] || batchOperation.value?.state || '—')
 const summary = computed(() => result.value?.summary || { totalRecords: 0, validDevices: 0, invalidRecords: 0, enabledDevices: 0, disabledDevices: 0, onlineDevices: 0, offlineDevices: 0, unknownStatus: 0 })
 let refreshSequence = 0; let groupSequence = 0; let profileSequence = 0; let detailSequence = 0
+let connectionContext = 0; let connectionActive = true; let connectionPollCount = 0
+let connectionPoll: ReturnType<typeof setTimeout> | undefined
+
+function stopConnectionPolling(): void { if (connectionPoll !== undefined) clearTimeout(connectionPoll); connectionPoll = undefined }
+function invalidateConnectionTests(message = ''): void {
+  ++connectionContext; stopConnectionPolling()
+  connectionPlan.value = null; connectionReport.value = null; connectionTargets.value = []; connectionPlanBusy.value = false; connectionPlanMessage.value = message
+}
+function currentConnectionContext(context: number): boolean { return connectionActive && canWrite.value && context === connectionContext }
+async function checkConnectionModules(context: number): Promise<boolean> {
+  try {
+    const modules = await getModuleStates()
+    if (!currentConnectionContext(context)) return false
+    if (['devices', 'h3c'].every(key => modules.some(module => module.key === key && module.enabled))) return true
+    invalidateConnectionTests('批量连接测试所需模块已停用或不可用')
+  } catch { if (currentConnectionContext(context)) invalidateConnectionTests('批量连接测试模块状态暂不可用，请刷新后重试') }
+  return false
+}
+function connectionPlanStateLabel(state: string): string { return state === 'PARTIAL_FAILED' ? '部分失败' : taskStateLabel(state) }
+function connectionPlanError(cause: unknown): void {
+  let message = '批量连接测试状态读取失败，请刷新重试'
+  if (cause instanceof ApiRequestError) {
+    if (cause.status === 400) message = '请选择 1 至 64 台不同设备'
+    else if ([401, 403, 404].includes(cause.status)) { invalidateConnectionTests('设备或任务不存在，或当前权限已发生变化'); return }
+    else if (cause.status === 409) message = '当前仅支持已关联可用连接资料的独立 H3C 设备，请检查所选设备'
+    else if (cause.status === 503) { invalidateConnectionTests('批量连接测试服务或模块暂不可用'); return }
+  }
+  connectionPlanMessage.value = message
+}
+function scheduleConnectionRefresh(context: number): void {
+  if (!currentConnectionContext(context) || !connectionPlanRunning.value) return
+  if (++connectionPollCount > 200) { connectionPlanMessage.value = '任务仍在运行，请稍后刷新结果或到任务中心查看'; return }
+  connectionPoll = setTimeout(() => { connectionPoll = undefined; void refreshConnectionTests(context) }, 1500)
+}
+async function refreshConnectionTests(context = connectionContext): Promise<void> {
+  const id = connectionPlan.value?.id
+  if (!id || connectionPlanBusy.value || !currentConnectionContext(context)) return
+  stopConnectionPolling(); connectionPlanBusy.value = true; connectionPlanMessage.value = ''
+  let loaded = false
+  try {
+    if (!await checkConnectionModules(context)) return
+    const next = await getH3cTaskPlanReport(id)
+    if (!currentConnectionContext(context) || !await checkConnectionModules(context)) return
+    if (next.plan.id !== id) throw new Error('任务关联不一致')
+    connectionPlan.value = next.plan; connectionReport.value = next; loaded = true
+  } catch (cause) { if (currentConnectionContext(context)) connectionPlanError(cause) }
+  finally {
+    if (currentConnectionContext(context)) { connectionPlanBusy.value = false; if (loaded) scheduleConnectionRefresh(context) }
+  }
+}
+async function startConnectionTests(): Promise<void> {
+  if (!connectionActive || !canWrite.value || connectionPlanBusy.value || connectionPlanRunning.value || !selectedIds.value.length || selectedIds.value.length > 64) return
+  invalidateConnectionTests(); const context = connectionContext
+  const ids = [...selectedIds.value]
+  connectionTargets.value = ids.map(id => selectedTargets.get(id) || { id, name: id })
+  connectionPollCount = 0; connectionPlanBusy.value = true
+  try {
+    if (!await checkConnectionModules(context)) return
+    const next = await createDeviceConnectionTests(ids)
+    if (!currentConnectionContext(context) || !await checkConnectionModules(context)) return
+    connectionPlan.value = next
+  } catch (cause) { if (currentConnectionContext(context)) connectionPlanError(cause) }
+  finally { if (currentConnectionContext(context)) connectionPlanBusy.value = false }
+  if (currentConnectionContext(context) && connectionPlan.value) await refreshConnectionTests(context)
+}
+async function cancelConnectionTests(): Promise<void> {
+  const id = connectionPlan.value?.id; const context = connectionContext
+  if (!id || !connectionPlanRunning.value || connectionPlanBusy.value || !currentConnectionContext(context)) return
+  stopConnectionPolling(); connectionPlanBusy.value = true; connectionPlanMessage.value = ''
+  try {
+    if (!await checkConnectionModules(context)) return
+    const next = await cancelH3cTaskPlan(id)
+    if (!currentConnectionContext(context) || !await checkConnectionModules(context)) return
+    connectionPlan.value = next; connectionReport.value = null
+  } catch (cause) { if (currentConnectionContext(context)) connectionPlanError(cause) }
+  finally { if (currentConnectionContext(context)) connectionPlanBusy.value = false }
+  if (currentConnectionContext(context) && connectionPlan.value) await refreshConnectionTests(context)
+}
+watch(siteId, () => { clearSelection(); invalidateConnectionTests() }, { flush: 'sync' })
+watch(canWrite, () => { clearSelection(); invalidateConnectionTests() }, { flush: 'sync' })
+onActivated(() => { connectionActive = true })
+onDeactivated(() => { connectionActive = false; clearSelection(); invalidateConnectionTests() })
+onBeforeUnmount(() => { connectionActive = false; invalidateConnectionTests() })
 
 async function refreshSites(): Promise<void> {
   try {
@@ -93,9 +187,10 @@ function selectSite(nextSiteId: string): void {
 }
 function selectScope(nextGroupId = ''): void { groupId.value = nextGroupId; applyFilters() }
 function clearFilters(): void { search.value = ''; status.value = ''; vendor.value = ''; deviceType.value = ''; groupId.value = ''; applyFilters() }
-function onSelectionChange(id: string, event: Event): void { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? Array.from(new Set([...selectedIds.value, id])) : selectedIds.value.filter(item => item !== id) }
-function togglePageSelection(): void { selectedIds.value = allRowsSelected.value ? selectedIds.value.filter(id => !rows.value.some(row => row.id === id)) : Array.from(new Set([...selectedIds.value, ...rows.value.map(row => row.id)])) }
-function clearSelection(): void { selectedIds.value = [] }
+function rememberConnectionTarget(row: DeviceInventoryItem): void { selectedTargets.set(row.id, { id: row.id, name: row.name, profileId: row.terminalProfileId }) }
+function onSelectionChange(id: string, event: Event): void { const checked = (event.target as HTMLInputElement).checked; const row = rows.value.find(item => item.id === id); if (checked && row) rememberConnectionTarget(row); else selectedTargets.delete(id); selectedIds.value = checked ? Array.from(new Set([...selectedIds.value, id])) : selectedIds.value.filter(item => item !== id) }
+function togglePageSelection(): void { const remove = allRowsSelected.value; rows.value.forEach(row => { if (remove) selectedTargets.delete(row.id); else rememberConnectionTarget(row) }); selectedIds.value = remove ? selectedIds.value.filter(id => !rows.value.some(row => row.id === id)) : Array.from(new Set([...selectedIds.value, ...rows.value.map(row => row.id)])) }
+function clearSelection(): void { selectedIds.value = []; selectedTargets.clear() }
 function newIdempotencyKey(): string { return globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${Math.random().toString(16).slice(2)}` }
 function openBatch(kind: DeviceBatchKind): void { if (!canWrite.value || !selectedIds.value.length) return; batchKind.value = kind; batchSite.value = siteId.value || 'local'; batchGroup.value = ''; Object.assign(batchMetadata, { name: '', vendor: '', model: '', deviceType: '', description: '' }); operationId.value = newIdempotencyKey(); showBatchDialog.value = true }
 function batchPayload(): DeviceBatchRequest {
@@ -249,13 +344,34 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
         <div class="device-list-region">
           <section class="card">
             <div class="filter-bar"><label class="global-search filter-input"><el-icon><Search /></el-icon><input v-model="search" placeholder="搜索名称、设备 ID、管理 IP、厂商" @keydown.enter="applyFilters" /></label><select v-model="vendor" aria-label="设备厂商" @change="applyFilters"><option value="">全部厂商</option><option v-for="option in vendorOptions" :key="option" :value="option">{{ option }}</option></select><select v-model="deviceType" aria-label="设备类型" @change="applyFilters"><option value="">全部类型</option><option v-for="option in deviceTypeOptions" :key="option" :value="option">{{ option }}</option></select><select v-model="status" aria-label="设备状态" @change="applyFilters"><option value="">全部状态</option><option value="ENABLED">已启用</option><option value="DISABLED">已禁用</option><option value="ONLINE">最近在线</option><option value="OFFLINE">最近离线</option><option value="UNKNOWN">状态未知</option></select><button class="icon-button" type="button" title="清除筛选" @click="clearFilters"><el-icon><Filter /></el-icon></button><span class="filter-bar__grow" /><span class="muted">服务端分页 · 最新更新时间排序</span></div>
-        <div v-if="canWrite" class="batch-toolbar"><label class="batch-select-all"><input type="checkbox" :checked="allRowsSelected" aria-label="批量当前页全选" @change="togglePageSelection" />当前页全选</label><span class="muted">已选择 {{ selectedIds.length }} 台（跨页选择会保留明确设备 ID）</span><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_ENABLE')">批量启用</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_DISABLE')">批量禁用</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_SET_GROUP')">设置分组</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_SET_SITE')">设置局点</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_UPDATE_METADATA')">更新元数据</el-button><el-button v-if="selectedIds.length" text size="small" @click="clearSelection">清除选择</el-button></div>
+        <div v-if="canWrite" class="batch-toolbar"><label class="batch-select-all"><input type="checkbox" :checked="allRowsSelected" aria-label="批量当前页全选" @change="togglePageSelection" />当前页全选</label><span class="muted">已选择 {{ selectedIds.length }} 台（跨页选择会保留明确设备 ID）</span><el-button size="small" :loading="connectionPlanBusy" :disabled="!selectedIds.length || selectedIds.length > 64 || connectionPlanBusy || connectionPlanRunning" @click="startConnectionTests">批量测试连接</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_ENABLE')">批量启用</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_DISABLE')">批量禁用</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_SET_GROUP')">设置分组</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_SET_SITE')">设置局点</el-button><el-button size="small" :disabled="!selectedIds.length" @click="openBatch('BATCH_UPDATE_METADATA')">更新元数据</el-button><el-button v-if="selectedIds.length" text size="small" @click="clearSelection">清除选择</el-button></div>
         <div v-loading="loading" class="table-wrap device-table-wrap" data-testid="device-inventory-table"><table class="data-table"><thead><tr><th><input type="checkbox" :checked="allRowsSelected" aria-label="批量当前页全选" @change="togglePageSelection" /></th><th>状态</th><th>设备名称 / ID</th><th>管理 IP</th><th>厂商 / 型号</th><th>类型</th><th>局点 / 分组</th><th>终端档案</th><th>更新时间</th><th>操作</th></tr></thead><tbody><tr v-for="device in rows" :key="device.id" :class="{ 'is-invalid': !device.isValid }" @dblclick="openDetails(device)"><td><input type="checkbox" :checked="selectedIds.includes(device.id)" :aria-label="`选择设备 ${device.name}`" @change="onSelectionChange(device.id, $event)" /></td><td><span :class="['state-pill', statusClass(device.connectionStatus)]"><i class="status-dot" />{{ statusLabel(device.connectionStatus) }}</span></td><td><span class="device-name">{{ device.name }}</span><span class="device-subline mono">{{ device.deviceId || device.id }}<span v-if="!device.isValid" class="device-quality">· {{ device.qualityIssues.join(' / ') }}</span></span></td><td class="device-address">{{ device.managementIp || device.managementAddress }}</td><td>{{ device.vendor }}<span class="device-subline">{{ device.model }}</span></td><td>{{ device.deviceType }}</td><td>{{ device.site }}<span class="device-subline">{{ device.group }}</span></td><td><span :class="['state-pill', device.terminalProfileId ? 'good' : 'neutral']">{{ device.terminalProfileId ? '已关联' : '未关联' }}</span></td><td>{{ formatTime(device.updatedAt || device.lastSeenMs) }}</td><td><div class="table-actions"><el-button text size="small" @click="openDetails(device)">详情</el-button><el-button v-if="canWrite" text size="small" @click="openEdit(device)">编辑</el-button><el-button v-if="canWrite" text size="small" @click="toggle(device)">{{ device.enabled ? '禁用' : '启用' }}</el-button><el-button text size="small" :disabled="!device.terminalProfileId" @click="quickTest(device)">测试连接</el-button><el-button text size="small" :disabled="!device.terminalProfileId" @click="openInner(device)">终端</el-button></div></td></tr><tr v-if="!rows.length"><td colspan="10"><div class="empty-state"><div><el-icon><Document /></el-icon><strong>{{ hasFilters ? '没有符合条件的设备' : '暂无设备' }}</strong><small>新增设备或导入 CSV 后，数据会从 Catalog 真实读取。</small></div></div></td></tr></tbody></table></div>
         <div class="pagination-bar"><span>第 {{ page }} 页 · 每页 {{ pageSize }} 条 · 共 {{ result?.total || 0 }} 条</span><div class="toolbar"><select v-model.number="pageSize" @change="page = 1; refresh()"><option :value="20">20 / 页</option><option :value="50">50 / 页</option><option :value="100">100 / 页</option></select><el-button size="small" :disabled="page <= 1" @click="page--; refresh()">上一页</el-button><el-button size="small" :disabled="!result?.hasMore" @click="page++; refresh()">下一页</el-button></div></div>
           </section>
         </div>
       </div>
     </template>
+    <section v-if="canWrite && (connectionPlan || connectionPlanBusy || connectionPlanMessage)" class="card" data-testid="device-connection-batch" aria-label="批量连接测试结果" aria-live="polite">
+      <div class="card__body">
+        <div class="overview-footer"><strong>批量连接测试</strong><span v-if="connectionPlan">{{ connectionPlanStateLabel(connectionPlan.state) }} · 已完成 {{ connectionPlanCompleted }} / {{ connectionPlan.items.length }}</span><span v-else-if="connectionPlanBusy">正在提交所选设备</span></div>
+        <p class="muted">仅测试明确选中的设备。本次结果反映连接及只读命令执行情况。</p>
+        <p v-if="connectionPlanMessage" role="status">{{ connectionPlanMessage }}</p>
+        <template v-if="connectionPlan">
+          <p class="mono">任务计划：{{ connectionPlan.id }}</p>
+          <progress :value="connectionPlanCompleted" :max="connectionPlan.items.length || 1" aria-label="批量连接测试进度" />
+          <div class="toolbar"><el-button size="small" :disabled="connectionPlanBusy" @click="refreshConnectionTests()">刷新结果</el-button><el-button v-if="connectionPlanRunning" size="small" :disabled="connectionPlanBusy" @click="cancelConnectionTests">取消测试</el-button></div>
+          <div class="table-wrap"><table class="data-table"><thead><tr><th>设备 / 库存 ID</th><th>状态</th><th>子任务</th><th>命令结果</th></tr></thead><tbody>
+            <tr v-for="entry in connectionPlanRows" :key="entry.item.ordinal">
+              <td>{{ entry.target?.name || entry.item.target }}<small class="device-subline mono">{{ entry.target?.id || '库存关联待核对' }}</small><small class="device-subline mono">连接资料：{{ entry.item.target }}</small></td>
+              <td>{{ connectionPlanStateLabel(entry.item.state) }}<small v-if="entry.item.error || entry.report?.run?.failureReason" class="device-subline">{{ taskFailureLabel(entry.item.error || entry.report?.run?.failureReason) }}</small></td>
+              <td class="mono">{{ entry.item.runId || '待调度' }}</td>
+              <td><div v-for="command in entry.report?.commands || []" :key="command.index"><span class="mono">{{ command.command }}</span> · {{ connectionPlanStateLabel(command.state) }}<small v-if="command.error" class="device-subline">{{ taskFailureLabel(command.error) }}</small></div><span v-if="!entry.report?.commands.length" class="muted">暂无命令结果</span></td>
+            </tr>
+          </tbody></table></div>
+        </template>
+        <el-button size="small" @click="router.push('/tasks')">打开任务中心</el-button>
+      </div>
+    </section>
     <div class="section-label">数据与安全口径</div><div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>设备库存与 h3c_device_profiles 分离，终端历史按原 profile ID 保留</span><span><el-icon><CircleCheck /></el-icon>启用状态由服务端同步到已关联终端档案</span><span><el-icon><Warning /></el-icon>CSV 不接受密码、凭据或私钥列，导入先预览再原子提交</span></div></div>
     <el-dialog v-model="showOnboard" title="快速添加设备" width="620px"><div class="form-grid"><label class="form-field"><span>设备地址</span><input v-model="onboardForm.host" placeholder="192.168.56.2" required /></label><label class="form-field"><span>厂商</span><select v-model="onboardForm.vendor"><option value="H3C">H3C</option><option value="Huawei">Huawei</option><option value="Cisco">Cisco</option><option value="ZTE">ZTE</option><option value="Ruijie">Ruijie</option><option value="Juniper">Juniper</option></select></label><label v-if="onboardForm.vendor === 'Cisco'" class="form-field"><span>平台</span><select v-model="onboardForm.platform"><option value="">请选择平台</option><option value="IOS">IOS</option><option value="IOS_XE">IOS-XE</option><option value="NXOS">NX-OS</option></select></label><label class="form-field"><span>连接协议</span><select v-model="onboardForm.protocol" @change="updateOnboardProtocol"><option value="SSH">SSH</option><option value="TELNET">Telnet</option><option value="AUTO">自动协商</option></select></label><p v-if="onboardForm.protocol === 'TELNET' || (onboardForm.protocol === 'AUTO' && onboardForm.allowTelnetFallback)" class="form-hint">Telnet 使用明文传输。</p><label class="form-field"><span>端口</span><input v-model.number="onboardForm.port" type="number" min="1" max="65535" /></label><label class="form-field"><span>用户名</span><input v-model="onboardForm.username" autocomplete="username" required /></label><label class="form-field"><span>密码</span><input v-model="onboardForm.password" type="password" autocomplete="current-password" required /><small class="form-hint">密码仅用于本次本机服务请求并保存到该设备记录；不会显示在设备列表、任务、日志或响应中。</small></label><label v-if="onboardForm.protocol === 'AUTO'" class="form-field" style="align-items:center"><span>SSH 失败时尝试 Telnet</span><input v-model="onboardForm.allowTelnetFallback" type="checkbox" /></label><label class="form-field"><span>设备名称（可选）</span><input v-model="onboardForm.name" placeholder="留空使用设备地址" /></label><label class="form-field"><span>描述（可选）</span><input v-model="onboardForm.description" /></label></div><p class="muted">创建连接资料后会自动保存主机指纹策略并立即测试连接。当前局点：{{ siteScopeLabel }}</p><template #footer><el-button @click="showOnboard = false">取消</el-button><el-button type="primary" :loading="saving" @click="onboardDevice">添加并测试连接</el-button></template></el-dialog>
     <el-dialog v-model="showCredential" title="设备凭据" width="480px" @closed="credentialPassword = ''"><div class="form-grid"><label class="form-field"><span>密码</span><input v-model="credentialPassword" type="password" autocomplete="new-password" :disabled="clearCredential" /><small class="form-hint">留空保留已保存密码。</small></label><label class="form-field"><span>清除已保存密码</span><input v-model="clearCredential" type="checkbox" /></label></div><template #footer><el-button @click="showCredential = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveCredential">保存</el-button></template></el-dialog>

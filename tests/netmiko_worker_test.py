@@ -131,6 +131,83 @@ class NetmikoWorkerTests(unittest.TestCase):
                 finally:
                     target.disconnect()
 
+    def test_legacy_h3c_host_key_retry_uses_netmiko_once_and_closes_failed_session(self):
+        for error in (
+            module.paramiko.SSHException("Incompatible ssh peer (no acceptable host key)"),
+            NetmikoTimeoutException("A paramiko SSHException occurred during connection creation: Negotiation failed."),
+        ):
+            with self.subTest(error=type(error).__name__):
+                first, second = connection(), connection()
+                first._open.side_effect = error
+                with mock.patch.object(module, "ConnectHandler", side_effect=[first, second]) as handler:
+                    worker = module.Worker()
+                    self.assertEqual(worker.connect(request(allow_legacy_algorithms=True))["driver"], "hp_comware")
+                    self.assertEqual(handler.call_count, 2)
+                    self.assertNotIn("disabled_algorithms", handler.call_args_list[0].kwargs)
+                    self.assertEqual(handler.call_args_list[1].kwargs["disabled_algorithms"],
+                                     {"keys": ["rsa-sha2-512", "rsa-sha2-256"]})
+                    first.disconnect.assert_called_once_with()
+                    first._open.assert_called_once_with()
+                    second._open.assert_called_once_with()
+                    worker.close()
+                    second.disconnect.assert_called_once_with()
+
+    def test_legacy_retry_is_scoped_to_opted_in_h3c_ssh_host_key_negotiation(self):
+        host_key_error = module.paramiko.SSHException("no acceptable host key")
+        cases = [
+            (request(), host_key_error),
+            (request(allow_legacy_algorithms="true"), host_key_error),
+            (request(vendor="zte", allow_legacy_algorithms=True), host_key_error),
+            (request(protocol="telnet", allow_legacy_algorithms=True), host_key_error),
+            (request(allow_legacy_algorithms=True), NetmikoAuthenticationException("host key algorithm auth failed")),
+            (request(allow_legacy_algorithms=True), module.paramiko.AuthenticationException("no acceptable host key")),
+            (request(allow_legacy_algorithms=True), NetmikoTimeoutException("TCP timeout")),
+            (request(allow_legacy_algorithms=True), module.paramiko.SSHException("no acceptable kex algorithm")),
+            (request(allow_legacy_algorithms=True), module.paramiko.SSHException("no acceptable cipher")),
+            (request(allow_legacy_algorithms=True), ValueError("no acceptable host key")),
+        ]
+        for values, error in cases:
+            with self.subTest(values=values.get("protocol"), error=type(error).__name__):
+                target = connection()
+                target._open.side_effect = error
+                with mock.patch.object(module, "ConnectHandler", return_value=target) as handler:
+                    with self.assertRaises(type(error)) as raised:
+                        module.Worker().connect(values)
+                    self.assertIs(raised.exception, error)
+                    self.assertEqual(handler.call_count, 1)
+                    target.disconnect.assert_called_once_with()
+
+    def test_failed_legacy_retry_stops_after_two_attempts_and_preserves_failure(self):
+        first, second = connection(), connection()
+        first._open.side_effect = module.paramiko.SSHException("no matching host key")
+        final = module.paramiko.SSHException("no acceptable host key")
+        second._open.side_effect = final
+        with mock.patch.object(module, "ConnectHandler", side_effect=[first, second]) as handler:
+            worker = module.Worker()
+            with self.assertRaises(module.paramiko.SSHException) as raised:
+                worker.connect(request(allow_legacy_algorithms=True))
+            self.assertIs(raised.exception, final)
+            self.assertEqual(handler.call_count, 2)
+            self.assertIsNone(worker.connection)
+            first.disconnect.assert_called_once_with()
+            second.disconnect.assert_called_once_with()
+
+    def test_legacy_retry_reopens_jump_channel_and_releases_both_attempts(self):
+        first, second = connection(), connection()
+        first._open.side_effect = module.paramiko.SSHException("no acceptable host key")
+        first_jump, second_jump = jump_client(), jump_client()
+        with mock.patch.object(module.paramiko, "SSHClient", side_effect=[first_jump, second_jump]), \
+             mock.patch.object(module, "ConnectHandler", side_effect=[first, second]) as handler:
+            worker = module.Worker()
+            worker.connect(request(allow_legacy_algorithms=True, jump_host=jump_request()))
+            first_jump.close.assert_called_once_with()
+            first_jump.get_transport.return_value.open_channel.return_value.close.assert_called_once_with()
+            self.assertIs(handler.call_args_list[0].kwargs["sock"], first_jump.get_transport.return_value.open_channel.return_value)
+            self.assertIs(handler.call_args_list[1].kwargs["sock"], second_jump.get_transport.return_value.open_channel.return_value)
+            worker.close()
+            second_jump.close.assert_called_once_with()
+            second_jump.get_transport.return_value.open_channel.return_value.close.assert_called_once_with()
+
     def test_jump_first_connection_and_rotated_fingerprint_auto_trust(self):
         for old_pin in (None, FINGERPRINT, "SHA256:old-key"):
             with self.subTest(old_pin=old_pin):

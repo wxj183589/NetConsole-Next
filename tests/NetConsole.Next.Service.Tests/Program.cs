@@ -9,7 +9,11 @@ using System.Text;
 using System.Text.Json;
 using NetConsole.Next.Credentials;
 
-if (args.Length > 0 && args[0] == "--ssh-wire")
+if (NetmikoWorkerBudgetTests.IsWorker)
+    await NetmikoWorkerBudgetTests.RunWorkerAsync();
+else if (args.Length > 0 && args[0] == "--netmiko-worker-budget-tests")
+    await NetmikoWorkerBudgetTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--ssh-wire")
     await SchedulerTests.RunSshWireAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--sqlite-probe")
     SqliteSecurityTests.Run();
@@ -62,12 +66,19 @@ else if (args.Length > 0 && args[0] == "--concurrency-p1-tests")
     await ConcurrencyP1Tests.RunAsync();
 else if (args.Length > 0 && args[0] == "--task-plan-tests")
     TaskPlanTests.Run();
+else if (args.Length > 0 && args[0] == "--device-connection-tests")
+    await DeviceConnectionTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--h3c-lldp-topology-tests")
     H3cLldpTopologyTests.Run();
 else if (args.Length > 0 && args[0] == "--config-backup-tests")
     await ConfigBackupTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-connection-policy-tests")
+{
+    await H3cConnectionPolicyTests.RunAsync();
+    await TerminalCoreTests.RunAsync();
+}
 else if (args.Length > 0 && args[0] == "--credential-tests")
     CredentialTests.Run();
 else if (args.Length > 0 && args[0] == "--zte-tests")
@@ -202,6 +213,8 @@ internal static class SchedulerTests
         await CancelsQueuedAndRunningRequests();
         await TimesOutAndDisposesSession();
         await ReportsConnectionFailuresAndDisposesSession();
+        await H3cConnectionPolicyTests.RunAsync();
+        await NetmikoWorkerBudgetTests.RunAsync();
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
@@ -227,6 +240,7 @@ internal static class SchedulerTests
         WirelessTests.Run();
         WirelessRuntimeTests.Run();
         await TaskSiteScopeTests.RunAsync();
+        await DeviceConnectionTests.RunAsync();
         await InteractiveScopeTests.RunAsync();
         H3cFactScopeTests.Run();
         await H3cTaskFactPublicationTests.RunAsync();

@@ -16,7 +16,8 @@ internal sealed class H3cBatchTaskService(
     P2B5SiteScopeStore siteScopes,
     BoundedCollectionScheduler scheduler)
 {
-    public TaskPlanSnapshot CreateAndSchedule(H3cTaskPlanCreateRequest request, string actorUserId)
+    public TaskPlanSnapshot CreateAndSchedule(H3cTaskPlanCreateRequest request, string actorUserId,
+        IReadOnlyDictionary<string, string>? expectedDeviceIds = null)
     {
         if (request.ProfileIds is null || request.ProfileIds.Count is < 1 or > 64)
             throw new ArgumentException("A task plan must target between 1 and 64 devices.", nameof(request));
@@ -42,6 +43,13 @@ internal sealed class H3cBatchTaskService(
             var definitionId = $"{planId}:d:{index}";
             definitions.Add((index, target, definitionId, scopes.CaptureDefinition(target, actorUserId)));
         }
+
+        // Inventory callers freeze the user's selected device identities before
+        // resolving profiles. A concurrent rebind must never change that set.
+        if (expectedDeviceIds is not null && (expectedDeviceIds.Count != targets.Length ||
+            definitions.Any(item => !expectedDeviceIds.TryGetValue(item.Target, out var expected) ||
+                !string.Equals(item.Scope.DeviceId, expected, StringComparison.Ordinal))))
+            throw new InvalidOperationException("设备连接档案关联已变化，请刷新设备列表后重试。");
 
         foreach (var definition in definitions)
             catalog.CreateTaskDefinition(definition.DefinitionId, "H3C_SSH_READONLY", definition.Target,

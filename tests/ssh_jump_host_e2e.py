@@ -337,7 +337,8 @@ def run():
                 def failed_terminal():
                     result = expect(owner, f"/api/system/terminal/sessions/{rejected_terminal}")
                     return result if result["state"] == "FAILED" else None
-                assert eventually(failed_terminal)["disconnectReason"] == "JUMP_HOST_CHANNEL_FAILED"
+                failed_terminal_view = eventually(failed_terminal)
+                assert failed_terminal_view["disconnectReason"] == "JUMP_HOST_CHANNEL_FAILED", failed_terminal_view
                 jump_a.deny_forward = False
                 expect(owner, path_a, "PUT", jump_payload(jump_a, password="ignored", clearPassword=True))
                 assert not expect(owner, path_a)["credentialConfigured"]

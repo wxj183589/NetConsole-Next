@@ -27,6 +27,7 @@ internal interface IDeviceSessionFactory
 
 internal interface IDeviceSession : IAsyncDisposable
 {
+    string Protocol => "SSH";
     Task ConnectAsync(CancellationToken cancellationToken);
     Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
 }

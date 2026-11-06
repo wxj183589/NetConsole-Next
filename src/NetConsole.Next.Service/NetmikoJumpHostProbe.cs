@@ -29,11 +29,13 @@ internal sealed class NetmikoJumpHostProbe
         Process? process = null;
         StreamWriter? input = null;
         StreamReader? output = null;
+        NetmikoWorkerBudget.Lease? slot = null;
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(30));
             var token = deadline.Token;
+            slot = await NetmikoWorkerBudget.AcquireAsync(token).ConfigureAwait(false);
             var script = FindWorkerScript();
             var start = new ProcessStartInfo
             {
@@ -49,13 +51,18 @@ internal sealed class NetmikoJumpHostProbe
             start.StandardInputEncoding = new System.Text.UTF8Encoding(false);
             start.StandardOutputEncoding = System.Text.Encoding.UTF8;
             start.Environment["PYTHONIOENCODING"] = "utf-8";
-            process = Process.Start(start) ?? throw new InvalidOperationException("Netmiko worker could not start.");
-            input = process.StandardInput;
-            output = process.StandardOutput;
+            token.ThrowIfCancellationRequested();
+            var processSlot = slot;
+            slot = null;
+            var worker = processSlot.Start(start);
+            process = worker.Process;
+            input = worker.Input;
+            output = worker.Output;
             _ = Task.Run(async () =>
             {
-                try { while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
+                try { while (await worker.Error.ReadLineAsync().ConfigureAwait(false) is not null) { } }
                 catch { }
+                finally { worker.Error.Dispose(); }
             });
 
             var request = JsonSerializer.Serialize(new
@@ -104,7 +111,9 @@ internal sealed class NetmikoJumpHostProbe
             try { if (process is { HasExited: false }) process.Kill(entireProcessTree: true); } catch { }
             try { input?.Dispose(); } catch { }
             try { output?.Dispose(); } catch { }
-            try { process?.Dispose(); } catch { }
+            slot?.Dispose();
+            // A started process retains its slot until the exit observer sees
+            // actual termination, including when Kill fails.
         }
     }
 

@@ -49,6 +49,16 @@ internal sealed class H3cUnsupportedAlgorithmException() : InvalidOperationExcep
 internal sealed class H3cProtocolNegotiationException() : InvalidOperationException(
     "The SSH peer could not negotiate a compatible protocol algorithm.") { }
 
+internal static class H3cConnectionPolicy
+{
+    // One configured alternate transport, before any business command runs.
+    // Authentication, host-key, Jump Host and cancellation failures never retry.
+    public static bool CanFallbackToTelnet(H3cDeviceProfileSnapshot profile, Exception error) =>
+        string.Equals(profile.TerminalProtocol, "AUTO", StringComparison.OrdinalIgnoreCase) &&
+        profile.AllowTelnetFallback &&
+        error is H3cProtocolNegotiationException or H3cConnectionTimeoutException;
+}
+
 internal sealed class H3cOutputLimitException() : Exception(
     "H3C command output exceeded the configured combined output/error limit.") { }
 
@@ -215,6 +225,9 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
     private StreamReader? _output;
     private bool _connected;
     private bool _disposed;
+    private bool _connectStarted;
+    private readonly object _lifetimeGate = new();
+    private readonly CancellationTokenSource _stopped = new();
     private readonly SemaphoreSlim _requestGate = new(1, 1);
     private readonly bool _interactive;
     private readonly string _vendor;
@@ -233,7 +246,17 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
             ? jumpHost : null;
     }
 
-    public bool IsConnected => _connected && !_disposed && _process is { HasExited: false };
+    public bool IsConnected
+    {
+        get
+        {
+            lock (_lifetimeGate)
+            {
+                try { return _connected && !_disposed && _process is { HasExited: false }; }
+                catch (InvalidOperationException) { return false; }
+            }
+        }
+    }
     internal bool HasJumpHost => _jumpHost is not null;
     internal string? Driver { get; private set; }
     private bool _channelEnded;
@@ -243,9 +266,25 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         ArgumentNullException.ThrowIfNull(verifyHostKey);
         if (_jumpHost is not null && string.IsNullOrEmpty(_jumpHost.Password))
             throw new H3cJumpHostConnectionException("JUMP_HOST_CREDENTIAL_UNAVAILABLE", "当前局点未保存 SSH 中转密码。");
-        StartWorker();
+        lock (_lifetimeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _stopped.Token.ThrowIfCancellationRequested();
+            if (_connectStarted) throw new InvalidOperationException("Netmiko transport can only connect once.");
+            _connectStarted = true;
+        }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token, timeout.Token);
+        NetmikoWorkerBudget.Lease? slot = null;
         try
         {
+            slot = await NetmikoWorkerBudget.AcquireAsync(deadline.Token).ConfigureAwait(false);
+            lock (_lifetimeGate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                deadline.Token.ThrowIfCancellationRequested();
+                StartWorker(ref slot);
+            }
             var result = await RequestAsync(new
             {
                 op = "connect",
@@ -256,6 +295,7 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
                 vendor = _vendor,
                 protocol = string.Equals(_profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase) ? "telnet" : "ssh",
                 device_type = string.IsNullOrWhiteSpace(_profile.DeviceType) ? null : _profile.DeviceType,
+                allow_legacy_algorithms = _profile.AllowLegacyAlgorithms,
                 conn_timeout = 10,
                 auth_timeout = 10,
                 banner_timeout = 10,
@@ -263,7 +303,7 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
                     ? "gb18030" : "utf-8",
                 interactive = _interactive,
                 jump_host = BuildJumpRequest()
-            }, cancellationToken).ConfigureAwait(false);
+            }, deadline.Token).ConfigureAwait(false);
             Driver = result.TryGetProperty("driver", out var driver) ? driver.GetString() : null;
             var keyType = result.TryGetProperty("host_key_type", out var type) && type.ValueKind == JsonValueKind.String
                 ? type.GetString() : null;
@@ -285,10 +325,16 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
                 result.TryGetProperty("jump_host_key_sha256", out var presentedJumpKey) && presentedJumpKey.ValueKind == JsonValueKind.String &&
                 !_catalog.UpdateSiteSshJumpHostFingerprint(_jumpHost.SiteId, presentedJumpKey.GetString()!, _jumpHost))
                 throw new IOException("SSH 中转配置在连接期间发生变化。");
-            _connected = true;
+            lock (_lifetimeGate)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                _connected = true;
+            }
         }
-        catch (OperationCanceledException) { Abort(); throw; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        { Abort(); throw new H3cConnectionTimeoutException(); }
         catch { Abort(); throw; }
+        finally { slot?.Dispose(); }
     }
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
@@ -325,23 +371,29 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
 
     public void Abort()
     {
-        _connected = false;
-        try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); } catch { }
+        lock (_lifetimeGate)
+        {
+            _connected = false;
+            _stopped.Cancel();
+            try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); } catch { }
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        // Closing pipes terminates the owned process and its sockets. Never
-        // write an unqueued close request alongside an in-flight response.
-        Abort();
-        try { _input?.Dispose(); } catch { }
-        try { _output?.Dispose(); } catch { }
-        try { _process?.Dispose(); } catch { }
+        lock (_lifetimeGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // Never write an unqueued close request alongside an in-flight response.
+            Abort();
+            try { _input?.Dispose(); } catch { }
+            try { _output?.Dispose(); } catch { }
+            // The exit observer disposes the process and releases its slot.
+        }
     }
 
-    private void StartWorker()
+    private void StartWorker(ref NetmikoWorkerBudget.Lease? slot)
     {
         var script = FindWorkerScript();
         var start = new ProcessStartInfo
@@ -359,13 +411,17 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         start.StandardOutputEncoding = Encoding.UTF8;
         start.Environment["PYTHONIOENCODING"] = "utf-8";
         start.Environment["PYTHONUTF8"] = "1";
-        _process = Process.Start(start) ?? throw new InvalidOperationException("Netmiko worker could not start.");
-        _input = _process.StandardInput;
-        _output = _process.StandardOutput;
+        var processSlot = slot!;
+        slot = null;
+        var worker = processSlot.Start(start);
+        _process = worker.Process;
+        _input = worker.Input;
+        _output = worker.Output;
         _ = Task.Run(async () =>
         {
-            try { while (await _process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
+            try { while (await worker.Error.ReadLineAsync().ConfigureAwait(false) is not null) { } }
             catch { }
+            finally { worker.Error.Dispose(); }
         });
     }
 
@@ -722,13 +778,35 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
 {
     private IH3cSshTransport? _transport;
     private bool _sessionCounted;
+    public string Protocol { get; private set; } =
+        string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase) ? "TELNET" : "SSH";
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var password = credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
-        _transport = transportFactory.Create(profile, password);
+        try
+        {
+            await ConnectAttemptAsync(profile with { TerminalProtocol = Protocol }, password, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested &&
+            H3cConnectionPolicy.CanFallbackToTelnet(profile, ex))
+        {
+            Protocol = "TELNET";
+            await ConnectAttemptAsync(profile with { TerminalProtocol = "TELNET" }, password, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        _sessionCounted = true;
+        H3cCollectionMetrics.SessionOpened();
+    }
+
+    private async Task ConnectAttemptAsync(H3cDeviceProfileSnapshot attempt, string password,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _transport = transportFactory.Create(attempt, password);
         string? hostKeyCorrelation = null;
         try
         {
@@ -749,10 +827,10 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
             {
                 try { catalog.FailSshHostKey(hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE"); } catch { }
             }
+            try { _transport.Dispose(); } catch { }
+            _transport = null;
             throw;
         }
-        _sessionCounted = true;
-        H3cCollectionMetrics.SessionOpened();
     }
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
