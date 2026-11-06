@@ -8,11 +8,12 @@ internal static class ConcurrencyP1Tests
     public static async Task RunAsync()
     {
         await SameDeviceIsExclusiveDifferentDevicesRemainParallel();
+        await SameDeviceCancellationWhileWaitingForDeviceIsCancelled();
         await FailedTaskCanBeRetriedAsANewRun();
         await InterruptedTaskRequiresExplicitResume();
         await SuccessfulTaskCannotBeRetried();
         await TaskRunLookupSurvivesRecentWindow();
-        Console.WriteLine("CONCURRENCY_P1_TESTS=5/5 PASS");
+        Console.WriteLine("CONCURRENCY_P1_TESTS=6/6 PASS");
     }
 
     private static async Task SameDeviceIsExclusiveDifferentDevicesRemainParallel()
@@ -29,6 +30,33 @@ internal static class ConcurrencyP1Tests
         Assert(results.All(item => item.State == "SUCCEEDED"), "all independent tasks should complete");
         Assert(factory.MaximumActiveFor("device-a") == 1, "same device tasks must never hold two sessions concurrently");
         Assert(factory.MaximumActiveTotal >= 2, "different devices should still run in parallel under the global cap");
+    }
+
+    private static async Task SameDeviceCancellationWhileWaitingForDeviceIsCancelled()
+    {
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new ProbeFactory
+        {
+            OnExecute = async (_, token) =>
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(token);
+                return "released";
+            }
+        };
+        await using var scheduler = new BoundedCollectionScheduler(factory, 2, 2);
+        Assert(scheduler.TrySchedule(new("device-serial", "first", TimeSpan.FromSeconds(5)), out var firstId), "first task admission should succeed");
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert(scheduler.TrySchedule(new("device-serial", "second", TimeSpan.FromSeconds(5)), out var secondId), "second task admission should succeed");
+        await WaitUntil(() => scheduler.Get(secondId)?.State == "CONNECTING");
+        Assert(scheduler.Cancel(secondId), "waiting same-device task should be cancellable");
+        var cancelled = await WaitTerminal(scheduler, secondId);
+        Assert(cancelled.State == "CANCELLED", cancelled.ToString()!);
+        releaseFirst.TrySetResult();
+        var completed = await WaitTerminal(scheduler, firstId);
+        Assert(completed.State == "SUCCEEDED", completed.ToString()!);
+        Assert(factory.Created == 1, "a task cancelled at the device gate must not open a session");
     }
 
     private static async Task FailedTaskCanBeRetriedAsANewRun()
@@ -99,6 +127,12 @@ internal static class ConcurrencyP1Tests
         }
     }
 
+    private static async Task WaitUntil(Func<bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (!predicate()) await Task.Delay(10, timeout.Token);
+    }
+
     private sealed class ProbeFactory : IDeviceSessionFactory
     {
         private readonly ConcurrentDictionary<string, int> _activeByTarget = new(StringComparer.OrdinalIgnoreCase);
@@ -108,6 +142,7 @@ internal static class ConcurrencyP1Tests
         private int _created;
         private int _calls;
         public bool FailFirst { get; init; }
+        public Func<string, CancellationToken, Task<string>>? OnExecute { get; init; }
         public int Created => Volatile.Read(ref _created);
         public int MaximumActiveTotal => Volatile.Read(ref _maximumTotal);
         public int MaximumActiveFor(string target) => _maximumByTarget.TryGetValue(target, out var value) ? value : 0;
@@ -135,7 +170,12 @@ internal static class ConcurrencyP1Tests
             public async Task ConnectAsync(CancellationToken cancellationToken)
             { owner.Connected(target); _connected = true; await Task.Delay(60, cancellationToken); }
             public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
-            { if (owner.FailFirst && Interlocked.Increment(ref owner._calls) == 1) throw new IOException("synthetic first failure"); await Task.Delay(60, cancellationToken); return "ok"; }
+            {
+                if (owner.FailFirst && Interlocked.Increment(ref owner._calls) == 1) throw new IOException("synthetic first failure");
+                if (owner.OnExecute is not null) return await owner.OnExecute(target, cancellationToken);
+                await Task.Delay(60, cancellationToken);
+                return "ok";
+            }
             public ValueTask DisposeAsync() { if (_connected) owner.Disconnected(target); return ValueTask.CompletedTask; }
         }
     }

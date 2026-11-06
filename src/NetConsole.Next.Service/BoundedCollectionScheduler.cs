@@ -298,14 +298,23 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     private async Task ExecuteAsync(WorkItem item)
     {
         var gate = _deviceGates.GetOrAdd(item.Request.Target, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(item.Cancellation.Token);
+        var acquired = false;
         try
         {
+            await gate.WaitAsync(item.Cancellation.Token);
+            acquired = true;
             await ExecuteCoreAsync(item);
+        }
+        catch (OperationCanceledException) when (item.Cancellation.IsCancellationRequested || _shutdown.IsCancellationRequested)
+        {
+            // Cancellation can happen while waiting for another task on this
+            // device. Preserve the user-visible cancellation outcome instead
+            // of letting the worker classify the wait as a scheduler failure.
+            SetTerminal(item, "CANCELLED", null, null, timeoutRequested: false);
         }
         finally
         {
-            gate.Release();
+            if (acquired) gate.Release();
         }
     }
 
