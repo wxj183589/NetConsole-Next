@@ -322,9 +322,26 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
             assert not paused["enabled"] and paused["nextRunMs"] is None
             resumed = config_expect(owner, plan_path, "PATCH", {"enabled": True})
             assert resumed["enabled"] and resumed["nextRunMs"] >= int(time.time() * 1000) + 3_590_000
+            missing_scope = config_expect(admin, "/api/system/diagnostics/runs?limit=1", status=403)
+            assert missing_scope["error"] == "P2B_SITE_SCOPE_UNAVAILABLE", missing_scope
             stop()
+            # Explicit Site authority belongs only to this stopped synthetic
+            # fixture. Apply canonical SQL directly; never launch a source DLL
+            # or weaken the candidate's fail-closed authorization guard.
+            now = int(time.time() * 1000)
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                db.executescript((REPO / "storage/schema_p2b5_site_scope.sql").read_text(encoding="utf-8"))
+                admin_id = db.execute("SELECT id FROM web_users WHERE username='admin'").fetchone()[0]
+                db.execute("""INSERT INTO web_user_site_memberships
+                    (id,user_id,site_reference,claim_state,source_kind,source_reference,revision,lifecycle,
+                     valid_from_ms,valid_to_ms,created_ms,updated_ms)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    ("offline-history-local", admin_id, "local", "ACTIVE", "DIRECT", "offline-candidate",
+                     1, "ACTIVE", now - 1000, now + 3_600_000, now, now))
+                db.commit()
             owner, admin = start()
             assert config_expect(owner, plans) == [resumed] and not target.commands
+            assert config_expect(admin, "/api/system/diagnostics/runs?limit=1") == []
 
             # An overdue record must remain dormant while the real module is off.
             config_expect(owner, "/api/system/modules/config-backups", "PUT", {"enabled": False})
@@ -399,12 +416,18 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
             for invalid in (0, 129):
                 assert config_expect(owner, "/api/system/diagnostics/runs?limit=" + str(invalid), status=400)["error"] == "DIAGNOSTIC_HISTORY_LIMIT_INVALID"
             stop()
+            with closing(sqlite3.connect(root / "catalog.db")) as db:
+                db.execute("UPDATE web_user_site_memberships SET claim_state='REVOKED',updated_ms=? WHERE id=?",
+                           (int(time.time() * 1000), "offline-history-local"))
+                db.commit()
             owner, admin = start()
             assert config_expect(owner, plans) == [completed]
             assert config_expect(owner, trace_path)["items"][0]["traceRoute"] == hops
             assert config_expect(owner, "/api/system/diagnostics/runs?limit=1") == summaries
+            config_expect(admin, "/api/system/diagnostics/runs?limit=1", status=403)
+            config_expect(admin, trace_path, status=403)
             assert target.commands == previous_commands and definition_count(root) == before + 1
-            print("OFFLINE_DIAGNOSTIC_HISTORY=PASS (bounded summary discovery, ADMIN read compatibility, restart, no diagnostic admission)", flush=True)
+            print("OFFLINE_DIAGNOSTIC_HISTORY=PASS (bounded summary discovery, explicit ADMIN Site authority/revocation, restart, no diagnostic admission)", flush=True)
             if trace_failure is None:
                 print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no CLI commands)", flush=True)
             else:
