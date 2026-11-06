@@ -1,5 +1,30 @@
 # 实现矩阵
 
+## 2026-11-07 当前实现矩阵：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+| 任务 | 当前交付与实际验证 | 保留边界 |
+| --- | --- | --- |
+| FD-P1-37 AC资源 | 原版必需3/可选6/补充概览3、逐命令Raw/Facts及当前/历史UI；backend3/3、HTTP21、Browser7、离线AC_RESOURCES PASS | version/device沿用已有投影；可选正文为非结构化证据；组名按来源AC保持CANDIDATE |
+| FD-P2-06 三类备份 | RUNNING/SAVED/STARTUP_INFO独立版本、同类diff、Raw前及下载防御脱敏（含完整/截断PEM）；backend9/9、HTTP28、Browser9、离线CONFIGURATION_KINDS PASS | STARTUP_INFO只是启动文件指向；startup正文/restore未实现 |
+| FD-P2-07 全机诊断 | 独立display diagnostic-information；任务600000ms、Worker共享540s期限、原始回显4MiB、仅精确已知问题回一次n；helper30/30、evidence96/96、HTTP24、Browser9、离线FULL_DIAGNOSTIC PASS | 未知问题不回答、结果未知不重放；仅合成提示证据，诊断正文不发布普通Facts |
+| 备份下载no-store | ef57213为配置下载补充Cache-Control: no-store；当前版本离线检查含缓存头和脱敏 | 不推定历史浏览器缓存已清除；下载不重连/重采集 |
+
+全部继续复用统一CPython/Netmiko、Profile自动凭据、任务/Site授权及sealed Raw；FIT-AP由AC管理。当前名称观察的SourceGroupKey/GroupIdentityKey均为null，两个AC同名组不合并，已有GroupEvidence fixture不代表生产稳定键。
+
+功能提交 `e93b382` 的完整后端 harness session `23456` EXIT 0 PASS，包含配置备份 9/9、全机诊断 helper 30/30、诊断证据 96/96、AC 资源 3/3 及既有回归；同提交 Worker 40/40、前端 14 files / 140 tests 和 typecheck PASS。`ef57213` 的 no-store 修复后重跑 Service Release 构建、配置 HTTP 28 项与完整离线十项门禁，未重复完整 harness、Worker 或前端单测。浏览器为真实 Chrome/源码 UI/API mock，HTTP 为实际 Service → CPython/Netmiko → 合成回环 SSH，均不替代真实型号验收。
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，ProductVersion `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新 bundle `build/netmiko-inheritance-final-20261106` 包含 18 个 pinned/hash wheels（CPython 3.13 / Netmiko 4.7 / Paramiko 4）；bundle build `13581`、candidate build `64183` 均 EXIT 0，Vue 2084 modules 与复制前后 driver/Telnet smoke PASS。离线运行 `71491` EXIT 0，十项标记全部 PASS。运行环境为 Production、隔离 cwd/数据、PATH 仅 System32，无 Python/worker 覆盖；未使用旧 NetConsole 生产数据。候选本机隔离运行不代表目标机安装，目标机仍需 .NET 10 ASP.NET Core Runtime。
+
+剩余：稳定生产 `GroupEvidence`、startup 文件正文/restore、其他固件与厂商的结构化业务、candidate 确认/拒绝、identity 合并/拆分、replacement 写入/撤销/revision 合同、可靠终止与 Domain/group 生命周期、双 AC HA/实时归属、剩余工作台、Windows 原生 125%、跨机 Web/TLS 与目标机安装/SCM/升级/卸载；不从缺席推断 `ENDED`。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。 整体 **PARTIAL / REAL_DEVICE_PENDING**。最终完整 Service harness session `31025` EXIT 0 PASS（含重连172/172及分类 / Jump CAS 修正）；前端 `pnpm test` 14 files / 124 tests、`pnpm typecheck`、`pnpm build` 均 PASS。
 
 | 能力 | 当前实现与证据 | 当前阶段 | 仍需证据/工作 |

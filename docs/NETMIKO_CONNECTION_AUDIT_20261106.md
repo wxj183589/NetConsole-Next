@@ -16,7 +16,7 @@
 | 命令、分页、回显和编码 | `safe_send_command`、`safe_send_command_with_paging`、各采集服务 | Next 使用 Netmiko 驱动准备和 `send_command`，不迁移手工分页循环；业务 parser 留在服务 |
 | 密码保存、自动读取、SSH 指纹与中转 | `device_credential_store.py`、`host_key_trust_service.py`、`host_key_manager.py`、`ssh_tunnel.py` | 按设备/Profile 或 Site 读取密码；认证后自动首次信任/轮换；普通凭据不采用 DPAPI 中心 |
 | 连接恢复 | `run_netmiko_with_retry`、`mesh_link_resident_polling_service.py`、`online_mr_collector.py`、`ssh_resilient_worker.py` | 有界重连两次、可取消退避；只在发送前明确断线时恢复当前只读命令，不重放任意 callback |
-| AC / FIT-AP / AP Group、配置生命周期、诊断 | `h3c_ac_collect_service.py`、`services/ac/`、`config_lifecycle_service.py`、`diagnostic_download_service.py` | 复用命令与解析经验；完整 AC/稳定生产组证据、saved/startup 生命周期和一次性诊断命令仍有业务缺口 |
+| AC / FIT-AP / AP Group、配置生命周期、诊断 | `h3c_ac_collect_service.py`、`services/ac/`、`config_lifecycle_service.py`、`diagnostic_download_service.py` | 已补齐 AC/AP 必选与可选资源命令、运行/保存配置和启动指向备份、只读全机诊断；稳定生产 GroupEvidence、启动文件正文/恢复及真实固件互操作仍待 |
 
 原版允许 SSH 与 Telnet 各自保存端口和凭据；Next 当前 AUTO 使用同一档案端点，不宣称两者参数模型等同。原版驱动存在和历史设备经验不等于 Next 型号兼容证据。
 
@@ -31,10 +31,10 @@
 | 设备详情与 Facts 刷新 | Catalog 已存事实 API | 刷新本身不发起 CLI；采集任务完成后读取新事实 |
 | H3C 信息、接口、VLAN、LLDP、光模块 | 命令计划 → `BoundedCollectionScheduler` → 统一 session | VLAN 已补齐 `display vlan all` detail parser、Raw 发布和整表快照；实机型号待验收 |
 | ZTE 信息、接口、LLDP、光模块 | `ZteCollectionService` → 相同 Netmiko transport | ZXROS 五条命令及独立 Profile；每条命令、重连和发布前复核 actor/Site/端点 |
-| AC 与 AC 下 FIT-AP | AC 命令计划 → 同一调度器；`WirelessReadModel` 读取 AC Facts | AP 列表、地址、射频；FIT-AP 保持 AC 管理，不创建独立 CLI 连接 |
-| AP Group 视图 | 同一 AC 的 AP 事实、来源修订和投影 | 组名为候选，不冒充稳定厂商组键或跨 AC 确认；独立生产 GroupEvidence 与完整命令待补齐 |
-| 配置采集与备份 | `ConfigBackupService` 创建 `display current-configuration` 任务 → 统一调度器 | 独立 H3C 运行配置；下载、版本和差异读取快照；saved/startup 生命周期待实现 |
-| 设备诊断 | `NetworkDiagnostics` 的 ICMP/TCP/DNS 与已存 LLDP Facts | TCP 探测不是 CLI 客户端；任务诊断 TXT/ZIP 读取已封存 Raw，不重新连接或采集 |
+| AC 与 AC 下 FIT-AP | `H3cAcResources` 固定命令计划 → 同一调度器；`WirelessReadModel` 读取 AC Facts | AP 列表/地址/射频、六项可选资源及 CPU/内存/制造信息；可选项保留命令证据，不捏造结构化解析；FIT-AP 经 AC 管理 |
+| AP Group 视图 | 同一 AC 的 AP 事实、来源修订和投影 | 组名为来源 AC 限定的 CANDIDATE，厂商身份键为空；独立生产 GroupEvidence 仍待 |
+| 配置采集与备份 | `ConfigBackupService` 选择 RUNNING/SAVED/STARTUP_INFO 固定命令 → 统一调度器 | 独立 H3C 三类分开编号、历史/差异/下载；STARTUP_INFO 仅文件指向，未实现启动文件正文和恢复 |
+| 设备诊断 | ICMP/TCP/DNS、已存 LLDP Facts；`H3cDiagnosticCapture` → 同一 Netmiko session | `display diagnostic-information` 540s/4MiB，只对已验证措辞回答一次 n；不重放。封存 TXT/ZIP 下载不重新采集 |
 | 网络 Web Shell | `TerminalSessionManager` → `NetmikoTerminalTransport` → Worker 交互通道 | 复用设备密码、厂商、协议、指纹与 Site Jump；SSH 支持远端 PTY resize，Telnet 不支持远端 resize |
 | Linux 服务器 | 独立 `LinuxSshTerminalTransport` / SSH.NET ShellStream | 保留独立 inventory、认证、WebSocket 实时终端及生命周期，不强制使用网络 Site Jump |
 | Site Jump Host | Paramiko `SSHClient` / `direct-tcpip` 转发或 Jump probe | 只用于必要中转；目标网络设备仍由 Netmiko 登录。Telnet/Ping/SNMP/UDP 不套用该中转 |

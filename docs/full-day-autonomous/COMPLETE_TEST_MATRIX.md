@@ -1,5 +1,54 @@
 # 完整测试矩阵
 
+## 2026-11-07 当前测试矩阵：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+证据提交范围：完整后端 session23456、Worker40/40、前端14files/140tests及typecheck通过于 `e93b382`；`ef57213` no-store修复后重跑Service Release构建、配置HTTP28与完整离线十项，未重复完整harness/Worker/前端单测。
+
+| 门禁 | 实际结果 | 证据范围 |
+| --- | --- | --- |
+| Release Service/Tests | PASS，0 warnings/errors | e93b382构建Service/Tests；ef57213重建Service |
+| 默认完整后端harness | e93b382 session23456 EXIT0 PASS | 配置9/9、helper30/30、evidence96/96、AC3/3及既有回归；header修复后未重跑 |
+| Worker | e93b382 40/40 PASS | 精确交互/期限/大小/不重放及既有驱动恢复；header修复后未重跑 |
+| 完整前端 | e93b382 14 files/140 tests、typecheck PASS | 单测/typecheck未因header修复重跑；当前候选Vite2084 modules PASS |
+| AC HTTP/Chrome | 21 checks / 7 scenarios PASS | HTTP真实Netmiko合成SSH；Chrome源码UI/API mock，6张已检查截图 |
+| 三类备份HTTP/Chrome | 28 checks / 9 scenarios PASS | 独立版本/同类diff/saved缺失/只读；Chrome3张已检查截图 |
+| 全机诊断HTTP/Chrome | 24 checks / 9 scenarios PASS | direct/confirmed/未知问题/断线/取消/大小/脱敏/重启；Chrome4张已检查截图 |
+| bundle / candidate build | 13581 / 64183 EXIT0 | 18 pinned/hash wheels、当前Vue、前后driver/Telnet smoke |
+| 当前离线运行 | 71491 EXIT0，10标记PASS | 精确ef57213 ProductVersion、bundled依赖与隔离运行 |
+| 资源核对 | 相关进程0、顶层offline-candidate目录0 | Vite90348/18792保留；最小SQLite fixture保留 |
+
+当前候选十项均已执行通过：
+
+```text
+OFFLINE_BUNDLED_RUNTIME
+OFFLINE_STATIC_UI
+OFFLINE_NETMIKO_CONNECTION
+OFFLINE_TASK_DIAGNOSTICS
+OFFLINE_NETMIKO_RECONNECT
+OFFLINE_LINUX_WEBSOCKET
+OFFLINE_AC_RESOURCES
+OFFLINE_CONFIGURATION_KINDS
+OFFLINE_FULL_DIAGNOSTIC
+OFFLINE_CANDIDATE
+```
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，ProductVersion `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新 bundle `build/netmiko-inheritance-final-20261106` 包含 18 个 pinned/hash wheels（CPython 3.13 / Netmiko 4.7 / Paramiko 4）；bundle build `13581`、candidate build `64183` 均 EXIT 0，Vue 2084 modules 与复制前后 driver/Telnet smoke PASS。离线运行 `71491` EXIT 0，十项标记全部 PASS。运行环境为 Production、隔离 cwd/数据、PATH 仅 System32，无 Python/worker 覆盖；未使用旧 NetConsole 生产数据。候选本机隔离运行不代表目标机安装，目标机仍需 .NET 10 ASP.NET Core Runtime。
+
+配置离线覆盖三类独立版本、脱敏/no-store下载与saved缺失；诊断离线含direct/confirmed两分支、超过普通256KiB的回显、只回n及脱敏TXT/ZIP，共12 checks。
+
+资源核对由主 Agent 完成：Next Workspace 相关 Service/Python/py 进程 0，`test-data` 顶层 `offline-candidate-*` 目录 0；用户 Vite PID `90348` 与 `127.0.0.1:18792` Listen 保留。单个最小 SQLite fixture 按规则保留，不能写全部测试目录 0，确切路径见 [最终交接](FINAL_HANDOVER.md)。未访问/复制旧 NetConsole 数据根，真实设备配置写入 0。
+
+此前VLAN/终端/Linux/Jump/有界恢复等专项未全部再次独立运行，下方保留原提交/会话的证据范围；远端CI、原生125%、真实设备、跨机TLS及目标机安装未完成。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前检查点：9fc499f
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。 整体 **PARTIAL / REAL_DEVICE_PENDING**。

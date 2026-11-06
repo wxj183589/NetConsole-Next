@@ -4,7 +4,7 @@
 
 状态：**连接策略及共享 worker 预算的定向回归通过；完整业务继承仍为 PARTIAL / REAL_DEVICE_PENDING。** 本文记录连接策略修复及其验收；完整生产入口盘点见 [连接审计](NETMIKO_CONNECTION_AUDIT_20261106.md)。
 
-当前最终功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。下方8320e2f、24项Worker和session69905为策略/预算检查点历史；最终完整harness为session31025 EXIT0，重连172/172、Worker前序同批29/29。旧网络SSH.NET/自定义回显分页已删除，准确候选七项运行门禁通过，见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。VLAN和封存任务诊断下载已补齐；一次性全机诊断命令仍未迁移。
+2026-11-07 当前产品提交为 `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`（含AC资源/三类配置/全机诊断e93b382与下载no-store修复）。下方8320e2f、24项Worker和session69905为策略/预算检查点历史；最新完整harness为e93b382上的session23456 EXIT0，重连172/172、AC3/3、配置9/9、诊断30/30与证据96/96；Worker40/40。HTTP header修复后配置HTTP28和准确候选10项运行门禁通过，见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。旧网络SSH.NET/自定义回显分页已删除。
 
 ## 本批问题与最终行为
 
@@ -35,9 +35,9 @@
 | H3C 旧 Host Key 协商兼容 | `netmiko_connection.py` 的 `_connect_with_compatibility`、`_legacy_ssh_rsa_allowed`、`_legacy_ssh_rsa_params`、`_is_host_key_negotiation_error` | 复用原版作用范围与参数；补充 Netmiko 包装的 Paramiko 异常识别，不因普通超时、认证、kex 或 cipher 错误触发旧 Host Key 参数 |
 | H3C、ZTE 驱动与业务能力约束 | `netmiko_connection.py` 的驱动常量；`device_collection_support.py`；`h3c_collect_service.py` | 使用明确的 Netmiko SSH/Telnet 驱动，不把任意设备静默归到 H3C 或 ZTE；命令与解析仍由 Next 服务管理 |
 | 回显、分页与命令执行经验 | `netmiko_connection.py` 的 `safe_send_command`、`safe_send_command_with_paging`；`h3c_collect_service.py` 的命令与 fallback 选择 | Next worker 使用 Netmiko `send_command` 和驱动准备；没有移植原版手工分页循环，避免再次实现终端分页机制 |
-| AC、FIT-AP 和 AP Group | `h3c_ac_collect_service.py` 的 AC 命令集、Netmiko 建连及组证据处理；`services/ac/ac_command_service.py`、`ac_service.py`、`ac_optical_service.py` | Next 保留 AC 采集与事实投影；FIT-AP 通过 AC 管理。原版完整命令集和稳定组证据尚未全部迁移 |
-| 配置生命周期 | `config_lifecycle_service.py` 的 `display current-configuration`、`display saved-configuration` 和统一重试入口 | Next 当前实现独立 H3C 的运行配置备份；保存配置、启动配置和完整生命周期尚未继承 |
-| CLI 诊断文件下载 | `diagnostic_download_service.py` 的 `display diagnostic-information` 和统一重试入口 | Next 已在 `34b524d` 实现任务封存 TXT/ZIP 下载，不重新采集；原版一次性 `display diagnostic-information` 命令仍未实现 |
+| AC、FIT-AP 和 AP Group | `h3c_ac_collect_service.py` 的 AC 命令集、Netmiko 建连及组证据处理；`services/ac/ac_command_service.py`、`ac_service.py`、`ac_optical_service.py` | e93b382补齐12条固定资源命令；可选项保留回显证据，稳定厂商组身份仍待；FIT-AP通过AC管理 |
+| 配置生命周期 | `config_lifecycle_service.py` 的 `display current-configuration`、`display saved-configuration` 和统一重试入口 | 独立H3C运行/保存配置正文与启动文件指向三类只读备份；启动文件正文、恢复与写入生命周期未继承 |
+| CLI 诊断文件下载 | `diagnostic_download_service.py` 的 `display diagnostic-information` 和统一重试入口 | e93b382已支持只读一次性全机诊断，经Netmiko交互及既有封存TXT/ZIP下载；真实固件确认措辞待验收 |
 
 原版允许 SSH 与 Telnet 各自保存端口、用户名、密码。Next 当前档案只有一组主机、端口、用户名、密码及协议；AUTO 的 Telnet 尝试使用同一档案端点。本批没有扩展为两套协议端点或两套凭据，不能宣称这项参数模型已与原版等同。
 
@@ -54,10 +54,10 @@
 | VLAN | `170bf81` 已实现 H3C `display vlan all` detail 采集、Raw 发布、完整表快照及 UI | parser6/6、publication14/14、HTTP25与Chrome mock6/6 PASS；其它厂商和未验证型号仍待验收 |
 | LLDP | H3C 任务命令及 ZTE LLDP 命令共用 Netmiko | LLDP 诊断读取已存 Facts，与主动采集不同 |
 | 光模块 | H3C `display transceiver diagnosis interface` 与 ZTE `show opticalinfo brief` 已有命令与 parser，共用 Netmiko | H3C 可从允许的任务定义/计划 API 提交；任务页快捷命令不覆盖全部命令；型号实机待验证 |
-| AC 与 FIT-AP | H3C AP 列表、地址、射频及相关 WLAN 命令走统一任务链；`WirelessReadModel` 从 AC Facts 构造 AP 观察 | FIT-AP 不独立登录。完整原版 AC 命令集、双 AC HA、切换恢复及实时归属仍待验收 |
+| AC 与 FIT-AP | `H3cAcResources`固定12条资源命令走统一任务链；`WirelessReadModel`从AC Facts构造AP观察 | 可选命令只保留回显证据；FIT-AP不独立登录。别名/按名称命令未迁移，真实型号、双AC HA、切换恢复及实时归属仍待验收 |
 | AP Group 视图 | 从同一 AC 的 AP 观察、组名及证据派生关系 | 当前生产投影缺少独立稳定 GroupEvidence；组名候选不等于已确认组身份；未发现独立 AP Group CLI 采集命令 |
-| 配置采集与备份 | `ConfigBackupService` 创建 H3C `display current-configuration` 任务，交给统一调度器；历史、下载与 diff 读取快照 | 当前仅支持独立管理的 H3C，FIT-AP 和其他厂商拒绝；未实现原版启动配置与配置保存流程 |
-| 设备诊断 | `NetworkDiagnostics` 提供 PING、TCP、DNS 和已存 LLDP Facts | TCP 探测不是 CLI 客户端；未实现 `display diagnostic-information` 下载 |
+| 配置采集与备份 | `ConfigBackupService`按RUNNING/SAVED/STARTUP_INFO选择固定命令，经统一调度器；历史/下载/diff读取快照 | 仅独立H3C，FIT-AP和其他厂商拒绝；启动文件正文、恢复及远端配置保存写操作未实现 |
+| 设备诊断 | `NetworkDiagnostics`提供PING/TCP/DNS/已存LLDP；`H3cDiagnosticCapture`经统一session采集全机诊断 | 全机诊断540s/4MiB且不重放，只对已知措辞回一次n；TCP探测保持独立。真实固件待验收 |
 | 网络设备 Web Shell | `TerminalSessionManager` 对 SSH/Telnet 创建 `NetmikoTerminalTransport`，复用 worker 交互通道、设备凭据和 Site Jump | 交互连接可用不代表对应厂商结构化采集均已实现 |
 | Linux 与 Jump Host | Linux 独立 SSH.NET shell；Jump Host 的 Paramiko SSH 只建立转发，目标设备仍由 Netmiko 登录 | 它们属于独立 Linux/中转需求；真实 Linux 主机和真实中转环境仍待验证 |
 
@@ -118,15 +118,15 @@ worker 禁用用户 `known_hosts` 读写和交互确认，登录及 Netmiko 准�
 
 预算测试复用测试程序集作为 JSON worker 子进程，不依赖外部 Python 安装，也不使用真实设备。它验证生产 C# 进程启动和释放路径；实际 CPython/Netmiko 协议及 Jump 转发仍由 Python 单元测试和根任务 E2E 覆盖。
 
-此历史检查点的准确功能提交为 `8320e2f0653c0f295700883c1900eef0a0690632`；对应候选 `build/service-8320e2f-20261106` 的 ProductVersion 已核验包含该完整 SHA。CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装与复制前后隔离 driver/Telnet smoke 均 PASS；当时候选五项运行门禁均 PASS。当前9fc499f候选和七项运行门禁详见 [最终架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
+此历史检查点的准确功能提交为 `8320e2f0653c0f295700883c1900eef0a0690632`；对应候选 `build/service-8320e2f-20261106` 的 ProductVersion 已核验包含该完整 SHA。CPython 3.13 x64、Netmiko 4.7、本地 wheel/hash/no-index 安装与复制前后隔离 driver/Telnet smoke 均 PASS；当时候选五项运行门禁均 PASS。当前ef57213候选和十项运行门禁详见 [最终架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。目标机 SCM 安装、升级、卸载和跨 Windows 验收仍待完成；framework-dependent Service 需要 .NET 10 ASP.NET Core Runtime。
 
 已有 `reports/netmiko-simulator-20261106.json` 记录 HCL AC1 `192.168.56.2`、AC2 `192.168.56.5` 和 SW `192.168.56.3` 的只读命令返回；这是前序批次证据，本次连接策略审计未重新登录这些模拟器。远端配置写入为 0。
 
 ## 保留问题
 
-1. 完整 AP Group 证据、原版完整 AC 命令集与一次性 `display diagnostic-information` 命令尚有缺口。H3C VLAN采集/快照已由170bf81补齐，任务封存TXT/ZIP诊断下载已由34b524d补齐。专用批量连接限定为独立H3C的只读版本命令测试，不扩大其他厂商的业务兼容范围。
+1. 稳定生产 AP Group 证据仍待。`e93b382` 已补齐固定 AC/AP 资源命令与一次性 `display diagnostic-information`，详见 AC 资源及全机诊断专篇；可选命令只提供回显证据，诊断确认措辞仅合成覆盖，不能据此宣称真实固件兼容。VLAN 与封存 TXT/ZIP 下载已有前序验收。
 2. Huawei、Cisco、Ruijie、Juniper 当前的驱动可选性不能扩写成这些厂商的全业务兼容。未验证型号与真实交换机、路由器、AC 均标记 `REAL_DEVICE_PENDING`。
-3. 配置备份仅覆盖当前声明的独立 H3C 运行配置；原版启动配置、保存配置和其他厂商流程尚未完整迁移。本批未执行任何远端配置变更。
+3. `e93b382` 已提供独立 H3C 的运行配置、保存配置与启动配置指向备份，各类独立版本且仅同类比较；启动文件正文、恢复及其他厂商流程仍待。未执行任何远端配置变更。
 4. AUTO 目前共用一个档案端口和凭据；不提供原版独立 SSH/Telnet 参数。显式内部驱动与协议不符时直接失败。
 5. 4ee1cb7及9fc499f已补齐有界断线恢复、退避与发送前精确只读命令恢复，最终172/172回归通过；发送后结果未知及交互命令不自动重放，不能宣称任意命令均可安全恢复。
 6. 真实 Linux、真实 Jump Host、双 AC HA 与现场切换恢复、正式离线安装和其他 Windows 环境仍待验收。

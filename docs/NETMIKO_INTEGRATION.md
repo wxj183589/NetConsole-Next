@@ -49,7 +49,7 @@ H3C profile 的密码存于设备 profile 记录，按 profile ID 读取；共�
 
 ## 本轮定向回归
 
-当前最终功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；旧网络SSH.NET、回显/分页及专用wire harness已退役。Release构建0 warnings/errors，完整Service harness session31025 EXIT0，重连172/172；网络终端契约3 checks、完整浏览器session87828 EXIT0。准确版本候选7项运行门禁通过；最终源码、报告及待验收项见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。下方历史测试按当时范围保留。
+2026-11-07当前产品提交为 `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`，包含AC资源、三类只读配置备份和全机诊断e93b382，以及配置下载no-store修复。旧网络SSH.NET、回显/分页及专用wire harness已退役。Release构建0 warnings/errors；e93b382完整Service harness session23456 EXIT0，重连172/172、AC3/3、配置9/9、诊断30/30和证据96/96；Worker40/40，Web140 tests/typecheck PASS。header修复后配置HTTP28及准确版本候选10项运行门禁通过；最终源码、报告及待验收项见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。网络终端浏览器与Jump完整专项沿用9fc499f阶段原范围；下方历史测试按当时范围保留。
 
 2026-11-06 当前连接增量：采集、连接测试与网络 Web Shell 共用有界 AUTO 协议策略；显式允许的 H3C 旧 Host Key 协商兼容最多再尝试一次。所有网络 worker 与 Jump probe 共享每 Service 进程 16 个名额，等待可取消，实际子进程退出后才归还。没有新增连接池或任意命令重放。后续 `4ee1cb7` 已实现同一逻辑会话最多两次额外重连、250/1000 ms 可取消退避，并在每次重连和每条命令前复核当前授权；只有发送前明确断线的当前厂商精确只读命令可以恢复。详见 [重连验收](NETMIKO_RECONNECT_ACCEPTANCE_20261106.md)。策略与原版差异见 [连接策略验收](NETMIKO_CONNECTION_POLICY_ACCEPTANCE_20261106.md)。
 

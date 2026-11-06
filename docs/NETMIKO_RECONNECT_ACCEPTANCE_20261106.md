@@ -6,7 +6,11 @@
 
 本文记录 NetConsole-Next 对原版 NetConsole 断线处理语义的继承边界，以及本批新增的 Netmiko Worker 重连策略。本文只描述只读 CLI 采集和连接恢复，不授权或验证任何设备配置变更。
 
-## 当前最终检查点
+## 2026-11-07 集成复核
+
+当前产品ef57213（含e93b382）在完整Service harness session23456继续通过172/172重连回归；Worker定向40/40通过。准确ef57213离线候选session71491的十项门禁包含内置Worker发送前断线恢复、Raw顺序及不重放已完成命令。当前候选、版本和范围见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)；报告为Workspace `reports/netmiko-final-ef57213-20261107.json`。下方9fc499f阶段完整终端/Jump专项未在本批重复执行，保留原始证据范围。
+
+## 9fc499f 检查点（历史）
 
 准确功能提交为 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`，包含有界恢复 `4ee1cb7` 和后续异常/并发分类修复。最终 Release build 为 0 warnings / 0 errors；默认完整 Service harness session31025 EXIT0，`NETMIKO_RETRY_TESTS=172/172`。下文163与session46633保留为前一检查点历史，不代表当前计数。
 

@@ -1,5 +1,31 @@
 # 剩余缺口与验收边界
 
+## 2026-11-07 当前剩余缺口：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+本批已关闭AC固定12命令Raw/Facts/UI、三类只读备份/no-store下载、一次性全机诊断接入；不再把它们列为未迁移。后端/HTTP/浏览器及精确当前SHA离线十门禁均有本机证据。
+
+1. 稳定生产GroupEvidence：真实catalog仅组名观察，来源AC范围CANDIDATE，SourceGroupKey/GroupIdentityKey均null，真实稳定厂商key和共享组证据待补。
+2. startup文件正文、配置恢复及相关写生命周期；STARTUP_INFO仅display startup指向，SAVED不等于restore。
+3. 其他固件提示/长回显、可选AC资源结构化解析及其他厂商完整业务；driver映射和合成命令返回不等于型号兼容。
+4. candidate确认/拒绝、identity合并/拆分、replacement权威写入/撤销/revision、可靠终止及Domain/group生命周期；F10隔离/缓存收敛不替代，不从缺席推断ENDED。
+5. 双AC HA/切换恢复/实时归属、实时多AC业务端到端与剩余工作台。
+6. Windows原生125%、跨机Web认证/TLS、目标机安装/SCM/升级卸载；需.NET10 ASP.NET Core Runtime。
+7. 实际H3C/ZTE、Linux与堡垒机：REAL_DEVICE_PENDING。诊断已知问题措辞仅合成覆盖，未知措辞不回答。
+
+功能提交 `e93b382` 的完整后端 harness session `23456` EXIT 0 PASS，包含配置备份 9/9、全机诊断 helper 30/30、诊断证据 96/96、AC 资源 3/3 及既有回归；同提交 Worker 40/40、前端 14 files / 140 tests 和 typecheck PASS。`ef57213` 的 no-store 修复后重跑 Service Release 构建、配置 HTTP 28 项与完整离线十项门禁，未重复完整 harness、Worker 或前端单测。浏览器为真实 Chrome/源码 UI/API mock，HTTP 为实际 Service → CPython/Netmiko → 合成回环 SSH，均不替代真实型号验收。
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，ProductVersion `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新 bundle `build/netmiko-inheritance-final-20261106` 包含 18 个 pinned/hash wheels（CPython 3.13 / Netmiko 4.7 / Paramiko 4）；bundle build `13581`、candidate build `64183` 均 EXIT 0，Vue 2084 modules 与复制前后 driver/Telnet smoke PASS。离线运行 `71491` EXIT 0，十项标记全部 PASS。运行环境为 Production、隔离 cwd/数据、PATH 仅 System32，无 Python/worker 覆盖；未使用旧 NetConsole 生产数据。候选本机隔离运行不代表目标机安装，目标机仍需 .NET 10 ASP.NET Core Runtime。
+
+资源核对由主 Agent 完成：Next Workspace 相关 Service/Python/py 进程 0，`test-data` 顶层 `offline-candidate-*` 目录 0；用户 Vite PID `90348` 与 `127.0.0.1:18792` Listen 保留。单个最小 SQLite fixture 按规则保留，不能写全部测试目录 0，确切路径见 [最终交接](FINAL_HANDOVER.md)。未访问/复制旧 NetConsole 数据根，真实设备配置写入 0。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。整体状态 **PARTIAL**。
 
 ## 当前已闭环

@@ -1,6 +1,6 @@
 # H3C AC 资源命令与回显验收
 
-日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。开发基线：`d0aaee6`；本文件记录该基线上的本批未提交修改，最终提交以集成结果为准。本批后端定向测试、合成 HTTP/Netmiko 链路及源码浏览器场景通过；实际 H3C AC 型号兼容仍为 `REAL_DEVICE_PENDING`。
+日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。开发基线：`d0aaee6`；功能提交 `e93b382`。本批后端定向测试、合成 HTTP/Netmiko 链路及源码浏览器场景通过；2026-11-07准确ef57213离线候选的AC资源门禁也通过，详见统一架构验收。实际H3C AC型号兼容仍为 `REAL_DEVICE_PENDING`。
 
 ## 原版命令来源
 

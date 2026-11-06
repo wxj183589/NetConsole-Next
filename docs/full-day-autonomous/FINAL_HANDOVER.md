@@ -1,5 +1,33 @@
 # 最终交接
 
+## 2026-11-07 当前交接：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+本批功能：AC12命令/独立Raw与Facts/当前历史UI、来源AC组候选、三类只读备份/同类diff/PEM脱敏/no-store下载、全机诊断540s/4MiB/精确问题回n及TXT/ZIP。继续用统一Netmiko、Profile自动凭据；FIT-AP由AC管理。
+
+功能提交 `e93b382` 的完整后端 harness session `23456` EXIT 0 PASS，包含配置备份 9/9、全机诊断 helper 30/30、诊断证据 96/96、AC 资源 3/3 及既有回归；同提交 Worker 40/40、前端 14 files / 140 tests 和 typecheck PASS。`ef57213` 的 no-store 修复后重跑 Service Release 构建、配置 HTTP 28 项与完整离线十项门禁，未重复完整 harness、Worker 或前端单测。浏览器为真实 Chrome/源码 UI/API mock，HTTP 为实际 Service → CPython/Netmiko → 合成回环 SSH，均不替代真实型号验收。
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，ProductVersion `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新 bundle `build/netmiko-inheritance-final-20261106` 包含 18 个 pinned/hash wheels（CPython 3.13 / Netmiko 4.7 / Paramiko 4）；bundle build `13581`、candidate build `64183` 均 EXIT 0，Vue 2084 modules 与复制前后 driver/Telnet smoke PASS。离线运行 `71491` EXIT 0，十项标记全部 PASS。运行环境为 Production、隔离 cwd/数据、PATH 仅 System32，无 Python/worker 覆盖；未使用旧 NetConsole 生产数据。候选本机隔离运行不代表目标机安装，目标机仍需 .NET 10 ASP.NET Core Runtime。
+
+主 Agent 核对：Next Workspace相关Service/Python/py进程0，test-data顶层offline-candidate-*目录0；用户Vite PID90348、127.0.0.1:18792 Listen保留。保留一个完整harness遗留的最小SQLite fixture（618496 bytes），按用户规则未删除：
+
+```text
+D:\study\NetConsole-Next-Workspace\test-data\netmiko-inheritance-validation-20261106\netconsole-next-onboard-site-01861946f59f4b06b9d822092da9495b\catalog.db
+```
+
+不能将此状态写成全部测试目录0。已核对并退役被替代的失败候选 `build/service-e93b382-20261106`，验收通过候选、新bundle、截图/报告与最小SQLite保留。未访问/复制旧NetConsole数据根，真实设备配置写入0。
+
+剩余：稳定生产 `GroupEvidence`、startup 文件正文/restore、其他固件与厂商的结构化业务、candidate 确认/拒绝、identity 合并/拆分、replacement 写入/撤销/revision 合同、可靠终止与 Domain/group 生命周期、双 AC HA/实时归属、剩余工作台、Windows 原生 125%、跨机 Web/TLS 与目标机安装/SCM/升级/卸载；不从缺席推断 `ENDED`。
+
+下一步先取得稳定GroupEvidence并定义生命周期权威写合同，再推进startup正文/restore、其他固件/厂商、HA和剩余工作台；部署验收独立执行。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前检查点：9fc499f
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。

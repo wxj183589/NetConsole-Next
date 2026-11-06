@@ -4,13 +4,13 @@
 
 ## 当前最终检查点
 
-功能提交 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16` 已退役旧网络SSH.NET/自定义回显分页实现，保留独立Linux SSH.NET。统一网络入口、认证与Host Key、VLAN、封存诊断和有界重连的源码与范围见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。最终Release构建0 warnings/errors；默认完整Service harness session31025 EXIT0，重连172/172；网络终端契约3 checks与完整浏览器E2E session87828 EXIT0。
+2026-11-07产品提交 `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`，包含AC资源、三类配置和全机诊断e93b382及下载no-store修复，继承9fc499f退役旧网络SSH.NET/自定义回显分页，保留独立Linux SSH.NET。统一入口、认证、Host Key及功能范围见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。Release构建0 warnings/errors；e93b382默认完整Service harness session23456 EXIT0，重连172/172、AC3、配置9、诊断30/证据96；Worker40，Web140/typecheck PASS。header修复后配置HTTP28 PASS。网络终端契约3 checks与完整浏览器session87828为前序9fc499f证据，本批未重跑完整终端专项。
 
-当前候选 `D:\study\NetConsole-Next-Workspace\build\service-9fc499f-20261106` 的ProductVersion精确为 `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。bundle为 `build/netmiko-reconnect-final-20261106`；当前Vue构建及复制前后隔离smoke PASS。候选E2E session16200 EXIT0，BUNDLED_RUNTIME/STATIC_UI/NETMIKO_CONNECTION/TASK_DIAGNOSTICS/NETMIKO_RECONNECT/LINUX_WEBSOCKET/CANDIDATE七项PASS，覆盖当前VLAN与诊断页面、TXT/ZIP封存hash和不重采集、内置Worker恢复且不重放已完成命令。
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107` 的ProductVersion精确为 `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。bundle为 `build/netmiko-inheritance-final-20261106`；构建64183 EXIT0，当前Vue与复制前后隔离smoke PASS。候选E2E session71491 EXIT0，原七项及新增AC_RESOURCES/CONFIGURATION_KINDS/FULL_DIAGNOSTIC共十项PASS，覆盖AC12命令、三类独立备份/脱敏下载、直接和确认全机诊断及原有Linux WebSocket/重连/封存下载。
 
-结构化报告：Workspace `reports/netmiko-final-9fc499f-20261106.json`。下方8320e2f与a3954a5候选为历史检查点，不代表当前版本。目标机安装/SCM/升级卸载、真实Linux/Jump和硬件仍待验收，不宣称全产品完成。
+结构化报告：Workspace `reports/netmiko-final-ef57213-20261107.json`。下方9fc499f、8320e2f与a3954a5记录为历史检查点，不代表当前版本。目标机安装/SCM/升级卸载、真实Linux/Jump和硬件仍待验收，不宣称全产品完成。
 
-当前源码最终Jump E2E session65279 EXIT0，`SITE_JUMP_HTTP_NETMIKO`与`SITE_JUMP_RESTART_DELETE`均PASS，包括连接测试和终端转发拒绝各仅尝试一次、稳定错误码、取消释放与重启后自动读取配置。候选及Jump测试后Service/Python残留0、`offline-candidate-*`目录0；用户Vite PID90348和`127.0.0.1:18792`监听保留。
+前序9fc499f Jump E2E session65279 EXIT0，`SITE_JUMP_HTTP_NETMIKO`与`SITE_JUMP_RESTART_DELETE`均PASS，包括连接测试和终端转发拒绝各仅尝试一次、稳定错误码、取消释放与重启后自动读取配置；本批未重跑完整Jump专项。最新候选结束后Service/Python残留0、`offline-candidate-*`目录0；用户Vite PID90348和`127.0.0.1:18792`监听保留。
 
 ## 实现
 

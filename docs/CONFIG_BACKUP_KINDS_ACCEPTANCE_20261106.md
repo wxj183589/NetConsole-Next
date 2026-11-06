@@ -1,6 +1,6 @@
 # H3C 三类只读配置备份验收
 
-日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。开发基线：`d0aaee6`；最终功能提交以本文件所属 commit 为准。本文件补充 [设备入口与差异验收](CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md)，不将历史测试结果作为本批结果。整体产品及实际设备兼容仍为 `PARTIAL / REAL_DEVICE_PENDING`。
+日期：2026-11-06，最终候选复核2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。开发基线：`d0aaee6`；功能提交 `e93b382`、下载no-store修复 `ef57213`。本文件补充 [设备入口与差异验收](CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md)，不将历史测试结果作为本批结果。整体产品及实际设备兼容仍为 `PARTIAL / REAL_DEVICE_PENDING`。
 
 ## 类别与只读边界
 
@@ -33,7 +33,9 @@
 
 PEM 私钥先于逐行规则整体脱敏，覆盖普通、RSA、EC、OPENSSH、ENCRYPTED `PRIVATE KEY`；完整块从 BEGIN 至 END 一并替换，缺少 END 的截断块从 BEGIN 替换至输出末尾。规则大小写不敏感，并有一秒正则超时。不能只替换 PEM 头行而留下私钥正文。本批不扫描或改写历史备份文件。
 
-`VerifyPrivateKeyRedaction` 已增加三类 Raw/下载、仅秘密变化的 Diff、五种完整及截断 PEM、全部敏感词和非配置命令边界测试。**这组 C# 测试尚未运行；不能把新增的预期 `9/9` 输出当作执行通过。**
+`VerifyPrivateKeyRedaction` 覆盖三类 Raw/下载、仅秘密变化的 Diff、五种完整及截断 PEM、全部敏感词和非配置命令边界。该组已在最终完整Service harness session23456执行，配置备份9/9 PASS。
+
+成功下载响应设置 `Cache-Control: no-store`。首轮离线候选发现缺少该响应头，ef57213修复后配置HTTP28及离线候选三类下载断言均通过。
 
 ## 页面交互
 

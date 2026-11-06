@@ -2,9 +2,9 @@
 
 Evidence is scoped to the stated code and environment. CI or simulation does not imply field acceptance.
 
-## Current Netmiko checkpoint, 2026-11-06
+## Current Netmiko checkpoint, 2026-11-07
 
-Branch `codex-A/netconsole-next-r3-dual-ac`, feature `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`: Release build 0 warnings/errors; full Service harness session31025 EXIT0 with reconnect172/172; terminal browser E2E session87828 and Jump E2E session65279 EXIT0. The exact-version Windows candidate passed seven isolated runtime gates, session16200 EXIT0. Full evidence and limitations are in [unified architecture acceptance](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) and Workspace `reports/netmiko-final-9fc499f-20261106.json`. No remote CI, Push, Merge or Release was performed for this checkpoint.
+Branch `codex-A/netconsole-next-r3-dual-ac`, product `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`: AC resources, three configuration kinds and full-device diagnostics are implemented in e93b382; ef57213 adds configuration download no-store. Release build 0 warnings/errors; e93b382 full Service harness session23456 EXIT0 with reconnect172/172, AC3/3, configuration9/9, diagnostic helper30/30 and evidence96/96; worker40/40, Web14 files/140 tests and typecheck PASS. After the HTTP header fix, configuration HTTP28 and all ten exact-version Windows candidate gates passed (session71491 EXIT0). AC HTTP21/browser7 and diagnostic HTTP24/browser9 passed; browser results use mocked APIs. Terminal browser session87828 and Jump session65279 remain earlier 9fc499f evidence within their original scope. Full evidence and limitations are in [unified architecture acceptance](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) and Workspace `reports/netmiko-final-ef57213-20261107.json`. No remote CI, Push, Merge or Release was performed for this checkpoint.
 
 The following G2/G2.1/G2.3 records retain their original SHAs and test environments. Their words “current” and dependency versions refer to those historical checkpoints. `ssh_protocol_sim.py` and `requirements-ssh-protocol.txt` retired with the obsolete network SSH.NET implementation; their old results do not validate the current Netmiko runtime or current dependency versions.
 

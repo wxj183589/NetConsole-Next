@@ -1,5 +1,24 @@
 # Raw → Facts → Current 验收
 
+## 2026-11-07 本批Raw/Facts边界：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+证据提交范围：完整后端 session23456、Worker40/40、前端14files/140tests及typecheck通过于 `e93b382`；`ef57213` no-store修复后重跑Service Release构建、配置HTTP28与完整离线十项，未重复完整harness/Worker/前端单测。
+
+AC12命令逐条保留command/capturedMs/scope/sealed Raw proof，多命令按commands[]内index/command/outputSha256/segmentSha256核验；Radio补齐Facts。当前每kind1条、历史20条，STALE按捕获时间显示；UNSUPPORTED/PARTIAL/EMPTY/FAILED优先于Raw已核验标签。
+
+可选命令/补充概览仅非结构化正文。组名观察按来源AC保留CANDIDATE，不把名称/APID/hash当SourceGroupKey。三类配置在Raw前/下载防御脱敏，含完整/截断PEM，排除普通Facts及任务诊断下载。全机诊断parsed JSON仅完成状态/字节/分类，多MiB正文留在Raw；TXT/ZIP只读封存不采集。
+
+AC3/3、配置9/9、helper30/30/evidence96/96、HTTP21/28/24 PASS；完整harness23456 EXIT0。当前离线AC/三类备份/全机诊断及既有任务诊断门禁PASS，均合成回环。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前复核：9fc499f
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。 最终完整 Service harness session `31025` EXIT 0 PASS（含重连172/172及分类 / Jump CAS 修正）；前端 `pnpm test` 14 files / 124 tests、`pnpm typecheck`、`pnpm build` 均 PASS。

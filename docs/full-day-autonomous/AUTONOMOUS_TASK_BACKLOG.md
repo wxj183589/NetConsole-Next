@@ -1,5 +1,34 @@
 # 自动任务池
 
+## 2026-11-07 当前任务状态：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+已确认 FD-P1-37、FD-P2-06、FD-P2-07 未占用，按本批增量登记。既有完成任务继续保持各自证据范围。
+
+| ID | 任务 | 状态 | 当前验收与边界 |
+| --- | --- | --- | --- |
+| FD-P1-37 | H3C AC 12 条资源命令与独立回显 | COMPLETED_LOCAL | 后端3/3、HTTP21、Browser7、离线AC_RESOURCES PASS；组名仅形成来源AC范围CANDIDATE |
+| FD-P2-06 | RUNNING/SAVED/STARTUP_INFO 三类只读备份 | COMPLETED_LOCAL | 后端9/9、HTTP28、Browser9、离线CONFIGURATION_KINDS PASS；独立版本/同类diff、脱敏/no-store下载；startup正文/restore仍待 |
+| FD-P2-07 | display diagnostic-information 全机诊断 | COMPLETED_LOCAL | helper30/30、evidence96/96、HTTP24、Browser9、离线FULL_DIAGNOSTIC PASS；540s/4MiB/仅精确问题回n，不重放 |
+| FD-P1-26 | 精确当前产品SHA离线候选 | COMPLETED_LOCAL | ef57213 ProductVersion，runtime71491 EXIT0，十标记PASS；非安装或实机验收 |
+| FD-P1-30 | candidate/identity/replacement与可靠终止合同 | CONTRACT_PENDING | 确认/拒绝、合并/拆分、写入/撤销/revision、Domain/group生命周期待定义 |
+| FD-P1-05 / FD-P1-18 | 无线完整业务、HA、切换/恢复与实时归属 | PARTIAL / PARTIAL_EXTERNAL | 既有隔离/HCL证据保留；生产GroupEvidence与现场业务证据待补 |
+| FD-P3-04 | 原生125%、跨机TLS与目标机部署 | PENDING_EXTERNAL | 本机视口、回环与framework-dependent候选不替代 |
+| FD-P3-03 | 当前矩阵、状态与交接 | UPDATED_LOCAL | 已同步功能提交、测试版本范围、离线候选与剩余缺口 |
+
+功能提交 `e93b382` 的完整后端 harness session `23456` EXIT 0 PASS，包含配置备份 9/9、全机诊断 helper 30/30、诊断证据 96/96、AC 资源 3/3 及既有回归；同提交 Worker 40/40、前端 14 files / 140 tests 和 typecheck PASS。`ef57213` 的 no-store 修复后重跑 Service Release 构建、配置 HTTP 28 项与完整离线十项门禁，未重复完整 harness、Worker 或前端单测。浏览器为真实 Chrome/源码 UI/API mock，HTTP 为实际 Service → CPython/Netmiko → 合成回环 SSH，均不替代真实型号验收。
+
+当前候选 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，ProductVersion `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新 bundle `build/netmiko-inheritance-final-20261106` 包含 18 个 pinned/hash wheels（CPython 3.13 / Netmiko 4.7 / Paramiko 4）；bundle build `13581`、candidate build `64183` 均 EXIT 0，Vue 2084 modules 与复制前后 driver/Telnet smoke PASS。离线运行 `71491` EXIT 0，十项标记全部 PASS。运行环境为 Production、隔离 cwd/数据、PATH 仅 System32，无 Python/worker 覆盖；未使用旧 NetConsole 生产数据。候选本机隔离运行不代表目标机安装，目标机仍需 .NET 10 ASP.NET Core Runtime。
+
+剩余：稳定生产 `GroupEvidence`、startup 文件正文/restore、其他固件与厂商的结构化业务、candidate 确认/拒绝、identity 合并/拆分、replacement 写入/撤销/revision 合同、可靠终止与 Domain/group 生命周期、双 AC HA/实时归属、剩余工作台、Windows 原生 125%、跨机 Web/TLS 与目标机安装/SCM/升级/卸载；不从缺席推断 `ENDED`。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前任务状态：9fc499f
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。 整体 **PARTIAL / REAL_DEVICE_PENDING**。

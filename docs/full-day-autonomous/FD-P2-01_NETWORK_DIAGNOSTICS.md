@@ -1,5 +1,20 @@
 # FD-P2-01 网络诊断批量任务
 
+## 2026-11-07 网络诊断与新增全机诊断范围：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+证据提交范围：完整后端 session23456、Worker40/40、前端14files/140tests及typecheck通过于 `e93b382`；`ef57213` no-store修复后重跑Service Release构建、配置HTTP28与完整离线十项，未重复完整harness/Worker/前端单测。
+
+本文件Ping/TCP/DNS/LLDP批量诊断继续保持原4/4隔离证据。本批另完成FD-P2-07：display diagnostic-information、540s/4MiB/精确问题回n、独立按钮与sealed TXT/ZIP；helper30/30/evidence96/96/HTTP24/Browser9及离线FULL_DIAGNOSTIC PASS。
+
+此结果不替代Ping/TCP/DNS/LLDP实时现场验收。具体见[全机诊断专项](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。
+
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前状态补充
 
 本批功能已本地提交 `a3954a5`，文档以所属 commit 为准。当前 Service harness PASS，Vue typecheck 和 8 files/23 tests PASS；AC1/AC2/SW 当前 Netmiko 自动认证及只读命令已通过，FIT-AP 通过 AC 管理。旧凭据缺失是下方原批次的历史边界，不能继续作为当前阻断。

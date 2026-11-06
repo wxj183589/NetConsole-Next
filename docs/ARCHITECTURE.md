@@ -1,8 +1,14 @@
 # NetConsole Next architecture status
 
-Status: `IN_PROGRESS`. This describes code present on the G2.1 development line; it is not a production deployment claim.
+Status: `IN_PROGRESS / PARTIAL / REAL_DEVICE_PENDING`. Current connection behavior is summarized below; the later G2/G2.1 phase records retain their historical scope and do not describe the current network SSH implementation.
 
-2026-11-06 connection update: the current catalog is schema 23. Network CLI collection, connection tests and Web Shell use CPython/Netmiko; Linux servers have an independent SSH.NET interactive workflow, and Site Jump Host settings apply to network SSH on demand. Device onboarding is transactional. Saved device/Linux/Jump passwords are SQLite plaintext fields protected by the data-root ACL, with no ordinary-device DPAPI center. Current implementation and test boundaries are recorded in [Web/Linux/Jump acceptance](WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md); older phase descriptions below retain their historical scope.
+2026-11-07 connection update: network CLI collection, connection tests, configuration backups, full-device diagnostics and Web Shell use CPython/Netmiko; Linux servers have an independent SSH.NET interactive workflow, and Site Jump Host settings apply to network SSH on demand. Device onboarding is transactional. Saved device/Linux/Jump passwords are SQLite plaintext fields protected by the data-root ACL, with no ordinary-device DPAPI center. The former network SSH.NET transports, custom prompt/paging readers and their wire tests have been removed. The current product ef57213 passed ten local offline candidate gates; [unified architecture acceptance](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) records exact commits, commands, evidence and limits.
+
+The Service owns identities, Site, command plans, parsing, SQLite, Raw/Facts/history and AC/AP relations. Netmiko owns network SSH/Telnet authentication, driver preparation, prompts, paging and command reads. A shared limit of 16 worker processes covers collection, tests, network terminals and Jump probes. Recovery is bounded and only applies to an exact read-only command whose connection was lost before sending; unknown post-send outcomes and interactive input are not replayed. FIT-AP stays AC-managed. AC optional resources expose command evidence; AP group names remain source-AC-scoped candidates. Three backup kinds separate running/saved content from startup file pointers. Full diagnostics reuse the same transport and sealed TXT/ZIP evidence, with a 540-second read deadline and 4 MiB output limit. These boundaries do not establish field-device compatibility or full product completion.
+
+## Historical G2/G2.1 design record
+
+The sections below preserve the earlier schema, Exec-channel, SSH.NET, single-command task and CI evidence for audit. Those retired network paths are not runtime fallback paths. Current network behavior and remaining gaps are authoritative in the linked current acceptance and integration documents.
 
 ## Current process boundary
 

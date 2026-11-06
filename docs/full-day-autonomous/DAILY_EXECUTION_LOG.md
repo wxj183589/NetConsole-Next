@@ -1,5 +1,29 @@
 # 全天候自主开发日志
 
+## 2026-11-07 集成与离线最终核对：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+证据提交范围：完整后端 session23456、Worker40/40、前端14files/140tests及typecheck通过于 `e93b382`；`ef57213` no-store修复后重跑Service Release构建、配置HTTP28与完整离线十项，未重复完整harness/Worker/前端单测。
+
+- e93b382继承AC12命令、三类只读备份、全机诊断；ef57213修复备份下载no-store。
+- FD-P1-37/FD-P2-06/FD-P2-07确认未占用后登记COMPLETED_LOCAL；真实组保持source AC scoped CANDIDATE。
+- 最终后端23456 EXIT0：配置9/9、helper30/30/evidence96/96、AC3/3和既有回归；worker40/40，Web14files/140tests/typecheck PASS。
+- 合成HTTP：AC21/备份28/诊断24 PASS；Chrome源码UI/mock：AC7（6截图）/备份9（3截图）/诊断9（4截图）PASS，截图已查看。
+- bundle13581、candidate64183 EXIT0；当前Vue2084 modules及前后smoke PASS；ProductVersion精确ef57213；离线71491 EXIT0十标记PASS。
+- 离线备份含no-store；诊断direct/confirmed >256KiB、只回n、脱敏TXT/ZIP12 checks PASS。
+
+资源核对由主 Agent 完成：Next Workspace 相关 Service/Python/py 进程 0，`test-data` 顶层 `offline-candidate-*` 目录 0；用户 Vite PID `90348` 与 `127.0.0.1:18792` Listen 保留。单个最小 SQLite fixture 按规则保留，不能写全部测试目录 0，确切路径见 [最终交接](FINAL_HANDOVER.md)。未访问/复制旧 NetConsole 数据根，真实设备配置写入 0。
+
+剩余：稳定生产 `GroupEvidence`、startup 文件正文/restore、其他固件与厂商的结构化业务、candidate 确认/拒绝、identity 合并/拆分、replacement 写入/撤销/revision 合同、可靠终止与 Domain/group 生命周期、双 AC HA/实时归属、剩余工作台、Windows 原生 125%、跨机 Web/TLS 与目标机安装/SCM/升级/卸载；不从缺席推断 `ENDED`。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前集成检查点：VLAN / CLI 诊断 / 有界恢复
 
 - Branch：`codex-A/netconsole-next-r3-dual-ac`。当前已完成检查点 `9fc499f8d2de08973896a1ea35b35d4e3ff23d16`；文档以所属提交为准。

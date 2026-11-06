@@ -1,6 +1,6 @@
 # H3C 全机诊断采集与下载验收
 
-日期：2026-11-06。Branch：`codex-A/netconsole-next-r3-dual-ac`。本文件记录当前增量的源码、合成 SSH 和浏览器验证；真实设备为 `REAL_DEVICE_PENDING`。保留当前分支，不 Push、Merge、Release。
+日期：2026-11-06，最终离线复核2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b382`。本文件记录源码、合成SSH和浏览器验证；真实设备为 `REAL_DEVICE_PENDING`。保留当前分支，不 Push、Merge、Release。
 
 ## 继承与实现
 
@@ -46,7 +46,7 @@ HTTP 测试模拟器允许 Netmiko 的 `quit` / `exit` 清理命令关闭通道�
 
 浏览器证据位于 `D:\study\NetConsole-Next-Workspace\build\task-diagnostics-browser\acceptance.json`，类型为 `CHROME_SOURCE_UI_MOCKED_API_FIXTURE`。4 张截图为 `diagnostics-dialog-1920.png`、`diagnostics-dialog-2560.png`、`diagnostics-integrity-failed.png` 和 `diagnostics-scope-revoked.png`。该证据不表示后端或真实设备兼容验证；后端链路由上述独立 HTTP 测试覆盖。
 
-离线候选检查可复用 `tests/h3c_diagnostic_e2e.py` 的 `DiagnosticTarget` 与 `verify_capture()`；后者使用调用者已有的 Service 和 bundled Python / Worker，不替换运行环境，包含直接与确认分支共 12 项检查。实际候选结果由集成验收记录另行报告。
+离线候选检查复用 `tests/h3c_diagnostic_e2e.py` 的 `DiagnosticTarget` 与 `verify_capture()`；后者使用调用者已有的Service和bundled Python / Worker，不替换运行环境，包含直接与确认分支共12项检查。2026-11-07准确ef57213候选已通过该门禁：两个分支均输出大于256KiB、确认仅回答显示用n、脱敏封存TXT/ZIP一致。完整十门禁session71491 EXIT0，准确路径和版本见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md)。
 
 ## 数据影响与待验收
 

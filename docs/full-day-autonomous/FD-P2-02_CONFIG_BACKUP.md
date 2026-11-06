@@ -1,5 +1,24 @@
 # FD-P2-02 配置备份、版本历史与差异
 
+## 2026-11-07 FD-P2-06三类只读备份：ef57213
+
+日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
+
+证据提交范围：完整后端 session23456、Worker40/40、前端14files/140tests及typecheck通过于 `e93b382`；`ef57213` no-store修复后重跑Service Release构建、配置HTTP28与完整离线十项，未重复完整harness/Worker/前端单测。
+
+RUNNING/display current-configuration、SAVED/display saved-configuration、STARTUP_INFO/display startup按Profile和类别独立编号，仅同类diff；旧manifest无类别按RUNNING读，不改写文件。STARTUP_INFO是指向，不是startup正文或restore。
+
+继续精确UUID/Profile、Site授权、任务/Raw/Netmiko/自动凭据；三类Raw前及下载脱敏含完整/截断PEM，ef57213统一no-store。历史/差异/下载/切类不采集；不发送save/system-view/restore。
+
+配置backend9/9、HTTP28、Chrome9 PASS，37条ConfigBackupsView在完整Web14files/140tests中PASS；typecheck PASS；完整harness23456 EXIT0。ef57213离线CONFIGURATION_KINDS含独立版本、脱敏/no-store与saved缺失PASS。此前6/6/HTTP19/Chrome6仅早期证据。
+
+专项：[AC 资源](../H3C_AC_RESOURCES_ACCEPTANCE_20261106.md)、[三类备份](../CONFIG_BACKUP_KINDS_ACCEPTANCE_20261106.md)、[全机诊断](../H3C_FULL_DIAGNOSTIC_ACCEPTANCE_20261106.md)。最新结构化报告位置：`D:\study\NetConsole-Next-Workspace\reports\netmiko-final-ef57213-20261107.json`。当前总入口为 [运行状态](AUTONOMOUS_RUN_STATE.json)、[测试矩阵](COMPLETE_TEST_MATRIX.md)、[最终交接](FINAL_HANDOVER.md)。
+
+
+## 2026-11-06 及更早记录（历史）
+
+以下旧检查点、任务状态、测试数量、候选路径及“当前/最终”均保留当时证据范围；最新结果和未完成项以上方 2026-11-07 章节为准。
+
 ## 2026-11-06 当前状态补充
 
 配置备份增量已本地提交 `e12d062`，完整验收见 `../CONFIG_BACKUP_DEVICE_DIFF_ACCEPTANCE_20261106.md`。最终功能提交 `8320e2f0653c0f295700883c1900eef0a0690632`，文档以所属提交为准。整体PARTIAL，不Push、Merge、Release。继续复用任务/Raw/claims、统一Netmiko连接和Profile密码自动读取；普通密码为受ACL保护的SQLite字段，无普通设备DPAPI中心。

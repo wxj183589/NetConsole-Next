@@ -1,12 +1,12 @@
 # Netmiko Windows 离线运行包
 
-## 当前准确版本候选（2026-11-06）
+## 当前准确版本候选（2026-11-07）
 
-当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-9fc499f-20261106`，EXE ProductVersion 精确为 `1.0.0+9fc499f8d2de08973896a1ea35b35d4e3ff23d16`。复用 Worker 未变化的 `build/netmiko-reconnect-final-20261106`，内置 CPython3.13、Netmiko4.7.0、Paramiko4.0.0及18个固定版本/hash wheel。构建session2553 EXIT0，当前Vue源码构建与复制前后driver/Telnet/JSON smoke PASS。
+当前候选为 `D:\study\NetConsole-Next-Workspace\build\service-cache-fix-20261107`，EXE ProductVersion 精确为 `1.0.0+ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。新运行包为 `build/netmiko-inheritance-final-20261106`，包含当前 Worker、CPython3.13、Netmiko4.7.0、Paramiko4.0.0及18个固定版本/hash wheel。运行包构建session13581、候选构建session64183均EXIT0，当前Vue源码构建2084模块与复制前后driver/Telnet/JSON smoke PASS。
 
-`py -3.13 -B tests/offline_candidate_e2e.py --candidate <当前目录>`，session16200 EXIT0。Production、独立cwd/数据根、PATH仅System32且清除Python/Worker覆盖，7项均PASS：`OFFLINE_BUNDLED_RUNTIME`、`OFFLINE_STATIC_UI`、`OFFLINE_NETMIKO_CONNECTION`、`OFFLINE_TASK_DIAGNOSTICS`、`OFFLINE_NETMIKO_RECONNECT`、`OFFLINE_LINUX_WEBSOCKET`、`OFFLINE_CANDIDATE`。候选使用自身运行时，覆盖VLAN/任务诊断入口、TXT/ZIP封存hash及不重采集、只读命令断线恢复且不重放已完成命令。
+`py -3.13 -B tests/offline_candidate_e2e.py --candidate <当前目录>`，session71491 EXIT0。Production、独立cwd/数据根、PATH仅System32且清除Python/Worker覆盖，10项均PASS：`OFFLINE_BUNDLED_RUNTIME`、`OFFLINE_STATIC_UI`、`OFFLINE_NETMIKO_CONNECTION`、`OFFLINE_TASK_DIAGNOSTICS`、`OFFLINE_NETMIKO_RECONNECT`、`OFFLINE_LINUX_WEBSOCKET`、`OFFLINE_AC_RESOURCES`、`OFFLINE_CONFIGURATION_KINDS`、`OFFLINE_FULL_DIAGNOSTIC`、`OFFLINE_CANDIDATE`。候选使用自身运行时，新增12条AC命令、三类独立版本/脱敏no-store下载/缺失saved失败，以及大于256KiB直接和确认全机诊断的封存TXT/ZIP校验；继续覆盖只读命令断线恢复且不重放已完成命令。
 
-准确证据见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) 和 Workspace `reports/netmiko-final-9fc499f-20261106.json`。这是本机候选运行验收，framework-dependent Service仍需目标机.NET10 ASP.NET Core Runtime；SCM安装、升级卸载及其他Windows机器继续待验收。未Push、Merge或Release。
+准确证据见 [统一架构验收](NETMIKO_UNIFIED_ARCHITECTURE_ACCEPTANCE_20261106.md) 和 Workspace `reports/netmiko-final-ef57213-20261107.json`。首次e93b382候选暴露下载缺少no-store，修复并重建后完整重跑通过。这是本机候选运行验收，framework-dependent Service仍需目标机.NET10 ASP.NET Core Runtime；SCM安装、升级卸载及其他Windows机器继续待验收。未Push、Merge或Release。
 
 ## 构建与部署方法
 
