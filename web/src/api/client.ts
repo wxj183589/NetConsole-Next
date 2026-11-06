@@ -1273,6 +1273,9 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export function getTask(runId: string): Promise<TaskRun> {
+  return request(`/api/system/tasks/${encodeURIComponent(runId)}`)
+}
 export function createDeviceConnectionTests(deviceIds: string[]): Promise<H3cTaskPlan> {
   return request('/api/system/devices/connection-tests', { method: 'POST', body: JSON.stringify({ deviceIds }) })
 }

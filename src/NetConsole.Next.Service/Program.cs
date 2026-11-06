@@ -713,6 +713,13 @@ app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     return Results.Ok(rawCatalog.RecentTaskRuns(scope: CurrentSiteScope(context)));
 });
+app.MapGet("/api/system/tasks/{runId}", (HttpContext context, string runId, Catalog rawCatalog) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return rawCatalog.GetTaskRun(runId, CurrentSiteScope(context)) is { } task
+        ? Results.Ok(task)
+        : Results.NotFound();
+});
 app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string runId, Catalog rawCatalog) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
