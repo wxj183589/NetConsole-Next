@@ -6,10 +6,10 @@
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
   "overallStatus": "PARTIAL",
-  "phase": "LOCAL_TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTED_PRODUCT_PARTIAL",
-  "currentHead": "253b8144226091337227f29dca93c9378ebe99af",
-  "currentHeadShort": "253b814",
-  "headMeaning": "Latest functional checkpoint including Traceroute/schedules and progress-read concurrency correction; later documentation commits recorded by Git and DevStatus",
+  "phase": "LOCAL_STARTUP_BODY_IDENTITY_CONCURRENCY_ACCEPTED_PRODUCT_PARTIAL",
+  "currentHead": "41bd2e2",
+  "currentHeadShort": "41bd2e2",
+  "headMeaning": "Continuation checkpoint including startup body UI and backend regression, identity review revision contract, and same-device cancellation fix; restore and live-device evidence remain pending",
   "activeWorkstreams": [],
   "completedLocal": [
     "bounded task scheduling, command-level Raw and complete-manifest publication",
@@ -50,13 +50,16 @@
     "final cleanup preserves accepted candidate, bundle, screenshots, reports, user Vite90348/127.0.0.1:18792 and one minimal SQLite fixture; Next Service/Python/py0 and offline-candidate temporary directories0; superseded failed e93b382 candidate retired",
     "FD-P2-08 structured bounded ICMP Traceroute, current-target guards, mixed cancellation and PARTIAL restart history",
     "FD-P2-09 persisted read-only backup schedules through existing Netmiko tasks with bounded completed metadata and durable terminal observation",
-    "253b814 single in-flight progress read per generation; cancel/new terminal protected from late older RUNNING/error; ToolsView12/typecheck/build PASS"
+    "253b814 single in-flight progress read per generation; cancel/new terminal protected from late older RUNNING/error; ToolsView12/typecheck/build PASS",
+    "cf0e172/86d3190/3c0e15a two-stage STARTUP_BODY read through validated H3C path, redacted snapshot/history/download/diff compatibility, explicit restore 409 and schedule rejection, and display-startup-to-more regression; CONFIG_BACKUP_TESTS11/11 and schedule15/15 PASS",
+    "2a58ae9 Site-claims-protected AP identity review, evidence-only identityRevision, candidate/conflict decision block reasons; WIRELESS_IDENTITY_CONTRACT_TESTS3/3 and wireless regression PASS",
+    "6809701 same-device semaphore-wait cancellation remains CANCELLED and does not create a second session; CONCURRENCY_P1_TESTS6/6 PASS"
   ],
   "nextTasks": [
     "obtain stable production GroupEvidence; source-AC group-name observations remain CANDIDATE with SourceGroupKey and GroupIdentityKey null",
-    "startup configuration file body and restore; RUNNING/SAVED/STARTUP_INFO collection is completed locally and STARTUP_INFO contains pointers only",
+    "startup restore write contract and现场验收; STARTUP_BODY read is completed locally but restore deliberately returns CONFIG_RESTORE_UNSUPPORTED",
     "additional firmware/vendor structured business support and actual network hardware/Linux/bastion interoperability evidence",
-    "define candidate confirm/reject, identity merge/split, replacement authority writes/revocation and revision concurrency contracts",
+    "define identity merge/split, replacement authority writes/revocation and revision concurrency mutation contracts; read-only candidate/conflict review contract is now local",
     "define reliable relation termination evidence and Domain/group lifecycle without inferring ENDED from absence",
     "dual-AC HA, failover/recovery and live AP ownership evidence",
     "complete remaining module workbench integration and real multi-AC business",
@@ -103,7 +106,7 @@
     "realDeviceStatus": "REAL_DEVICE_PENDING"
   },
   "verification": {
-    "serviceReleaseBuild": "PASS same source tree committed as2927b35: Release Service/Tests 0 warnings/errors, session89977",
+    "serviceReleaseBuild": "PASS at 86d3190: Release Service/Tests build 0 warnings/errors",
     "fullServiceHarnessCurrent": "PASS same source tree committed as2927b35: session89977 EXIT0; diagnostics4/Traceroute14/schedules15/backups9 plus all existing default suites",
     "frontendTypecheck": "PASS at2927b35 and after final253b814 progress-read correction",
     "frontendUnitTests": "16 files /159 tests PASS at2927b35; final253b814 ToolsView12/12 PASS; full160 suite not rerun",
@@ -123,7 +126,11 @@
     "wirelessHttp": "16 PASS markers; actual isolated Service with offline fixture; source scope and MAC-only canonical member links",
     "wirelessBrowser": "15 states PASS (11 wireless/4 global files); mocked APIs; Chrome 1920/2560 DPR1; final UI labels and font refinement",
     "netmikoNegotiationCurrent": "Historical policy6/worker29/HTTP reconnect13 and Jump65279 retain their original scope; e93b382 full harness23456 reconnect172 and worker40 PASS; ef57213 exact-version offline reconnect gate71491 PASS",
-    "configurationBackupTests": "9/9 PASS current batch, standalone plus full harness89977",
+    "configurationBackupTests": "11/11 PASS at 3c0e15a; STARTUP_BODY path validation, two-stage command order and explicit restore rejection",
+    "configurationBackupScheduleTests": "15/15 PASS after 86d3190; STARTUP_BODY rejected from durable schedules",
+    "wirelessIdentityContract": "3/3 PASS at 2a58ae9; identityRevision excludes runtime state and changes with exact evidence/source revision",
+    "wirelessRegressionAfterIdentity": "WIRELESS_GROUP_CONTRACT, CACHE4/4, REPLACEMENT3/3, IDENTITY3/3, PROJECTION and RUNTIME13/13 PASS",
+    "concurrencyCancellationRegression": "6/6 PASS after 6809701; cancellation during same-device gate wait preserves CANCELLED",
     "configurationBackupHttpNetmiko": "28 checks PASS current source, session44093; Service to CPython/Netmiko to synthetic loopback SSH",
     "configurationBackupBrowser": "9 scenarios PASS current UI/API mock; labeled history table isolates schedule controls",
     "apGroupCache": "WIRELESS_GROUP_CACHE_TESTS=4/4 PASS; rebuildable candidate cache only; no business ENDED",
@@ -292,7 +299,11 @@
     "FD-P3-04": "PENDING_EXTERNAL",
     "FD-P3-03": "UPDATED_LOCAL",
     "FD-P2-08": "COMPLETED_LOCAL",
-    "FD-P2-09": "COMPLETED_LOCAL"
+    "FD-P2-09": "COMPLETED_LOCAL",
+    "FD-P1-01-CANCEL": "COMPLETED_LOCAL",
+    "FD-P2-06B": "COMPLETED_LOCAL",
+    "FD-P2-09B": "COMPLETED_LOCAL",
+    "FD-P1-30A": "COMPLETED_LOCAL_READONLY"
   },
   "historicalVerificationEf57213": {
     "serviceReleaseBuild": "PASS at ef57213 after no-store header fix: Service Release build 0 warnings/errors; Service/Tests Release build at e93b382 also PASS",
@@ -358,5 +369,18 @@
     "sourceAndCandidateWorkerMatch": true,
     "postHeaderFixFullHarnessRepeated": false
   },
-  "currentAcceptance": "docs/TRACEROUTE_AND_BACKUP_SCHEDULE_ACCEPTANCE_20261107.md"
+  "currentAcceptance": "docs/autonomous-development/CONTINUATION_TEST_RESULTS.md",
+  "continuation": {
+    "recoveryReport": "docs/autonomous-development/CONTINUATION_RECOVERY_REPORT.md",
+    "developmentLog": "docs/autonomous-development/CONTINUATION_DEVELOPMENT_LOG.md",
+    "testResults": "docs/autonomous-development/CONTINUATION_TEST_RESULTS.md",
+    "finalHandover": "docs/autonomous-development/CONTINUATION_FINAL_HANDOVER.md",
+    "productsCommitted": ["6809701", "eef3c4a", "cf0e172", "2a58ae9", "86d3190", "3c0e15a", "41bd2e2"],
+    "worktreeStatus": "CLEAN_AT_CHECKPOINT",
+    "remotePush": false,
+    "remoteMerge": false,
+    "release": false,
+    "realDataChanged": false,
+    "deviceConfigurationWrites": 0
+  }
 }

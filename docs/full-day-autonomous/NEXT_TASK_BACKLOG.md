@@ -1,5 +1,21 @@
 # 全天候动态任务池
 
+## 2026-11-07 Continuation checkpoint：41bd2e2
+
+Branch：`codex-A/netconsole-next-r3-dual-ac`。本轮已完成并本地提交：同设备取消竞态、STARTUP_BODY 两阶段只读采集/UI 与 restore 明确拒绝边界、R3 identity review/revision 只读合同。整体仍 **PARTIAL / REAL_DEVICE_PENDING**，不 Push、Merge、Release。
+
+| ID | 任务 | 状态 | 验收与边界 |
+| --- | --- | --- | --- |
+| FD-P1-01 | 同设备互斥等待取消 | COMPLETED_LOCAL | `CONCURRENCY_P1_TESTS=6/6 PASS`；不创建第二会话 |
+| FD-P2-06B | STARTUP_BODY 正文采集 | COMPLETED_LOCAL | `CONFIG_BACKUP_TESTS=11/11 PASS`；严格 `.cfg` 路径、两阶段顺序、UI/API、Raw/claims/history/download/diff 复用 |
+| FD-P2-09B | STARTUP_BODY 计划边界 | COMPLETED_LOCAL | `CONFIG_BACKUP_SCHEDULE_TESTS=15/15 PASS`；定时计划拒绝正文采集 |
+| FD-P1-30A | AP identity review/revision | COMPLETED_LOCAL_READONLY | `WIRELESS_IDENTITY_CONTRACT_TESTS=3/3 PASS`；无权威 mutation |
+| FD-P1-30B | identity merge/split/replacement 写合同 | CONTRACT_PENDING | 需要 revision 并发、撤销和来源权威定义 |
+| FD-P1-05 / FD-P1-18 | 双 AC HA、切换/恢复、实时归属 | PARTIAL_EXTERNAL | 真实认证和运行证据待补 |
+| FD-P1-26 | 当前 HEAD 离线候选 | PENDING_CURRENT_BATCH | `86d3190` 尚未重建当前候选 |
+
+下一优先级：定义 identity 写合同；获取稳定 GroupEvidence；在凭据可用时执行双 AC HA/实时 AP 归属；重新构建当前 HEAD 隔离候选。
+
 ## 2026-11-07 Traceroute 与定时备份检查点：253b814
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `2927b35dfb6c9d5ae7e82f83548133f13b1668e6`；进度读取并发修复及当前功能检查点 `253b8144226091337227f29dca93c9378ebe99af`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；保留当前分支，仅本地提交，不 Push、Merge、Release。

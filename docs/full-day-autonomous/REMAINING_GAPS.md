@@ -1,5 +1,16 @@
 # 剩余缺口与验收边界
 
+## 2026-11-07 Continuation update：41bd2e2
+
+本轮关闭了启动配置正文的本地只读采集缺口，并加入了受 Site claims 保护的 identity review/revision 合同；配置 restore 仍明确拒绝，identity 权威写入仍未实现。`STARTUP_BODY` 不进入持久化定时计划。新增代码只使用 Next Workspace 隔离 fixture/回环，设备配置写入 0。
+
+当前优先缺口：
+
+1. identity confirm/reject、merge/split、replacement 写入/撤销和 revision 并发权威合同。
+2. 稳定厂商 GroupEvidence、可靠关系终止证据和 Domain/group 生命周期。
+3. 双 AC HA、切换/恢复、实时 AP ownership 与真实设备互操作。
+4. 当前 HEAD `41bd2e2` 的隔离离线候选、目标机安装/SCM/升级/卸载、跨机 TLS 和原生 Windows 125%。
+
 ## 2026-11-07 Traceroute 与定时备份检查点：253b814
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `2927b35dfb6c9d5ae7e82f83548133f13b1668e6`；进度读取并发修复及当前功能检查点 `253b8144226091337227f29dca93c9378ebe99af`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；保留当前分支，仅本地提交，不 Push、Merge、Release。

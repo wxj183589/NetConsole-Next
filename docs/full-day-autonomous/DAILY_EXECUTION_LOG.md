@@ -1,5 +1,13 @@
 # 全天候自主开发日志
 
+## 2026-11-07 续跑恢复与三批本地收口：86d3190
+
+从主仓库真实状态恢复，保留原有 dirty 修改并创建 `docs/autonomous-development/CONTINUATION_RECOVERY_REPORT.md`。本轮合入 `6809701` 同设备互斥等待取消修复、`cf0e172` 启动配置正文两阶段只读采集、`86d3190` 启动正文定时计划拒绝、`3c0e15a` 两阶段后端回归、`41bd2e2` 启动正文 UI/API 接入，以及 `2a58ae9` R3 identity review/revision 只读合同。
+
+验证：Release Service/Tests build 0 warnings/0 errors；`CONFIG_BACKUP_TESTS=11/11`、`CONFIG_BACKUP_SCHEDULE_TESTS=15/15`、`WIRELESS_IDENTITY_CONTRACT_TESTS=3/3`、无线回归（cache4/4、replacement3/3、runtime13/13）、`CONCURRENCY_P1_TESTS=6/6` PASS；前端全量 17 files / 199 tests、`vue-tsc --noEmit` 与 Vite build PASS。完整证据与未执行门禁见 `docs/autonomous-development/CONTINUATION_TEST_RESULTS.md`。
+
+恢复仍为 **PARTIAL / REAL_DEVICE_PENDING**。startup restore 明确返回 `CONFIG_RESTORE_UNSUPPORTED`，不会发送写命令；identity mutation、双 AC HA/切换、稳定 GroupEvidence、真实设备、跨机 TLS、原生 125% 和目标机部署仍未完成。未访问旧真实数据根，设备配置写入 0，未 push/merge/release。
+
 ## 2026-11-07 本批Traceroute与定时备份检查点：253b814
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能 `2927b35`，进度并发修复 `253b814`。全产品 **PARTIAL / REAL_DEVICE_PENDING**；仅本地提交，不 Push、Merge、Release。

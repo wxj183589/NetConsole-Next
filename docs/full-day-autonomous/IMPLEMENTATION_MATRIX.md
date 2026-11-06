@@ -1,5 +1,16 @@
 # 实现矩阵
 
+## 2026-11-07 Continuation checkpoint：41bd2e2
+
+| Capability | Current evidence | Current stage | Remaining boundary |
+| --- | --- | --- | --- |
+| Same-device cancellation | semaphore wait cancellation regression | PASS (`CONCURRENCY_P1_TESTS=6/6`) | real device restart evidence |
+| Startup configuration body | validated `display startup` pointer, `more` read, separate `STARTUP_BODY` snapshot | PASS (local read-only) | restore write contract and field/model coverage |
+| Configuration restore | explicit `409 CONFIG_RESTORE_UNSUPPORTED` | DELIBERATELY BLOCKED | requires write authority, rollback and现场验收 |
+| AP identity review | Site-claims API, exact evidence review, runtime-independent revision | PASS (read-only contract) | confirm/reject, merge/split, replacement authority mutation |
+| Dual AC HA | offline projection and user-confirmed topology | PARTIAL_EXTERNAL | live role, failover/recovery and AP ownership |
+| Current candidate | historical `ef57213` candidate remains valid for its commit | PENDING | rebuild candidate for `86d3190` |
+
 ## 2026-11-07 当前实现矩阵：ef57213
 
 日期：2026-11-07。Branch：`codex-A/netconsole-next-r3-dual-ac`。功能提交 `e93b38280328beb96bbbb1b172b3d0a01179cfef`；备份下载 no-store 修复及当前产品 HEAD `ef5721354fc56004f018a2b851b1aee9fd8b0bdd`。整体 **PARTIAL / REAL_DEVICE_PENDING**。保留当前分支，不 Push、Merge、Release。
