@@ -840,6 +840,19 @@ app.MapPost("/api/system/config-backups", (HttpContext context, ConfigBackupRequ
     catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
     catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
 });
+app.MapPost("/api/system/config-backups/startup-body", (HttpContext context, ConfigBackupRequest request,
+    ConfigBackupService backups) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var batch = backups.StartStartupBody(request.ProfileIds ?? Array.Empty<string>(), CurrentIdentity(context), CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/config-backups/batches/{batch.Id}", batch);
+    }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
 app.MapGet("/api/system/config-backups/batches/{id}", (HttpContext context, string id, ConfigBackupService backups) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
@@ -861,6 +874,22 @@ app.MapGet("/api/system/config-backups/{id}/download", (HttpContext context, str
     var result = backups.OpenDownload(id, CurrentSiteScope(context));
     return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "text/plain; charset=utf-8",
         result.Value.Name, enableRangeProcessing: true);
+});
+app.MapGet("/api/system/config-backups/{id}/startup-reference", (HttpContext context, string id,
+    ConfigBackupService backups) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var reference = backups.GetStartupReference(id, CurrentSiteScope(context));
+    return reference is null ? Results.NotFound() : Results.Ok(reference);
+});
+app.MapPost("/api/system/config-backups/{id}/restore", (HttpContext context, string id,
+    ConfigBackupService backups) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    return backups.Get(id, CurrentSiteScope(context)) is null
+        ? Results.NotFound()
+        : Results.Json(new { error = "CONFIG_RESTORE_UNSUPPORTED", detail = "配置恢复需要独立的写入合同和现场验收，当前不会向设备发送写命令。" }, statusCode: StatusCodes.Status409Conflict);
 });
 app.MapGet("/api/system/config-backups/{baseId}/diff/{targetId}", (HttpContext context, string baseId,
     string targetId, ConfigBackupService backups) =>

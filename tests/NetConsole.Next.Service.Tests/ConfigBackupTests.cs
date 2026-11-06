@@ -52,7 +52,31 @@ internal static class ConfigBackupTests
         await VerifyConfigurationKinds(actor);
         await VerifyInvalidSavedOutputs(actor);
         await VerifyPrivateKeyRedaction(actor);
-        Console.WriteLine("CONFIG_BACKUP_TESTS=9/9 PASS");
+        VerifyStartupFileSupport();
+        Console.WriteLine("CONFIG_BACKUP_TESTS=10/10 PASS");
+    }
+
+    private static void VerifyStartupFileSupport()
+    {
+        var reference = StartupConfigurationSupport.Inspect(
+            "Current startup saved-configuration file: NULL\n" +
+            "Main startup saved-configuration file: flash:/startup.cfg,\n" +
+            "Next main startup saved-configuration file: NULL\n");
+        Assert(reference is { FileReference: "flash:/startup.cfg", ReadCommand: "more flash:/startup.cfg",
+                BodyReadSupported: true, RestoreError: "CONFIG_RESTORE_UNSUPPORTED" } &&
+            H3cCommandPolicy.IsAllowed(reference.ReadCommand),
+            "a valid display startup pointer must produce one allowlisted read command");
+
+        foreach (var value in new[] { "flash:/../secret.cfg", "flash:/startup.cfg;save force",
+            "flash:/startup.txt", "flash:/startup.cfg extra", "http:/startup.cfg", "flash:/startup.cfg\nreboot" })
+        {
+            Assert(!H3cCommandPolicy.TryCreateStartupFileReadCommand(value, out _) &&
+                !H3cCommandPolicy.IsAllowed("more " + value),
+                "startup file reads must reject traversal, injection, non-config paths and unsupported schemes");
+        }
+        Assert(StartupConfigurationSupport.Inspect("Main startup saved-configuration file: NULL\n") is
+            { BodyReadSupported: false, RestoreError: "CONFIG_BACKUP_STARTUP_FILE_UNAVAILABLE" },
+            "a NULL startup pointer must fail closed without scheduling a body read");
     }
 
     private static async Task VerifyPrivateKeyRedaction(WebUserIdentity actor)

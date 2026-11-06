@@ -70,8 +70,9 @@ internal static class ConfigBackupKinds
     public const string Running = "RUNNING";
     public const string Saved = "SAVED";
     public const string StartupInfo = "STARTUP_INFO";
+    public const string StartupBody = "STARTUP_BODY";
 
-    public static bool IsSupported(string? kind) => kind is Running or Saved or StartupInfo;
+    public static bool IsSupported(string? kind) => kind is Running or Saved or StartupInfo or StartupBody;
     public static string CommandFor(string kind) => kind switch
     {
         Running => H3cCommandPolicy.DisplayCurrentConfiguration,
@@ -80,6 +81,28 @@ internal static class ConfigBackupKinds
         _ => throw new ConfigBackupException("CONFIG_BACKUP_KIND_UNSUPPORTED", "请选择运行配置、保存配置或启动配置指向。", 400)
     };
 
+}
+
+internal sealed record StartupConfigurationReference(string FileReference, string ReadCommand,
+    bool BodyReadSupported, string? RestoreError);
+
+internal static partial class StartupConfigurationSupport
+{
+    [GeneratedRegex(@"\bstartup\s+saved-configuration\s+file\s*:\s*(?<path>[^\s\r\n]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex FileReferencePattern();
+
+    public static StartupConfigurationReference Inspect(string? output)
+    {
+        foreach (Match match in FileReferencePattern().Matches(output ?? string.Empty))
+        {
+            var reference = match.Groups["path"].Value.Trim().TrimEnd(',', ';', '.');
+            if (reference.Equals("NULL", StringComparison.OrdinalIgnoreCase)) continue;
+            if (H3cCommandPolicy.TryCreateStartupFileReadCommand(reference, out var command))
+                return new(reference, command, true, "CONFIG_RESTORE_UNSUPPORTED");
+        }
+        return new(string.Empty, string.Empty, false, "CONFIG_BACKUP_STARTUP_FILE_UNAVAILABLE");
+    }
 }
 
 internal static class ConfigBackupSanitizer
@@ -152,6 +175,46 @@ internal sealed class ConfigBackupService(
         return batch.Snapshot();
     }
 
+    // Startup body collection is deliberately separate from the three regular
+    // backup kinds: the device first reports the file reference, then the
+    // service reads that exact validated reference through the same read-only
+    // task/Raw/Site scope pipeline.
+    public ConfigBackupBatch StartStartupBody(IReadOnlyList<string> profileIds, WebUserIdentity actor,
+        P2B5SiteScopeDecision scope)
+    {
+        if (actor.Role != "SUPERADMIN") throw new ConfigBackupException("CONFIG_BACKUP_PERMISSION_DENIED", "只有 SUPERADMIN 可以执行配置备份。", 403);
+        if (!scope.IsAuthorized) throw new ConfigBackupException("CONFIG_BACKUP_SCOPE_DENIED", scope.Detail, 403);
+        var normalized = (profileIds ?? Array.Empty<string>()).Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item.Trim()).Distinct(StringComparer.Ordinal).ToArray();
+        if (normalized.Length is < 1 or > MaxProfilesPerBatch)
+            throw new ConfigBackupException("CONFIG_BACKUP_RESOURCE_LIMIT", $"一次最多选择 {MaxProfilesPerBatch} 台设备。", 413);
+        var items = new List<BatchItemState>(normalized.Length);
+        foreach (var profileId in normalized)
+        {
+            if (!catalog.H3cProfileIsInScope(profileId, scope))
+                throw new ConfigBackupException("CONFIG_BACKUP_TARGET_NOT_VISIBLE", "所选设备不在当前 Site 权限范围内。", 404);
+            var snapshot = taskScopes.CaptureDefinition(profileId, actor.UserId);
+            RequireSupportedTarget(profileId);
+            items.Add(new(profileId, snapshot, "QUEUED", null, null));
+        }
+        var id = Guid.NewGuid().ToString("N");
+        var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items, ConfigBackupKinds.StartupBody);
+        lock (_batchGate) { _batches[id] = batch; PruneCompletedBatches(); }
+        _ = Task.Run(() => RunStartupBodyBatchAsync(batch), CancellationToken.None);
+        return batch.Snapshot();
+    }
+
+    public StartupConfigurationReference? GetStartupReference(string id, P2B5SiteScopeDecision scope)
+    {
+        var snapshot = Get(id, scope);
+        if (snapshot is null || snapshot.ConfigurationKind != ConfigBackupKinds.StartupInfo) return null;
+        var opened = OpenDownload(id, scope);
+        if (opened is null) return null;
+        using var stream = opened.Value.Stream;
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return StartupConfigurationSupport.Inspect(reader.ReadToEnd());
+    }
+
     private void RequireSupportedTarget(string profileId)
     {
         // The shared Netmiko profile catalog also contains other vendors. This
@@ -201,7 +264,11 @@ internal sealed class ConfigBackupService(
         string? configurationKind = null)
     {
         if (!scope.IsAuthorized || !catalog.H3cProfileIsInScope(profileId, scope)) return Array.Empty<ConfigBackupSnapshot>();
-        if (configurationKind is not null) _ = ConfigBackupKinds.CommandFor(configurationKind);
+        if (configurationKind is not null && configurationKind != ConfigBackupKinds.StartupBody)
+            _ = ConfigBackupKinds.CommandFor(configurationKind);
+        if (configurationKind == ConfigBackupKinds.StartupBody) { }
+        else if (configurationKind is not null && !ConfigBackupKinds.IsSupported(configurationKind))
+            _ = ConfigBackupKinds.CommandFor(configurationKind);
         var directory = ProfileDirectory(profileId);
         if (!Directory.Exists(directory) || IsReparse(directory)) return Array.Empty<ConfigBackupSnapshot>();
         var snapshots = Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
@@ -319,6 +386,100 @@ internal sealed class ConfigBackupService(
             addedCount, removedCount, Math.Min(addedCount, removedCount), added, removed, target.ConfigurationKind);
     }
 
+    private async Task RunStartupBodyBatchAsync(BatchState batch)
+    {
+        using var parallel = new SemaphoreSlim(Math.Min(4, batch.Items.Count), Math.Min(4, batch.Items.Count));
+        var tasks = batch.Items.Select(async item =>
+        {
+            await parallel.WaitAsync().ConfigureAwait(false);
+            try { await RunStartupBodyItemAsync(batch, item).ConfigureAwait(false); }
+            finally { parallel.Release(); }
+        }).ToArray();
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        lock (_batchGate) { batch.Complete(); PruneCompletedBatches(); }
+    }
+
+    private async Task RunStartupBodyItemAsync(BatchState batch, BatchItemState item)
+    {
+        var gate = _profileGates.GetOrAdd(item.ProfileId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            RequireSupportedTarget(item.ProfileId);
+            item.State = "RUNNING";
+            var prefix = $"config-startup-body-{batch.Id[..16]}-{Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(item.ProfileId))).ToLowerInvariant()[..12]}";
+            var infoRun = await ScheduleAndWaitAsync(batch, item, prefix + "-info", H3cCommandPolicy.DisplayStartup).ConfigureAwait(false);
+            if (infoRun is null) return;
+            var infoRaw = catalog.ReadCompleteH3cTaskRaw(infoRun);
+            if (infoRaw is null)
+            {
+                FailStartupBody(batch, item, "CONFIG_BACKUP_RAW_UNAVAILABLE");
+                return;
+            }
+            var reference = StartupConfigurationSupport.Inspect(infoRaw.Output);
+            if (!reference.BodyReadSupported)
+            {
+                FailStartupBody(batch, item, reference.RestoreError ?? "CONFIG_BACKUP_STARTUP_FILE_UNAVAILABLE");
+                return;
+            }
+            var bodyRun = await ScheduleAndWaitAsync(batch, item, prefix + "-body", reference.ReadCommand).ConfigureAwait(false);
+            if (bodyRun is null) return;
+            var bodyRaw = catalog.ReadCompleteH3cTaskRaw(bodyRun);
+            if (bodyRaw is null)
+            {
+                FailStartupBody(batch, item, "CONFIG_BACKUP_RAW_UNAVAILABLE");
+                return;
+            }
+            var snapshot = WriteSnapshot(item.ProfileId, item.Scope.DeviceId, item.Scope.SiteId, bodyRun, bodyRaw,
+                ConfigBackupKinds.StartupBody, reference.ReadCommand);
+            item.SnapshotId = snapshot.Id;
+            item.State = "SUCCEEDED";
+            catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "SUCCEEDED", item.ProfileId, bodyRun,
+                Array.Empty<string>(), $"snapshot={snapshot.Id};kind={snapshot.ConfigurationKind}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            FailStartupBody(batch, item, ex switch
+            {
+                TaskScopeRevokedException scope => scope.Reason,
+                ConfigBackupException backup => backup.Code,
+                _ => ex.GetType().Name
+            });
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task<string?> ScheduleAndWaitAsync(BatchState batch, BatchItemState item, string definitionId, string command)
+    {
+        catalog.CreateTaskDefinition(definitionId, "H3C_SSH_READONLY", item.ProfileId, command,
+            TimeSpan.FromMinutes(10), scopeSnapshot: item.Scope);
+        if (!scheduler.TryScheduleDefinition(definitionId, out var runId, batch.ActorUserId))
+        {
+            FailStartupBody(batch, item, "CONFIG_BACKUP_QUEUE_FULL");
+            return null;
+        }
+        item.TaskRunId = runId;
+        TaskRunSnapshot? run;
+        while (true)
+        {
+            await Task.Delay(100).ConfigureAwait(false);
+            run = catalog.GetTaskRun(runId);
+            if (run?.State is "SUCCEEDED" or "FAILED" or "TIMED_OUT" or "CANCELLED") break;
+        }
+        if (run?.State == "SUCCEEDED") return runId;
+        FailStartupBody(batch, item, run?.FailureReason ?? "CONFIG_BACKUP_COLLECTION_FAILED");
+        return null;
+    }
+
+    private void FailStartupBody(BatchState batch, BatchItemState item, string error)
+    {
+        item.State = "FAILED";
+        item.Error = error;
+        catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "FAILED", item.ProfileId,
+            item.TaskRunId, Array.Empty<string>(), error);
+    }
+
     private async Task RunBatchAsync(BatchState batch)
     {
         using var parallel = new SemaphoreSlim(Math.Min(4, batch.Items.Count), Math.Min(4, batch.Items.Count));
@@ -405,9 +566,11 @@ internal sealed class ConfigBackupService(
     }
 
     private ConfigBackupSnapshot WriteSnapshot(string profileId, string deviceId, string siteId,
-        string runId, ConfigBackupRaw raw, string configurationKind)
+        string runId, ConfigBackupRaw raw, string configurationKind, string? commandOverride = null)
     {
-        var command = ConfigBackupKinds.CommandFor(configurationKind);
+        var command = commandOverride ?? ConfigBackupKinds.CommandFor(configurationKind);
+        if (configurationKind == ConfigBackupKinds.StartupBody && !H3cCommandPolicy.IsStartupFileReadCommand(command))
+            throw new ConfigBackupException("CONFIG_BACKUP_STARTUP_COMMAND_INVALID", "启动文件读取命令不在安全范围内。", 409);
         if (raw.Command != command || raw.ProfileId != profileId || raw.RunId != runId)
             throw new ConfigBackupException("CONFIG_BACKUP_RAW_MISMATCH", "配置采集来源不一致，未生成备份。", 409);
         var transcript = CliTranscriptParser.Parse(raw.Output, command, completedExec: true);
@@ -506,7 +669,9 @@ internal sealed class ConfigBackupService(
     private static bool IsValidSnapshot(ConfigBackupSnapshot snapshot) =>
         IsSafeId(snapshot.Id) && IsSafeId(snapshot.ProfileId) &&
         ConfigBackupKinds.IsSupported(snapshot.ConfigurationKind) &&
-        snapshot.Command == ConfigBackupKinds.CommandFor(snapshot.ConfigurationKind) &&
+        (snapshot.ConfigurationKind == ConfigBackupKinds.StartupBody
+            ? H3cCommandPolicy.IsStartupFileReadCommand(snapshot.Command)
+            : snapshot.Command == ConfigBackupKinds.CommandFor(snapshot.ConfigurationKind)) &&
         (string.Equals(snapshot.DownloadName, $"{snapshot.Id}.{snapshot.ConfigurationKind.ToLowerInvariant()}.cfg", StringComparison.Ordinal) ||
             (snapshot.ConfigurationKind == ConfigBackupKinds.Running &&
                 string.Equals(snapshot.DownloadName, snapshot.Id + ".cfg", StringComparison.Ordinal))) &&

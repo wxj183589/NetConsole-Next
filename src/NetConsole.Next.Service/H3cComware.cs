@@ -25,15 +25,36 @@ internal static class H3cCommandPolicy
     public const string DisplaySavedConfiguration = "display saved-configuration";
     public const string DisplayStartup = "display startup";
 
+    private static readonly Regex StartupFileReferencePattern = new(
+        @"^(?:[A-Za-z][A-Za-z0-9_-]{0,31}#)?(?:flash|cf|sd|usb|slot[0-9]+#flash):/[A-Za-z0-9][A-Za-z0-9._/#-]{0,127}\.cfg$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    public static bool TryCreateStartupFileReadCommand(string? fileReference, out string command)
+    {
+        command = string.Empty;
+        var normalized = fileReference?.Trim() ?? string.Empty;
+        if (normalized.Length == 0 || normalized.Contains("..", StringComparison.Ordinal) ||
+            normalized.Any(char.IsWhiteSpace) || normalized.Any(char.IsControl) ||
+            !StartupFileReferencePattern.IsMatch(normalized)) return false;
+        command = "more " + normalized;
+        return true;
+    }
+
+    public static bool IsStartupFileReadCommand(string? command) =>
+        command is not null && command.StartsWith("more ", StringComparison.Ordinal) &&
+        TryCreateStartupFileReadCommand(command[5..], out var normalized) &&
+        string.Equals(command, normalized, StringComparison.Ordinal);
+
     public static bool IsConfigurationCommand(string command) => command is
-        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup;
+        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup || IsStartupFileReadCommand(command);
 
     public static bool IsAllowed(string command) => command is
         DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayVlanAll or DisplayWlanApAll or
         DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
         DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface or
-        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup || H3cAcResources.IsAllowed(command) ||
+        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup || IsStartupFileReadCommand(command) || H3cAcResources.IsAllowed(command) ||
         command == H3cDiagnosticCapture.Command;
 }
 
