@@ -85,6 +85,7 @@ internal sealed class ConfigBackupService(
     private const int MaxProfilesPerBatch = 32;
     private const int MaxHistory = 100;
     private const int MaxDiffLines = 256;
+    private const int MaxDiffCells = 1_048_576;
     private readonly ConcurrentDictionary<string, BatchState> _batches = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _profileGates = new(StringComparer.Ordinal);
     private readonly string _root = Path.Combine(settings.DataRoot, "backup", "config");
@@ -105,6 +106,7 @@ internal sealed class ConfigBackupService(
             if (!catalog.H3cProfileIsInScope(profileId, scope))
                 throw new ConfigBackupException("CONFIG_BACKUP_TARGET_NOT_VISIBLE", "所选设备不在当前 Site 权限范围内。", 404);
             var snapshot = taskScopes.CaptureDefinition(profileId, actor.UserId);
+            RequireSupportedTarget(profileId);
             items.Add(new(profileId, snapshot, "QUEUED", null, null));
         }
 
@@ -113,6 +115,17 @@ internal sealed class ConfigBackupService(
         _batches[id] = batch;
         _ = Task.Run(() => RunBatchAsync(batch), CancellationToken.None);
         return batch.Snapshot();
+    }
+
+    private void RequireSupportedTarget(string profileId)
+    {
+        // The shared Netmiko profile catalog also contains other vendors. This
+        // backup workflow currently has only a verified standalone H3C command
+        // policy. FIT-AP collection remains owned by its managing AC.
+        var target = catalog.GetTaskScopeTarget(profileId, P2B5SiteScopeDecision.Global);
+        if (catalog.GetNetmikoVendor(profileId) != "h3c" ||
+            string.Equals(target?.DeviceType, "FIT_AP", StringComparison.OrdinalIgnoreCase))
+            throw new ConfigBackupException("CONFIG_BACKUP_TARGET_UNSUPPORTED", "当前配置备份仅支持独立管理的 H3C 设备。", 409);
     }
 
     public ConfigBackupBatch? GetBatch(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
@@ -169,12 +182,74 @@ internal sealed class ConfigBackupService(
         if (baseline is null || target is null || baseline.ProfileId != target.ProfileId) return null;
         var baseLines = ReadLines(SnapshotPath(baseline));
         var targetLines = ReadLines(SnapshotPath(target));
-        var added = targetLines.Except(baseLines, StringComparer.Ordinal).Take(MaxDiffLines).ToArray();
-        var removed = baseLines.Except(targetLines, StringComparer.Ordinal).Take(MaxDiffLines).ToArray();
-        var changed = Math.Min(Math.Abs(targetLines.Count - baseLines.Count),
-            Math.Max(added.Length, removed.Length));
-        return new(baseId, targetId, target.ProfileId, added.Length == 0 && removed.Length == 0,
-            added.Length, removed.Length, changed, added, removed);
+        var start = 0;
+        while (start < baseLines.Count && start < targetLines.Count &&
+               string.Equals(baseLines[start], targetLines[start], StringComparison.Ordinal)) start++;
+        var baseEnd = baseLines.Count;
+        var targetEnd = targetLines.Count;
+        while (baseEnd > start && targetEnd > start &&
+               string.Equals(baseLines[baseEnd - 1], targetLines[targetEnd - 1], StringComparison.Ordinal))
+        {
+            baseEnd--;
+            targetEnd--;
+        }
+
+        var baseCount = baseEnd - start;
+        var targetCount = targetEnd - start;
+        var added = new List<string>(MaxDiffLines);
+        var removed = new List<string>(MaxDiffLines);
+        var addedCount = 0;
+        var removedCount = 0;
+        void Add(string line)
+        {
+            addedCount++;
+            if (added.Count < MaxDiffLines) added.Add(line);
+        }
+        void Remove(string line)
+        {
+            removedCount++;
+            if (removed.Count < MaxDiffLines) removed.Add(line);
+        }
+
+        if (baseCount == 0 || targetCount == 0 || (long)(baseCount + 1) * (targetCount + 1) > MaxDiffCells)
+        {
+            // Large unmatched regions are conservatively replaced in sequence. They
+            // need not be a minimal edit, but never hide reordering or duplicates.
+            for (var index = start; index < baseEnd; index++) Remove(baseLines[index]);
+            for (var index = start; index < targetEnd; index++) Add(targetLines[index]);
+        }
+        else
+        {
+            // Shared prefix/suffix keep routine edits small; the cell budget bounds
+            // the remaining LCS table and comparison work for unrelated configs.
+            var lengths = new int[baseCount + 1, targetCount + 1];
+            for (var i = baseCount - 1; i >= 0; i--)
+                for (var j = targetCount - 1; j >= 0; j--)
+                    lengths[i, j] = string.Equals(baseLines[start + i], targetLines[start + j], StringComparison.Ordinal)
+                        ? lengths[i + 1, j + 1] + 1
+                        : Math.Max(lengths[i + 1, j], lengths[i, j + 1]);
+            var baseIndex = 0;
+            var targetIndex = 0;
+            while (baseIndex < baseCount || targetIndex < targetCount)
+            {
+                if (baseIndex < baseCount && targetIndex < targetCount &&
+                    string.Equals(baseLines[start + baseIndex], targetLines[start + targetIndex], StringComparison.Ordinal))
+                {
+                    baseIndex++;
+                    targetIndex++;
+                }
+                else if (baseIndex < baseCount && (targetIndex == targetCount ||
+                             lengths[baseIndex + 1, targetIndex] >= lengths[baseIndex, targetIndex + 1]))
+                    Remove(baseLines[start + baseIndex++]);
+                else
+                    Add(targetLines[start + targetIndex++]);
+            }
+        }
+
+        // Counts describe the complete edit; each ordered preview is capped.
+        // ChangedLines pairs removals with additions and is not added to either total.
+        return new(baseId, targetId, target.ProfileId, addedCount == 0 && removedCount == 0,
+            addedCount, removedCount, Math.Min(addedCount, removedCount), added, removed);
     }
 
     private async Task RunBatchAsync(BatchState batch)
@@ -196,6 +271,7 @@ internal sealed class ConfigBackupService(
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            RequireSupportedTarget(item.ProfileId);
             item.State = "RUNNING";
             var definitionId = $"config-backup-{batch.Id[..16]}-{Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(item.ProfileId))).ToLowerInvariant()[..12]}";
@@ -244,7 +320,12 @@ internal sealed class ConfigBackupService(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             item.State = "FAILED";
-            item.Error = ex is TaskScopeRevokedException scope ? scope.Reason : ex.GetType().Name;
+            item.Error = ex switch
+            {
+                TaskScopeRevokedException scope => scope.Reason,
+                ConfigBackupException backup => backup.Code,
+                _ => ex.GetType().Name
+            };
             catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "FAILED", item.ProfileId,
                 item.TaskRunId, Array.Empty<string>(), item.Error);
         }
@@ -304,8 +385,16 @@ internal sealed class ConfigBackupService(
         { return null; }
     }
 
-    private static IReadOnlyList<string> ReadLines(string path) =>
-        File.ReadAllLines(path, Encoding.UTF8).Take(16_384).ToArray();
+    private static IReadOnlyList<string> ReadLines(string path)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length is < 1 or > H3cRawOutput.MaximumBytes)
+            throw new InvalidDataException("Configuration backup exceeds the bounded Raw limit.");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line) lines.Add(line);
+        return lines;
+    }
 
     private string ProfileDirectory(string profileId)
     {

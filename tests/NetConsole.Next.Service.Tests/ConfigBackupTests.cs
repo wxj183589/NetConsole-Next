@@ -45,7 +45,161 @@ internal static class ConfigBackupTests
         Assert(fixture.Catalog.QueryH3cFacts(fixture.Profile, history: true)
             .All(item => item.Kind != "command.display.current-configuration"),
             "configuration backups must not publish device configuration into the Facts UI projection");
-        Console.WriteLine("CONFIG_BACKUP_TESTS=1/1 PASS");
+        RejectUnsupportedTargets(actor);
+        RejectManagedFitApTargets(actor);
+        await VerifyLineDiffs(actor);
+        Console.WriteLine("CONFIG_BACKUP_TESTS=6/6 PASS");
+    }
+
+    private static async Task VerifyLineDiffs(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var failures = new List<string>();
+        void Check(bool condition, string message)
+        {
+            if (!condition) failures.Add(message);
+        }
+
+        async Task<ConfigBackupDiff> Compare(string baseline, string target)
+        {
+            fixture.Factory.Output = baseline;
+            var first = await fixture.Backup(actor);
+            fixture.Factory.Output = target;
+            var second = await fixture.Backup(actor);
+            Assert(first.State == "SUCCEEDED" && second.State == "SUCCEEDED", "diff fixtures must back up successfully");
+            return fixture.Backups.Diff(first.Items.Single().SnapshotId!, second.Items.Single().SnapshotId!,
+                P2B5SiteScopeDecision.Global) ?? throw new InvalidOperationException("diff fixture must be readable");
+        }
+
+        var reordered = await Compare("alpha\nbeta\ngamma\n", "gamma\nbeta\nalpha\n");
+        Check(!reordered.Identical && reordered.Added.SequenceEqual(new[] { "beta", "alpha" }) &&
+            reordered.Removed.SequenceEqual(new[] { "alpha", "beta" }),
+            "reordered lines must produce differences in their original sequence");
+
+        var removedDuplicate = await Compare("head\nrepeat\nrepeat\ntail\n", "head\nrepeat\ntail\n");
+        Check(!removedDuplicate.Identical && removedDuplicate.AddedLines == 0 && removedDuplicate.RemovedLines == 1 &&
+            removedDuplicate.Removed.SequenceEqual(new[] { "repeat" }), "removing one duplicate occurrence must be visible");
+        var addedDuplicates = await Compare("head\ntail\n", "head\nrepeat\nrepeat\ntail\n");
+        Check(!addedDuplicates.Identical && addedDuplicates.AddedLines == 2 && addedDuplicates.RemovedLines == 0 &&
+            addedDuplicates.Added.SequenceEqual(new[] { "repeat", "repeat" }), "added duplicate occurrences must not collapse");
+        var same = await Compare("head\nrepeat\nrepeat\ntail\n", "head\nrepeat\nrepeat\ntail\n");
+        Check(same.Identical && same.AddedLines == 0 && same.RemovedLines == 0 && same.ChangedLines == 0,
+            "identical sequences with duplicates must remain identical");
+        var replaced = await Compare("head\nbefore\ntail\n", "head\nafter\ntail\n");
+        Check(replaced is { Identical: false, AddedLines: 1, RemovedLines: 1, ChangedLines: 1 },
+            "equal-length replacements must count changed lines");
+
+        var prefix = string.Concat(Enumerable.Repeat("x\n", 17_000));
+        var lateChange = await Compare(prefix + "before\n", prefix + "after\n");
+        Check(!lateChange.Identical && lateChange.Added.SequenceEqual(new[] { "after" }) &&
+            lateChange.Removed.SequenceEqual(new[] { "before" }), "changes after line 16,384 must not be hidden");
+
+        const int lineCount = 12_000;
+        var baseline = string.Join('\n', Enumerable.Range(0, lineCount).Select(index => $"old-{index:D5}")) + "\n";
+        var target = string.Join('\n', Enumerable.Range(0, lineCount).Select(index => $"new-{index:D5}")) + "\n";
+        fixture.Factory.Output = baseline;
+        var largeFirst = await fixture.Backup(actor);
+        fixture.Factory.Output = target;
+        var largeSecond = await fixture.Backup(actor);
+        Assert(largeFirst.State == "SUCCEEDED" && largeSecond.State == "SUCCEEDED", "large diff fixtures must back up successfully");
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var large = fixture.Backups.Diff(largeFirst.Items.Single().SnapshotId!, largeSecond.Items.Single().SnapshotId!,
+            P2B5SiteScopeDecision.Global) ?? throw new InvalidOperationException("large diff fixture must be readable");
+        var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Check(large is { Identical: false, AddedLines: lineCount, RemovedLines: lineCount, ChangedLines: lineCount } &&
+            large.Added.Count == 256 && large.Removed.Count == 256 &&
+            large.Added.SequenceEqual(Enumerable.Range(0, 256).Select(index => $"new-{index:D5}")) &&
+            large.Removed.SequenceEqual(Enumerable.Range(0, 256).Select(index => $"old-{index:D5}")),
+            "large differences must retain total counts and cap each ordered preview at 256 lines");
+        // A full 12,000 x 12,000 integer LCS table would allocate over 500 MiB.
+        Check(allocatedBytes < 32 * 1024 * 1024, "large comparisons must use bounded memory instead of a full quadratic table");
+        Assert(failures.Count == 0, string.Join("; ", failures));
+    }
+
+    private static void RejectUnsupportedTargets(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var unsupported = Guid.NewGuid().ToString("N");
+        fixture.Catalog.CreateH3cDeviceProfile(new(unsupported, "192.0.2.62", 22, "fixture", "FIXTURE_REFERENCE",
+            string.Empty, true, 0, 0));
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Root, "catalog.db"), Pooling = false
+        }.ToString());
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE device_inventory SET vendor=$vendor WHERE terminal_profile_id=$profile";
+        command.Parameters.AddWithValue("$profile", unsupported);
+        var vendor = command.Parameters.Add("$vendor", SqliteType.Text);
+        foreach (var name in new[] { "Cisco", "Huawei", "ZTE", "unknown-vendor", "" })
+        {
+            vendor.Value = name;
+            command.ExecuteNonQuery();
+            try
+            {
+                fixture.Backups.Start(new[] { fixture.Profile, unsupported }, actor, P2B5SiteScopeDecision.Global);
+                throw new InvalidOperationException("mixed-vendor backup must be rejected before scheduling");
+            }
+            catch (ConfigBackupException ex)
+            {
+                Assert(ex.Code == "CONFIG_BACKUP_TARGET_UNSUPPORTED" && ex.StatusCode == 409,
+                    "unsupported vendors must return a specific compatibility error");
+            }
+        }
+        var hiddenScope = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "another-site" }, "fixture");
+        try
+        {
+            fixture.Backups.Start(new[] { unsupported }, actor, hiddenScope);
+            throw new InvalidOperationException("hidden target must be rejected");
+        }
+        catch (ConfigBackupException ex)
+        {
+            Assert(ex.Code == "CONFIG_BACKUP_TARGET_NOT_VISIBLE" && ex.StatusCode == 404,
+                "target visibility must be checked before vendor compatibility");
+        }
+        command.Parameters.Clear();
+        command.CommandText = "SELECT COUNT(*) FROM task_definitions";
+        Assert(Convert.ToInt64(command.ExecuteScalar()) == 0,
+            "a rejected mixed batch must not create definitions or connect even its first H3C target");
+    }
+
+    private static void RejectManagedFitApTargets(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var fitAp = Guid.NewGuid().ToString("N");
+        fixture.Catalog.CreateH3cDeviceProfile(new(fitAp, "192.0.2.63", 22, "fixture", "FIXTURE_REFERENCE",
+            string.Empty, true, 0, 0));
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(fixture.Root, "catalog.db"), Pooling = false
+        }.ToString());
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE device_inventory SET vendor='H3C',device_type=$type WHERE terminal_profile_id=$profile";
+        command.Parameters.AddWithValue("$profile", fitAp);
+        var type = command.Parameters.Add("$type", SqliteType.Text);
+        foreach (var deviceType in new[] { "FIT_AP", "fit_ap", "FiT_aP" })
+        {
+            type.Value = deviceType;
+            command.ExecuteNonQuery();
+            foreach (var profiles in new[] { new[] { fitAp }, new[] { fixture.Profile, fitAp } })
+            {
+                try
+                {
+                    fixture.Backups.Start(profiles, actor, P2B5SiteScopeDecision.Global);
+                    throw new InvalidOperationException("direct service calls must not back up a FIT-AP as a standalone H3C target");
+                }
+                catch (ConfigBackupException ex)
+                {
+                    Assert(ex.Code == "CONFIG_BACKUP_TARGET_UNSUPPORTED" && ex.StatusCode == 409,
+                        "FIT-AP targets must return the unsupported-target compatibility error");
+                }
+            }
+        }
+        command.Parameters.Clear();
+        command.CommandText = "SELECT COUNT(*) FROM task_definitions";
+        Assert(Convert.ToInt64(command.ExecuteScalar()) == 0,
+            "single and mixed FIT-AP requests must fail before creating any task definitions");
     }
 
     private sealed class Fixture : IDisposable
