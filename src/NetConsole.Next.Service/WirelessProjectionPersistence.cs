@@ -15,6 +15,16 @@ internal sealed partial class Catalog
         using var db = Open();
         using var transaction = db.BeginTransaction();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var sourceCutoffs = snapshot.ApResources.SelectMany(item => item.Observations)
+            .Select(item => (Source: item.SourceAcDeviceId, Captured: item.CapturedMs))
+            .Concat(snapshot.ApGroups.SelectMany(item => item.SourceGroupObservations)
+                .Select(item => (Source: item.SourceAcDeviceId, Captured: item.CapturedMs)))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Source) && item.Captured > 0)
+            .GroupBy(item => item.Source, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Max(item => item.Captured), StringComparer.Ordinal);
+        var cachedCutoffs = ReadGroupCacheSourceCutoffs(db, transaction, sourceCutoffs.Keys);
+        var staleSources = sourceCutoffs.Where(item => cachedCutoffs.TryGetValue(item.Key, out var cached) && item.Value < cached)
+            .Select(item => item.Key).ToHashSet(StringComparer.Ordinal);
         foreach (var domain in snapshot.AcDomains)
         {
             using var command = db.CreateCommand();
@@ -113,6 +123,9 @@ internal sealed partial class Catalog
         }
         foreach (var group in snapshot.ApGroups)
         {
+            // A delayed snapshot must not recreate evicted candidates or
+            // regress the only captured watermark for a confirmed empty group.
+            if (group.SourceAcDeviceIds.Any(staleSources.Contains)) continue;
             using var command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
@@ -151,6 +164,26 @@ internal sealed partial class Catalog
             command.Parameters.AddWithValue("$conflict", (object?)group.ConflictReason ?? DBNull.Value);
             command.Parameters.AddWithValue("$groupObservations", JsonSerializer.Serialize(group.SourceGroupObservations));
             command.ExecuteNonQuery();
+        }
+        using (var compact = db.CreateCommand())
+        {
+            compact.Transaction = transaction;
+            // This only compacts disposable candidate locators. It does not
+            // end a group or remove Raw/Facts/history. Equal timestamps have no
+            // reliable revision ordering and therefore retain both candidates.
+            compact.CommandText = """
+                DELETE FROM wireless_ap_groups
+                WHERE group_identity_key IS NULL
+                  AND id NOT IN (SELECT value FROM json_each($currentIds))
+                  AND EXISTS (
+                      SELECT 1 FROM json_each($sourceCutoffs) source
+                      WHERE source.key=wireless_ap_groups.source_ac_device_id
+                        AND wireless_ap_groups.observed_at_ms<CAST(source.value AS INTEGER))
+                """;
+            compact.Parameters.AddWithValue("$currentIds", JsonSerializer.Serialize(snapshot.ApGroups.Select(item => item.Id)));
+            compact.Parameters.AddWithValue("$sourceCutoffs", JsonSerializer.Serialize(sourceCutoffs
+                .Where(item => !staleSources.Contains(item.Key)).ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal)));
+            compact.ExecuteNonQuery();
         }
         var observations = snapshot.ApResources.SelectMany(item => item.Observations).ToArray();
         var manifestId = "wireless-collection:" + snapshot.SourceRevision;
@@ -203,5 +236,32 @@ internal sealed partial class Catalog
         }
         transaction.Commit();
         return new(snapshot.AcDomains.Count, snapshot.ApResources.Count, observations.Length, snapshot.ApGroups.Count);
+    }
+
+    private static IReadOnlyDictionary<string, long> ReadGroupCacheSourceCutoffs(
+        SqliteConnection db, SqliteTransaction transaction, IEnumerable<string> sources)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = transaction;
+        // Observation rows retain the watermark even when a newer snapshot has
+        // no groups. Explicit source-group evidence also covers empty groups;
+        // use each source's captured time, not a Domain aggregate or cache time.
+        query.CommandText = """
+            SELECT source_id,MAX(captured_ms) FROM (
+                SELECT source_ac_device_id AS source_id,captured_ms
+                FROM wireless_ap_observations
+                WHERE source_ac_device_id IN (SELECT value FROM json_each($sources))
+                UNION ALL
+                SELECT json_extract(evidence.value,'$.SourceAcDeviceId'),
+                       CAST(json_extract(evidence.value,'$.CapturedMs') AS INTEGER)
+                FROM wireless_ap_groups cached,json_each(cached.source_group_observations_json) evidence
+                WHERE json_extract(evidence.value,'$.SourceAcDeviceId') IN (SELECT value FROM json_each($sources))
+            ) GROUP BY source_id
+            """;
+        query.Parameters.AddWithValue("$sources", JsonSerializer.Serialize(sources));
+        using var reader = query.ExecuteReader();
+        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (reader.Read()) result[reader.GetString(0)] = reader.GetInt64(1);
+        return result;
     }
 }

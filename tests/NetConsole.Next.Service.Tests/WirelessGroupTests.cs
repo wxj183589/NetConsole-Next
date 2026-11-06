@@ -24,6 +24,11 @@ internal static class WirelessGroupTests
         SourceAndSiteFilteringPrecedesProjection();
         LegacyProjectionMigrationIsAtomicAndIdempotent();
         Console.WriteLine("WIRELESS_GROUP_CONTRACT_TESTS=PASS");
+        CandidateCacheCompactsOnlyObservedSources();
+        DelayedSnapshotsCannotRestoreEvictedCandidates();
+        EmptyGroupEvidenceRetainsPerSourceWatermarks();
+        CandidateCacheCompactionRollsBackAtomically();
+        Console.WriteLine("WIRELESS_GROUP_CACHE_TESTS=4/4 PASS");
     }
 
     private static void NameOnlyGroupsRemainCandidates()
@@ -255,6 +260,156 @@ internal static class WirelessGroupTests
             "23-to-24 upgrade preserves legacy data as unconfirmed name-only projection and remains restart safe");
         Execute(db, "INSERT INTO wireless_ap_groups SELECT 'another',source_ac_device_id,source_ac_domain_id,NULL,display_name,group_scope,member_resource_ids_json,source_revision,scope_status,updated_ms,NULL,group_identity_status,membership_revision,source_observation_ids_json,source_ac_device_ids_json,source_evidence_refs_json,observed_at_ms,conflict_reason,source_group_observations_json FROM wireless_ap_groups WHERE id='legacy'");
         Assert(Scalar(db, "SELECT COUNT(*) FROM wireless_ap_groups") == "2", "multiple unconfirmed groups per AC must not collide on a fabricated key");
+    }
+
+    private static void CandidateCacheCompactsOnlyObservedSources()
+    {
+        using var fixture = new GroupCacheFixture();
+        var baseline = Project(new[] { Ap("AC1", "confirmed", 10), Ap("AC2", "unobserved", 10) });
+        var confirmed = Reproject(baseline, new[] { Evidence(baseline, "AC1", "stable-key") });
+        fixture.Catalog.PersistWirelessProjection(confirmed);
+        var preserved = Scalar(fixture.Db, "SELECT id FROM wireless_ap_groups WHERE source_ac_device_id='AC2'");
+        for (var captured = 100; captured < 110; captured++)
+        {
+            var snapshot = Project(new[] { Ap("AC1", "first", captured),
+                Ap("AC1", "second", captured, "AP2", "SN-2", "4c6fd6080402") });
+            fixture.Catalog.PersistWirelessProjection(snapshot);
+            fixture.Catalog.PersistWirelessProjection(snapshot);
+            Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE source_ac_device_id='AC1' AND group_identity_key IS NULL") == "2" &&
+                Scalar(fixture.Db, "SELECT MIN(observed_at_ms) FROM wireless_ap_groups WHERE source_ac_device_id='AC1' AND group_identity_key IS NULL") == captured.ToString(),
+                "each observed source retains all current candidates without accumulating prior revisions or duplicate refreshes");
+        }
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE group_identity_key='AC|AC1|stable-key'") == "1" &&
+            Scalar(fixture.Db, "SELECT id FROM wireless_ap_groups WHERE source_ac_device_id='AC2'") == preserved &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_observations") == "22",
+            "candidate cache compaction preserves confirmed identities, sources without current evidence, and historical source observations");
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>()));
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "4", "FULL authorization with no source evidence cannot empty the group cache");
+        var partial = Project(new[] { Ap("AC1", "partial", 1000) }) with { Scope = new("PARTIAL", "fixture") };
+        var manifestCount = Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifests");
+        try { fixture.Catalog.PersistWirelessProjection(partial); throw new Exception("partial projection unexpectedly persisted"); }
+        catch (InvalidOperationException) { }
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "4" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_observations") == "22" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifests") == manifestCount,
+            "partial-scope rejection occurs before any insertion or compaction");
+    }
+
+    private static void DelayedSnapshotsCannotRestoreEvictedCandidates()
+    {
+        using var fixture = new GroupCacheFixture();
+        var older = Project(new[] { Ap("AC1", "old", 100) });
+        var newer = Project(new[] { Ap("AC1", "new", 200) });
+        fixture.Catalog.PersistWirelessProjection(older);
+        fixture.Catalog.PersistWirelessProjection(newer);
+        fixture.Catalog.PersistWirelessProjection(older);
+        Assert(Scalar(fixture.Db, "SELECT display_name FROM wireless_ap_groups") == "new" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "1",
+            "a delayed older snapshot neither deletes the newer candidate nor restores the evicted candidate");
+        var noGroup = Project(new[] { Ap("AC1", "", 300) });
+        fixture.Catalog.PersistWirelessProjection(noGroup);
+        fixture.Catalog.PersistWirelessProjection(newer);
+        fixture.Catalog.PersistWirelessProjection(older);
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "0", "source observation watermarks survive a zero-candidate projection");
+
+        var snapshots = Enumerable.Range(400, 8).Select(captured => Project(new[] { Ap("AC1", "revision-" + captured, captured) })).ToArray();
+        Parallel.ForEach(snapshots.Reverse(), snapshot => fixture.Catalog.PersistWirelessProjection(snapshot));
+        fixture.Catalog.PersistWirelessProjection(snapshots[0]);
+        Assert(Scalar(fixture.Db, "SELECT display_name FROM wireless_ap_groups") == "revision-407" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "1",
+            "concurrent transactions preserve the newest source candidate regardless of snapshot arrival order");
+    }
+
+    private static void EmptyGroupEvidenceRetainsPerSourceWatermarks()
+    {
+        using var fixture = new GroupCacheFixture();
+        var seed = Project(new[] { Ap("AC1", "one", 100), Ap("AC2", "two", 100) });
+        var first = Shared(Evidence(seed, "AC1", "shared-key")) with
+            { SourceObservationIds = Array.Empty<string>(), CapturedMs = 500, SourceRevision = "group:AC1:500" };
+        var second = Shared(Evidence(seed, "AC2", "shared-key")) with
+            { SourceObservationIds = Array.Empty<string>(), CapturedMs = 200, SourceRevision = "group:AC2:200" };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { first, second }));
+        var sourceTwo = Evidence(seed, "AC2", null) with
+            { SourceObservationIds = Array.Empty<string>(), CapturedMs = 300, SourceRevision = "group:AC2:300" };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { sourceTwo }));
+        Assert(Scalar(fixture.Db, "SELECT observed_at_ms FROM wireless_ap_groups WHERE group_identity_key IS NULL") == "300",
+            "a Domain's maximum observation time cannot suppress a newer observation from its slower source");
+        var equalTime = sourceTwo with { SourceRevision = "group:AC2:300:other-evidence" };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { equalTime }));
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE group_identity_key IS NULL") == "2",
+            "same-time revisions lack a safe ordering and must both remain candidates");
+        var sourceOneOld = Evidence(seed, "AC1", null) with { SourceObservationIds = Array.Empty<string>(), CapturedMs = 400 };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { sourceOneOld }));
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE group_identity_key IS NULL AND source_ac_device_id='AC1'") == "0",
+            "explicit empty-group evidence supplies a watermark without fabricated AP observations");
+
+        // Replacing an existing stable empty group with an older snapshot must
+        // not erase the only source watermark and allow a later stale candidate.
+        var staleShared = first with { CapturedMs = 100, SourceRevision = "group:AC1:100" };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { staleShared, second }));
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { sourceOneOld }));
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE group_identity_key IS NULL AND source_ac_device_id='AC1'") == "0" &&
+            Scalar(fixture.Db, "SELECT observed_at_ms FROM wireless_ap_groups WHERE group_identity_key='DOMAIN|domain-1|shared-key'") == "500",
+            "older stable-group cache writes cannot regress per-source evidence watermarks");
+        var newest = sourceTwo with { CapturedMs = 400, SourceRevision = "group:AC2:400" };
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { newest }));
+        fixture.Catalog.PersistWirelessProjection(Project(Array.Empty<WirelessObservationSeed>(), new[] { equalTime }));
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups WHERE group_identity_key IS NULL") == "1" &&
+            Scalar(fixture.Db, "SELECT observed_at_ms FROM wireless_ap_groups WHERE group_identity_key IS NULL") == "400",
+            "empty-group candidate revisions compact safely and cannot be restored by a delayed snapshot");
+    }
+
+    private static void CandidateCacheCompactionRollsBackAtomically()
+    {
+        using var fixture = new GroupCacheFixture();
+        fixture.Catalog.PersistWirelessProjection(Project(new[] { Ap("AC1", "before", 100) }));
+        Execute(fixture.Db, "CREATE TRIGGER fail_group_cache BEFORE INSERT ON wireless_collection_manifests BEGIN SELECT RAISE(ABORT,'fixture cache publication failure'); END");
+        var newer = Project(new[] { Ap("AC1", "after", 200) });
+        try { fixture.Catalog.PersistWirelessProjection(newer); throw new InvalidOperationException("cache publication unexpectedly succeeded"); }
+        catch (SqliteException) { }
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "1" &&
+            Scalar(fixture.Db, "SELECT display_name FROM wireless_ap_groups") == "before" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_observations") == "1" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifests") == "1" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifest_items") == "1" &&
+            Scalar(fixture.Db, "SELECT last_seen_ms FROM wireless_ap_resources") == "100",
+            "a publication failure rolls back candidate deletion, candidate insertion, observations, resource updates and manifests together");
+        Execute(fixture.Db, "DROP TRIGGER fail_group_cache");
+        fixture.Catalog.PersistWirelessProjection(newer);
+        Assert(Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_groups") == "1" &&
+            Scalar(fixture.Db, "SELECT display_name FROM wireless_ap_groups") == "after" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_ap_observations") == "2" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifests") == "2" &&
+            Scalar(fixture.Db, "SELECT COUNT(*) FROM wireless_collection_manifest_items") == "2",
+            "retry publishes the new candidate and compacts the old cache while retaining source history");
+    }
+
+    private sealed class GroupCacheFixture : IDisposable
+    {
+        private readonly string _tempRoot = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        private readonly string _root;
+        public Catalog Catalog { get; }
+        public SqliteConnection Db { get; }
+
+        public GroupCacheFixture()
+        {
+            _root = Path.Combine(_tempRoot, "next-group-cache-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_root);
+            Catalog = new(new RuntimeSettings { DataRoot = _root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = System.Net.IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 });
+            Catalog.Initialize();
+            Db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(_root, "catalog.db"), Pooling = false }.ToString());
+            Db.Open();
+        }
+
+        public void Dispose()
+        {
+            Db.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (!Path.GetFullPath(_root).StartsWith(_tempRoot, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("group cache fixture cleanup escaped its temporary root");
+            Directory.Delete(_root, true);
+        }
     }
 
     private static WirelessAcDeviceSeed Ac(string id, string site = "site-a") => new(id, id, site, "192.0.2.1", "H3C", "WX", "CONNECTED", null, "V7", true);
