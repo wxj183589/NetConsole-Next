@@ -835,6 +835,7 @@ app.MapGet("/api/system/config-backups/{id}/download", (HttpContext context, str
     ConfigBackupService backups) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
     var result = backups.OpenDownload(id, CurrentSiteScope(context));
     return result is null ? Results.NotFound() : Results.File(result.Value.Stream, "text/plain; charset=utf-8",
         result.Value.Name, enableRangeProcessing: true);

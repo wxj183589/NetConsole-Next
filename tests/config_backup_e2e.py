@@ -132,6 +132,7 @@ def download(client, snapshot, status=200):
     try:
         with client.opener.open(request, timeout=8) as response:
             assert response.status == status
+            assert response.headers["Cache-Control"] == "no-store"
             return response.read(), response.headers
     except urllib.error.HTTPError as error:
         assert error.code == status, error.code
