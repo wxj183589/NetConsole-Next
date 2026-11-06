@@ -10,6 +10,7 @@ written to logs.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import sys
@@ -17,7 +18,7 @@ from typing import Any
 
 import paramiko
 from netmiko import ConnectHandler
-from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
+from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException, ReadException, ReadTimeout
 from netmiko.ssh_dispatcher import CLASS_MAPPER
 
 
@@ -30,6 +31,14 @@ class UnsupportedDeviceTypeError(ValueError):
 
 class OutputLimitError(ValueError):
     """The bounded worker channel cannot accept the payload."""
+
+
+class ConnectionLostError(ConnectionError):
+    """Netmiko confirmed the existing connection is no longer alive."""
+
+
+class CommandInterruptedError(Exception):
+    """The command started; disconnected reads cannot prove complete output."""
 
 
 class JumpHostAuthenticationError(ConnectionError):
@@ -108,6 +117,57 @@ def is_host_key_negotiation_error(error: Exception) -> bool:
                "hostkey algorithm", "server only offered ssh-rsa")
     return any(marker in text for marker in markers) or text.rstrip(".") == "negotiation failed" or (
         wrapped and text.rsplit(":", 1)[-1].strip().rstrip(".") == "negotiation failed")
+
+
+def is_network_loss(error: BaseException | None) -> bool:
+    if isinstance(error, paramiko.ssh_exception.NoValidConnectionsError):
+        return bool(error.errors) and all(is_network_loss(item) for item in error.errors.values())
+    if isinstance(error, (EOFError, ConnectionError, ReadException)):
+        return True
+    if isinstance(error, OSError):
+        network_codes = {errno.ECONNABORTED, errno.ECONNRESET, errno.ECONNREFUSED,
+                         errno.ENETDOWN, errno.ENETUNREACH, errno.EHOSTUNREACH,
+                         errno.ENOTCONN, errno.EPIPE, errno.ETIMEDOUT}
+        return error.errno in network_codes or getattr(error, "winerror", None) in {
+            10050, 10051, 10053, 10054, 10057, 10060, 10061, 10064, 10065
+        } or str(error).strip().casefold() == "socket is closed"
+    return False
+
+
+def failure_kind(error: Exception, operation: str | None) -> str:
+    """Use transport evidence, without exposing exception/request text."""
+    name = type(error).__name__
+    if isinstance(error, JumpHostAuthenticationError):
+        return name
+    if isinstance(error, JumpHostConnectionError):
+        cause = error.__cause__
+        return name if isinstance(cause, TimeoutError) or is_network_loss(cause) else "JUMP_HOST_PROTOCOL_ERROR"
+    if isinstance(error, JumpHostChannelError):
+        cause = error.__cause__
+        if isinstance(cause, TimeoutError) or is_network_loss(cause) or (
+                isinstance(cause, paramiko.ChannelException) and cause.code == 2):
+            return name
+        return "JUMP_HOST_FORWARD_DENIED"
+    if isinstance(error, (paramiko.AuthenticationException, NetmikoAuthenticationException)):
+        return name
+    # A prompt/read timeout may contain output. Never classify it as a lost
+    # connection even if the channel has closed in the meantime.
+    if isinstance(error, ReadTimeout):
+        return "COMMAND_TIMEOUT"
+    if isinstance(error, NetmikoTimeoutException):
+        cause = error.__cause__ or error.__context__
+        if isinstance(cause, TimeoutError):
+            return "CONNECT_TIMEOUT" if operation == "connect" else "COMMAND_TIMEOUT"
+        if is_network_loss(cause):
+            return "CONNECTION_LOST" if operation == "connect" else "COMMAND_INTERRUPTED"
+        if isinstance(cause, paramiko.SSHException) or is_host_key_negotiation_error(error):
+            return "PROTOCOL_ERROR"
+        return "NETMIKO_TIMEOUT_UNCLASSIFIED"
+    if isinstance(error, TimeoutError):
+        return "CONNECT_TIMEOUT" if operation == "connect" else "COMMAND_TIMEOUT"
+    if is_network_loss(error):
+        return "CONNECTION_LOST" if operation == "connect" or isinstance(error, ConnectionLostError) else "COMMAND_INTERRUPTED"
+    return name
 
 
 class Worker:
@@ -220,13 +280,22 @@ class Worker:
         if self.connection is None:
             raise RuntimeError("worker is not connected")
         try:
-            output = self.connection.send_command(
-                request["command"],
-                read_timeout=float(request.get("read_timeout", 30)),
-                cmd_verify=False,
-                strip_prompt=False,
-                strip_command=False,
-            )
+            if not self.connection.is_alive():
+                raise ConnectionLostError()
+            try:
+                output = self.connection.send_command(
+                    request["command"],
+                    read_timeout=float(request.get("read_timeout", 30)),
+                    cmd_verify=False,
+                    strip_prompt=False,
+                    strip_command=False,
+                )
+            except Exception as error:
+                if isinstance(error, ReadTimeout):
+                    raise
+                if is_network_loss(error):
+                    raise CommandInterruptedError() from error
+                raise
             if len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
                 raise OutputLimitError("command output exceeded worker limit")
         except Exception:
@@ -337,6 +406,7 @@ def main() -> int:
     for line in sys.stdin:
         if not line.strip():
             continue
+        operation = None
         try:
             request = json.loads(line)
             operation = request.get("op")
@@ -361,8 +431,10 @@ def main() -> int:
                 return 0
         except Exception as exc:
             # Never reflect request values (especially password) in the
-            # protocol.  Exception class is sufficient for the .NET mapper.
-            emit({"ok": False, "error": type(exc).__name__, "detail": "worker operation failed"})
+            # protocol. Explicit failure classes prevent command/prompt
+            # timeouts from being mistaken for a connection safe to replay.
+            emit({"ok": False, "error": type(exc).__name__, "failure_kind": failure_kind(exc, operation),
+                  "detail": "worker operation failed"})
     worker.close()
     return 0
 

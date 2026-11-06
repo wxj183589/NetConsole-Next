@@ -9,7 +9,11 @@ using System.Text;
 using System.Text.Json;
 using NetConsole.Next.Credentials;
 
-if (NetmikoWorkerBudgetTests.IsWorker)
+if (NetmikoRetryTransportTests.IsWorker)
+    await NetmikoRetryTransportTests.RunWorkerAsync();
+else if (args.Length > 0 && args[0] == "--netmiko-retry-tests")
+    await NetmikoRetryTransportTests.RunAsync();
+else if (NetmikoWorkerBudgetTests.IsWorker)
     await NetmikoWorkerBudgetTests.RunWorkerAsync();
 else if (args.Length > 0 && args[0] == "--netmiko-worker-budget-tests")
     await NetmikoWorkerBudgetTests.RunAsync();
@@ -222,6 +226,7 @@ internal static class SchedulerTests
         await ReportsConnectionFailuresAndDisposesSession();
         await H3cConnectionPolicyTests.RunAsync();
         await NetmikoWorkerBudgetTests.RunAsync();
+        await NetmikoRetryTransportTests.RunAsync();
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
         VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();

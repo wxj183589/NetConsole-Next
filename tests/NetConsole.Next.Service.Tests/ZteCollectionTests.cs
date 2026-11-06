@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 
 namespace NetConsole.Next.Service.Tests;
@@ -148,6 +149,7 @@ internal static class ZteCollectionTests
             Assert(catalog.QueryZteFacts(profileId, "optical", false, 10).Count == 1 &&
                    catalog.QueryZteFacts(profileId, "lldp", false, 10).Count == 1,
                 "ZTE runtime fixture session must persist optical and LLDP current facts");
+            await VerifyOperationBoundaries(catalog, root);
             Console.WriteLine("PASS: ZTE profile, parser replay, current/history atomic facts and failed-run preservation");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
@@ -156,6 +158,205 @@ internal static class ZteCollectionTests
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private static async Task VerifyOperationBoundaries(Catalog catalog, string root)
+    {
+        void Execute(string sql, string id = "")
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = Path.Combine(root, "catalog.db"), Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+        string Scalar(string sql)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = Path.Combine(root, "catalog.db"), Pooling = false }.ToString());
+            db.Open();
+            using var command = db.CreateCommand(); command.CommandText = sql;
+            return Convert.ToString(command.ExecuteScalar())!;
+        }
+        (string Profile, string Baseline) CreateTarget()
+        {
+            var id = Guid.NewGuid().ToString("N");
+            catalog.CreateZteDeviceProfile(new(id, "192.0.2.44", 22, "reader", "FIXTURE", "", true, 0, 0), "synthetic");
+            var baseline = Guid.NewGuid().ToString("N");
+            catalog.StartZteCollectionRun(baseline, id, 1);
+            catalog.CommitZteCollection(baseline, id, "SUCCEEDED", null, new Dictionary<string, string>(),
+                [("identity", "PARSED", "{\"previous\":true}")]);
+            return (id, baseline);
+        }
+        void AssertFailed(ZteCollectionRunSnapshot run, string profile, string baseline, int completed)
+        {
+            Assert(run.State == "FAILED" && run.FailureReason!.Contains("REVOKED", StringComparison.Ordinal),
+                "a rejected live boundary must persist a failed run and its reason");
+            var current = catalog.QueryZteFacts(profile, null, false, 100);
+            Assert(current.Count == 1 && current[0].RunId == baseline,
+                "revocation must preserve the previous Current without publishing any new kind");
+            var retained = catalog.QueryZteFacts(profile, null, true, 100).Where(fact => fact.RunId == run.Id).ToArray();
+            Assert(retained.Length == completed && retained.All(fact => fact.Status == "PARTIAL" && !fact.IsCurrent),
+                "completed output must be sealed as partial history after a failed boundary");
+        }
+
+        var denied = CreateTarget();
+        var deniedFactory = new BoundaryTransportFactory();
+        await using (var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), deniedFactory))
+        {
+            var before = Scalar("SELECT COUNT(*) FROM zte_collection_runs");
+            try { service.Start(denied.Profile, () => throw new TaskScopeRevokedException("ZTE_ACTOR_SCOPE_REVOKED")); throw new Exception("admission must reject"); }
+            catch (TaskScopeRevokedException) { }
+            Assert(deniedFactory.Created == 0 && Scalar("SELECT COUNT(*) FROM zte_collection_runs") == before,
+                "denied admission must neither create a run nor a transport");
+        }
+
+        var actorId = Scalar("SELECT id FROM web_users WHERE username='superadmin'");
+        void RequireActor()
+        {
+            if (catalog.GetActiveTaskActor(actorId) is not { Role: "SUPERADMIN" })
+                throw new TaskScopeRevokedException("ZTE_ACTOR_SCOPE_REVOKED");
+        }
+        var duringConnect = CreateTarget();
+        var connectFactory = new BoundaryTransportFactory
+        { Connected = () => Execute("UPDATE web_users SET disabled=1 WHERE id=$id", actorId) };
+        try
+        {
+            await using var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), connectFactory);
+            var result = await Terminal(service, service.Start(duringConnect.Profile, RequireActor));
+            AssertFailed(result, duringConnect.Profile, duringConnect.Baseline, 0);
+            Assert(connectFactory.Commands == 0 && connectFactory.Disposals == 1,
+                "actor disabled during connection must prevent the first command and release transport");
+        }
+        finally { Execute("UPDATE web_users SET disabled=0 WHERE id=$id", actorId); }
+
+        var betweenCommands = CreateTarget();
+        var roleFactory = new BoundaryTransportFactory
+        { Command = _ => Execute("UPDATE web_users SET role='ADMIN' WHERE id=$id", actorId) };
+        try
+        {
+            await using var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), roleFactory);
+            var result = await Terminal(service, service.Start(betweenCommands.Profile, RequireActor));
+            AssertFailed(result, betweenCommands.Profile, betweenCommands.Baseline, 1);
+            Assert(roleFactory.Commands == 1 && roleFactory.Disposals == 1,
+                "role revocation must stop the next command and release transport");
+        }
+        finally { Execute("UPDATE web_users SET role='SUPERADMIN' WHERE id=$id", actorId); }
+
+        Execute("INSERT OR IGNORE INTO sites(id,name) VALUES('zte-boundary-other','Other fixture')");
+        foreach (var assignment in new[] { "enabled=0", "host='192.0.2.45'", "port=2222", "username='changed-reader'", "site_id='zte-boundary-other'" })
+        {
+            var target = CreateTarget();
+            var factory = new BoundaryTransportFactory
+            { Command = _ => Execute("UPDATE zte_device_profiles SET " + assignment + " WHERE id=$id", target.Profile) };
+            await using var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), factory);
+            var result = await Terminal(service, service.Start(target.Profile));
+            AssertFailed(result, target.Profile, target.Baseline, 1);
+            Assert(factory.Commands == 1, "disabled or changed frozen endpoint must stop the next command: " + assignment);
+        }
+
+        var beforePublish = CreateTarget();
+        var publishFactory = new BoundaryTransportFactory
+        { Command = command => { if (command == ZteCommandPolicy.ShowLldpEntry) Execute("UPDATE web_users SET disabled=1 WHERE id=$id", actorId); } };
+        try
+        {
+            await using var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), publishFactory);
+            var result = await Terminal(service, service.Start(beforePublish.Profile, RequireActor));
+            AssertFailed(result, beforePublish.Profile, beforePublish.Baseline, 5);
+            Assert(publishFactory.Commands == 5, "revocation after the last command must be caught before publication");
+        }
+        finally { Execute("UPDATE web_users SET disabled=0 WHERE id=$id", actorId); }
+
+        var queued = CreateTarget();
+        var blockerA = CreateTarget();
+        var blockerB = CreateTarget();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queueFactory = new BoundaryTransportFactory { ConnectWait = token => release.Task.WaitAsync(token) };
+        await using (var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), queueFactory))
+        {
+            var first = service.Start(blockerA.Profile);
+            var second = service.Start(blockerB.Profile);
+            var last = service.Start(queued.Profile);
+            try { Execute("UPDATE zte_device_profiles SET enabled=0 WHERE id=$id", queued.Profile); }
+            finally { release.TrySetResult(); }
+            await Terminal(service, first); await Terminal(service, second);
+            AssertFailed(await Terminal(service, last), queued.Profile, queued.Baseline, 0);
+            Assert(queueFactory.Created == 2, "target disabled while queued must not create a third transport");
+        }
+
+        var reconnect = CreateTarget();
+        var reconnectFactory = new BoundaryTransportFactory { Retry = true, LoseConnection = true,
+            Command = _ => Execute("UPDATE web_users SET disabled=1 WHERE id=$id", actorId) };
+        try
+        {
+            await using var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), reconnectFactory);
+            var result = await Terminal(service, service.Start(reconnect.Profile, RequireActor));
+            AssertFailed(result, reconnect.Profile, reconnect.Baseline, 0);
+            Assert(reconnectFactory.Created == 1 && reconnectFactory.Commands == 1 && reconnectFactory.Disposals == 1,
+                "live actor revocation during connection loss must stop before opening a replacement transport");
+        }
+        finally { Execute("UPDATE web_users SET disabled=0 WHERE id=$id", actorId); }
+
+        var metadata = CreateTarget();
+        var metadataFactory = new BoundaryTransportFactory { Command = _ => catalog.UpdateZteCredential(metadata.Profile, "synthetic", false) };
+        await using (var service = new ZteCollectionService(catalog, new UnavailableH3cCredentialProvider(), metadataFactory))
+        {
+            var result = await Terminal(service, service.Start(metadata.Profile, RequireActor));
+            Assert(result.State == "SUCCEEDED" && metadataFactory.Commands == 5 &&
+                catalog.QueryZteFacts(metadata.Profile, null, false, 100).All(fact => fact.RunId == result.Id),
+                "automatic host-key trust and credential revision updates must not revoke an unchanged endpoint");
+        }
+        Console.WriteLine("ZTE_OPERATION_BOUNDARY_TESTS=12/12 PASS");
+    }
+
+    private static async Task<ZteCollectionRunSnapshot> Terminal(ZteCollectionService service, string id)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (true)
+        {
+            var run = service.GetRun(id)!;
+            if (run.State is not ("QUEUED" or "RUNNING")) return run;
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
+    private sealed class BoundaryTransportFactory : IH3cSshTransportFactory
+    {
+        public Action? Connected { get; init; }
+        public Action<string>? Command { get; init; }
+        public Func<CancellationToken, Task>? ConnectWait { get; init; }
+        public bool Retry { get; init; }
+        public bool LoseConnection { get; init; }
+        public int Created, Commands, Disposals;
+        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password)
+        {
+            Assert(password == "synthetic", "boundary fixture must use its saved device credential");
+            IH3cSshTransport CreatePhysical() { Interlocked.Increment(ref Created); return new BoundaryTransport(this); }
+            return Retry ? new NetmikoRetryTransport(CreatePhysical, ZteCommandPolicy.IsAllowed, (_, _) => Task.CompletedTask) : CreatePhysical();
+        }
+    }
+
+    private sealed class BoundaryTransport(BoundaryTransportFactory owner) : IH3cSshTransport
+    {
+        private readonly FixtureTransport _fixture = new(false);
+        public bool IsConnected => _fixture.IsConnected;
+        public async Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
+        {
+            if (owner.ConnectWait is not null) await owner.ConnectWait(cancellationToken);
+            await _fixture.ConnectAsync(verifyHostKey, cancellationToken);
+            owner.Connected?.Invoke();
+        }
+        public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref owner.Commands);
+            owner.Command?.Invoke(command);
+            if (owner.LoseConnection) { _fixture.Abort(); throw new H3cConnectionLostException(); }
+            return _fixture.ExecuteAsync(command, cancellationToken);
+        }
+        public void Abort() => _fixture.Abort();
+        public void Dispose() { Interlocked.Increment(ref owner.Disposals); _fixture.Dispose(); }
     }
 
     private sealed class FixtureTransportFactory(bool failAuthentication = false) : IH3cSshTransportFactory

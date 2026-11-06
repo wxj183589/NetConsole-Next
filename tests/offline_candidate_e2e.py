@@ -29,6 +29,7 @@ from linux_ssh_e2e import LinuxSimulator, PASSWORD as LINUX_PASSWORD
 from linux_ssh_e2e import eventually, expect, read_until, session, websocket
 from p2b3_read_api_e2e import free_port, stop_service
 from ssh_jump_host_e2e import Target, connection_test, create_profile, task
+from netmiko_reconnect_e2e import ReconnectTarget, VERSION, VLAN, commands_since, submit, wait_run
 from terminal_e2e import PASSWORD as NETWORK_PASSWORD
 from web_auth_e2e import Client
 
@@ -179,13 +180,27 @@ def wait_ready(service: subprocess.Popen, base: str) -> None:
     raise AssertionError("Candidate did not become healthy")
 
 
+def verify_reconnect(client: Client, profile: str, target: ReconnectTarget) -> None:
+    target.mode = "drop-once"
+    before, connections = len(target.commands), len(target.transports)
+    run_id = submit(client, profile, [VERSION, VLAN])
+    result = wait_run(client, run_id)
+    assert result["state"] == "SUCCEEDED", result
+    assert len(target.transports) - connections == 2 and commands_since(target, before) == [VERSION, VLAN]
+    manifest = expect(client, f"/api/system/tasks/{run_id}/diagnostics")
+    assert manifest["status"] == "COMPLETE" and len(manifest["commands"]) == 2
+    eventually(lambda: target.active == 0)
+    target.mode = "healthy"
+    print("OFFLINE_NETMIKO_RECONNECT=PASS (bundled worker recovers pre-command loss, ordered Raw, no completed-command replay)")
+
+
 def run(candidate: Path) -> None:
     if os.name != "nt":
         raise RuntimeError("This acceptance gate requires Windows")
     candidate = candidate_directory(candidate)
     test_parent = workspace_path("test-data")
     test_parent.mkdir(parents=True, exist_ok=True)
-    network, linux = Target(), LinuxSimulator()
+    network, linux = ReconnectTarget(), LinuxSimulator()
     try:
         with tempfile.TemporaryDirectory(prefix="offline-candidate-", dir=test_parent) as temporary_name:
             temporary = Path(temporary_name)
@@ -213,6 +228,7 @@ def run(candidate: Path) -> None:
                     assert "display version" in network.commands, "Netmiko did not execute the probe on the simulator"
                     print("OFFLINE_NETMIKO_CONNECTION=PASS (candidate cwd, no Python PATH or worker override, real loopback SSH login and command)")
                     verify_diagnostics(owner, profile, network)
+                    verify_reconnect(owner, profile, network)
 
                     server = expect(owner, "/api/system/linux/servers", "POST", {
                         "name": "Offline Linux simulator", "host": "127.0.0.1", "port": linux.port,

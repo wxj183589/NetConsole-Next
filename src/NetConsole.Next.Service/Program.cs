@@ -1476,11 +1476,25 @@ app.MapPost("/api/system/sites/{siteId}/ssh-jump-host/refresh-fingerprint", asyn
     catch (NetmikoJumpHostProbeException ex)
     { return Results.Conflict(new { error = ex.Code, detail = ex.Message }); }
 });
-app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, string id, ZteCollectionService zte, Catalog catalog) =>
+app.MapPost("/api/system/zte/profiles/{id}/collect", (HttpContext context, string id, ZteCollectionService zte,
+    Catalog catalog, P2B5SiteScopeStore scopes) =>
 {
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "ZTE_COLLECTION_PERMISSION_DENIED", id);
-    try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id) }); }
+    var profile = zte.Profile(id);
+    if (profile is null) return Results.NotFound();
+    if (DeviceSiteScopeGuard(context, profile.SiteId) is { } denied) return denied;
+    var actorUserId = CurrentIdentity(context).UserId;
+    var siteId = profile.SiteId;
+    void RequireActorScope()
+    {
+        var actor = catalog.GetActiveTaskActor(actorUserId);
+        if (actor is null || actor.Role != "SUPERADMIN" || !DeviceSiteScope.Allows(scopes.Resolve(actor), siteId) ||
+            catalog.GetZteDeviceProfile(id)?.SiteId != siteId)
+            throw new TaskScopeRevokedException("ZTE_ACTOR_SCOPE_REVOKED");
+    }
+    try { return Results.Accepted($"/api/system/zte/runs", new { runId = zte.Start(id, RequireActorScope) }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
     catch (ZteCollectionRejectedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status429TooManyRequests); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }

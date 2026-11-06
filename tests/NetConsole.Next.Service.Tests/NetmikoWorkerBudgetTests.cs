@@ -169,7 +169,7 @@ internal static class NetmikoWorkerBudgetTests
                 var failed = false;
                 try { await connection; }
                 catch (H3cAuthenticationFailedException) when (host == "fail") { failed = true; }
-                catch (IOException) when (host == "exit") { failed = true; }
+                catch (H3cConnectionLostException) when (host == "exit") { failed = true; }
                 Assert(failed, "a failed worker must not report a connection");
             }
             transport.Abort(); transport.Dispose();

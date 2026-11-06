@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import io
@@ -431,8 +432,92 @@ class NetmikoWorkerTests(unittest.TestCase):
                     self.assertEqual(module.main(), 0)
                 self.assertNotIn(secret, stdout.getvalue() + stderr.getvalue())
                 self.assertEqual(json.loads(stdout.getvalue()), {
-                    "ok": False, "error": type(error).__name__, "detail": "worker operation failed"})
+                    "ok": False, "error": type(error).__name__, "failure_kind": module.failure_kind(error, "connect"),
+                    "detail": "worker operation failed"})
                 target.disconnect.assert_called_once_with()
+
+    def test_send_before_alive_check_distinguishes_safe_recovery_from_started_command(self):
+        target = connection()
+        target.is_alive.return_value = False
+        worker = module.Worker()
+        worker.connection = target
+        with self.assertRaises(module.ConnectionLostError) as error:
+            worker.execute({"command": "display version"})
+        self.assertEqual(module.failure_kind(error.exception, "execute"), "CONNECTION_LOST")
+        target.send_command.assert_not_called()
+        target.disconnect.assert_called_once_with()
+
+        for failure in (EOFError("partial"), ConnectionResetError("partial"),
+                        OSError(errno.EPIPE, "partial"), module.ReadException("partial")):
+            with self.subTest(failure=type(failure).__name__):
+                target = connection()
+                target.send_command.side_effect = failure
+                worker = module.Worker()
+                worker.connection = target
+                with self.assertRaises(module.CommandInterruptedError) as error:
+                    worker.execute({"command": "display version"})
+                self.assertEqual(module.failure_kind(error.exception, "execute"), "CommandInterruptedError")
+                target.send_command.assert_called_once()
+                target.disconnect.assert_called_once_with()
+
+    def test_read_timeout_and_wrapped_errors_do_not_authorize_command_replay(self):
+        for cause in (ConnectionResetError("secret"), EOFError("secret"),
+                      OSError(errno.ECONNREFUSED, "secret"), module.paramiko.SSHException("secret")):
+            wrapped = NetmikoTimeoutException("secret")
+            wrapped.__cause__ = cause
+            expected_connect = "PROTOCOL_ERROR" if isinstance(cause, module.paramiko.SSHException) else "CONNECTION_LOST"
+            self.assertEqual(module.failure_kind(wrapped, "connect"), expected_connect)
+            expected_execute = "PROTOCOL_ERROR" if isinstance(cause, module.paramiko.SSHException) else "COMMAND_INTERRUPTED"
+            self.assertEqual(module.failure_kind(wrapped, "execute"), expected_execute)
+        self.assertEqual(module.failure_kind(NetmikoTimeoutException("unproven"), "connect"), "NETMIKO_TIMEOUT_UNCLASSIFIED")
+        self.assertEqual(module.failure_kind(ReadTimeout("partial"), "connect"), "COMMAND_TIMEOUT")
+        self.assertEqual(module.failure_kind(ReadTimeout("partial"), "execute"), "COMMAND_TIMEOUT")
+        self.assertEqual(module.failure_kind(OSError(errno.EINVAL, "argument"), "connect"), "OSError")
+        self.assertEqual(module.failure_kind(OSError("unproven"), "execute"), "OSError")
+        self.assertEqual(module.failure_kind(TimeoutError(), "connect"), "CONNECT_TIMEOUT")
+        self.assertEqual(module.failure_kind(TimeoutError(), "execute"), "COMMAND_TIMEOUT")
+
+    def test_jump_permissions_protocol_and_authentication_are_not_transient(self):
+        for cause, expected in ((module.paramiko.ChannelException(1, "secret"), "JUMP_HOST_FORWARD_DENIED"),
+                                (module.paramiko.ChannelException(2, "secret"), "JumpHostChannelError"),
+                                (ConnectionRefusedError("secret"), "JumpHostChannelError"),
+                                (TimeoutError(), "JumpHostChannelError"),
+                                (module.paramiko.SSHException("secret"), "JUMP_HOST_FORWARD_DENIED")):
+            wrapped = module.JumpHostChannelError()
+            wrapped.__cause__ = cause
+            self.assertEqual(module.failure_kind(wrapped, "connect"), expected)
+        protocol = module.JumpHostConnectionError()
+        protocol.__cause__ = module.paramiko.SSHException("secret")
+        self.assertEqual(module.failure_kind(protocol, "connect"), "JUMP_HOST_PROTOCOL_ERROR")
+        self.assertEqual(module.failure_kind(module.JumpHostAuthenticationError(), "connect"), "JumpHostAuthenticationError")
+
+    def test_paramiko_aggregated_connection_refusal_retains_network_evidence(self):
+        refused = module.paramiko.ssh_exception.NoValidConnectionsError({
+            ("192.0.2.44", 22): ConnectionRefusedError(errno.ECONNREFUSED, "synthetic")})
+        wrapped = NetmikoTimeoutException("synthetic")
+        wrapped.__context__ = refused
+        self.assertEqual(module.failure_kind(refused, "connect"), "CONNECTION_LOST")
+        self.assertEqual(module.failure_kind(wrapped, "connect"), "CONNECTION_LOST")
+        self.assertEqual(module.failure_kind(wrapped, "execute"), "COMMAND_INTERRUPTED")
+        unproven = module.paramiko.ssh_exception.NoValidConnectionsError({
+            ("192.0.2.44", 22): OSError(errno.EINVAL, "synthetic")})
+        self.assertFalse(module.is_network_loss(unproven))
+
+    def test_json_failure_category_preserves_strict_command_stage_and_no_secrets(self):
+        for failure, expected in ((EOFError("synthetic-secret"), "CommandInterruptedError"),
+                                  (ReadTimeout("synthetic-secret"), "COMMAND_TIMEOUT"),
+                                  (ValueError("synthetic-secret"), "ValueError")):
+            target = connection()
+            target.send_command.side_effect = failure
+            payload = "\n".join((json.dumps(request(op="connect")),
+                                  json.dumps({"op": "execute", "command": "display version"}))) + "\n"
+            stdout = io.StringIO()
+            with mock.patch.object(module.sys, "stdin", io.StringIO(payload)), \
+                 contextlib.redirect_stdout(stdout), mock.patch.object(module, "ConnectHandler", return_value=target):
+                self.assertEqual(module.main(), 0)
+            replies = [json.loads(line) for line in stdout.getvalue().splitlines()]
+            self.assertEqual(replies[1]["failure_kind"], expected)
+            self.assertNotIn("synthetic-secret", stdout.getvalue())
 
     def test_successful_json_result_never_reflects_device_or_jump_password(self):
         stdout, stderr = io.StringIO(), io.StringIO()

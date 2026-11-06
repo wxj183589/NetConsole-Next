@@ -77,6 +77,8 @@ internal sealed class ZteSshDeviceSession : IAsyncDisposable
     private readonly IH3cSshTransportFactory _transportFactory;
     private readonly Catalog _catalog;
     private IH3cSshTransport? _transport;
+    private Action? _operationBoundary;
+    public void SetOperationBoundary(Action boundary) => _operationBoundary = boundary;
 
     public ZteSshDeviceSession(ZteDeviceProfileSnapshot profile, IH3cCredentialProvider credentials,
         IH3cSshTransportFactory transportFactory, Catalog catalog)
@@ -95,8 +97,23 @@ internal sealed class ZteSshDeviceSession : IAsyncDisposable
             _profile.CredentialReference, _profile.HostKeySha256, _profile.Enabled, _profile.CreatedMs, _profile.UpdatedMs,
             _profile.HostKeyUpdatePolicy, _profile.AllowLegacyAlgorithms, _profile.TerminalEncoding, "SSH", false,
             DeviceType: "zte_zxros", SiteId: _profile.SiteId);
+        _operationBoundary?.Invoke();
         _transport = _transportFactory.Create(h3cProfile, password);
         string? keyType = null, fingerprint = null;
+        var expectedProfile = _profile;
+        void CommitKey()
+        {
+            if (fingerprint is null || keyType is null || !_catalog.CommitZteHostKey(expectedProfile, keyType, fingerprint))
+                throw new H3cHostKeyMismatchException();
+            expectedProfile = expectedProfile with { HostKeySha256 = fingerprint };
+            keyType = fingerprint = null;
+        }
+        if (_transport is NetmikoRetryTransport recovery)
+        {
+            recovery.BeforeReconnect = () => { _operationBoundary?.Invoke(); keyType = fingerprint = null; };
+            recovery.Reconnected = CommitKey;
+            recovery.ReconnectFailed = () => keyType = fingerprint = null;
+        }
         await _transport.ConnectAsync((type, presented) =>
         {
             if (string.IsNullOrWhiteSpace(type) || type.Length > 128 || type.Any(char.IsWhiteSpace) || type.Any(char.IsControl)) return false;
@@ -105,8 +122,7 @@ internal sealed class ZteSshDeviceSession : IAsyncDisposable
             keyType = type;
             return true;
         }, cancellationToken);
-        if (fingerprint is null || keyType is null || !_catalog.CommitZteHostKey(_profile, keyType, fingerprint))
-            throw new H3cHostKeyMismatchException();
+        CommitKey();
     }
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
@@ -168,10 +184,28 @@ internal sealed class ZteCollectionService
         profile.TerminalEncoding, profile.SiteId, _catalog.HasZteCredentialPassword(profile.Id));
     public ZteCollectionRunSnapshot? GetRun(string id) => _runs.TryGetValue(id, out var run) ? run : _catalog.GetZteCollectionRun(id);
 
-    public string Start(string profileId)
+    public string Start(string profileId, Action? guard = null)
     {
         var profile = _catalog.GetZteDeviceProfile(profileId) ?? throw new KeyNotFoundException("ZTE device profile was not found.");
         if (!profile.Enabled) throw new InvalidOperationException("ZTE device profile is disabled.");
+        void RequireOperationBoundary()
+        {
+            try
+            {
+                guard?.Invoke();
+                var current = _catalog.GetZteDeviceProfile(profile.Id);
+                // This profile type is always SSH/zte_zxros. Host-key and
+                // credential updates do not change the frozen endpoint.
+                if (current is null || !current.Enabled || current.SiteId != profile.SiteId ||
+                    current.Host != profile.Host || current.Port != profile.Port || current.Username != profile.Username)
+                    throw new TaskScopeRevokedException("ZTE_TARGET_REVOKED");
+            }
+            catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or JsonException)
+            {
+                throw new TaskScopeRevokedException("ZTE_SCOPE_AUTHORITY_UNAVAILABLE");
+            }
+        }
+        RequireOperationBoundary();
         if (!_reservedProfiles.TryAdd(profileId, 0))
             throw new ZteCollectionRejectedException("A ZTE collection is already running for this profile.");
         if (Interlocked.Increment(ref _queued) > QueueCapacity)
@@ -191,7 +225,7 @@ internal sealed class ZteCollectionService
             Interlocked.Decrement(ref _queued);
             throw;
         }
-        var task = CollectAsync(runId, profile);
+        var task = CollectAsync(runId, profile, RequireOperationBoundary);
         _tasks[runId] = task;
         _ = task.ContinueWith(completed =>
         {
@@ -221,7 +255,7 @@ internal sealed class ZteCollectionService
     public IReadOnlyList<ZteFactSnapshot> Facts(string profileId, string? kind, bool history, int limit)
         => _catalog.QueryZteFacts(profileId, kind, history, limit);
 
-    private async Task CollectAsync(string runId, ZteDeviceProfileSnapshot profile)
+    private async Task CollectAsync(string runId, ZteDeviceProfileSnapshot profile, Action requireOperationBoundary)
     {
         var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
         var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -235,21 +269,30 @@ internal sealed class ZteCollectionService
             acquired = true;
             Interlocked.Decrement(ref _queued);
             dequeued = true;
+            requireOperationBoundary();
             _catalog.MarkZteCollectionRunRunning(runId, started);
             _runs[runId] = new(runId, profile.Id, "RUNNING", started, null, null, statuses);
             await using var session = new ZteSshDeviceSession(profile, _credentials, _transportFactory, _catalog);
+            session.SetOperationBoundary(requireOperationBoundary);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
             timeout.CancelAfter(TimeSpan.FromMinutes(10));
+            requireOperationBoundary();
             await session.ConnectAsync(timeout.Token);
             foreach (var command in Commands)
             {
                 try
                 {
+                    requireOperationBoundary();
                     var output = await session.ExecuteAsync(command, timeout.Token);
                     var fact = Parse(command, output);
                     statuses[command] = fact.Status;
                     facts.Add((fact.Kind, fact.Status, fact.Json));
                     if (fact.Status is not ("PARSED" or "EMPTY")) failure ??= fact.Status;
+                }
+                catch (TaskScopeRevokedException ex)
+                {
+                    statuses[command] = ex.Reason;
+                    throw;
                 }
                 catch (H3cPartialOutputException ex)
                 {
@@ -271,13 +314,19 @@ internal sealed class ZteCollectionService
                 }
             }
             var state = failure is null ? "SUCCEEDED" : failure == "INTERRUPTED" ? "INTERRUPTED" : facts.Any(x => x.Status is "PARSED" or "EMPTY") ? "PARTIAL" : "FAILED";
+            requireOperationBoundary();
             _catalog.CommitZteCollection(runId, profile.Id, state, failure, statuses, facts);
             _runs[runId] = new(runId, profile.Id, state, started, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), failure, new Dictionary<string, string>(statuses));
         }
         catch (Exception ex)
         {
-            failure = ex is OperationCanceledException ? "INTERRUPTED" : ex is H3cCredentialUnavailableException ? "CREDENTIAL_UNAVAILABLE" : ex.GetType().Name;
-            _catalog.CommitZteCollection(runId, profile.Id, failure == "INTERRUPTED" ? "INTERRUPTED" : "FAILED", failure, statuses, facts);
+            failure = ex is TaskScopeRevokedException revoked ? revoked.Reason : ex is OperationCanceledException ? "INTERRUPTED" : ex is H3cCredentialUnavailableException ? "CREDENTIAL_UNAVAILABLE" : ex.GetType().Name;
+            // A failed boundary seals evidence as history. Commit publishes any
+            // PARSED fact as Current regardless of the enclosing run state.
+            var retainedFacts = ex is TaskScopeRevokedException
+                ? facts.Select(fact => (fact.Kind, fact.Status == "PARSED" ? "PARTIAL" : fact.Status, fact.Json)).ToList()
+                : facts;
+            _catalog.CommitZteCollection(runId, profile.Id, failure == "INTERRUPTED" ? "INTERRUPTED" : "FAILED", failure, statuses, retainedFacts);
             _runs[runId] = new(runId, profile.Id, failure == "INTERRUPTED" ? "INTERRUPTED" : "FAILED", started, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), failure, new Dictionary<string, string>(statuses));
         }
         finally

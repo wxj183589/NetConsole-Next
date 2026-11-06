@@ -32,7 +32,7 @@ internal sealed class H3cJumpHostKeyMismatchException() : InvalidOperationExcept
 internal sealed class H3cJumpHostKeyMissingException() : InvalidOperationException(
     "SSH Jump Host connection completed without a verifiable host key.") { }
 
-internal sealed class H3cJumpHostConnectionException(string code, string message) : IOException(message)
+internal sealed class H3cJumpHostConnectionException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;
 }
@@ -42,6 +42,18 @@ internal sealed class H3cAuthenticationFailedException() : InvalidOperationExcep
 
 internal sealed class H3cConnectionTimeoutException() : TimeoutException(
     "H3C SSH connection timed out.") { }
+
+internal sealed class H3cCommandTimeoutException() : TimeoutException(
+    "设备命令读取超时，结果不完整。") { }
+
+internal sealed class H3cConnectionLostException() : Exception(
+    "设备连接已断开或不可达。") { }
+
+internal sealed class H3cCommandInterruptedException() : Exception(
+    "设备命令执行中断，结果不完整。") { }
+
+internal sealed class H3cWorkerProtocolException() : InvalidOperationException(
+    "Netmiko Worker 返回了无效响应。") { }
 
 internal sealed class H3cUnsupportedAlgorithmException() : InvalidOperationException(
     "The SSH peer has no algorithm in the configured security allowlist.") { }
@@ -210,8 +222,34 @@ internal sealed class SshNetH3cSshTransportFactory : IH3cSshTransportFactory
 /// </summary>
 internal sealed class NetmikoWorkerH3cSshTransportFactory(Catalog? catalog = null) : IH3cSshTransportFactory
 {
-    public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) =>
-        new NetmikoWorkerH3cSshTransport(profile, password, catalog?.GetSiteSshJumpHost(profile.SiteId), catalog);
+    public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password)
+    {
+        var useJump = !string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase);
+        var jump = useJump ? catalog?.GetSiteSshJumpHost(profile.SiteId) : null;
+        var vendor = catalog?.GetZteDeviceProfile(profile.Id) is not null ? "zte" :
+            catalog?.GetNetmikoVendor(profile.Id) ?? (profile.DeviceType is "zte_zxros" or "zte_zxros_telnet" ? "zte" : "h3c");
+        return new NetmikoRetryTransport(
+            () =>
+            {
+                var currentJump = useJump ? catalog?.GetSiteSshJumpHost(profile.SiteId) : null;
+                if (!SameJumpConfiguration(jump, currentJump))
+                    throw new InvalidOperationException("SSH 中转配置在会话期间发生变化，请重新开始任务。");
+                return new NetmikoWorkerH3cSshTransport(profile, password, currentJump, catalog);
+            },
+            command => CanReplay(profile, vendor, command));
+    }
+
+    private static bool SameJumpConfiguration(SiteSshJumpHostSnapshot? first, SiteSshJumpHostSnapshot? current) =>
+        first is null ? current is null : current is not null && first.SiteId == current.SiteId &&
+        first.Host == current.Host && first.Port == current.Port && first.Username == current.Username &&
+        first.Password == current.Password && first.CredentialReference == current.CredentialReference && first.Enabled == current.Enabled;
+
+    internal static bool CanReplay(H3cDeviceProfileSnapshot profile, string vendor, string command) => vendor switch
+    {
+        "h3c" when string.IsNullOrWhiteSpace(profile.DeviceType) || profile.DeviceType is "hp_comware" or "hp_comware_telnet" => H3cCommandPolicy.IsAllowed(command),
+        "zte" when string.IsNullOrWhiteSpace(profile.DeviceType) || profile.DeviceType is "zte_zxros" or "zte_zxros_telnet" => ZteCommandPolicy.IsAllowed(command),
+        _ => false
+    };
 }
 
 internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
@@ -303,7 +341,7 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
                     ? "gb18030" : "utf-8",
                 interactive = _interactive,
                 jump_host = BuildJumpRequest()
-            }, deadline.Token).ConfigureAwait(false);
+            }, deadline.Token, connecting: true).ConfigureAwait(false);
             Driver = result.TryGetProperty("driver", out var driver) ? driver.GetString() : null;
             var keyType = result.TryGetProperty("host_key_type", out var type) && type.ValueKind == JsonValueKind.String
                 ? type.GetString() : null;
@@ -339,11 +377,16 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
 
     public async Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
     {
-        if (!IsConnected) throw new InvalidOperationException("Netmiko worker is not connected.");
+        lock (_lifetimeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _stopped.Token.ThrowIfCancellationRequested();
+        }
+        if (!IsConnected) throw new H3cConnectionLostException();
         var result = await RequestAsync(new { op = "execute", command, read_timeout = 30 }, cancellationToken).ConfigureAwait(false);
         return result.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.String
             ? output.GetString() ?? string.Empty
-            : string.Empty;
+            : throw new H3cWorkerProtocolException();
     }
 
     internal async Task<string> ReadChannelAsync(CancellationToken cancellationToken)
@@ -425,7 +468,7 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         });
     }
 
-    private async Task<JsonElement> RequestAsync(object request, CancellationToken cancellationToken)
+    private async Task<JsonElement> RequestAsync(object request, CancellationToken cancellationToken, bool connecting = false)
     {
         // A terminal reads continuously while the user writes. Queue both
         // operations so the JSON responses cannot be consumed by another call.
@@ -433,7 +476,7 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token);
             deadline.CancelAfter(TimeSpan.FromSeconds(45));
             var token = deadline.Token;
             var input = _input ?? throw new InvalidOperationException("Netmiko worker input is unavailable.");
@@ -441,18 +484,30 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
             await input.WriteLineAsync(JsonSerializer.Serialize(request).AsMemory(), token).ConfigureAwait(false);
             await input.FlushAsync(token).ConfigureAwait(false);
             var line = await output.ReadLineAsync(token).ConfigureAwait(false)
-                ?? throw new IOException("Netmiko worker exited before returning a response.");
+                ?? throw (connecting ? (Exception)new H3cConnectionLostException() : new H3cCommandInterruptedException());
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
-            if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean())
-                return root.GetProperty("result").Clone();
-            var error = root.TryGetProperty("error", out var kind) ? kind.GetString() : null;
-            throw MapWorkerFailure(error);
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("ok", out var ok) ||
+                ok.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new H3cWorkerProtocolException();
+            if (ok.GetBoolean())
+                return root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object
+                    ? result.Clone() : throw new H3cWorkerProtocolException();
+            var error = root.TryGetProperty("error", out var kind) && kind.ValueKind == JsonValueKind.String ? kind.GetString() : null;
+            var category = root.TryGetProperty("failure_kind", out var failure) && failure.ValueKind == JsonValueKind.String ? failure.GetString() : null;
+            throw MapWorkerFailure(error, category, connecting);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && !_stopped.IsCancellationRequested)
         {
             Abort();
-            throw new H3cConnectionTimeoutException();
+            if (connecting) throw new H3cConnectionTimeoutException();
+            throw new H3cCommandTimeoutException();
+        }
+        catch (JsonException) { Abort(); throw new H3cWorkerProtocolException(); }
+        catch (IOException error) when (IsWorkerPipeDisconnected(error))
+        {
+            Abort();
+            if (connecting) throw new H3cConnectionLostException();
+            throw new H3cCommandInterruptedException();
         }
         catch
         {
@@ -464,18 +519,39 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         finally { _requestGate.Release(); }
     }
 
-    private static Exception MapWorkerFailure(string? error) => error switch
+    private bool IsWorkerPipeDisconnected(IOException error)
     {
+        // Windows broken pipe / pipe closing / no process; Unix EPIPE. Other
+        // IO errors are not proof that a command is safe to replay.
+        if ((error.HResult & 0xffff) is 109 or 232 or 233 or 32) return true;
+        lock (_lifetimeGate)
+        {
+            try { return _process is { HasExited: true }; }
+            catch (InvalidOperationException) { return false; }
+        }
+    }
+
+    internal static Exception MapWorkerFailure(string? error, string? category = null, bool connecting = false) => (category ?? error) switch
+    {
+        "CONNECTION_LOST" => new H3cConnectionLostException(),
+        "COMMAND_INTERRUPTED" or "CommandInterruptedError" => new H3cCommandInterruptedException(),
+        "CONNECT_TIMEOUT" => connecting ? new H3cConnectionTimeoutException() : new H3cCommandTimeoutException(),
+        "COMMAND_TIMEOUT" => new H3cCommandTimeoutException(),
+        "PROTOCOL_ERROR" => new H3cProtocolNegotiationException(),
+        "JUMP_HOST_PROTOCOL_ERROR" => new H3cJumpHostConnectionException("JUMP_HOST_PROTOCOL_FAILED", "SSH 中转服务器协议协商失败。"),
+        "JUMP_HOST_FORWARD_DENIED" => new H3cJumpHostConnectionException("JUMP_HOST_FORWARD_DENIED", "SSH 中转服务器拒绝转发，请检查转发权限。"),
         "JumpHostAuthenticationError" => new H3cJumpHostConnectionException("JUMP_HOST_AUTHENTICATION_FAILED", "SSH 中转服务器认证失败，请检查中转用户名和密码。"),
         "JumpHostConnectionError" => new H3cJumpHostConnectionException("JUMP_HOST_UNREACHABLE", "SSH 中转服务器不可达，请检查地址、端口和 SSH 服务。"),
         "JumpHostChannelError" => new H3cJumpHostConnectionException("JUMP_HOST_CHANNEL_FAILED", "SSH 中转已连接，但无法转发到目标设备，请检查路由和转发权限。"),
         "AuthenticationException" or "NetmikoAuthenticationException" => new H3cAuthenticationFailedException(),
-        "TimeoutError" or "NetmikoTimeoutException" or "ReadTimeout" or "socket.timeout" => new H3cConnectionTimeoutException(),
+        "ReadTimeout" => new H3cCommandTimeoutException(),
+        "TimeoutError" or "NetmikoTimeoutException" or "socket.timeout" => connecting ? new H3cConnectionTimeoutException() : new H3cCommandTimeoutException(),
         "UnsupportedDeviceTypeError" or "ValueError" => new ArgumentException("设备驱动或连接参数不受支持。"),
         "OutputLimitError" => new H3cOutputLimitException(),
         "SSHException" or "IncompatiblePeer" => new H3cProtocolNegotiationException(),
-        "EOFError" or "ConnectionError" or "OSError" or "ConnectionRefusedError" => new IOException("设备连接已断开或不可达。"),
-        _ => new IOException("Netmiko Worker 连接失败。")
+        "EOFError" or "ConnectionError" or "ConnectionResetError" or "ConnectionAbortedError" or "BrokenPipeError" or "ConnectionRefusedError" =>
+            connecting ? new H3cConnectionLostException() : new H3cCommandInterruptedException(),
+        _ => new H3cWorkerProtocolException()
     };
 
     private static string FindWorkerScript()
@@ -778,6 +854,9 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
 {
     private IH3cSshTransport? _transport;
     private bool _sessionCounted;
+    private readonly NetmikoReconnectBudget _recoveryBudget = new();
+    private Action? _operationBoundary;
+    public void SetOperationBoundary(Action boundary) => _operationBoundary = boundary;
     public string Protocol { get; private set; } =
         string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase) ? "TELNET" : "SSH";
 
@@ -806,8 +885,28 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _operationBoundary?.Invoke();
         _transport = transportFactory.Create(attempt, password);
         string? hostKeyCorrelation = null;
+        void CommitKey()
+        {
+            if (catalog is not null && hostKeyCorrelation is not null && !catalog.CommitSshHostKey(hostKeyCorrelation))
+                throw new H3cHostKeyMismatchException();
+            hostKeyCorrelation = null;
+        }
+        void FailKey()
+        {
+            if (catalog is not null && hostKeyCorrelation is not null)
+                catalog.FailSshHostKey(hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE");
+            hostKeyCorrelation = null;
+        }
+        if (_transport is NetmikoRetryTransport recovery)
+        {
+            recovery.ReconnectBudget = _recoveryBudget;
+            recovery.BeforeReconnect = () => { _operationBoundary?.Invoke(); hostKeyCorrelation = null; };
+            recovery.Reconnected = CommitKey;
+            recovery.ReconnectFailed = FailKey;
+        }
         try
         {
             await _transport.ConnectAsync((keyType, fingerprint) =>
@@ -817,16 +916,11 @@ internal sealed class H3cSshDeviceSession(H3cDeviceProfileSnapshot profile, IH3c
                 hostKeyCorrelation = decision.CorrelationId;
                 return decision.Accepted;
             }, cancellationToken).ConfigureAwait(false);
-            if (catalog is not null && hostKeyCorrelation is not null &&
-                !catalog.CommitSshHostKey(hostKeyCorrelation))
-                throw new H3cHostKeyMismatchException();
+            CommitKey();
         }
         catch
         {
-            if (catalog is not null && hostKeyCorrelation is not null)
-            {
-                try { catalog.FailSshHostKey(hostKeyCorrelation, "SSH_CONNECTION_FAILED_BEFORE_EFFECTIVE"); } catch { }
-            }
+            try { FailKey(); } catch { }
             try { _transport.Dispose(); } catch { }
             _transport = null;
             throw;

@@ -28,6 +28,7 @@ internal interface IDeviceSessionFactory
 internal interface IDeviceSession : IAsyncDisposable
 {
     string Protocol => "SSH";
+    void SetOperationBoundary(Action boundary) { }
     Task ConnectAsync(CancellationToken cancellationToken);
     Task<string> ExecuteAsync(string command, CancellationToken cancellationToken);
 }
@@ -326,6 +327,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         {
             if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_CONNECT");
             session = _sessionFactory.Create(item.Request.Target);
+            if (item.Scope is not null)
+                session.SetOperationBoundary(() => _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_RECONNECT"));
             if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_CONNECT");
             operationStarted = true;
             await session.ConnectAsync(linked.Token);
@@ -333,6 +336,7 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
             SetState(item, "RUNNING");
             for (currentCommandIndex = 0; currentCommandIndex < commandPlan.Count; currentCommandIndex++)
             {
+                if (item.Scope is not null) _scopeAuthorizer!.Require(item.Scope, item.Request.Target, "BEFORE_COMMAND");
                 var command = commandPlan[currentCommandIndex];
                 var output = await session.ExecuteAsync(command, linked.Token);
                 commandOutputs.Add((command, ConfigBackupSanitizer.Sanitize(command, output), currentCommandIndex, "COMPLETE"));

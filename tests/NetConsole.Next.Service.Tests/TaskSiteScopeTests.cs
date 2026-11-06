@@ -12,13 +12,15 @@ internal static class TaskSiteScopeTests
         LegacyRunsDoNotAcquireRetroactiveScope();
         await RevokedQueuedTargetNeverConnects();
         await RevokedDuringConnectNeverExecutesCommand();
+        await RevokedBetweenCommandsStopsRemainingPlan();
+        await RevokedBeforeReconnectStopsTransport();
         await RevokedBoundedCommandSealsPartialRaw(false);
         await RevokedBoundedCommandSealsPartialRaw(true);
         await AuthorizedScopedTaskKeepsExistingCollectionBehavior();
         await QueuedCancelAndRevocationKeepBothReasons();
         await RevokedDuringDisposeSealsOrClassifiesResult(false);
         await RevokedDuringDisposeSealsOrClassifiesResult(true);
-        Console.WriteLine("TASK_SITE_SCOPE_TESTS=11/11 PASS");
+        Console.WriteLine("TASK_SITE_SCOPE_TESTS=13/13 PASS");
     }
 
     private static void FreezesPersistentTargetWithoutStoringSecrets()
@@ -119,6 +121,52 @@ internal static class TaskSiteScopeTests
         Assert(result.State == "CANCELLED" && result.Error!.Contains("REVOKED_AFTER_START") && result.Error.Contains("BEFORE_COMMAND") &&
             factory.TargetConnects == 1 && factory.TargetCommands == 0 && factory.Disposals == 1,
             "accepted bounded connect may finish, but revoked command must never start and transport must be disposed");
+    }
+
+    private static async Task RevokedBetweenCommandsStopsRemainingPlan()
+    {
+        using var f = new Fixture();
+        var scope = f.Authorizer.CaptureDefinition(f.ProfileId, f.SuperId);
+        f.Catalog.CreateTaskDefinition("multi-revoke", "H3C_SSH_READONLY", f.ProfileId, "display version",
+            TimeSpan.FromSeconds(5), scopeSnapshot: scope, commands: ["display version", "display vlan all"]);
+        var factory = new SessionFactory { OnExecute = (_, _) =>
+        {
+            f.Execute("UPDATE web_users SET disabled=1 WHERE id=$id", f.SuperId);
+            return Task.FromResult("bounded first response");
+        } };
+        await using var scheduler = f.Scheduler(factory);
+        Assert(scheduler.TryScheduleDefinition("multi-revoke", out var run, f.SuperId), "multi-command task admitted");
+        var result = await Terminal(scheduler, run);
+        Assert(result.State == "CANCELLED" && result.Error!.Contains("BEFORE_COMMAND") &&
+            factory.TargetCommands == 1 && factory.Disposals == 1 &&
+            f.Catalog.GetTaskRunCommands(run) is { Count: 2 } commands &&
+            commands[0].CaptureStatus == "PARTIAL" && commands[1].CaptureStatus is null,
+            "revocation must stop the next command and retain the first response as partial evidence");
+    }
+
+    private static async Task RevokedBeforeReconnectStopsTransport()
+    {
+        using var f = new Fixture();
+        f.Definition("reconnect-revoke", f.SuperId);
+        var reopened = false;
+        Action? beforeReconnect = null;
+        var factory = new SessionFactory
+        {
+            OnBoundary = boundary => beforeReconnect = boundary,
+            OnExecute = (_, _) =>
+            {
+                f.Execute("UPDATE web_users SET disabled=1 WHERE id=$id", f.SuperId);
+                beforeReconnect!();
+                reopened = true;
+                return Task.FromResult("unreachable");
+            }
+        };
+        await using var scheduler = f.Scheduler(factory);
+        Assert(scheduler.TryScheduleDefinition("reconnect-revoke", out var run, f.SuperId), "reconnect task admitted");
+        var result = await Terminal(scheduler, run);
+        Assert(result.State == "CANCELLED" && result.Error!.Contains("BEFORE_RECONNECT") &&
+            !reopened && factory.TargetConnects == 1 && factory.Disposals == 1,
+            "the session reconnect boundary must consult current authority before reopening a transport");
     }
 
     private static async Task RevokedBoundedCommandSealsPartialRaw(bool cancelAlso)
@@ -269,10 +317,12 @@ internal static class TaskSiteScopeTests
         public Func<string, CancellationToken, Task> OnConnect { get; init; } = (_, _) => Task.CompletedTask;
         public Func<string, CancellationToken, Task<string>> OnExecute { get; init; } = (_, _) => Task.FromResult("synthetic Comware response");
         public Action OnDispose { get; init; } = () => { };
+        public Action<Action> OnBoundary { get; init; } = _ => { };
         public int TargetConnects, TargetCommands, Disposals;
         public IDeviceSession Create(string target) => new Session(this, target);
         private sealed class Session(SessionFactory owner, string target) : IDeviceSession
         {
+            public void SetOperationBoundary(Action boundary) => owner.OnBoundary(boundary);
             public Task ConnectAsync(CancellationToken token)
             { if (target != "blocker") Interlocked.Increment(ref owner.TargetConnects); return owner.OnConnect(target, token); }
             public Task<string> ExecuteAsync(string command, CancellationToken token)
