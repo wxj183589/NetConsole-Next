@@ -21,7 +21,8 @@ internal static class H3cTaskFactPublicationTests
         await MultiCommandRawCannotRelabelDeviceHost();
         await SuccessfulMultiCommandRunRequiresCompleteManifestSet();
         await MultiCommandFailureKeepsEarlierRawBounded();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=13/13 PASS");
+        await VlanTablePublishesWholeRevisionsWithRawAndScope();
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=14/14 PASS");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()
@@ -265,6 +266,42 @@ internal static class H3cTaskFactPublicationTests
         Assert(f.Catalog.GetTaskRun(runId)!.State == "RUNNING" &&
             f.Scalar($"SELECT COUNT(*) FROM task_run_command_outputs WHERE task_run_id='{runId}'") == "0",
             "incomplete success must leave the run open and avoid committing a partial command set");
+    }
+
+    private static async Task VlanTablePublishesWholeRevisionsWithRawAndScope()
+    {
+        using var f = new Fixture();
+        var output = H3cVlanTests.Transcript(H3cVlanTests.Block(1) + "\n" + H3cVlanTests.Block(30));
+        await using var scheduler = f.Scheduler(new Factory { Execute = _ => output });
+        var first = await f.Run(scheduler, H3cCommandPolicy.DisplayVlanAll);
+        var fact = f.Catalog.QueryH3cFacts(f.Profile, "vlan.table").Single();
+        using (var payload = JsonDocument.Parse(fact.PayloadJson))
+            Assert(first.State == "SUCCEEDED" && fact.CollectedRawVerified && payload.RootElement.GetProperty("vlans").GetArrayLength() == 2 &&
+                payload.RootElement.GetProperty("rawProvenance").GetProperty("runId").GetString() == first.Id,
+                "a VLAN table must bind to exactly its sealed, scoped Raw task");
+        var before = f.Rows();
+        Assert(f.Catalog.PublishH3cTaskFacts(first.Id).Status == "PUBLISHED" && f.Rows() == before,
+            "VLAN Raw republication is idempotent");
+
+        output = H3cVlanTests.Transcript(H3cVlanTests.Block(1));
+        await f.Run(scheduler, H3cCommandPolicy.DisplayVlanAll);
+        fact = f.Catalog.QueryH3cFacts(f.Profile, "vlan.table").Single();
+        using (var payload = JsonDocument.Parse(fact.PayloadJson))
+            Assert(payload.RootElement.GetProperty("vlans").GetArrayLength() == 1 &&
+                f.Catalog.QueryH3cFacts(f.Profile, "vlan.table", history: true).Count == 2,
+                "removed VLANs disappear from the whole current table while prior tables remain immutable history");
+
+        output = H3cVlanTests.Transcript(H3cVlanTests.Block(1) + "\n---- More ----");
+        await f.Run(scheduler, H3cCommandPolicy.DisplayVlanAll);
+        fact = new Catalog(f.Settings).QueryH3cFacts(f.Profile, "vlan.table").Single();
+        using (var payload = JsonDocument.Parse(fact.PayloadJson))
+            Assert(fact.Status == "PARTIAL" && fact.DataState == "PARTIAL" && fact.CollectedRawVerified &&
+                payload.RootElement.GetProperty("vlans").GetArrayLength() == 0,
+                "complete Raw with incomplete parsing stays partial after restart and never fabricates current membership");
+        var other = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other" }, "other-claims");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile, "vlan.table", history: true, scope: other).Count == 0 &&
+            f.Catalog.QueryH3cFacts(f.Profile, "vlan.table", history: true).Count == 3,
+            "VLAN revisions use captured Site scope including partial state");
     }
 
     private sealed class Fixture : IDisposable

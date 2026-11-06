@@ -194,6 +194,19 @@ internal sealed partial class Catalog
             Add("device.identity", "device", version, version.Recognized ? "STALE" : "UNSUPPORTED");
         }
 
+        if (outputs.TryGetValue(H3cCommandPolicy.DisplayVlanAll, out var vlanOutput))
+        {
+            // A table is one immutable revision. Per-VLAN Current rows would
+            // retain removed VLANs when a later complete table omits them.
+            var vlans = H3cComwareParser.ParseVlans(vlanOutput, completedExec: provenance is not null);
+            Add("vlan.table", "default", vlans, vlans.Status switch
+            {
+                "PARSED" => "STALE",
+                "UNRECOGNIZED" => "UNSUPPORTED",
+                _ => vlans.Status
+            });
+        }
+
         var brief = outputs.TryGetValue(H3cCommandPolicy.DisplayInterfaceBrief, out var briefOutput)
             ? H3cComwareParser.ParseInterfaceBrief(briefOutput).Interfaces
             : Array.Empty<H3cInterfaceStatus>();

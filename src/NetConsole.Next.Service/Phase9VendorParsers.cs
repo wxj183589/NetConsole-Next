@@ -35,11 +35,14 @@ internal static partial class CliTranscriptParser
         RegexOptions.CultureInvariant)]
     private static partial Regex PagerPattern();
 
-    [GeneratedRegex(@"(?i)(?:invalid\s+command|unrecognized\s+command|incomplete\s+command|ambiguous\s+command|%\s*invalid\s+input)",
+    [GeneratedRegex(@"^\s*(?:Name|Description)\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex FreeTextFieldPattern();
+
+    [GeneratedRegex(@"(?im)^\s*(?:(?:%|error:)\s*)*(?:invalid\s+command|unrecognized\s+command|incomplete\s+command|ambiguous\s+command|invalid\s+input)\b",
         RegexOptions.CultureInvariant)]
     private static partial Regex UnsupportedPattern();
 
-    [GeneratedRegex(@"(?i)(?:permission\s+denied|insufficient\s+privilege|not\s+authorized|authorization\s+failed)",
+    [GeneratedRegex(@"(?im)^\s*(?:(?:%|error:)\s*)*(?:permission\s+denied|insufficient\s+privilege|not\s+authorized|authorization\s+failed)\b",
         RegexOptions.CultureInvariant)]
     private static partial Regex PermissionPattern();
 
@@ -81,7 +84,9 @@ internal static partial class CliTranscriptParser
                 }
             }
 
-            if (PagerPattern().IsMatch(trimmed))
+            // A pager may follow a table row on the same line. Named free-text
+            // fields can contain that literal text without representing a pager.
+            if (!FreeTextFieldPattern().IsMatch(trimmed) && PagerPattern().IsMatch(trimmed))
             {
                 pages++;
                 continue;
@@ -118,14 +123,23 @@ internal static partial class CliTranscriptParser
         if (normalized.Length == 0) return false;
         var sawPrompt = false;
         var sawPromptCommand = false;
+        var sawContent = false;
+        var sawClosingPrompt = false;
         foreach (var rawLine in normalized.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(line)) continue;
             var match = PromptLinePattern().Match(line);
-            if (!match.Success) continue;
+            if (!match.Success)
+            {
+                if (sawClosingPrompt) return true;
+                sawContent = true;
+                continue;
+            }
             var echoed = match.Groups["command"].Value.Trim();
             if (echoed.Length == 0)
             {
+                if (sawContent) sawClosingPrompt = true;
                 sawPrompt = true;
                 continue;
             }
@@ -133,6 +147,7 @@ internal static partial class CliTranscriptParser
             {
                 sawPrompt = true;
                 sawPromptCommand = true;
+                sawContent = true;
                 if (!string.Equals(echoed, command, StringComparison.OrdinalIgnoreCase)) return true;
                 continue;
             }

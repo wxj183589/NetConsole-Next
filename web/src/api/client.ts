@@ -540,6 +540,7 @@ export interface H3cFact {
   capturedMs: number
   isCurrent: boolean
   payloadJson: string
+  collectedRawVerified?: boolean
   dataState?: string
   freshness?: string
 }

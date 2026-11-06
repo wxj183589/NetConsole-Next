@@ -10,6 +10,7 @@ internal static class H3cCommandPolicy
     public const string DisplayInterfaceBrief = "display interface brief";
     public const string DisplayInterface = "display interface";
     public const string DisplayDevice = "display device";
+    public const string DisplayVlanAll = "display vlan all";
     public const string DisplayWlanApAll = "display wlan ap all";
     public const string DisplayWlanApAllAddress = "display wlan ap all address";
     public const string DisplayWlanApAllRadio = "display wlan ap all radio";
@@ -23,7 +24,7 @@ internal static class H3cCommandPolicy
     public const string DisplayCurrentConfiguration = "display current-configuration";
 
     public static bool IsAllowed(string command) => command is
-        DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayWlanApAll or
+        DisplayVersion or DisplayInterfaceBrief or DisplayInterface or DisplayDevice or DisplayVlanAll or DisplayWlanApAll or
         DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
         DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface or
@@ -371,6 +372,11 @@ internal static partial class H3cComwareParser
     {
         if (string.IsNullOrWhiteSpace(output))
             return new("EMPTY", "{}");
+        if (command == H3cCommandPolicy.DisplayVlanAll)
+        {
+            var result = ParseVlans(output, completedExec);
+            return new(result.Status, System.Text.Json.JsonSerializer.Serialize(result));
+        }
         if (GetTranscriptFailure(command, output, completedExec) is { } transcriptFailure)
             return transcriptFailure;
         if (command == H3cCommandPolicy.DisplayVersion)

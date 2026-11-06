@@ -702,9 +702,10 @@ app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
 });
 app.MapGet("/api/system/tasks/{runId}/commands", (HttpContext context, string runId, Catalog rawCatalog) =>
 {
-    var scope = CurrentSiteScope(context);
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
-    if (rawCatalog.GetTaskRun(runId, scope) is null) return Results.NotFound();
+    // Resolve the request's Site decision before reading it; no pre-guard
+    // global fallback may authorize command metadata for a scoped operator.
+    if (rawCatalog.GetTaskRun(runId, CurrentSiteScope(context)) is null) return Results.NotFound();
     return Results.Ok(rawCatalog.GetTaskRunCommands(runId));
 });
 app.MapPost("/api/system/tasks/{runId}/cancel", (HttpContext context, string runId, Catalog rawCatalog,
