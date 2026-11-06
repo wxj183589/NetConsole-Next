@@ -53,7 +53,8 @@ internal static class ConfigBackupTests
         await VerifyInvalidSavedOutputs(actor);
         await VerifyPrivateKeyRedaction(actor);
         VerifyStartupFileSupport();
-        Console.WriteLine("CONFIG_BACKUP_TESTS=10/10 PASS");
+        await VerifyStartupBodyCollection(actor);
+        Console.WriteLine("CONFIG_BACKUP_TESTS=11/11 PASS");
     }
 
     private static void VerifyStartupFileSupport()
@@ -77,6 +78,33 @@ internal static class ConfigBackupTests
         Assert(StartupConfigurationSupport.Inspect("Main startup saved-configuration file: NULL\n") is
             { BodyReadSupported: false, RestoreError: "CONFIG_BACKUP_STARTUP_FILE_UNAVAILABLE" },
             "a NULL startup pointer must fail closed without scheduling a body read");
+    }
+
+    private static async Task VerifyStartupBodyCollection(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        fixture.Factory.Outputs[H3cCommandPolicy.DisplayStartup] =
+            "<H3C>display startup\nMain startup saved-configuration file: flash:/startup.cfg\n<H3C>\n";
+        fixture.Factory.Outputs["more flash:/startup.cfg"] =
+            "<H3C>more flash:/startup.cfg\n#\nsysname startup-body\n<H3C>\n";
+        var batch = fixture.Backups.StartStartupBody(new[] { fixture.Profile }, actor, P2B5SiteScopeDecision.Global);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        ConfigBackupBatch current;
+        do
+        {
+            await Task.Delay(20, timeout.Token);
+            current = fixture.Backups.GetBatch(batch.Id, actor, P2B5SiteScopeDecision.Global)!;
+        } while (current.State is "RUNNING");
+        Assert(current is { State: "SUCCEEDED", Succeeded: 1 } &&
+            fixture.Factory.Commands.SequenceEqual(new[] { H3cCommandPolicy.DisplayStartup, "more flash:/startup.cfg" }),
+            "startup body collection must read the pointer first and then execute the exact validated file command");
+        var snapshot = fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global, ConfigBackupKinds.StartupBody).Single();
+        Assert(snapshot.Command == "more flash:/startup.cfg" && snapshot.ConfigurationKind == ConfigBackupKinds.StartupBody,
+            "startup body snapshot must retain the validated command and independent category");
+        var download = fixture.Backups.OpenDownload(snapshot.Id, P2B5SiteScopeDecision.Global)!.Value;
+        using var reader = new StreamReader(download.Stream);
+        Assert(reader.ReadToEnd().Contains("sysname startup-body", StringComparison.Ordinal),
+            "startup body snapshot must persist the file contents through the normal download boundary");
     }
 
     private static async Task VerifyPrivateKeyRedaction(WebUserIdentity actor)
@@ -445,6 +473,7 @@ internal static class ConfigBackupTests
     private sealed class Factory : IDeviceSessionFactory
     {
         public string Output { get; set; } = "<H3C>sysname initial\nlocal-user admin password hash super-secret\ninterface GigabitEthernet1/0/1\n description initial\n</H3C>\n";
+        public Dictionary<string, string> Outputs { get; } = new(StringComparer.Ordinal);
         public Exception? Failure { get; set; }
         public List<string> Commands { get; } = new();
         public IDeviceSession Create(string target) => new Session(this);
@@ -454,7 +483,8 @@ internal static class ConfigBackupTests
             public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
             {
                 owner.Commands.Add(command);
-                return owner.Failure is not null ? Task.FromException<string>(owner.Failure) : Task.FromResult(owner.Output);
+                return owner.Failure is not null ? Task.FromException<string>(owner.Failure) :
+                    Task.FromResult(owner.Outputs.TryGetValue(command, out var output) ? output : owner.Output);
             }
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
