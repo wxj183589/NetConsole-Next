@@ -33,6 +33,7 @@ builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<TaskSiteScopeAuthorizer>();
 builder.Services.AddSingleton<ITaskScopeAuthorizer>(sp => sp.GetRequiredService<TaskSiteScopeAuthorizer>());
 builder.Services.AddSingleton<WirelessReadModelService>();
+builder.Services.AddSingleton<WirelessIdentityLifecycleService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
 builder.Services.AddSingleton<P2B5ExportService>();
@@ -1717,6 +1718,43 @@ app.MapGet("/api/system/wireless/ap-resources/{id}/identity-review", (HttpContex
         var resource = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
         return resource is null ? WirelessResourceNotVisible() : Results.Ok(WirelessIdentityContract.Describe(resource));
     }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/identity-lifecycle", (HttpContext context, string id,
+    WirelessReadModelService wireless, WirelessIdentityLifecycleService lifecycle, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var scope = CurrentSiteScope(context);
+        var snapshot = wireless.GetSnapshot(scope);
+        var resource = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        if (resource is null) return WirelessResourceNotVisible();
+        return Results.Ok(lifecycle.Get(id, WirelessIdentityContract.Describe(resource), scope));
+    }
+    catch (WirelessIdentityLifecycleException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapPost("/api/system/wireless/ap-resources/{id}/identity-decision", (HttpContext context, string id,
+    WirelessIdentityLifecycleRequest request, WirelessReadModelService wireless,
+    WirelessIdentityLifecycleService lifecycle, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var scope = CurrentSiteScope(context);
+        var snapshot = wireless.GetSnapshot(scope);
+        var resource = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
+        if (resource is null) return WirelessResourceNotVisible();
+        var normalized = request with { ResourceId = id };
+        return Results.Ok(lifecycle.Decide(CurrentIdentity(context), normalized,
+            WirelessIdentityContract.Describe(resource), snapshot.ApResources, scope));
+    }
+    catch (WirelessIdentityLifecycleException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
     { return WirelessAuthorityUnavailable(ex); }
 });

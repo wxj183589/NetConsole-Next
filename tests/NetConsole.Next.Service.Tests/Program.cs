@@ -58,6 +58,8 @@ else if (args.Length > 0 && args[0] == "--wireless-tests")
 }
 else if (args.Length > 0 && args[0] == "--wireless-identity-contract-tests")
     WirelessIdentityContractTests.Run();
+else if (args.Length > 0 && args[0] == "--wireless-identity-lifecycle-tests")
+    WirelessIdentityLifecycleTests.Run();
 else if (args.Length > 0 && args[0] == "--task-site-scope-tests")
     await TaskSiteScopeTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--interactive-scope-tests")
