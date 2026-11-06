@@ -6,11 +6,22 @@ using System.Text;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.IO.Ports;
+using Microsoft.Extensions.Hosting.WindowsServices;
+using Microsoft.Extensions.Logging.EventLog;
 
 using var singleInstance = SingleInstanceGuard.Acquire();
 var settings = RuntimeSettings.FromEnvironment();
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "NetConsoleNext");
+// Interactive/offline runs use console and the data-root rolling log. The
+// Windows default EventLog provider can throw on an ordinary warning when its
+// source is unavailable, defeating optional-subsystem fault isolation.
+if (OperatingSystem.IsWindows() && !WindowsServiceHelpers.IsWindowsService())
+{
+    foreach (var provider in builder.Services.Where(item => item.ServiceType == typeof(ILoggerProvider) &&
+                 item.ImplementationType == typeof(EventLogLoggerProvider)).ToArray())
+        builder.Services.Remove(provider);
+}
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(45));
 var webBind = settings.WebBindAddress.IndexOf(':') >= 0 ? $"[{settings.WebBindAddress}]" : settings.WebBindAddress;
 builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
