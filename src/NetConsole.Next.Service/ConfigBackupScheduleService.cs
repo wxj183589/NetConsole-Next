@@ -321,7 +321,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
     private static bool IsValid(ConfigBackupScheduleSnapshot? item) => item is not null && IsSafeId(item.Id) &&
         IsSafeId(item.OwnerUserId) && item.ProfileIds is { Count: >= 1 and <= MaximumProfiles } &&
         item.ProfileIds.All(IsSafeId) && item.ProfileIds.Distinct(StringComparer.Ordinal).Count() == item.ProfileIds.Count &&
-        ConfigBackupKinds.IsSupported(item.ConfigurationKind) &&
+        ConfigBackupKinds.IsScheduled(item.ConfigurationKind) &&
         item.IntervalMinutes is >= MinimumIntervalMinutes and <= MaximumIntervalMinutes && item.CreatedMs > 0 &&
         (item.Enabled ? item.NextRunMs > 0 : item.NextRunMs is null) &&
         item.LastState is "NEVER_RUN" or "RUNNING" or "SUCCEEDED" or "PARTIAL" or "BLOCKED" or "INTERRUPTED" &&

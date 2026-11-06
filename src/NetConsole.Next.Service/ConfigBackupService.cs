@@ -73,6 +73,7 @@ internal static class ConfigBackupKinds
     public const string StartupBody = "STARTUP_BODY";
 
     public static bool IsSupported(string? kind) => kind is Running or Saved or StartupInfo or StartupBody;
+    public static bool IsScheduled(string? kind) => kind is Running or Saved or StartupInfo;
     public static string CommandFor(string kind) => kind switch
     {
         Running => H3cCommandPolicy.DisplayCurrentConfiguration,
