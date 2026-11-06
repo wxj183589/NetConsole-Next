@@ -89,6 +89,7 @@ internal static class NetmikoRetryTransportTests
         new H3cJumpHostConnectionException("JUMP_HOST_FORWARD_DENIED", "synthetic"),
         new H3cJumpHostConnectionException("JUMP_HOST_PROTOCOL_FAILED", "synthetic"),
         new H3cJumpHostConnectionException("JUMP_HOST_CREDENTIAL_UNAVAILABLE", "synthetic"),
+        new H3cJumpHostConnectionException("JUMP_HOST_CONFIGURATION_CHANGED", "synthetic"),
         new H3cProtocolNegotiationException(), new ArgumentException("driver"), new H3cWorkerProtocolException(),
         new H3cCommandTimeoutException(), new H3cCommandInterruptedException(), new H3cOutputLimitException(),
         new H3cPaginationDetectedException(), new H3cInvalidEncodingException(), new IOException("unproven failure"),
@@ -349,10 +350,70 @@ internal static class NetmikoRetryTransportTests
                 Assert(verified == 3 && data.Catalog.GetSiteSshJumpHost("local")!.HostKeySha256 == KeyA,
                     "reconnect refreshes Jump fingerprint snapshots for CAS while retaining the original business endpoint and two-reconnect budget");
             }
+            await JumpConfigurationCasFailureCannotDisableCatalog();
         }
         finally { foreach (var pair in previous) Environment.SetEnvironmentVariable(pair.Key, pair.Value); }
         for (var i = 0; i < 100 && NetmikoWorkerBudget.AvailableSlots != slots; i++) await Task.Delay(20);
         Assert(NetmikoWorkerBudget.AvailableSlots == slots, "all recovery processes exit and return the global worker slots");
+    }
+
+    private static async Task JumpConfigurationCasFailureCannotDisableCatalog()
+    {
+        using var data = new CatalogFixture();
+        var jump = new SiteSshJumpHostSnapshot("local", "192.0.2.80", 22, "jump", "FIXTURE", "synthetic", "", true, 0);
+        data.Catalog.UpsertSiteSshJumpHost(jump);
+        var factory = new JumpCasSessionFactory(data.Catalog, jump);
+        var persistenceFailures = 0;
+        await using var scheduler = new BoundedCollectionScheduler(factory, 1, 1, data.Catalog,
+            persistenceFailure: error => { Interlocked.Increment(ref persistenceFailures); data.Catalog.MarkUnavailable(error); });
+        Assert(scheduler.TrySchedule(new("jump-cas", H3cCommandPolicy.DisplayVersion, TimeSpan.FromSeconds(5)), out var id),
+            "Jump configuration CAS regression task is admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        DeviceCollectionSnapshot result;
+        while (true)
+        {
+            result = scheduler.Get(id)!;
+            if (result.State is "SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT") break;
+            await Task.Delay(10, timeout.Token);
+        }
+        Assert(factory.Failure is H3cJumpHostConnectionException { Code: "JUMP_HOST_CONFIGURATION_CHANGED" } &&
+            result.State == "FAILED" && result.Error == nameof(H3cJumpHostConnectionException),
+            "the real worker transport rejects the stale Jump fingerprint CAS as a configuration failure");
+        Assert(factory.Attempts == 1 && factory.Commands == 0,
+            "a changed Jump configuration cannot retry a worker or execute a business command");
+        Assert(Volatile.Read(ref persistenceFailures) == 0, "Jump configuration changes never call the scheduler persistence-failure handler");
+        var current = data.Catalog.GetSiteSshJumpHost("local")!;
+        Assert(current.Host == "192.0.2.81" && current.HostKeySha256 == "",
+            "Catalog remains available and preserves the edited Jump endpoint without publishing the stale fingerprint");
+    }
+
+    private sealed class JumpCasSessionFactory(Catalog catalog, SiteSshJumpHostSnapshot jump) : IDeviceSessionFactory
+    {
+        public int Attempts;
+        public int Commands;
+        public Exception? Failure;
+        public IDeviceSession Create(string target) => new Session(this, new NetmikoRetryTransport(
+            () => { Attempts++; return new NetmikoWorkerH3cSshTransport(Profile(), "synthetic", jump, catalog); },
+            H3cCommandPolicy.IsAllowed));
+        private bool VerifyHostKey(string? type, string? key)
+        {
+            catalog.UpsertSiteSshJumpHost(jump with { Host = "192.0.2.81" });
+            return key == KeyA;
+        }
+        private sealed class Session(JumpCasSessionFactory owner, NetmikoRetryTransport transport) : IDeviceSession
+        {
+            public async Task ConnectAsync(CancellationToken cancellationToken)
+            {
+                try { await transport.ConnectAsync(owner.VerifyHostKey, cancellationToken); }
+                catch (Exception error) { owner.Failure = error; throw; }
+            }
+            public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+            {
+                owner.Commands++;
+                return transport.ExecuteAsync(command, cancellationToken);
+            }
+            public ValueTask DisposeAsync() { transport.Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 
     private sealed class Transport : IH3cSshTransport

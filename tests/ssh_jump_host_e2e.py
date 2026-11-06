@@ -201,7 +201,8 @@ def create_profile(client, site_id, port, host="192.0.2.123", protocol="SSH"):
 
 
 def connection_test(client, profile_id):
-    return expect(client, f"/api/system/h3c/profiles/{profile_id}/test-connection", "POST", {})
+    # Refused TCP connects may consume all three bounded attempts on Windows.
+    return expect(client, f"/api/system/h3c/profiles/{profile_id}/test-connection", "POST", {}, timeout=45)
 
 
 def terminal(client, profile_id, wait=True):
@@ -331,14 +332,19 @@ def run():
                 assert connection_test(owner, first)["status"] == "CONNECTED"
 
                 jump_a.deny_forward = True
+                before_denial = len(jump_a.destinations)
                 failed = connection_test(owner, first)
-                assert failed["status"] == "JUMP_HOST_CHANNEL_FAILED", failed
+                assert failed["status"] == "JUMP_HOST_FORWARD_DENIED", failed
+                assert len(jump_a.destinations) == before_denial + 1, "explicit forwarding denial must not retry"
+                before_denial = len(jump_a.destinations)
                 rejected_terminal = terminal(owner, first, wait=False)
                 def failed_terminal():
                     result = expect(owner, f"/api/system/terminal/sessions/{rejected_terminal}")
                     return result if result["state"] == "FAILED" else None
                 failed_terminal_view = eventually(failed_terminal)
-                assert failed_terminal_view["disconnectReason"] == "JUMP_HOST_CHANNEL_FAILED", failed_terminal_view
+                assert failed_terminal_view["disconnectReason"] == "JUMP_HOST_FORWARD_DENIED", failed_terminal_view
+                assert len(jump_a.destinations) == before_denial + 1, "terminal forwarding denial must not retry"
+                eventually(lambda: jump_a.active == target.active == 0)
                 jump_a.deny_forward = False
                 expect(owner, path_a, "PUT", jump_payload(jump_a, password="ignored", clearPassword=True))
                 assert not expect(owner, path_a)["credentialConfigured"]

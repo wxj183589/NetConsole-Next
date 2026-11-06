@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise a published Windows candidate with its bundled Netmiko runtime.
 
-Run with a test Python that has tests/requirements-ssh-protocol.txt and
-websockets installed. Only the test harness uses that Python: the candidate
+Run with a test Python that has tests/requirements-netmiko-e2e.txt installed.
+Only the test harness uses that Python: the candidate
 runs from its own directory with no system Python on PATH and no worker or
 runtime override. All device targets are synthetic loopback SSH servers.
 """

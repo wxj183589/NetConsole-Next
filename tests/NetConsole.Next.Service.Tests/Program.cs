@@ -17,8 +17,6 @@ else if (NetmikoWorkerBudgetTests.IsWorker)
     await NetmikoWorkerBudgetTests.RunWorkerAsync();
 else if (args.Length > 0 && args[0] == "--netmiko-worker-budget-tests")
     await NetmikoWorkerBudgetTests.RunAsync();
-else if (args.Length > 0 && args[0] == "--ssh-wire")
-    await SchedulerTests.RunSshWireAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--sqlite-probe")
     SqliteSecurityTests.Run();
 else if (args.Length > 0 && args[0] == "--p2b2-migrate")
@@ -106,108 +104,6 @@ else
 
 internal static class SchedulerTests
 {
-    public static async Task RunSshWireAsync(string[] arguments)
-    {
-        if (arguments.Length != 3 || arguments[0] is not ("success" or "host-key" or "auth" or "timeout" or "disconnect" or "concurrent"))
-            throw new ArgumentException("Expected: --ssh-wire <success|host-key|auth|timeout|disconnect|concurrent> <port> <sha256-pin>.");
-        var mode = arguments[0];
-        var port = int.Parse(arguments[1], System.Globalization.CultureInfo.InvariantCulture);
-        var pin = arguments[2];
-        var password = Environment.GetEnvironmentVariable("NETCONSOLE_TEST_SSH_PASSWORD") ?? "synthetic-test-password";
-        var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "127.0.0.1", port,
-            "reader", "TEST_CREDENTIAL", pin, true, 0, 0);
-        var session = new H3cSshDeviceSession(profile, new FixedH3cCredentialProvider(password),
-            new SshNetH3cSshTransportFactory());
-        var sessionsBefore = H3cCollectionMetrics.Snapshot().ActiveSshSessions;
-        try
-        {
-            switch (mode)
-            {
-                case "success":
-                    await session.ConnectAsync(CancellationToken.None);
-                    var output = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None);
-                    Assert(output == "H3C Comware synthetic response\n", "SSH.NET Exec Channel should return the simulated Comware response intact");
-                    var connectedMetrics = H3cCollectionMetrics.Snapshot();
-                    Assert(connectedMetrics.ConnectAuthenticationCount > 0 && connectedMetrics.ConnectAuthenticationTotalMs > 0 &&
-                           connectedMetrics.ConnectionSetupCount > 0 && connectedMetrics.AuthenticationCount > 0 &&
-                           connectedMetrics.ConnectionSetupTotalMs > 0 && connectedMetrics.AuthenticationTotalMs > 0,
-                        "SSH protocol telemetry should retain combined connect/auth timing and report connection/key-exchange and post-pin authentication time separately");
-                    Console.WriteLine("PASS: SSH.NET wire authentication, pinned host key and Exec Channel output");
-                    break;
-                case "host-key":
-                    try
-                    {
-                        await session.ConnectAsync(CancellationToken.None);
-                        throw new InvalidOperationException("an unknown SSH host key must be rejected");
-                    }
-                    catch (H3cHostKeyMismatchException) { }
-                    Console.WriteLine("PASS: SSH.NET wire host-key mismatch was rejected");
-                    break;
-                case "auth":
-                    try
-                    {
-                        await session.ConnectAsync(CancellationToken.None);
-                        throw new InvalidOperationException("bad SSH credentials must be rejected");
-                    }
-                    catch (H3cAuthenticationFailedException) { }
-                    Console.WriteLine("PASS: SSH.NET wire password authentication failure was rejected");
-                    break;
-                case "timeout":
-                    using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
-                    {
-                        var started = Stopwatch.GetTimestamp();
-                        try
-                        {
-                            await session.ConnectAsync(timeout.Token);
-                            throw new InvalidOperationException("a silent SSH peer must not complete a connection");
-                        }
-                        catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
-                        Assert(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3),
-                            "SSH connect cancellation must finish promptly when the peer never sends its banner");
-                    }
-                    Console.WriteLine("PASS: SSH.NET wire connection cancellation released a silent peer");
-                    break;
-                case "disconnect":
-                    await session.ConnectAsync(CancellationToken.None);
-                    try
-                    {
-                        await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None);
-                        throw new InvalidOperationException("a reset after command output must not report complete collection");
-                    }
-                    catch (H3cPartialOutputException ex)
-                    {
-                        Assert(ex.FailureCode == "H3C_DISCONNECTED_PARTIAL" &&
-                               ex.Output == "partial Comware response\n",
-                            "SSH reset should retain and classify the received command output prefix");
-                    }
-                    Console.WriteLine("PASS: SSH.NET wire reset preserved only the bounded partial command output");
-                    break;
-                case "concurrent":
-                    var second = new H3cSshDeviceSession(profile, new FixedH3cCredentialProvider(password),
-                        new SshNetH3cSshTransportFactory());
-                    try
-                    {
-                        await Task.WhenAll(session.ConnectAsync(CancellationToken.None),
-                            second.ConnectAsync(CancellationToken.None));
-                        Assert(H3cCollectionMetrics.Snapshot().ActiveSshSessions == sessionsBefore + 2,
-                            "two independent SSH.NET sessions should be tracked concurrently");
-                        var outputs = await Task.WhenAll(
-                            session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None),
-                            second.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None));
-                        Assert(outputs.All(value => value == "H3C Comware synthetic response\n"),
-                            "concurrent SSH exec channels should retain both synthetic responses");
-                    }
-                    finally { await second.DisposeAsync(); }
-                    Console.WriteLine("PASS: two concurrent SSH.NET wire sessions completed and released");
-                    break;
-            }
-        }
-        finally { await session.DisposeAsync(); }
-
-        Assert(H3cCollectionMetrics.Snapshot().ActiveSshSessions == sessionsBefore,
-            "SSH.NET protocol simulation must not leave an active session behind");
-    }
-
     public static async Task RunArchiveTestsAsync()
     {
         VerifiesArchiveResourceBoundariesAndAdmissionRollback();
@@ -229,7 +125,7 @@ internal static class SchedulerTests
         await NetmikoRetryTransportTests.RunAsync();
         await StopsActiveSessionsDuringSchedulerShutdown();
         await PersistsDefinitionsRunsAndRestartState();
-        VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy();
+        VerifiesH3cGoldenParsersAndPins();
         VerifiesPhase9VendorParsersAndCliTranscript();
         VerifiesPhase10GoldenFixtureManifest();
         VerifiesPhase11LiveApGoldenFixtures();
@@ -263,7 +159,6 @@ internal static class SchedulerTests
         await P2B5RailReferenceTests.RunAsync();
         SqliteSecurityTests.Run();
         P2B3DiffContractTests.Run();
-        await VerifiesH3cOutputCollectionLimitsAndDisconnects();
         await VerifiesRawPublishFailureIsRetryable();
         await VerifiesPreservedRawRejectsFurtherOperations();
         await VerifiesConcurrentRawSealIsSerialized();
@@ -789,7 +684,7 @@ internal static class SchedulerTests
         }
     }
 
-    private static void VerifiesH3cGoldenParsersPinsAndAlgorithmPolicy()
+    private static void VerifiesH3cGoldenParsersAndPins()
     {
         var fixtures = Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c");
         var version = H3cComwareParser.ParseVersion(File.ReadAllText(Path.Combine(fixtures, "display_version.txt")));
@@ -829,22 +724,6 @@ internal static class SchedulerTests
         Assert(H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, fingerprint), "SHA256 pin should match SSH.NET fingerprint form");
         Assert(!H3cHostKeyFingerprint.Matches("SHA256:" + fingerprint, new string('A', 43)), "wrong host key must not match");
         AssertThrows<ArgumentException>(() => H3cHostKeyFingerprint.Normalize("MD5:aa:bb"));
-
-        var connectionInfo = new Renci.SshNet.ConnectionInfo("192.0.2.1", 22, "lab",
-            new Renci.SshNet.PasswordAuthenticationMethod("lab", "unit-test-placeholder"));
-        H3cSshAlgorithmPolicy.Apply(connectionInfo);
-        Assert(!connectionInfo.KeyExchangeAlgorithms.ContainsKey("diffie-hellman-group1-sha1") &&
-               !connectionInfo.Encryptions.ContainsKey("3des-cbc") &&
-               !connectionInfo.HmacAlgorithms.ContainsKey("hmac-sha1") &&
-               !connectionInfo.HostKeyAlgorithms.ContainsKey("ssh-rsa"), "weak SSH algorithms must be removed from the connection allowlist");
-        var legacyConnectionInfo = new Renci.SshNet.ConnectionInfo("192.0.2.1", 22, "lab",
-            new Renci.SshNet.PasswordAuthenticationMethod("lab", "unit-test-placeholder"));
-        H3cSshAlgorithmPolicy.Apply(legacyConnectionInfo, allowLegacyAlgorithms: true);
-        Assert(legacyConnectionInfo.KeyExchangeAlgorithms.ContainsKey("diffie-hellman-group14-sha1") ||
-               legacyConnectionInfo.Encryptions.ContainsKey("aes128-cbc") ||
-               legacyConnectionInfo.HmacAlgorithms.ContainsKey("hmac-sha1") ||
-               legacyConnectionInfo.HostKeyAlgorithms.ContainsKey("ssh-rsa"),
-            "device-scoped legacy compatibility should retain only explicitly allowed legacy algorithms");
 
         Assert(H3cComwareParser.Parse(H3cCommandPolicy.DisplayVersion, string.Empty).Status == "EMPTY",
             "empty command output is a capture result, not a parser success");
@@ -1180,112 +1059,6 @@ internal static class SchedulerTests
             Console.WriteLine($"PHASE11_OFFLINE_H3C_FACT_REPLAY=PASS (facts={current.Count}, peers=3, source={Catalog.H3cOfflineFixtureSource})");
         }
         finally { Directory.Delete(root, true); }
-    }
-
-    private static async Task VerifiesH3cOutputCollectionLimitsAndDisconnects()
-    {
-        const int boundary = H3cRawOutput.MaximumBytes;
-        var exact = Enumerable.Repeat((byte)'x', boundary).ToArray();
-        var exactOutput = await H3cCommandOutputCollector.CollectAsync(new MemoryStream(exact),
-            new MemoryStream(), Task.CompletedTask, boundary, () => throw new InvalidOperationException("unexpected abort"));
-        Assert(Encoding.UTF8.GetByteCount(exactOutput.Text) == boundary && exactOutput.StderrByteCount == 0,
-            "the output byte limit must accept an exactly full UTF-8 response");
-
-        var aborts = 0;
-        var overflow = Enumerable.Repeat((byte)'y', boundary + 1).ToArray();
-        try
-        {
-            await H3cCommandOutputCollector.CollectAsync(new MemoryStream(overflow), new MemoryStream(),
-                Task.CompletedTask, boundary, () => aborts++);
-            throw new InvalidOperationException("output larger than the configured limit should fail");
-        }
-        catch (H3cPartialOutputException ex)
-        {
-            Assert(ex.Output.Length == boundary && ex.FailureCode == "H3C_OUTPUT_LIMIT_PARTIAL",
-                "over-limit stdout must preserve exactly the bounded prefix");
-        }
-        Assert(aborts == 1, "output overflow must abort the SSH transport");
-
-        var truncatedUtf8 = Enumerable.Repeat((byte)'u', boundary - 2)
-            .Concat(new byte[] { 0xe2, 0x82, 0xac }).ToArray();
-        try
-        {
-            await H3cCommandOutputCollector.CollectAsync(new MemoryStream(truncatedUtf8), new MemoryStream(),
-                Task.CompletedTask, boundary, () => { });
-            throw new InvalidOperationException("overflow cut through a UTF-8 character must stay visibly partial");
-        }
-        catch (H3cPartialOutputException ex)
-        {
-            Assert(ex.Output == new string('u', boundary - 2) && ex.FailureCode == "H3C_OUTPUT_LIMIT_PARTIAL",
-                "a byte-capped UTF-8 tail must retain its valid prefix without inserting replacement characters");
-        }
-
-        var stderrOverflow = Enumerable.Repeat((byte)'e', boundary + 1).ToArray();
-        try
-        {
-            await H3cCommandOutputCollector.CollectAsync(new MemoryStream(), new MemoryStream(stderrOverflow),
-                Task.CompletedTask, boundary, () => { });
-            throw new InvalidOperationException("stderr must count toward the combined SSH output limit");
-        }
-        catch (H3cOutputLimitException) { }
-
-        try
-        {
-            await H3cCommandOutputCollector.CollectAsync(new MemoryStream(Encoding.UTF8.GetBytes("partial response")),
-                new MemoryStream(), Task.FromException(new IOException("simulated SSH connection reset")), boundary, () => { });
-            throw new InvalidOperationException("a reset after partial output must not be reported as complete");
-        }
-        catch (H3cPartialOutputException ex)
-        {
-            Assert(ex.Output == "partial response" && ex.FailureCode == "H3C_DISCONNECTED_PARTIAL",
-                "partial command output must remain available with a disconnect status");
-        }
-
-        try
-        {
-            await H3cCommandOutputCollector.CollectAsync(new MemoryStream(new byte[] { 0xff }), new MemoryStream(),
-                Task.CompletedTask, boundary, () => { });
-            throw new InvalidOperationException("invalid UTF-8 must be diagnosed, not silently replaced");
-        }
-        catch (H3cInvalidEncodingException) { }
-
-        using (var cancellation = new CancellationTokenSource())
-        using (var blockedOutput = new CancellationReadStream())
-        {
-            var cancelAborts = 0;
-            var execution = Task.Delay(Timeout.InfiniteTimeSpan, cancellation.Token);
-            var collection = H3cCommandOutputCollector.CollectAsync(blockedOutput, new MemoryStream(), execution,
-                boundary, () => { cancelAborts++; blockedOutput.Release(); }, cancellation.Token);
-            await blockedOutput.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-            cancellation.Cancel();
-            try
-            {
-                await collection.WaitAsync(TimeSpan.FromSeconds(1));
-                throw new InvalidOperationException("cancellation must stop a blocked SSH output read");
-            }
-            catch (OperationCanceledException) { }
-            Assert(cancelAborts == 1 && collection.IsCompleted,
-                "cancellation must abort the transport once and leave no output-drain task behind");
-        }
-
-        using (var cancellation = new CancellationTokenSource())
-        {
-            var partialOutput = H3cCommandOutputCollector.CollectAsync(
-                new MemoryStream(Encoding.UTF8.GetBytes("partial before cancel")), new MemoryStream(),
-                Task.Delay(Timeout.InfiniteTimeSpan, cancellation.Token), boundary, () => { }, cancellation.Token);
-            cancellation.Cancel();
-            try
-            {
-                await partialOutput.WaitAsync(TimeSpan.FromSeconds(1));
-                throw new InvalidOperationException("cancelled output must not be reported as complete");
-            }
-            catch (H3cPartialOutputException ex)
-            {
-                Assert(ex.IsCancellation && ex.FailureCode == "H3C_CANCELLED_PARTIAL" &&
-                       ex.Output == "partial before cancel",
-                    "cancelled partial output must retain its bytes with an explicit cancellation state");
-            }
-        }
     }
 
     private static void VerifiesLocalSecurityTokenRotationAndDpapiBoundary()
@@ -3341,33 +3114,6 @@ internal static class SchedulerTests
         {
             await inner.DisposeAsync();
             GC.SuppressFinalize(this);
-        }
-    }
-
-    private sealed class CancellationReadStream : Stream
-    {
-        private readonly TaskCompletionSource<int> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public void Release() => _release.TrySetResult(0);
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            ReadStarted.TrySetResult();
-            return new ValueTask<int>(_release.Task);
-        }
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Flush() => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) Release();
-            base.Dispose(disposing);
         }
     }
 

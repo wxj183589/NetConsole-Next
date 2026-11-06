@@ -1,0 +1,4 @@
+# Exercise the same Netmiko and Paramiko versions as the shipping worker.
+-r ../tools/netmiko_requirements.txt
+# Synthetic HTTP/WebSocket terminal and Jump Host clients only.
+websockets==16.0

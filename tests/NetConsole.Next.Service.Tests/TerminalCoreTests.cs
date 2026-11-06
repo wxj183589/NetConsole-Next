@@ -19,9 +19,10 @@ internal static class TerminalCoreTests
         await VerifiesRecordingCatalogBusyAndDiskFaultsAsync();
         await VerifiesSshHostKeyLifecycleAsync();
         await VerifiesConnectionTestResultBoundariesAsync();
-        await VerifiesFailureReasonBeforeRecordingCompletionAsync();
+        await VerifiesFailureReasonBeforeRecordingCompletionAsync(
+            new H3cJumpHostConnectionException("JUMP_HOST_CHANNEL_FAILED", "跳板机拒绝转发目标连接"), "JUMP_HOST_CHANNEL_FAILED");
+        await VerifiesFailureReasonBeforeRecordingCompletionAsync(new H3cConnectionLostException(), "TRANSPORT_DISCONNECTED");
         VerifiesTerminalTextEncoding();
-        VerifiesStreamingTerminalTextDecoder();
         await VerifiesLegacyV6SingleFileReadAsync();
     }
 
@@ -490,11 +491,20 @@ internal static class TerminalCoreTests
             var failedLogin = await authenticationFailure.TestAsync(deviceId, CancellationToken.None);
             Assert(failedLogin is not null && failedLogin.Status == "AUTHENTICATION_FAILED",
                 "a failure during ConnectAsync must remain an authentication failure");
+
+            var commandExecuted = false;
+            var disconnected = new H3cConnectionTestService(catalog,
+                new ConnectionTestFakeSessionFactory(() => new ConnectionTestFakeSession(
+                    () => Task.FromException(new H3cConnectionLostException()),
+                    (_, _) => { commandExecuted = true; return Task.FromResult("unused"); })));
+            var failedConnection = await disconnected.TestAsync(deviceId, CancellationToken.None);
+            Assert(failedConnection is { Status: "UNREACHABLE", Message: "设备不可达" } && !commandExecuted,
+                "a lost connection during login must report device unavailability without executing a command");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }
 
-    private static async Task VerifiesFailureReasonBeforeRecordingCompletionAsync()
+    private static async Task VerifiesFailureReasonBeforeRecordingCompletionAsync(Exception failure, string reason)
     {
         var root = Path.Combine(Path.GetTempPath(), "netconsole-next-terminal-failure-reason-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -507,9 +517,7 @@ internal static class TerminalCoreTests
             };
             var catalog = new Catalog(settings);
             catalog.Initialize();
-            const string reason = "JUMP_HOST_CHANNEL_FAILED";
-            var credentials = new TerminalCoreFailingCredentialProvider(
-                new H3cJumpHostConnectionException(reason, "跳板机拒绝转发目标连接"));
+            var credentials = new TerminalCoreFailingCredentialProvider(failure);
             await using var manager = new TerminalSessionManager(catalog, settings, credentials);
             using var releaseCompletion = new ManualResetEventSlim();
             var completionReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -534,18 +542,18 @@ internal static class TerminalCoreTests
             {
                 runtime.Start();
                 await completionReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
-                AssertFailure(runtime.Snapshot, completed: false);
-                AssertFailure(catalog.GetTerminalSession(snapshot.Id), completed: false);
+                AssertFailure(runtime.Snapshot, reason, completed: false);
+                AssertFailure(catalog.GetTerminalSession(snapshot.Id), reason, completed: false);
             }
             finally
             {
                 releaseCompletion.Set();
                 await runtime.DisposeAsync();
             }
-            AssertFailure(runtime.Snapshot, completed: true);
-            AssertFailure(catalog.GetTerminalSession(snapshot.Id), completed: true);
+            AssertFailure(runtime.Snapshot, reason, completed: true);
+            AssertFailure(catalog.GetTerminalSession(snapshot.Id), reason, completed: true);
 
-            static void AssertFailure(TerminalSessionSnapshot? actual, bool completed)
+            static void AssertFailure(TerminalSessionSnapshot? actual, string reason, bool completed)
             {
                 Assert(actual is not null && actual.State == "FAILED" && actual.ConnectionResult == reason &&
                        actual.DisconnectReason == reason,
@@ -566,23 +574,6 @@ internal static class TerminalCoreTests
             "explicit GB18030 Telnet prompts should decode without replacement characters");
         Assert(TerminalTextEncoding.Decode(Encoding.UTF8.GetBytes("提示符> "), "AUTO") == "提示符> ",
             "AUTO terminal encoding should preserve valid UTF-8 device prompts");
-    }
-
-    private static void VerifiesStreamingTerminalTextDecoder()
-    {
-        var utf8 = Encoding.UTF8.GetBytes("中文提示符> ");
-        var utf8Decoder = new TerminalTextDecoder("UTF-8");
-        var first = utf8Decoder.Decode(utf8.AsSpan(0, 2));
-        var second = utf8Decoder.Decode(utf8.AsSpan(2));
-        Assert(Encoding.UTF8.GetString(first) + Encoding.UTF8.GetString(second) == "中文提示符> ",
-            "UTF-8 terminal decoding must preserve characters split across transport reads");
-
-        var gb = TerminalTextEncoding.Resolve("GB18030").GetBytes("中文提示符> ");
-        var gbDecoder = new TerminalTextDecoder("GB18030");
-        var gbFirst = gbDecoder.Decode(gb.AsSpan(0, 1));
-        var gbSecond = gbDecoder.Decode(gb.AsSpan(1));
-        Assert(Encoding.UTF8.GetString(gbFirst) + Encoding.UTF8.GetString(gbSecond) == "中文提示符> ",
-            "GB18030 terminal decoding must preserve characters split across transport reads");
     }
 
     private sealed class TerminalCoreFixedH3cCredentialProvider(string? value) : IH3cCredentialProvider

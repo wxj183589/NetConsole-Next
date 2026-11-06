@@ -328,6 +328,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
                 H3cUnsupportedAlgorithmException or H3cProtocolNegotiationException => "UNSUPPORTED_ALGORITHM",
                 H3cAuthenticationFailedException => "AUTHENTICATION_FAILED",
                 H3cCredentialUnavailableException => "CREDENTIAL_UNAVAILABLE",
+                H3cConnectionLostException => "TRANSPORT_DISCONNECTED",
                 TimeoutException => "TIMEOUT",
                 UnauthorizedAccessException => "SERIAL_ACCESS_DENIED",
                 IOException => "TRANSPORT_IO_ERROR",

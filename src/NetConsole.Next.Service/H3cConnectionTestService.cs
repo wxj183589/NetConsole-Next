@@ -117,7 +117,7 @@ internal sealed class H3cConnectionTestService(
             => ("HOST_KEY_REJECTED", "主机身份校验失败"),
         H3cConnectionTimeoutException or TimeoutException => ("CONNECT_TIMEOUT", "连接超时"),
         H3cProtocolNegotiationException or H3cUnsupportedAlgorithmException => ("PROTOCOL_MISMATCH", "协议或算法不匹配"),
-        SocketException => ("UNREACHABLE", "设备不可达"),
+        H3cConnectionLostException or SocketException => ("UNREACHABLE", "设备不可达"),
         IOException => ("UNREACHABLE", "设备不可达"),
         InvalidDataException or PlatformNotSupportedException => ("CREDENTIAL_UNAVAILABLE", "未配置可用凭据"),
         ArgumentException => ("PROTOCOL_MISMATCH", "协议配置不匹配"),

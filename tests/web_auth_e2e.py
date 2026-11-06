@@ -44,7 +44,7 @@ class Client:
         other.csrf = self.csrf
         return other
 
-    def request(self, path, method="GET", payload=None, csrf=True, origin=True):
+    def request(self, path, method="GET", payload=None, csrf=True, origin=True, timeout=8):
         data = None if payload is None else json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"} if data is not None else {}
         if csrf and self.csrf:
@@ -53,7 +53,7 @@ class Client:
             headers["Origin"] = self.base if origin is True else origin
         request = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         try:
-            with self.opener.open(request, timeout=8) as response:
+            with self.opener.open(request, timeout=timeout) as response:
                 body = response.read()
                 return response.status, json.loads(body) if body else None
         except urllib.error.HTTPError as error:
