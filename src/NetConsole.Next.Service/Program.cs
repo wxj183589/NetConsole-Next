@@ -1671,7 +1671,7 @@ app.MapGet("/api/system/wireless/ac-domains/{id}/ap-groups", (HttpContext contex
     if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
     try
     {
-        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var snapshot = wireless.GetGroupSnapshot(CurrentSiteScope(context), QueryValue(request, "sourceAcId"));
         if (!snapshot.AcDomains.Any(domain => string.Equals(domain.Id, id, StringComparison.Ordinal))) return WirelessResourceNotVisible();
         var items = snapshot.ApGroups.Where(group => string.Equals(group.SourceAcDomainId, id, StringComparison.Ordinal)).ToArray();
         return Results.Ok(ToWirelessPage(items, request, snapshot));
@@ -1680,32 +1680,41 @@ app.MapGet("/api/system/wireless/ac-domains/{id}/ap-groups", (HttpContext contex
     { return WirelessAuthorityUnavailable(ex); }
 });
 
-app.MapGet("/api/system/wireless/ap-groups/{id}", (HttpContext context, string id,
+app.MapGet("/api/system/wireless/ap-groups/{id}", (HttpContext context, HttpRequest request, string id,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {
     if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
     try
     {
-        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var snapshot = wireless.GetGroupSnapshot(CurrentSiteScope(context), QueryValue(request, "sourceAcId"));
         var group = snapshot.ApGroups.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
         if (group is null) return WirelessResourceNotVisible();
-        var members = snapshot.ApResources
-            .Where(resource => group.MemberResourceIds.Contains(resource.Id, StringComparer.Ordinal))
-            .ToArray();
+        var members = WirelessProjectionEngine.GroupMembers(snapshot, group);
+        var observations = members.SelectMany(item => item.Observations).ToArray();
         return Results.Ok(new
         {
             group,
             members,
-            total = members.Length,
-            asOf = snapshot.AsOf,
+            observations,
+            total = members.Count,
+            asOf = group.ObservedAtMs,
             scope = snapshot.Scope,
-            sourceRevision = snapshot.SourceRevision,
+            sourceRevision = group.SourceRevision,
             warnings = snapshot.Warnings,
             provenance = new
             {
                 group.SourceAcDeviceId,
+                group.SourceAcDeviceIds,
                 group.SourceAcDomainId,
+                group.SourceGroupKey,
+                group.GroupIdentityKey,
+                group.GroupIdentityStatus,
                 group.SourceRevision,
+                group.MembershipRevision,
+                group.SourceObservationIds,
+                group.SourceEvidenceRefs,
+                group.ObservedAtMs,
+                group.ConflictReason,
                 group.ScopeStatus,
                 group.GroupScope
             }
@@ -1715,17 +1724,17 @@ app.MapGet("/api/system/wireless/ap-groups/{id}", (HttpContext context, string i
     { return WirelessAuthorityUnavailable(ex); }
 });
 
-app.MapGet("/api/system/wireless/ap-groups/{id}/members", (HttpContext context, string id,
+app.MapGet("/api/system/wireless/ap-groups/{id}/members", (HttpContext context, HttpRequest request, string id,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {
     if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
     try
     {
-        var snapshot = wireless.GetSnapshot(CurrentSiteScope(context));
+        var snapshot = wireless.GetGroupSnapshot(CurrentSiteScope(context), QueryValue(request, "sourceAcId"));
         var group = snapshot.ApGroups.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
         if (group is null) return WirelessResourceNotVisible();
-        var items = snapshot.ApResources.Where(resource => group.MemberResourceIds.Contains(resource.Id, StringComparer.Ordinal)).ToArray();
-        return Results.Ok(new { items, total = items.Length, asOf = snapshot.AsOf, scope = snapshot.Scope, sourceRevision = snapshot.SourceRevision, warnings = snapshot.Warnings });
+        var items = WirelessProjectionEngine.GroupMembers(snapshot, group);
+        return Results.Ok(new { items, total = items.Count, asOf = group.ObservedAtMs, scope = snapshot.Scope, sourceRevision = group.SourceRevision, membershipRevision = group.MembershipRevision, warnings = snapshot.Warnings });
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
     { return WirelessAuthorityUnavailable(ex); }

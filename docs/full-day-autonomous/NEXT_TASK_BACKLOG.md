@@ -1,5 +1,14 @@
 # 全天候动态任务池
 
+2026-11-06 检查点 N：AP Group 来源身份本机验收通过，功能提交以本段所属 commit 为准（起点 `8885705`）。独立证据与来源范围读模型、schema24、HTTP16、前端29、浏览器15及完整Service回归PASS。正式生命周期和真实source-key/共享组证据继续待完成。既有 `a3954a5` 离线候选不包含此批。
+
+| ID | 工作流 | 任务 | 优先级 | 依赖 | 状态 | 验收 |
+| --- | --- | --- | --- | --- | --- | --- |
+| FD-P1-27 | Wireless | AP Group 来源键、身份与成员版本 | P1 | explicit evidence/Site claims/schema24 | COMPLETED_LOCAL | 合同10场景、迁移/HTTP/API/UI PASS；实时证据待验收 |
+| FD-P1-28 | Wireless | 投影缓存退役与完整AP/Domain/group生命周期 | P1 | frozen contracts/current authority | IN_PROGRESS | 先核查缓存读写和退役边界；不把缓存清理等同业务生命周期 |
+
+下方为连接批次任务记录。
+
 更新：2026-11-06。本批功能已本地提交 `a3954a5`，文档以所属 commit 为准（起点 `4dac9fc`）。**整体 PARTIAL**；COMPLETED_LOCAL 仅表示列出的本机范围。真实设备/主机/堡垒机仍 `REAL_DEVICE_PENDING`。不 Push、Merge、Release。
 
 | ID | 工作流 | 任务 | 优先级 | 依赖 | 状态 | 验收 |

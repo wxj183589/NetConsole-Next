@@ -178,6 +178,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV22Migration(db);
         ZteCollectionSchema.Apply(db);
         LinuxServerSchema.Apply(db);
+        ApplyV24Migration(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
 
@@ -512,6 +513,23 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         using var transaction = db.BeginTransaction();
         using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v22.sql")
             ?? throw new InvalidOperationException("Embedded schema_v22.sql was not found.");
+        using var reader = new StreamReader(resource);
+        using var command = db.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = reader.ReadToEnd();
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    internal static void ApplyV24Migration(SqliteConnection db)
+    {
+        using var transaction = db.BeginTransaction();
+        using var version = db.CreateCommand();
+        version.Transaction = transaction;
+        version.CommandText = "SELECT 1 FROM schema_versions WHERE version=24";
+        if (version.ExecuteScalar() is not null) return;
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("schema_v24.sql")
+            ?? throw new InvalidOperationException("Embedded schema_v24.sql was not found.");
         using var reader = new StreamReader(resource);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

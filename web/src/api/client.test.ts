@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getDeviceInventory, getHealth, setCsrfToken } from './client'
+import { getDeviceInventory, getHealth, getWirelessApGroup, getWirelessApGroups, setCsrfToken } from './client'
 
 describe('Next API client', () => {
   it('uses same-origin credentials and never places credentials in a URL', async () => {
@@ -21,6 +21,18 @@ describe('Next API client', () => {
     expect(url).toContain('deviceType=SWITCH')
     expect(url).not.toContain('password')
     fetchMock.mockRestore()
+  })
+
+  it('keeps the selected AC scope on group lists and details', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))
+    try {
+      await getWirelessApGroups('domain/a', { sourceAcId: 'ac/b' })
+      await getWirelessApGroup('projection/a', { sourceAcId: 'ac/b' })
+      expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+        '/api/system/wireless/ac-domains/domain%2Fa/ap-groups?sourceAcId=ac%2Fb',
+        '/api/system/wireless/ap-groups/projection%2Fa?sourceAcId=ac%2Fb',
+      ])
+    } finally { fetchMock.mockRestore() }
   })
 })
 

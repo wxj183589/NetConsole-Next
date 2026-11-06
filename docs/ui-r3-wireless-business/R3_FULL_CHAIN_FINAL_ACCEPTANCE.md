@@ -1,5 +1,28 @@
 # R3 Full-Chain Final Acceptance（双 AC 补充版）
 
+## 2026-11-06 当前 AP Group 集成边界
+
+本切片：`LOCAL_ACCEPTANCE_PASS`；总体仍为 `PARTIAL`。当前本机已验收 typed source-group evidence、名称 only 的 AC candidate/null keys、严格 DOMAIN shared/成员一致条件、独立 membershipRevision、source-only member provenance、schema24 可重建 projection 与 UI 来源展示。schema23 已归 Linux 切片。
+
+本次本机验收证据如下；所有结果只覆盖相应 fixture/测试边界。
+
+| 本机 Gate | 结果与证据范围 |
+| --- | --- |
+| AP Group 来源身份合同 | 10 个合同场景 PASS；映射 SC-28/29/36..41 与 no-leak/provenance 断言 |
+| Wireless projection / Runtime | projection PASS；Runtime 13/13 PASS |
+| schema24 | 事务回滚、幂等、fresh/reopen 与旧数据 candidate/null-key 降级 PASS；最小隔离数据 |
+| HTTP API | `py -3.13 -B tests/r3_dual_ac_api_e2e.py` 全部 16 个 marker PASS；真实 HTTP 服务 + 离线 fixture，含 sourceAcId/MAC-only canonical 成员链接 |
+| 完整 Service harness | PASS；本机服务测试边界 |
+| Chrome 无线浏览器 fixture | 15 状态 PASS；1920/2560、DPR1，API mocked，非 live 设备/端到端 GUI |
+| 前端 | 9 files/29 tests、typecheck、独立 Vite PASS；本机当前切片 |
+
+上述来源身份切片为 `LOCAL_ACCEPTANCE_PASS`，不代表完整 57 场景完成。完整 AP candidate/replacement、Domain/group 生命周期、真实 HA/切换、Windows native 125% 和真实设备兼容性仍须各自证据；无真实证据项维持 `REAL_DEVICE_PENDING`。
+
+下方 2026-11-05 和早期 Checkpoint 的 mutex、凭据、schema 未变等文字保留为历史，不作为当前阻塞的确认。已提交连接批次的当前证据见 [全天候开发交付记录](../full-day-autonomous/FULL_DAY_AUTONOMOUS_FINAL_REPORT.md)；AP Group 本切片合同与本机验收映射见 [AP Group 合同](R3_B0_AP_GROUP_CONTRACT.md) 和 [测试矩阵](R3_B0_TEST_SCENARIO_MATRIX.md)。保留当前分支；不执行 Push、Merge 或 Release。
+
+## 历史全链路验收与 Checkpoint
+
+
 日期：2026-11-05
 分支：`codex-A/netconsole-next-r3-dual-ac`
 状态：`PARTIAL`

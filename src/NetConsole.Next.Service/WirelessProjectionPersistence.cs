@@ -117,23 +117,39 @@ internal sealed partial class Catalog
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO wireless_ap_groups
-                    (id,source_ac_device_id,source_ac_domain_id,source_group_key,display_name,group_scope,member_resource_ids_json,source_revision,scope_status,updated_ms)
-                VALUES($id,$sourceAc,$domain,$key,$display,$scope,$members,$revision,$status,$updated)
+                    (id,source_ac_device_id,source_ac_domain_id,source_group_key,display_name,group_scope,member_resource_ids_json,source_revision,scope_status,updated_ms,
+                     group_identity_key,group_identity_status,membership_revision,source_observation_ids_json,source_ac_device_ids_json,source_evidence_refs_json,
+                     observed_at_ms,conflict_reason,source_group_observations_json)
+                VALUES($id,$sourceAc,$domain,$key,$display,$scope,$members,$revision,$status,$updated,
+                       $identityKey,$identityStatus,$membershipRevision,$observations,$sourceAcs,$evidence,$observed,$conflict,$groupObservations)
                 ON CONFLICT(id) DO UPDATE SET source_ac_device_id=excluded.source_ac_device_id,source_ac_domain_id=excluded.source_ac_domain_id,
                     source_group_key=excluded.source_group_key,display_name=excluded.display_name,group_scope=excluded.group_scope,
                     member_resource_ids_json=excluded.member_resource_ids_json,source_revision=excluded.source_revision,
-                    scope_status=excluded.scope_status,updated_ms=excluded.updated_ms
+                    scope_status=excluded.scope_status,updated_ms=excluded.updated_ms,group_identity_key=excluded.group_identity_key,
+                    group_identity_status=excluded.group_identity_status,membership_revision=excluded.membership_revision,
+                    source_observation_ids_json=excluded.source_observation_ids_json,source_ac_device_ids_json=excluded.source_ac_device_ids_json,
+                    source_evidence_refs_json=excluded.source_evidence_refs_json,observed_at_ms=excluded.observed_at_ms,
+                    conflict_reason=excluded.conflict_reason,source_group_observations_json=excluded.source_group_observations_json
                 """;
             command.Parameters.AddWithValue("$id", group.Id);
             command.Parameters.AddWithValue("$sourceAc", group.SourceAcDeviceId);
             command.Parameters.AddWithValue("$domain", group.SourceAcDomainId);
-            command.Parameters.AddWithValue("$key", group.SourceGroupKey);
+            command.Parameters.AddWithValue("$key", (object?)group.SourceGroupKey ?? DBNull.Value);
             command.Parameters.AddWithValue("$display", group.DisplayName);
             command.Parameters.AddWithValue("$scope", group.GroupScope);
             command.Parameters.AddWithValue("$members", JsonSerializer.Serialize(group.MemberResourceIds));
             command.Parameters.AddWithValue("$revision", group.SourceRevision);
             command.Parameters.AddWithValue("$status", group.ScopeStatus);
             command.Parameters.AddWithValue("$updated", now);
+            command.Parameters.AddWithValue("$identityKey", (object?)group.GroupIdentityKey ?? DBNull.Value);
+            command.Parameters.AddWithValue("$identityStatus", group.GroupIdentityStatus);
+            command.Parameters.AddWithValue("$membershipRevision", group.MembershipRevision);
+            command.Parameters.AddWithValue("$observations", JsonSerializer.Serialize(group.SourceObservationIds));
+            command.Parameters.AddWithValue("$sourceAcs", JsonSerializer.Serialize(group.SourceAcDeviceIds));
+            command.Parameters.AddWithValue("$evidence", JsonSerializer.Serialize(group.SourceEvidenceRefs));
+            command.Parameters.AddWithValue("$observed", group.ObservedAtMs);
+            command.Parameters.AddWithValue("$conflict", (object?)group.ConflictReason ?? DBNull.Value);
+            command.Parameters.AddWithValue("$groupObservations", JsonSerializer.Serialize(group.SourceGroupObservations));
             command.ExecuteNonQuery();
         }
         var observations = snapshot.ApResources.SelectMany(item => item.Observations).ToArray();

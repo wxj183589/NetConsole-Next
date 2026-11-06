@@ -1,5 +1,18 @@
 # R3-B0 API Gap 追踪矩阵（修订版）
 
+## 2026-11-06 G07 当前切片追踪
+
+当前状态：`LOCAL_ACCEPTANCE_PASS`。下方 10 gap、implemented=0 与“parser only has Group text”等表述保留为冻结设计/早期实现批次历史，不代表当前 G07 来源身份实现；本节不重算或关闭其他 gap。
+
+| Gap / API | 当前实现范围 | 授权/数据边界 | 验证映射 | 剩余范围 |
+| --- | --- | --- | --- | --- |
+| G07 / API-W07/W08 | typed source-group evidence；AC/DOMAIN scoped key；名称 only 为 AC candidate/null key；成员 revision 独立；detail/members 保留实际 observation provenance | 现有 Site/source AC predicate；schema24 仅可重建 projection，Raw/Facts 为 Authority | SC-28/29/36..41；`WirelessGroupTests.cs`、API E2E、WirelessView 单测与浏览器脚本；均 `LOCAL_ACCEPTANCE_PASS` | 完整 Domain/group 生命周期、持久 change events、真实设备与其余全链路验收 |
+
+本机来源身份切片已通过：10 个 Group 合同、Wireless projection、Runtime 13/13、schema24 迁移边界、真实 HTTP/离线 fixture 全部 16 个 marker、完整 Service harness、Chrome API mocked 15 状态、前端 9 files/29 tests 与 typecheck/独立 Vite；范围见 [本机验收记录](R3_FULL_CHAIN_FINAL_ACCEPTANCE.md)。具体字段/nullability、Domain shared 成员一致门槛和历史名称迁移见 [AP Group 当前合同](R3_B0_AP_GROUP_CONTRACT.md)。其他 G01..G10 状态须按各自当前证据判定，不因 G07 本切片自动提升。
+
+## 历史 Gap 设计与早期实现追踪
+
+
 修订日期：2026-11-04
 状态：`FROZEN_DESIGN_ACCOUNTED_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。10 个 gap 均有业务字段、合同、授权、测试和实施批次追踪；没有 gap 被产品代码关闭。
 

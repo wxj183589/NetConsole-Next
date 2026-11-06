@@ -1,5 +1,31 @@
 # R3-B0 测试场景矩阵
 
+## 2026-11-06 AP Group 切片当前映射
+
+本节仅映射本次来源身份修复，不重编号原有 `SC-01`～`SC-57`，也不改变 57 场景/17 fixture 的历史设计数量。以下映射的本切片断言已完成本机验收，状态为 `LOCAL_ACCEPTANCE_PASS`；完整 change-event/ended/replacement 生命周期仍属后续范围，不由这些断言宣告完成。下方 `NOT_RUN_DOC_ONLY`、批准前门槛与排除项保留为原设计批次历史，不要求重新取得本次已给出的实施授权。
+
+| 场景 | 本切片当前预期 | 当前核验入口 |
+| --- | --- | --- |
+| SC-28 | 同名跨 AC 保持分离；无显式 key 时分别为 AC/CANDIDATE，两个 key 字段为 null | `NameOnlyGroupsRemainCandidates`、`ExplicitKeysStayAcScopedWithoutSharedEvidence`；API/UI group detail |
+| SC-29 | 显式 evidence 支持空组；实际成员/source relation 变化改变 membershipRevision；改名/不变刷新不改变；完整 change-event 生命周期后续 | `ExplicitDomainEvidenceAndEmptyGroups`、`RenameAndMembershipRevisionsAreIndependent` |
+| SC-36 | 同 Domain 同名或同 key 不足以合并；默认独立 AC 组，名称 only 保留候选 | `NameOnlyGroupsRemainCandidates`、`ExplicitKeysStayAcScopedWithoutSharedEvidence` |
+| SC-37 | 显式 shared refs + 已确认 Domain/相符 ID + 成员集合一致才为 DOMAIN；不完整/不一致 evidence 不得确认 DOMAIN | `ExplicitDomainEvidenceAndEmptyGroups`、`DomainMemberChangeDoesNotPromoteGroups` |
+| SC-38 | 缺 key/provenance 为 candidate/null identity key；非法 AC/Site/observation evidence 不影响可见组；候选详情仍需当前 source claims | `MissingAndInvalidEvidenceFailsClosed`；API/UI null-key detail |
+| SC-39 | 同 scope/key 改名保持稳定 identity 和 membershipRevision；来源 revision 可变；无变化刷新同样保持 membershipRevision | `RenameAndMembershipRevisionsAreIndependent` |
+| SC-40 | 同名不同 source key 保持独立并显示 conflict；同 key 并发互斥名称保留证据，禁止 alias merge | `ContradictoryNamesAndKeysRemainSeparate` |
+| SC-41 | Domain 成员变化不自动升级 AC 组；旧 shared 成员证据不匹配时 AC/conflict；完整 ended/replacement 生命周期后续 | `DomainMemberChangeDoesNotPromoteGroups` |
+
+以上具名后端入口位于 `tests/NetConsole.Next.Service.Tests/WirelessGroupTests.cs`。补充本机核验结果同为 `LOCAL_ACCEPTANCE_PASS`：
+
+- `GroupMembersRetainOnlyActualObservationProvenance` / `SourceAndSiteFilteringPrecedesProjection` 核验 source-only members、跨 Site 无泄露，以及隐藏来源变化不影响可见 revision。
+- `LegacyProjectionMigrationIsAtomicAndIdempotent` 核验 schema23→24 的事务失败回滚、重入、旧名称行降为 candidate/null keys；fresh/reopen、projection 持久化与多候选 null-key 共存也已通过最小隔离 fixture 核验。
+- `tests/r3_dual_ac_api_e2e.py`、`web/src/views/WirelessView.test.ts` 和 `tests/wireless_browser_e2e.mjs` 已核验 opaque ID 详情、候选空 key、source AC 过滤、MAC-only canonical 链接与来源信息展示。
+
+本机结果：AP Group 10 个合同场景、Wireless projection、Runtime 13/13、完整 Service harness 与真实 HTTP/离线 fixture 16 个 marker 通过；Chrome API mocked 无线浏览器 15 状态通过（1920/2560、DPR1，非 live）；前端 9 files/29 tests、typecheck 与独立 Vite 通过。完整 57 场景、真实 HA/切换、Windows native 125% 与真实设备兼容性不因本节提升；无真实证据项目保持 `REAL_DEVICE_PENDING` 或原 pending 状态。
+
+## 历史测试设计与批次说明
+
+
 本矩阵是实现前测试设计，不表示本轮已执行。原有 35 个场景、12 个最小 fixture；本轮 amendment 增加至 57 个场景、17 个最小 fixture。真实 AC/AP、网络扫描和真实 task execution 均明确排除。
 
 冻结更新（2026-11-05）：`TEST_SCENARIOS=57`、`TEST_FIXTURES=17` 已纳入冻结基线，但当前执行状态仍为 `NOT_RUN_DOC_ONLY`；未来 gate 不能因决策冻结而自动变为 `PASS`。

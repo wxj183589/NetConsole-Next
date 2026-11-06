@@ -1,4 +1,19 @@
-# 当前检查点 M：Netmiko / Web / Linux / Jump
+# 当前检查点 N：AP Group 来源身份
+
+2026-11-06 在 `8885705` 后完成 AP Group 来源身份修复；本文件所属提交为本批功能检查点。独立来源证据、名称候选、AC/Domain 身份、成员版本及来源范围详情/API/UI已完成本机验收；schema24只迁移可重建投影缓存。详见 `docs/AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md`。
+
+CURRENT_BATCH=N_AP_GROUP_SOURCE_IDENTITY
+BRANCH=codex-A/netconsole-next-r3-dual-ac
+LOCAL_STATUS=LOCAL_ACCEPTANCE_PASS
+TESTS=Group contract 10 methods PASS; Projection PASS; Runtime 13/13 PASS; schema24 PASS; HTTP fixture 16 markers PASS; full Service harness PASS; Vue 29 PASS; typecheck/Vite PASS; browser fixture 15 states PASS
+OFFLINE_CANDIDATE_BOUNDARY=Existing a3954a5 candidate excludes this AP Group batch
+NEXT_LOCAL_TASK=AP Group cache retirement and remaining workbench integration; formal lifecycle remains partial
+FINAL_STATUS=PARTIAL; REAL_DEVICE_PENDING
+PUSH=NO
+MERGE=NO
+RELEASE=NO
+
+## 检查点 M：Netmiko / Web / Linux / Jump
 
 2026-11-06 当前批次以 `docs/WEB_SSH_LINUX_JUMP_ACCEPTANCE_20261106.md` 和 `docs/NETMIKO_CONNECTION_AUDIT_20261106.md` 为准：完整 Service harness、前端 23 项、worker 20 项、离线工具 7 项通过；网络终端重连、Linux loopback SSH/Edge 浏览器、静默撤权、Jump 真实回环转发及 Settings Chrome mock 门禁通过。HCL AC1/AC2/SW 已使用当前 Netmiko 完成只读查询；FIT-AP 按 AC 管理，配置写入 0。真实设备、HA、实时 AP 归属、原生 125% 缩放、跨机 Web 和目标机安装仍待验收。下方 L 是历史检查点，其中旧 harness 竞态及 SW/FIT-AP 阻断已由当前证据替代。
 

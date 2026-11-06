@@ -5,6 +5,7 @@ internal static class WirelessTests
 {
     public static void Run()
     {
+        NetConsole.Next.Service.Tests.WirelessGroupTests.Run();
         ProjectsSamePhysicalApAcrossDualAcWithoutDuplicateIdentity();
         PreservesSerialMacConflictWithoutAutoMerge();
         MergesPartialExactEvidenceWithoutUsingNames();

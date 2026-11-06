@@ -1,5 +1,18 @@
 # R3 双 AC 无线业务 GUI 验收
 
+## 2026-11-06 当前 AP Group UI 切片
+
+当前状态：`LOCAL_ACCEPTANCE_PASS`。本切片展示 group scope、来源 AC、identity status、可空 source/identity key、source/membership revision、实际 observation IDs、evidence refs 与冲突原因；名称 only 明确为 AC candidate，不显示由名称伪造的稳定 key。
+
+同名组按 opaque projection ID 选择详情；DOMAIN 展示依赖服务端明确 shared evidence 与确认 Domain/成员一致合同。AC/source 过滤后重新读取来源受限的 detail/members，不把同 AP 的其他 AC observation 带入当前组详情；迟到详情不能覆盖新选择。改名和无变化刷新不应造成 membershipRevision 变化。
+
+核验入口为 `web/src/views/WirelessView.test.ts`、`tests/wireless_browser_e2e.mjs` 与 `tests/r3_dual_ac_api_e2e.py`。本机前端 9 files/29 tests、typecheck、独立 Vite PASS；Chrome 无线浏览器 fixture 15 状态 PASS（1920/2560、DPR1，API mocked，非 live）。真实 HTTP + 离线 fixture 的 API 脚本全部 16 个 marker PASS，包含 sourceAcId 过滤与 MAC-only 来源成员的 canonical 全局可解析链接；这不等同 live Service-backed 浏览器全链路。当前切片为 `LOCAL_ACCEPTANCE_PASS`；真实 HA、真实设备及 Windows native 125% 仍待独立证据。
+
+下方旧 mutex/凭据阻塞与早期 GUI 数值仅作为历史，不代表当前环境。当前业务字段定义见 [AP Group 合同](R3_B0_AP_GROUP_CONTRACT.md)。
+
+## 历史 GUI 实现与验收
+
+
 ## 已实现的导航合同
 
 ```text

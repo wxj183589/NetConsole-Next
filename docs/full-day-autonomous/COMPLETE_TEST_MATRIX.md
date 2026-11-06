@@ -1,5 +1,9 @@
 # 完整测试矩阵
 
+2026-11-06 检查点 N：`AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md` 为本批证据；Group合同10场景、Projection、Runtime13/13、schema24初始化/降级/幂等/回滚、HTTP16 marker、完整Service harness、前端9 files/29 tests、typecheck/Vite、Chrome15状态均PASS。HTTP为真实隔离Service＋离线fixture，浏览器为API mock；1920/2560 DPR1。完整57场景/正式生命周期/实时HA并未据此通过。旧离线候选保持绑定 `a3954a5`，不包含本批。
+
+下表为连接批次验收，未改动项目的证据继续按原范围有效。
+
 日期：2026-11-06。本批功能已本地提交 `a3954a5`，文档以所属 commit 为准（起点 `4dac9fc`）；整体 PARTIAL。下表中的本机或模拟证据不等于真实硬件兼容。
 
 | 门禁 | 当前结果 | 证据边界 |

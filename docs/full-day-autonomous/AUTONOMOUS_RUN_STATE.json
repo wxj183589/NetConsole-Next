@@ -6,13 +6,13 @@
   "branch": "codex-A/netconsole-next-r3-dual-ac",
   "worktree": "D:\\study\\NetConsole-Next-Workspace\\NetConsole-Next",
   "overallStatus": "PARTIAL",
-  "phase": "NETMIKO_WEB_LINUX_JUMP_LOCAL_ACCEPTANCE",
-  "currentHead": "a3954a5e95590782a576272d4e4b3c526eab248b",
-  "currentHeadShort": "a3954a5",
-  "headMeaning": "feature batch locally committed as a3954a5; documentation is defined by its containing commit",
+  "phase": "AP_GROUP_SOURCE_IDENTITY_LOCAL_ACCEPTANCE",
+  "currentHead": "8885705167b6475d46bb4431ae7c39d2c865fcd3",
+  "currentHeadShort": "8885705",
+  "headMeaning": "base before AP Group source identity batch; feature commit is the containing commit of this state file",
   "activeWorkstreams": [
-    "documentation closure",
-    "wireless identity and HA backlog"
+    "AP Group cache retirement review",
+    "device workbench entry review"
   ],
   "completedLocal": [
     "bounded task scheduling, command-level Raw and complete-manifest publication",
@@ -28,7 +28,8 @@
     "Linux server inventory and SSH.NET interactive terminal",
     "Site Jump Host forwarding, probe, Settings UI and fingerprint lifecycle",
     "network terminal, Linux and Jump local browser/integration gates",
-    "fresh Windows offline candidate build and bundled-runtime execution gate"
+    "fresh Windows offline candidate build and bundled-runtime execution gate",
+    "AP Group explicit source identity, source-scoped members and schema24 cache migration"
   ],
   "nextTasks": [
     "formal AP candidate/replacement and Domain/group lifecycle contracts",
@@ -78,9 +79,9 @@
   },
   "verification": {
     "serviceReleaseBuild": "PASS: 0 warnings / 0 errors after final scope fixes",
-    "fullServiceHarnessCurrent": "PASS after final scope fixes",
+    "fullServiceHarnessCurrent": "PASS including AP Group source identity and schema24",
     "frontendTypecheck": "PASS",
-    "frontendUnitTests": "8 files / 23 tests PASS",
+    "frontendUnitTests": "9 files / 29 tests PASS",
     "netmikoWorkerTests": "20 tests PASS",
     "offlineToolRegressions": "7 tests PASS",
     "networkTerminalE2e": "PASS: loopback SSH/Telnet/AUTO, browser, replay, cancellation and reconnect",
@@ -89,11 +90,15 @@
     "siteJumpSettingsBrowser": "SITE_JUMP_SETTINGS_BROWSER=PASS: Chrome and API Mock",
     "offlineCandidateRuntime": "PASS: OFFLINE_BUNDLED_RUNTIME (Netmiko 4.7.0 / Paramiko 4.0.0), STATIC_UI, NETMIKO_CONNECTION, LINUX_WEBSOCKET, OFFLINE_CANDIDATE; Production environment with isolated cwd/data root; PATH only System32; no system Python override",
     "offlineCandidatePath": "D:\\study\\NetConsole-Next-Workspace\\build\\service-web-linux-jump-a3954a5-20261106",
-    "offlineCandidateLimits": "local candidate execution only; not target-machine installation, SCM or native GUI acceptance",
+    "offlineCandidateLimits": "a3954a5 connection batch only; excludes later AP Group changes; not target-machine installation, SCM or native GUI acceptance",
     "offlineCandidatePreviousRuntime": "PASS: fresh Vite/CPython bundle; candidate EXE with Production environment with isolated cwd/data root and PATH only System32; bundled Netmiko 4.7/Paramiko 4; current UI hashes; loopback H3C SSH and Linux WebSocket",
     "offlineCandidatePreviousPath": "D:\\study\\NetConsole-Next-Workspace\\build\\service-web-linux-jump-final-20261106",
     "offlineCandidateProductVersion": "1.0.0+a3954a5e95590782a576272d4e4b3c526eab248b",
-    "offlineCandidateCleanup": "PASS: residual Service/Python processes 0; offline-candidate temporary directories 0"
+    "offlineCandidateCleanup": "PASS: residual Service/Python processes 0; offline-candidate temporary directories 0",
+    "apGroupContract": "10 scenario methods PASS; Projection PASS; Runtime 13/13 PASS",
+    "apGroupMigration": "schema24 fresh, legacy downgrade, reopen, idempotence and rollback PASS",
+    "wirelessHttp": "16 PASS markers; actual isolated Service with offline fixture; source scope and MAC-only canonical member links",
+    "wirelessBrowser": "15 states PASS (11 wireless/4 global files); mocked APIs; Chrome 1920/2560 DPR1; final UI labels and font refinement"
   },
   "historicalEvidenceBoundary": "2026-11-05 DPAPI, SW legacy Exec and rejected independent FIT-AP login are historical; they are not current architecture blockers",
   "realDataChanged": false,
@@ -102,5 +107,5 @@
   "merge": false,
   "release": false,
   "baseCommit": "4dac9fc3ffc68d87a13e8cc4cef113220fb5d47e",
-  "lastRecoveryCommit": "a3954a5e95590782a576272d4e4b3c526eab248b"
+  "lastRecoveryCommit": "8885705167b6475d46bb4431ae7c39d2c865fcd3"
 }

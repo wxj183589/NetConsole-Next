@@ -1,5 +1,18 @@
 # R3-B0 无线业务 API 合同规格（修订版）
 
+## 2026-11-06 当前切片边界
+
+AP Group 来源身份修复为 `LOCAL_ACCEPTANCE_PASS`。下方“本轮未实现/0 gap”等计数属于冻结设计批次，不是当前产品状态；本次不据此重开授权，也不宣称所有 API 或 gap 已关闭。
+
+API-W07/W08 继续为只读入口，按 [当前 AP Group 合同](R3_B0_AP_GROUP_CONTRACT.md) 返回 typed source evidence 与身份状态。实际 JSON 使用 camelCase：名称 only 为 `groupScope=AC`、`groupIdentityStatus=CANDIDATE`、`sourceGroupKey=null`、`groupIdentityKey=null`；可通过受 source Site claims 保护的 opaque ID 读取候选详情。不能从 display name 生成稳定 key。
+
+DOMAIN 要同时具备显式 domain-shared evidence、确认的 Domain/相符 ID 与一致的成员集合；否则保持 AC/candidate/conflict。`membershipRevision` 独立于 `sourceRevision`，不因改名或无变化刷新改变。响应附 `sourceObservationIds`、`sourceAcDeviceIds`、`sourceEvidenceRefs`、`observedAtMs`、`conflictReason` 和 `sourceGroupObservations`；成员/详情在 Site/source AC 过滤后聚合，只带该组实际关联的 observations；sourceAcId 过滤保留当前授权投影的 canonical opaque resource ID，MAC-only 来源返回的成员链接仍可由全局 resource detail 解析。
+
+schema24 只持久化可重建 group projection；schema23 已归 Linux 切片。完整身份与 Domain/group 生命周期、写回和其他未验证 API 不由本切片宣告完成。`py -3.13 -B tests/r3_dual_ac_api_e2e.py` 已通过全部 16 个 marker，使用真实 HTTP 服务与离线 fixture，包含 sourceAcId/MAC-only canonical 成员链接。schema24 本机迁移与 Service harness 通过；Chrome 15 状态为 API mocked 浏览器证据，非 live 设备。当前切片为 `LOCAL_ACCEPTANCE_PASS`，不等同完整 R3/API 验收。
+
+## 历史合同与早期实现记录
+
+
 修订日期：2026-11-04
 状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。本文件区分“已有可复用 API”“已有但缺无线语义”和“未来新 API”；不表示 endpoint 已实现。本轮 `API_GAPS_IMPLEMENTED_THIS_ROUND=0`。
 

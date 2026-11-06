@@ -1,5 +1,13 @@
 # 最终交接
 
+## 2026-11-06 检查点 N 增量
+
+在 `8885705` 后完成AP Group来源身份本机修复和验收，功能SHA以本段所属commit为准。厂商稳定来源键独立于组名；只有名称时为AC/CANDIDATE。明确共享证据才确认Domain组；成员版本独立，来源筛选重建详情字段并保留可打开的canonical AP链接。schema24只更新可重建投影缓存。后端合同10场景、Runtime13、真实HTTP＋离线fixture16 marker、完整Service harness、前端29项/typecheck/Vite、浏览器mock15状态PASS。
+
+继续检查投影缓存退役、剩余工作台入口，再推进正式AP/Domain/group生命周期。整体仍PARTIAL；真实source-key/共享组、HA、原生125%、跨机TLS和目标机安装继续待验收。旧离线候选为 `a3954a5`，不包含此批。仅Next Workspace隔离数据，无设备配置写入；不Push/Merge/Release。详细证据见 `../AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106.md`。
+
+## 连接批次交接（历史）
+
 日期：2026-11-06。整体：**PARTIAL**。工作树：`D:\study\NetConsole-Next-Workspace\NetConsole-Next`；Branch：`codex-A/netconsole-next-r3-dual-ac`；本批功能已本地提交 `a3954a5e95590782a576272d4e4b3c526eab248b`，文档以所属 commit 为准（起点 `4dac9fc`）。按用户要求保留当前分支，不 Push、Merge、Release。
 
 ## 本批结果

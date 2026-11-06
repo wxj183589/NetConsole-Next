@@ -1,5 +1,14 @@
 # R3 无线业务准备度最终裁决
 
+## 2026-11-06 当前切片指针
+
+AP Group 来源身份与 schema24 最小 projection 修复已完成本机验收，状态 `LOCAL_ACCEPTANCE_PASS`，总体仍 `PARTIAL`。7 项业务决策已冻结，当前用户持续任务已授权推进；下方批准前/准备期的“未授权、代码未开始、schema未变”保留为历史，不要求重复授权。
+
+当前 source-group 合同、SC-28/29/36..41 映射及 schema23/Linux、schema24/group 边界分别见 [AP Group 合同](R3_B0_AP_GROUP_CONTRACT.md)、[57 场景矩阵](R3_B0_TEST_SCENARIO_MATRIX.md) 和 [Schema 影响](R3_B1_SCHEMA_AND_MIGRATION_IMPACT.md)。本机 Group 合同10场景、projection、Runtime13/13、schema24、HTTP16 marker、Service harness、Chrome mocked15状态与前端检查证据见 [本机验收记录](R3_FULL_CHAIN_FINAL_ACCEPTANCE.md)；完整 identity/replacement、Domain/group 生命周期与真实设备验收不由该切片宣告完成。
+
+## 历史准备度裁决与冻结更新
+
+
 日期：2026-11-04
 
 ## 2026-11-05 当前冻结更新

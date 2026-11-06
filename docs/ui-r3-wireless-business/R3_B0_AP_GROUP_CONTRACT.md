@@ -1,5 +1,25 @@
 # R3-B0 AP Group 合同（修订版）
 
+## 2026-11-06 当前切片：来源身份合同
+
+状态：`LOCAL_ACCEPTANCE_PASS`。本节记录已完成本机验收的 AP Group 只读来源身份修复；下方冻结设计与旧实现记录保留为历史。本节不表示整套无线业务、57 场景或真实设备验收完成。
+
+- 统一采用 typed `WirelessSourceGroupEvidence`：来源 AC、Site、显式 `sourceGroupKey`、display name、实际 observation IDs、captured time、source revision、Raw manifest 和 parser revision。来源 AC/Site 或 observation 归属无法验证时，不将该 evidence 纳入可见投影。AP listing 中的 `Group` 文本只证明临时组关系，不提供厂商稳定 key。
+- 名称 only 的可见组为 `groupScope=AC`、`groupIdentityStatus=CANDIDATE`、`sourceGroupKey=null`、`groupIdentityKey=null`。允许通过 opaque projection ID 在当前 source Site claims 内读取候选详情；该 ID 不成为稳定身份或授权来源，也不使用名称伪造 key。候选 ID 可随来源 evidence 变化。
+- 有显式厂商/source key 及完整 provenance，且未证明 domain-shared 时，采用 `AC|source_ac_device_id|source_group_key`。只有明确 `domainSharedEvidenceRefs`、已确认的 Domain、相同 source Domain ID，且 evidence 中 Domain 成员集合与当前确认集合一致，才采用 `DOMAIN|ac_domain_id|source_group_key`。同名、相同 Domain ID 或两个 AC 返回相同 key 均不足以确认 DOMAIN。
+- `membershipRevision` 只表达 scoped identity 与当前成员关系：来源 AC/resource 集合、实际来源 AC 集合，以及 DOMAIN 组的确认成员集合。仅改名、captured time/source revision 更新或无变化刷新均不得改变它；这些 evidence 变化由独立 `sourceRevision` 表达。较旧 observation 作为 provenance 保留，不并入当前 membership。
+- 相同 scope/name 对应不同 source key 时保持独立并显示 conflict；同一 key 的并发互斥名称保留冲突 evidence。Domain 成员变化后，旧 shared evidence 不匹配时不得升级为 DOMAIN，应按可见证据保留 AC 范围与 candidate/conflict 原因。
+- Site claims 过滤先于身份投影；sourceAcId 过滤后重建当前组的 members、count、state、revision 与 evidence。已授权投影中的 opaque AP resource locator 保持全局可解析，包含仅有 MAC evidence 的来源；这不带入其他来源的 summary 或 observations。不可见 Domain 成员/shared evidence 不得泄露或影响可见 revision。成员详情只返回该组实际 observation 关联。
+
+实际 JSON 使用 camelCase；下文 snake_case 是概念合同。当前响应包括 `groupScope`、可空 `groupIdentityKey` / `sourceGroupKey`、`groupIdentityStatus`、`membershipRevision`、`sourceRevision`、`sourceObservationIds`、`sourceAcDeviceIds`、`sourceEvidenceRefs`、`observedAtMs`、`conflictReason` 和 typed `sourceGroupObservations`，并保留 source AC/Domain、scope 与 as-of 信息。
+
+schema23 已用于 Linux 连接切片；本切片使用 schema24，只调整可重建 `wireless_ap_groups` projection，保存上述身份/provenance，不提升为 Raw/Facts 的事实 Authority。历史名称键降为 `AC / CANDIDATE / null key`，不据此确认身份。完整 AP candidate/replacement、Domain/group 创建结束与变更历史生命周期仍后续；`AP_GROUP_WRITE=OUT_OF_SCOPE`。
+
+集成核验入口：`tests/NetConsole.Next.Service.Tests/WirelessGroupTests.cs`、`tests/r3_dual_ac_api_e2e.py`、`web/src/views/WirelessView.test.ts`、`tests/wireless_browser_e2e.mjs`。本机 AP Group 10 个合同场景、Wireless projection、schema24 事务回滚/幂等/fresh/reopen/旧数据降级、真实 HTTP 离线 fixture 的 16 个 marker 与完整 Service harness 均通过；Chrome API mocked 浏览器 15 状态及前端 9 files/29 tests、typecheck、独立 Vite 通过。结果为 `LOCAL_ACCEPTANCE_PASS`，具体证据范围见 [本机验收记录](R3_FULL_CHAIN_FINAL_ACCEPTANCE.md)。未取得真实设备证据的兼容性仍为 `REAL_DEVICE_PENDING`。
+
+## 历史冻结设计与早期实现记录
+
+
 修订日期：2026-11-04
 状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。AP group 在 B0 只定义只读业务合同；`AP_GROUP_WRITE=OUT_OF_SCOPE`。
 

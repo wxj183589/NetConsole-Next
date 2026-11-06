@@ -1,5 +1,18 @@
 # R3-B1 Schema 与 Migration 影响审计
 
+## 2026-11-06 当前实施边界
+
+当前 AP Group 来源身份修复为 `LOCAL_ACCEPTANCE_PASS`，由用户持续开发任务覆盖；下方 `DESIGN_ONLY`、`R3_B1_DATABASE_CHANGE_AUTHORIZED=NO` 和“禁止 migration”只记录 B1 准备批次，不构成本次重复授权门槛。冻结设计本身不授予实施权限的原则仍有效。
+
+schema23 已用于 Linux SSH；本切片使用 `storage/schema_v24.sql`，仅重建可丢弃、可重建的 `wireless_ap_groups` projection。持久化内容为可空 source/identity key、identity status、membership revision、实际 observation/source AC/evidence refs、观察时间、冲突原因与 typed source-group observations。Raw/Facts 保持事实 Authority；不引入新的凭据中心或完整无线生命周期表。
+
+旧名称键不能作为确认身份迁移：保留 display/member 信息，降为 `group_scope=AC`、`group_identity_status=CANDIDATE`、`source_group_key=NULL`、`group_identity_key=NULL`，标记 `LEGACY_GROUP_NAME_ONLY`。已用最小隔离 fixture 核验事务失败回滚、幂等/重复执行、fresh/reopen、旧名称行降级与多候选 null-key 共存；Wireless projection 与完整 Service harness 同样通过。当前本机结果为 `LOCAL_ACCEPTANCE_PASS`，不访问旧 NetConsole 真实数据根，不宣称生产数据迁移完成。
+
+完整 AP candidate/replacement、Domain/group 生命周期及其持久历史仍为后续范围。当前合同与场景映射见 [AP Group 合同](R3_B0_AP_GROUP_CONTRACT.md) 和 [测试矩阵](R3_B0_TEST_SCENARIO_MATRIX.md)。
+
+## 历史 B1 准备期审计
+
+
 基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`  
 审计状态：`DESIGN_ONLY`  
 `R3_B1_DATABASE_CHANGE_AUTHORIZED=NO`

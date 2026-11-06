@@ -32,13 +32,13 @@ else if (args.Length > 0 && args[0] == "--phase11-h3c-facts")
 else if (args.Length > 0 && args[0] == "--wireless-fixture-json")
 {
     var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-    var snapshot = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"));
+    var snapshot = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"), fixture.GroupEvidence);
     Console.WriteLine(JsonSerializer.Serialize(snapshot with { Warnings = new[] { "OFFLINE_FIXTURE_EVIDENCE" } }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 }
 else if (args.Length > 0 && args[0] == "--wireless-runtime-fixture-json")
 {
     var fixture = JsonSerializer.Deserialize<WirelessFixtureDocument>(File.ReadAllText(args[1]), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-    var resource = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims")).ApResources.Single();
+    var resource = new WirelessProjectionEngine().Project(fixture.Acs, fixture.Observations, fixture.TopologyEvidence, new("FULL", "fixture-claims"), fixture.GroupEvidence).ApResources.Single();
     if (args.Length > 2) resource = resource with { Observations = resource.Observations.Where(item => item.SourceAcDeviceId == args[2]).ToArray() };
     var samples = fixture.RuntimeSamples ?? throw new InvalidDataException("Runtime fixture must include history samples.");
     var state = new WirelessRuntimeStateProjection().Project(resource, new(samples, false, new HashSet<string>()),

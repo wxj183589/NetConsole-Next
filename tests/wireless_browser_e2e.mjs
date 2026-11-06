@@ -88,8 +88,11 @@ await page.route('**/api/**', async route => {
    const group = snapshot.apGroups.find(item => item.id === groupId)
    if (!group) { status = 404; body = { error: 'WIRELESS_RESOURCE_NOT_VISIBLE' } }
    else {
-     const members = allResources.filter(resource => group.memberResourceIds.includes(resource.id))
-     body = { group, members, total: members.length, asOf: snapshot.asOf, scope: snapshot.scope, sourceRevision: 'fixture-revision', warnings: ['OFFLINE_FIXTURE_EVIDENCE'], provenance: { sourceAcDeviceId: group.sourceAcDeviceId, sourceAcDomainId: group.sourceAcDomainId, sourceRevision: group.sourceRevision, scopeStatus: group.scopeStatus, groupScope: group.groupScope } }
+     const observationIds = new Set(group.sourceObservationIds)
+     const members = snapshot.apResources.filter(resource => group.memberResourceIds.includes(resource.id))
+       .map(resource => ({ ...resource, observations: resource.observations.filter(item => observationIds.has(item.id)) }))
+     const observations = members.flatMap(resource => resource.observations)
+     body = { group, members, observations, total: members.length, asOf: snapshot.asOf, scope: snapshot.scope, sourceRevision: 'fixture-revision', warnings: ['OFFLINE_FIXTURE_EVIDENCE'], provenance: { sourceAcDeviceId: group.sourceAcDeviceId, sourceAcDomainId: group.sourceAcDomainId, sourceRevision: group.sourceRevision, scopeStatus: group.scopeStatus, groupScope: group.groupScope, sourceGroupKey: group.sourceGroupKey, groupIdentityKey: group.groupIdentityKey, groupIdentityStatus: group.groupIdentityStatus, membershipRevision: group.membershipRevision, sourceObservationIds: group.sourceObservationIds, sourceAcDeviceIds: group.sourceAcDeviceIds, sourceEvidenceRefs: group.sourceEvidenceRefs, observedAtMs: group.observedAtMs, conflictReason: group.conflictReason } }
    }
  } else if (pathname.includes('/wireless/collection-manifests/') && !pathname.endsWith('/collection-manifests')) {
    const id = decodeURIComponent(pathname.split('/').at(-1))
@@ -104,7 +107,10 @@ await page.route('**/api/**', async route => {
    body = paged(items.length ? [{ id, sourceRevision: snapshot.sourceRevision, scopeStatus: snapshot.scope.status, sourceAcDeviceIds: [...new Set(items.map(item => item.sourceAcDeviceId))], firstCapturedMs: Math.min(...items.map(item => item.capturedMs)), lastCapturedMs: Math.max(...items.map(item => item.capturedMs)), observationCount: items.length, status: 'PUBLISHED', createdMs: snapshot.asOf }] : [], url)
  } else if (pathname.endsWith('/ap-groups')) {
    if (mode === 'group-error') { status = 503; body = { error: 'fixture group unavailable' } }
-   else body = paged(snapshot.apGroups, url)
+   else {
+     const source = url.searchParams.get('sourceAcId')
+     body = paged(source ? snapshot.apGroups.filter(group => group.sourceAcDeviceIds.includes(source)) : snapshot.apGroups, url)
+   }
  } else { status = 404; body = { error: 'UNEXPECTED_FIXTURE_ROUTE', path: pathname }; unexpectedRoutes.push(pathname) }
  await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 })
@@ -142,6 +148,8 @@ try {
  await expect(page.locator('.wireless-group-row')).toHaveCount(1)
  await page.locator('.wireless-group-row').first().click()
  await expect(page.locator('.wireless-group-detail')).toContainText('来源 AC')
+ await expect(page.locator('.wireless-group-detail')).toContainText('待确认')
+ await expect(page.locator('.wireless-group-detail')).not.toContainText('AC|ac-device-1|default-group')
  await page.locator('.wireless-collection-row').first().click()
  await expect(page.locator('.wireless-collection-detail')).toContainText('fixture:ac1:')
  await expect(page.locator('.wireless-observation')).toHaveCount(1)

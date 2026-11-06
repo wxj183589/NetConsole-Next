@@ -63,7 +63,22 @@ const visibleResources = computed(() => resources.value.filter(resource => {
 }))
 const pagedResources = computed(() => visibleResources.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 const selectedResource = computed(() => visibleResources.value.find(resource => resource.id === selectedResourceId.value) || pagedResources.value[0] || null)
-const visibleGroups = computed(() => groups.value.filter(group => !selectedAcId.value || group.sourceAcDeviceId === selectedAcId.value))
+const visibleGroups = computed(() => groups.value.filter(group => !selectedAcId.value || group.sourceAcDeviceIds.includes(selectedAcId.value)))
+function groupSource(group: WirelessApGroup): string {
+  if (group.groupScope === 'DOMAIN') return `Domain 来源 · ${group.sourceAcDomainId}`
+  if (group.groupScope === 'AC') return `AC 来源 · ${group.sourceAcDeviceIds.join(' / ') || '待确认'}`
+  return '来源待确认'
+}
+function groupReason(reason: string): string {
+  return ({
+    GROUP_SOURCE_KEY_OR_EVIDENCE_MISSING: '缺少可信的来源组键或采集证据',
+    DOMAIN_SHARED_EVIDENCE_CONFLICT: '共享组证据与当前 AC Domain 成员不一致',
+    DOMAIN_SHARED_EVIDENCE_PENDING: 'AC Domain 共享组证据尚待确认',
+    GROUP_NAME_KEY_CONFLICT: '同一来源的同名组对应不同组键',
+    GROUP_DISPLAY_NAME_CONFLICT: '同一组键存在不同名称，请核对来源',
+    LEGACY_GROUP_NAME_ONLY: '历史记录仅有组名，来源身份尚待确认',
+  } as Record<string, string>)[reason] || reason
+}
 function viewObservations(resource: WirelessApResource) {
   return resource.observations.filter(item => (!selectedDomain.value || item.sourceAcDomainId === selectedDomain.value.id) && (!selectedAcId.value || item.sourceAcDeviceId === selectedAcId.value))
 }
@@ -136,7 +151,7 @@ async function loadGroups(domainId: string): Promise<void> {
   groupDetail.value = null
   groupDetailError.value = ''
   try {
-    const result = await readAll(params => getWirelessApGroups(domainId, params))
+    const result = await readAll(params => getWirelessApGroups(domainId, { ...params, sourceAcId: selectedAcId.value || undefined }))
     if (generation === groupGeneration) groups.value = result
   } catch (cause) {
     if (generation === groupGeneration) groupError.value = cause instanceof Error ? cause.message : 'AP 组读取失败'
@@ -175,7 +190,7 @@ async function selectGroup(group: WirelessApGroup): Promise<void> {
   groupDetailError.value = ''
   groupDetailLoading.value = true
   try {
-    const result = await getWirelessApGroup(group.id)
+    const result = await getWirelessApGroup(group.id, { sourceAcId: selectedAcId.value || undefined })
     if (generation === groupDetailGeneration) groupDetail.value = result
   } catch (cause) {
     if (generation === groupDetailGeneration) groupDetailError.value = cause instanceof Error ? cause.message : 'AP 组详情读取失败'
@@ -285,7 +300,37 @@ onMounted(() => { void refresh() })
 
           <el-pagination v-if="visibleResources.length > pageSize" v-model:current-page="page" :page-size="pageSize" :total="visibleResources.length" layout="total, prev, pager, next" />
           <div class="wireless-bottom-grid">
-            <section class="card"><div class="card__header"><h2>AP 组</h2><span class="state-pill">AC 作用域</span></div><div v-if="visibleGroups.length" class="wireless-group-list"><button v-for="group in visibleGroups" :key="group.id" class="wireless-group-row" :class="{ selected: groupDetail?.group.id === group.id }" type="button" @click="selectGroup(group)"><span><strong>{{ group.displayName }}</strong><small class="mono">{{ group.id }}</small></span><span>{{ group.memberResourceIds.length }} 个 AP</span></button></div><div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '按来源 AC 保留 AP 组。' }}</small></div></div><div v-if="groupDetailLoading" class="wireless-group-detail muted-text">正在读取组详情…</div><div v-else-if="groupDetailError" class="wireless-group-detail bad-text">{{ groupDetailError }}</div><div v-else-if="groupDetail" class="wireless-group-detail"><div class="card__header"><h3>{{ groupDetail.group.displayName }}</h3><span class="state-pill info">{{ groupDetail.provenance.groupScope }}</span></div><div class="wireless-group-detail__meta"><span>来源 AC <code>{{ groupDetail.provenance.sourceAcDeviceId }}</code></span><span>Domain <code>{{ groupDetail.provenance.sourceAcDomainId }}</code></span><span>Revision <code>{{ groupDetail.provenance.sourceRevision }}</code></span></div><small>可见成员 {{ groupDetail.total }} 个；成员列表经过当前 Site claims 过滤。</small></div></section>
+            <section class="card wireless-groups">
+              <div class="card__header"><h2>AP 组</h2><span class="state-pill">按来源保留</span></div>
+              <div v-if="visibleGroups.length" class="wireless-group-list">
+                <button v-for="group in visibleGroups" :key="group.id" class="wireless-group-row" :class="{ selected: groupDetail?.group.id === group.id }" type="button" @click="selectGroup(group)">
+                  <span><strong>{{ group.displayName }}</strong><small>{{ groupSource(group) }}</small><small class="mono">{{ group.groupIdentityKey || '稳定身份待确认' }}</small></span>
+                  <span class="wireless-group-row__status"><span :class="['state-pill', stateClass(group.groupIdentityStatus)]">{{ stateText(group.groupIdentityStatus) }}</span><small>{{ group.memberResourceIds.length }} 个 AP</small></span>
+                </button>
+              </div>
+              <div v-else class="empty-state"><div><strong>{{ groupError ? 'AP 组读取失败' : '暂无可见 AP 组' }}</strong><small>{{ groupError || '仅显示当前可见来源的 AP 组。' }}</small></div></div>
+              <div v-if="groupDetailLoading" class="wireless-group-detail muted-text">正在读取组详情…</div>
+              <div v-else-if="groupDetailError" class="wireless-group-detail bad-text">{{ groupDetailError }}</div>
+              <div v-else-if="groupDetail" class="wireless-group-detail">
+                <div class="card__header"><h3>{{ groupDetail.group.displayName }}</h3><span :class="['state-pill', stateClass(groupDetail.provenance.groupIdentityStatus)]">{{ stateText(groupDetail.provenance.groupIdentityStatus) }}</span></div>
+                <p>{{ groupSource(groupDetail.group) }}</p>
+                <p v-if="groupDetail.provenance.conflictReason" :class="groupDetail.provenance.groupIdentityStatus === 'CONFLICT' ? 'bad-text' : 'warn-text'">{{ groupReason(groupDetail.provenance.conflictReason) }}</p>
+                <dl class="wireless-group-provenance">
+                  <dt>稳定身份键</dt><dd><code>{{ groupDetail.provenance.groupIdentityKey || '待确认，尚无可信来源键' }}</code></dd>
+                  <dt>投影 ID</dt><dd><code>{{ groupDetail.group.id }}</code></dd>
+                  <dt>来源组键</dt><dd><code>{{ groupDetail.provenance.sourceGroupKey || '未提供' }}</code></dd>
+                  <dt>来源 AC</dt><dd><code>{{ groupDetail.provenance.sourceAcDeviceIds.join(' / ') || '待确认' }}</code></dd>
+                  <dt>来源 Domain</dt><dd><code>{{ groupDetail.provenance.sourceAcDomainId || '待确认' }}</code></dd>
+                  <dt>来源版本</dt><dd><code>{{ groupDetail.provenance.sourceRevision }}</code></dd>
+                  <dt>成员版本</dt><dd><code>{{ groupDetail.provenance.membershipRevision }}</code></dd>
+                  <dt>来源观察</dt><dd><code>{{ groupDetail.provenance.sourceObservationIds.join(' / ') || '暂无可见观察' }}</code></dd>
+                  <dt>证据引用</dt><dd><code>{{ groupDetail.provenance.sourceEvidenceRefs.join(' / ') || '暂无可见证据' }}</code></dd>
+                  <dt>观察时间</dt><dd>{{ formatTime(groupDetail.provenance.observedAtMs) }}</dd>
+                  <dt>查询时间 / 范围</dt><dd>{{ formatTime(groupDetail.asOf) }} · {{ groupDetail.provenance.scopeStatus }}</dd>
+                </dl>
+                <small>可见成员 {{ groupDetail.total }} 个；成员与来源证据经过当前 Site claims 过滤。</small>
+              </div>
+            </section>
             <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
           </div>
           <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
@@ -352,6 +397,8 @@ onMounted(() => { void refresh() })
 .wireless-group-list, .wireless-observation-list { padding: 0 14px 14px; }
 .wireless-group-row, .wireless-observation { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; border-bottom: 1px solid var(--nc-border); padding: 10px 2px; color: var(--nc-text-secondary); background: transparent; font: inherit; font-size: 11px; text-align: left; }
 .wireless-group-row { cursor: pointer; }
+.wireless-group-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.wireless-group-row__status { flex-shrink: 0; text-align: right; }
 .wireless-group-row:hover, .wireless-group-row.selected { background: var(--nc-primary-soft); }
 .wireless-group-row:last-child, .wireless-observation:last-child { border-bottom: 0; }
 .wireless-group-row strong, .wireless-group-row small, .wireless-observation strong, .wireless-observation small { display: block; }
@@ -360,7 +407,14 @@ onMounted(() => { void refresh() })
 .wireless-group-detail .card__header { padding: 0 0 8px; }
 .wireless-group-detail h3 { margin: 0; color: var(--nc-text); font-size: 13px; }
 .wireless-group-detail__meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 7px; }
-.wireless-group-detail code { color: var(--nc-text); font-size: 10px; }
+.wireless-group-detail code { color: var(--nc-text); font-size: 12px; }
+.wireless-groups .wireless-group-row { font-size: 13px; }
+.wireless-groups small { font-size: 12px; }
+.wireless-groups .wireless-group-detail { font-size: 13px; line-height: 1.6; }
+.wireless-group-detail .warn-text { color: var(--nc-warning); }
+.wireless-group-provenance { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; }
+.wireless-group-provenance dt { color: var(--nc-text-muted); }
+.wireless-group-provenance dd { margin: 0; overflow-wrap: anywhere; }
 .wireless-collection-list { padding: 0 14px 8px; }
 .wireless-collection-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; border-bottom: 1px solid var(--nc-border); padding: 10px 2px; color: var(--nc-text-secondary); background: transparent; font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
 .wireless-collection-row:hover, .wireless-collection-row.selected { background: var(--nc-primary-soft); }

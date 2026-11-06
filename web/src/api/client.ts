@@ -666,10 +666,18 @@ export interface WirelessApGroup {
   id: string
   sourceAcDeviceId: string
   sourceAcDomainId: string
-  sourceGroupKey: string
+  sourceGroupKey: string | null
   displayName: string
-  groupScope: string
+  groupScope: 'AC' | 'DOMAIN' | 'UNKNOWN'
+  groupIdentityKey: string | null
+  groupIdentityStatus: 'CONFIRMED' | 'CANDIDATE' | 'CONFLICT' | 'UNKNOWN'
   memberResourceIds: string[]
+  membershipRevision: string
+  sourceObservationIds: string[]
+  sourceAcDeviceIds: string[]
+  sourceEvidenceRefs: string[]
+  observedAtMs: number
+  conflictReason: string | null
   sourceRevision: string
   scopeStatus: string
 }
@@ -677,6 +685,7 @@ export interface WirelessApGroup {
 export interface WirelessApGroupDetail {
   group: WirelessApGroup
   members: WirelessApResource[]
+  observations: WirelessObservation[]
   total: number
   asOf: number
   scope: WirelessScope
@@ -687,7 +696,16 @@ export interface WirelessApGroupDetail {
     sourceAcDomainId: string
     sourceRevision: string
     scopeStatus: string
-    groupScope: string
+    groupScope: WirelessApGroup['groupScope']
+    sourceGroupKey: string | null
+    groupIdentityKey: string | null
+    groupIdentityStatus: WirelessApGroup['groupIdentityStatus']
+    membershipRevision: string
+    sourceObservationIds: string[]
+    sourceAcDeviceIds: string[]
+    sourceEvidenceRefs: string[]
+    observedAtMs: number
+    conflictReason: string | null
   }
 }
 
@@ -1043,11 +1061,11 @@ export function getWirelessCollectionManifests(domainId: string, params: { page?
 export function getWirelessCollectionManifest(id: string, params: { sourceAcId?: string } = {}): Promise<WirelessCollectionManifestDetail> {
   return request(queryPath(`/api/system/wireless/collection-manifests/${encodeURIComponent(id)}`, params))
 }
-export function getWirelessApGroups(domainId: string, params: { page?: number; pageSize?: number } = {}): Promise<WirelessPage<WirelessApGroup>> {
+export function getWirelessApGroups(domainId: string, params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessApGroup>> {
   return request(queryPath(`/api/system/wireless/ac-domains/${encodeURIComponent(domainId)}/ap-groups`, params))
 }
-export function getWirelessApGroup(id: string): Promise<WirelessApGroupDetail> {
-  return request(`/api/system/wireless/ap-groups/${encodeURIComponent(id)}`)
+export function getWirelessApGroup(id: string, params: { sourceAcId?: string } = {}): Promise<WirelessApGroupDetail> {
+  return request(queryPath(`/api/system/wireless/ap-groups/${encodeURIComponent(id)}`, params))
 }
 function queryPath(path: string, params: Record<string, unknown>): string {
   const query = new URLSearchParams()

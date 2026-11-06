@@ -406,18 +406,18 @@ STATUS=COMPLETED
 TASK_ID=A19
 MODULE=Wireless/Collection
 FEATURE=Domain-owned AP Group 与稳定 source group key
-CURRENT_STATUS=审计发现
+CURRENT_STATUS=LOCAL_ACCEPTANCE_PASS；实时 source-key/共享组证据仍待验收
 USER_VALUE=避免错误身份、状态和来源声明
 SEVERITY=P1
 DEPENDENCIES=设备认证及可验证 source group evidence
-EVIDENCE=现有事实只有组名，无经验证的共享组/source-key事实
-IMPLEMENTATION_SCOPE=复用现有事实；无证据不得伪造
+EVIDENCE=AP_GROUP_SOURCE_IDENTITY_ACCEPTANCE_20261106；Group合同10场景、schema24、HTTP16、浏览器15状态PASS；parser仅有组名时保持CANDIDATE
+IMPLEMENTATION_SCOPE=独立来源证据、AC/Domain身份、来源范围详情与成员版本；无证据不得伪造
 SECURITY_RISK=不扩展Site或设备范围
-DATABASE_IMPACT=真实数据零修改；持久模型单独评审
-TESTABILITY=定向单元及fixture；实测单列
-ESTIMATED_EFFORT=按证据和schema依赖分批
+DATABASE_IMPACT=schema24仅迁移可重建AP Group缓存；真实数据零修改
+TESTABILITY=完整Service harness、定向合同、真实HTTP加离线fixture、浏览器mock；实测单列
+ESTIMATED_EFFORT=本机实现已完成；正式生命周期与实测另项推进
 PRIORITY=P1
-STATUS=BLOCKED
+STATUS=COMPLETED_LOCAL_REAL_EVIDENCE_PENDING
 
 ## A20 持久身份/历史与可验证 Raw manifest/hash
 
