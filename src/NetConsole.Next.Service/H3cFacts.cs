@@ -111,6 +111,19 @@ internal sealed partial class Catalog
             newest.Parameters.AddWithValue("$identity", fact.IdentityKey);
             var maximum = newest.ExecuteScalar();
             var advance = maximum is null or DBNull || fact.CapturedMs > Convert.ToInt64(maximum);
+            if (advance && fact.Kind == "lldp.neighbor" && fact.Source.StartsWith("H3C_TASK_RAW:", StringComparison.Ordinal))
+            {
+                using var table = db.CreateCommand();
+                table.Transaction = transaction;
+                table.CommandText = @"SELECT 1 FROM h3c_facts WHERE profile_id=$profile AND kind='lldp.table'
+                    AND captured_ms>$captured AND json_extract(payload_json,'$.capturedScope')=$scope LIMIT 1";
+                table.Parameters.AddWithValue("$profile", fact.ProfileId);
+                table.Parameters.AddWithValue("$captured", fact.CapturedMs);
+                using var payload = JsonDocument.Parse(fact.PayloadJson);
+                table.Parameters.AddWithValue("$scope", payload.RootElement.TryGetProperty("capturedScope", out var scope)
+                    ? scope.GetRawText() : string.Empty);
+                if (table.ExecuteScalar() is not null) advance = false;
+            }
             if (advance)
             using (var clear = db.CreateCommand())
             {
@@ -137,6 +150,26 @@ internal sealed partial class Catalog
             insert.Parameters.AddWithValue("$current", advance ? 1 : 0);
             insert.Parameters.AddWithValue("$payload", fact.PayloadJson);
             insert.ExecuteNonQuery();
+        }
+        // A complete, scoped LLDP table advances Current as a set. Historical
+        // observations remain immutable; this never emits a deletion event.
+        foreach (var table in facts.Where(fact => fact.Kind == "lldp.table"))
+        {
+            using var retire = db.CreateCommand();
+            retire.Transaction = transaction;
+            retire.CommandText = @"UPDATE h3c_facts SET is_current=0
+                WHERE profile_id=$profile AND kind='lldp.neighbor' AND is_current=1
+                  AND source GLOB 'H3C_TASK_RAW:*' AND captured_ms<$captured
+                  AND json_extract(payload_json,'$.capturedScope')=$scope
+                  AND NOT EXISTS(SELECT 1 FROM h3c_facts newer
+                    WHERE newer.profile_id=$profile AND newer.kind='lldp.table'
+                      AND newer.identity_key=$identity AND newer.captured_ms>$captured)";
+            retire.Parameters.AddWithValue("$profile", table.ProfileId);
+            retire.Parameters.AddWithValue("$captured", table.CapturedMs);
+            retire.Parameters.AddWithValue("$identity", table.IdentityKey);
+            using var payload = JsonDocument.Parse(table.PayloadJson);
+            retire.Parameters.AddWithValue("$scope", payload.RootElement.GetProperty("capturedScope").GetRawText());
+            retire.ExecuteNonQuery();
         }
     }
 
@@ -257,8 +290,14 @@ internal sealed partial class Catalog
         }
         if (outputs.TryGetValue(H3cCommandPolicy.DisplayLldpNeighborInformationList, out var lldpOutput))
         {
-            foreach (var neighbor in H3cComwareParser.ParseLldpList(lldpOutput))
+            var table = H3cComwareParser.ParseLldpListTable(lldpOutput, completedExec: true);
+            var neighbors = provenance is null ? H3cComwareParser.ParseLldpList(lldpOutput) : table.Neighbors;
+            foreach (var neighbor in neighbors)
                 Add("lldp.neighbor", $"{neighbor.LocalInterface}|{neighbor.NeighborInterface}|{neighbor.ChassisId}", neighbor);
+            // Only verified task publication can replace a collected Current
+            // set. Offline imports and partial/unrecognized output cannot.
+            if (provenance is not null && scope is not null && table.Status == "PARSED")
+                Add("lldp.table", JsonSerializer.Serialize(scope, jsonOptions), table);
         }
 
         foreach (var command in H3cAcResources.RequiredCommands.Concat(H3cAcResources.OptionalCommands)

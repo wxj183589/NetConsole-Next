@@ -401,9 +401,9 @@ internal static partial class H3cComwareParser
         }
         if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
         {
-            var result = ParseLldpList(output);
-            return new(result.Count > 0 ? "PARSED" : "UNRECOGNIZED",
-                System.Text.Json.JsonSerializer.Serialize(result));
+            var result = ParseLldpListTable(output, completedExec);
+            return new(result.Status,
+                System.Text.Json.JsonSerializer.Serialize(result.Neighbors));
         }
         if (command == H3cCommandPolicy.DisplayLldpNeighborInformationVerbose)
         {

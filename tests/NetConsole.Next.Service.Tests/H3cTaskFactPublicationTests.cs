@@ -24,7 +24,82 @@ internal static class H3cTaskFactPublicationTests
         await SuccessfulMultiCommandRunRequiresCompleteManifestSet();
         await MultiCommandFailureKeepsEarlierRawBounded();
         await VlanTablePublishesWholeRevisionsWithRawAndScope();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=16/16 PASS");
+        await CompleteLldpTablesReplaceOnlyScopedCollectedCurrent();
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=17/17 PASS");
+    }
+
+    private static async Task CompleteLldpTablesReplaceOnlyScopedCollectedCurrent()
+    {
+        using var f = new Fixture();
+        var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "r71_simulator_sw_lldp_list.txt"));
+        const string command = H3cCommandPolicy.DisplayLldpNeighborInformationList;
+        await using var scheduler = f.Scheduler(new Factory { Execute = cmd => cmd == command ? output : Factory.Output(cmd) });
+        // This offline row has a distinct identity. The table-retirement
+        // operation must leave it untouched; generic Current inheritance still
+        // keys on profile/kind/identity without separating source or scope.
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string>
+            { [command] = "Local Interface Neighbor Sysname Neighbor Interface Management Address\nGE9/0/9 OFFLINE GE1/0/9 192.0.2.9" }, 1000);
+        var first = await f.Run(scheduler, command);
+        Assert(first.State == "SUCCEEDED" && f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Count == 4 &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.table").Single().CollectedRawVerified,
+            "real-shape complete LLDP task must publish three correct scoped neighbors and a verified table revision");
+        var firstHistoryCount = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor", history: true).Count;
+        // Use a distinct identity for the other-scope row. This tests the
+        // retirement filter, not same-identity isolation across scopes.
+        f.Execute("INSERT INTO h3c_facts SELECT 'other-scope',profile_id,kind,'other-scope',status,source,captured_ms,1," +
+            "json_set(payload_json,'$.capturedScope.siteId','other-site') FROM h3c_facts WHERE kind='lldp.neighbor' AND source LIKE 'H3C_TASK_RAW:%' LIMIT 1");
+        await f.Run(scheduler, H3cCommandPolicy.DisplayVersion);
+        var identity = f.Catalog.QueryH3cFacts(f.Profile, "device.identity").Single();
+        foreach (var incomplete in new[] { "Local Interface Chassis ID Port ID System Name\nGE1/0/1 truncated",
+            "unrecognized output", "Local Interface Chassis ID Port ID System Name\n-- More --" })
+        {
+            output = incomplete;
+            await f.Run(scheduler, command);
+            Assert(f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Count == 5 &&
+                f.Catalog.QueryH3cFacts(f.Profile, "lldp.table").Count == 1,
+                "partial/unrecognized/paged tables cannot retire Current or advance the complete table revision");
+        }
+        output = "Local Interface Chassis ID Port ID System Name\nGE1/0/3 1cc0-ab25-0600 GigabitEthernet1/0/0 ac2";
+        await Task.Delay(20);
+        var second = await f.Run(scheduler, command);
+        var current = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor");
+        Assert(second.State == "SUCCEEDED" && current.Count == 3 &&
+            current.Count(x => x.Source.StartsWith("H3C_TASK_RAW:") && x.Id != "other-scope") == 1 &&
+            current.Any(x => x.Id == "other-scope") && current.Any(x => x.Source == Catalog.H3cOfflineFixtureSource),
+            "table retirement must preserve these distinct-identity rows from another scope/source");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor", history: true).Count == firstHistoryCount + 2,
+            "set replacement must retain every historical observation without removals");
+        var before = f.Rows();
+        f.Catalog.PublishH3cTaskFacts(first.Id);
+        Assert(f.Rows() == before, "late replay must not resurrect missing old neighbors or replace the newer table");
+        f.Catalog.PublishH3cTaskFacts(second.Id);
+        Assert(f.Rows() == before, "same-revision republication must preserve Current and history exactly");
+        // Keep valid Raw whose first projection is delayed until after a newer
+        // empty table. Its unseen identity must not reappear in Current.
+        f.Execute("CREATE TRIGGER defer_lldp_projection BEFORE INSERT ON h3c_facts BEGIN SELECT RAISE(FAIL,'deferred synthetic projection'); END");
+        output = "Local Interface Chassis ID Port ID System Name\nGE7/0/7 0011-2233-4455 GE1/0/7 LATE";
+        var late = await f.Run(scheduler, command);
+        f.Execute("DROP TRIGGER defer_lldp_projection");
+        output = "Local Interface Chassis ID Port ID System Name";
+        await Task.Delay(20);
+        await f.Run(scheduler, command);
+        current = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor");
+        Assert(current.Count == 2 && current.All(x => x.Id == "other-scope" || x.Source == Catalog.H3cOfflineFixtureSource) &&
+            f.Catalog.QueryH3cFacts(f.Profile, "device.identity").Single().Id == identity.Id &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.table").Single().CollectedRawVerified,
+            "empty-table retirement preserves the distinct-identity other-scope/source rows, other kind and Raw history");
+        before = f.Rows();
+        f.Catalog.PublishH3cTaskFacts(second.Id);
+        Assert(f.Rows() == before, "replaying a nonempty older table cannot overwrite complete empty Current");
+        Assert(late.State == "SUCCEEDED" && f.Catalog.PublishH3cTaskFacts(late.Id).Status == "PUBLISHED" &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Count == 2 &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor", history: true).Single(x => x.Source.EndsWith(late.Id)).IsCurrent == false,
+            "a delayed first projection must retain historical Raw evidence without resurrecting an omitted identity");
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string>
+            { [command] = "Local Interface Neighbor Sysname Neighbor Interface Management Address\nGE8/0/8 OFFLINE-LATER GE1/0/8 192.0.2.8" }, 1001);
+        Assert(f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Count == 3 &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Any(x => x.IdentityKey.StartsWith("GE8/0/8|")),
+            "the collected-table ordering guard must not suppress this distinct-identity offline row");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()

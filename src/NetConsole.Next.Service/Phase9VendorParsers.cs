@@ -335,19 +335,49 @@ internal static partial class H3cComwareParser
     }
 
     public static IReadOnlyList<H3cLldpFact> ParseLldpList(string output)
+        => ParseLldpListTableCore(output, completedExec: true, allowIncompleteReplay: true).Neighbors;
+
+    public static H3cLldpListTable ParseLldpListTable(string output, bool completedExec = false)
+        => ParseLldpListTableCore(output, completedExec, allowIncompleteReplay: false);
+
+    private static H3cLldpListTable ParseLldpListTableCore(string output, bool completedExec, bool allowIncompleteReplay)
     {
-        var transcript = CliTranscriptParser.Parse(output, H3cCommandPolicy.DisplayLldpNeighborInformationList);
+        const string command = H3cCommandPolicy.DisplayLldpNeighborInformationList;
+        var transcript = CliTranscriptParser.Parse(output, command, completedExec);
+        if (CliTranscriptParser.HasCommandBoundaryMismatch(output, command) ||
+            transcript.Status == CliTranscriptStatus.Paged || !allowIncompleteReplay && transcript.Status == CliTranscriptStatus.Incomplete &&
+            !(completedExec && transcript.Prompt.Length == 0))
+            return new("PARTIAL", []);
+        if (transcript.Status is CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied)
+            return new("UNRECOGNIZED", []);
         var lines = transcript.Output.Split('\n');
-        var systemNameHeader = Array.FindIndex(lines, line => line.Trim().StartsWith("System Name", StringComparison.OrdinalIgnoreCase));
-        var systemNameFirst = systemNameHeader >= 0;
-        if (systemNameHeader >= 0) lines = lines[(systemNameHeader + 1)..];
-        return lines.Where(line => !line.Trim().StartsWith("Local Interface", StringComparison.OrdinalIgnoreCase) &&
-                !line.Trim().StartsWith("System Name", StringComparison.OrdinalIgnoreCase))
-            .Select(line => line.Trim().Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries))
-            .Where(parts => parts.Length == 4 && IsInterfaceToken(systemNameFirst ? parts[1] : parts[0]))
-            .Select(parts => systemNameFirst
-                ? new H3cLldpFact(parts[1], parts[0], parts[3], null, parts[2])
-                : new H3cLldpFact(parts[0], parts[1], parts[2], parts[3])).ToArray();
+        string[] headers = ["System Name Local Interface Chassis ID Port ID",
+            "Local Interface Chassis ID Port ID System Name",
+            "Local Interface Neighbor Sysname Neighbor Interface Management Address"];
+        var headerIndex = -1;
+        var layout = -1;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var normalized = string.Join(' ', lines[i].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            layout = Array.FindIndex(headers, header => header.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+            if (layout >= 0) { headerIndex = i; break; }
+        }
+        if (headerIndex < 0) return new("UNRECOGNIZED", []);
+        var rows = new List<H3cLldpFact>();
+        foreach (var line in lines[(headerIndex + 1)..].Where(line => !string.IsNullOrWhiteSpace(line)))
+        {
+            var parts = line.Trim().Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries);
+            var localIndex = layout == 0 ? 1 : 0;
+            if (parts.Length != 4 || !IsInterfaceToken(parts[localIndex]) || !parts[localIndex].Any(char.IsDigit))
+                return new("PARTIAL", []);
+            rows.Add(layout switch
+            {
+                0 => new(parts[1], parts[0], parts[3], null, parts[2]),
+                1 => new(parts[0], parts[3], parts[2], null, parts[1]),
+                _ => new(parts[0], parts[1], parts[2], parts[3])
+            });
+        }
+        return new("PARSED", rows);
     }
 
     public static IReadOnlyList<H3cLldpFact> ParseLldpVerbose(string output)

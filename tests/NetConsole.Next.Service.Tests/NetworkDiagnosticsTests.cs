@@ -9,6 +9,7 @@ internal static class NetworkDiagnosticsTests
 {
     public static async Task RunAsync()
     {
+        CompletionProgressWaitsForRunPublication();
         var historyIntegrity = Task.WhenAll(CorruptHistoryDoesNotBlockHealthyRuns(),
             FullCapacityCompletionRetainsEveryRun());
         try { await historyIntegrity; }
@@ -20,7 +21,64 @@ internal static class NetworkDiagnosticsTests
         await ListsLiveAndCompletedWithoutNewChecks();
         await HistoryListBoundsAndRestoresSafeSummaries();
         await HistoryReadsRespectCurrentAccountAndSiteScope();
-        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=9/9 PASS");
+        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=10/10 PASS");
+    }
+
+    private static void CompletionProgressWaitsForRunPublication()
+    {
+        using var fixture = new Fixture();
+        var device = fixture.Catalog.CreateDeviceInventory(new(null, "Publication fixture", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        var probe = new ControlledCompletionProbe();
+        using var service = new NetworkDiagnosticsService(fixture.Catalog, probe);
+        var context = new QueuedCompletionContext();
+        var previous = SynchronizationContext.Current;
+        NetworkDiagnosticRunSnapshot started;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+            started = service.Start(new([device.Item.Id], ["TRACEROUTE"], 5_000), "local-api-token", P2B5SiteScopeDecision.Global);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        probe.CompleteNext();
+        NetworkDiagnosticRunSnapshot current;
+        do
+        {
+            context.RunOne();
+            current = service.Get(started.Id, P2B5SiteScopeDecision.Global)!;
+        } while (current.Items.Single().State != "SUCCEEDED");
+        Assert(current.State == "RUNNING" && current.CompletedChecks == 1 && current.ProgressPercent < 100,
+            "completed children must not announce 100% before terminal run/history publication");
+        Assert(service.List("local-api-token", P2B5SiteScopeDecision.Global).Single().ProgressPercent < 100,
+            "summary filtering must preserve the pending publication boundary");
+        while (current.State == "RUNNING")
+        {
+            context.RunOne();
+            current = service.Get(started.Id, P2B5SiteScopeDecision.Global)!;
+        }
+        Assert(current.ProgressPercent == 100 && current.State == "SUCCEEDED", "durably published completion must reach 100%");
+        service.Dispose();
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        Assert(restarted.Get(started.Id, P2B5SiteScopeDecision.Global)?.Items.Single().TraceRoute?.DestinationReached == true,
+            "a caller observing 100% may immediately recreate the service and read complete history");
+    }
+
+    private sealed class QueuedCompletionContext : SynchronizationContext
+    {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _callbacks = new();
+        public override void Post(SendOrPostCallback callback, object? state) => _callbacks.Enqueue((callback, state));
+        public void RunOne()
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            (SendOrPostCallback Callback, object? State) callback;
+            while (!_callbacks.TryDequeue(out callback))
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                Thread.Sleep(1);
+            }
+            // Keep this runner outside the captured context, so child completion
+            // and the run's awaiting continuation remain separate queued steps.
+            callback.Callback(callback.State);
+        }
     }
 
     private static async Task BatchReportsProgressAndIsolatesFailures()

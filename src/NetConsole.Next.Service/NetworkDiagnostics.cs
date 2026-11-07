@@ -425,7 +425,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var cancelled = visible.Count(item => item.State == "CANCELLED");
         var queued = visible.Count(item => item.State == "QUEUED");
         var running = visible.Count(item => item.State == "RUNNING");
-        var percent = visible.Length == 0 ? 0 : completed * 100 / visible.Length;
+        var percent = ProgressPercent(completed, visible.Length, run.State);
         return new(run.Id, run.Actor, run.State, run.SiteId, run.TimeoutMs, run.Targets.Count, visible.Length,
             completed, succeeded, failed, noEvidence, cancelled, queued, running, percent, run.CreatedMs,
             run.StartedMs, run.EndedMs, run.FailureReason, visible);
@@ -513,7 +513,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
             TotalDevices = devices, TotalChecks = visible.Length, CompletedChecks = completed,
             SucceededChecks = succeeded, FailedChecks = failed, NoEvidenceChecks = noEvidence,
             CancelledChecks = cancelled, QueuedChecks = queued, RunningChecks = running,
-            ProgressPercent = visible.Length == 0 ? 0 : completed * 100 / visible.Length,
+            ProgressPercent = ProgressPercent(completed, visible.Length, snapshot.State),
             Items = visible
         };
     }
@@ -536,6 +536,12 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         Uri.CheckHostName(value) is not UriHostNameType.Unknown and not UriHostNameType.Basic;
     private static bool IsTerminal(string state) => state is "SUCCEEDED" or "FAILED" or "NO_EVIDENCE" or "CANCELLED";
     private static bool IsTerminalRun(string state) => state is "SUCCEEDED" or "PARTIAL" or "FAILED" or "CANCELLED";
+    private static int ProgressPercent(int completed, int total, string state)
+    {
+        var percent = total == 0 ? 0 : completed * 100 / total;
+        // Child checks may finish before the run publishes its terminal state and history.
+        return IsTerminalRun(state) ? percent : Math.Min(99, percent);
+    }
     private static long? ElapsedMs(long started) => Math.Max(0, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
     private static long UtcNowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(NetworkDiagnosticsService)); }

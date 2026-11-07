@@ -10,7 +10,50 @@ internal static class H3cLldpTopologyTests
         ProjectionClassifiesHistoryWithoutDeletes();
         RelationHistoryIsScopedToLocalDeviceAndSite();
         OfflineFixtureProjectsScopedRelation();
-        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=3/3 PASS");
+        SimulatorSwitchListRetainsColumnsAndRejectsLegends();
+        LegacyApBannerReplayRetainsEndpointsWithoutCompleteTableProof();
+        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=5/5 PASS");
+    }
+
+    private static void LegacyApBannerReplayRetainsEndpointsWithoutCompleteTableProof()
+    {
+        var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "live_ap_v7_229",
+            "display_lldp_neighbor_information_list.txt"));
+        var rows = H3cComwareParser.ParseLldpList(output);
+        Assert(rows.Count == 1 && rows[0].LocalInterface == "GE1/0/1" && rows[0].NeighborInterface == "ge2" &&
+            rows[0].NeighborSysname == "Switch" && rows[0].ChassisId == "00aa-bbcc-ddee",
+            "Phase11 banner-bearing offline capture must retain exact local/remote endpoints and chassis");
+        Assert(H3cComwareParser.ParseLldpListTable(output, completedExec: true).Status == "PARTIAL",
+            "offline extraction without terminal completion proof must not authorize product table replacement");
+        using var fixture = new Fixture();
+        var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "192.0.2.229", 22,
+            "fixture", "FIXTURE_REFERENCE", string.Empty, true, 0, 0);
+        fixture.Catalog.CreateH3cDeviceProfile(profile);
+        fixture.Catalog.ImportH3cOfflineReplay(profile.Id,
+            new Dictionary<string, string> { [H3cCommandPolicy.DisplayLldpNeighborInformationList] = output }, 1000);
+        Assert(fixture.Catalog.QueryH3cLldpRelations(profile.Id, false, 100, P2B5SiteScopeDecision.Global).Single().NeighborPort == "ge2" &&
+            fixture.Catalog.QueryH3cFacts(profile.Id, "lldp.table").Count == 0,
+            "offline replay must preserve the known relationship without creating a collected table authority");
+    }
+
+    private static void SimulatorSwitchListRetainsColumnsAndRejectsLegends()
+    {
+        var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "r71_simulator_sw_lldp_list.txt"));
+        var table = H3cComwareParser.ParseLldpListTable(output, completedExec: true);
+        Assert(table.Status == "PARSED" && table.Neighbors.Count == 3,
+            "the real SW list must not turn Chassis/Default legend rows into neighbors");
+        Assert(table.Neighbors[0] is { LocalInterface: "GE1/0/1", NeighborSysname: "AC1",
+            NeighborInterface: "GigabitEthernet1/0/1", ChassisId: "4c48-8d10-0100", ManagementAddress: null } &&
+            table.Neighbors[1].NeighborSysname == "4c48-cb6e-0400" && table.Neighbors[2].NeighborSysname == "ac2",
+            "local-first chassis columns must preserve observed identity and never invent a management IP");
+        var header = "Local Interface Chassis ID Port ID System Name";
+        Assert(H3cComwareParser.ParseLldpListTable(header, completedExec: true).Status == "PARSED" &&
+            H3cComwareParser.ParseLldpListTable(header, completedExec: true).Neighbors.Count == 0,
+            "a completed exact table header is an empty complete table");
+        foreach (var bad in new[] { "unrecognized output", header + "\nGE1/0/1 truncated",
+            header + "\n-- More --", header + "\nPermission denied" })
+            Assert(H3cComwareParser.ParseLldpListTable(bad, completedExec: true).Status != "PARSED",
+                "malformed, paged and denied output must never authorize set replacement");
     }
 
     private static void ProjectionClassifiesHistoryWithoutDeletes()
