@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { executeConfigRestore, getConfigRestoreStatus, getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, previewConfigRestore, setCsrfToken } from './client'
+import { downloadTaskHistory, executeConfigRestore, getConfigRestoreStatus, getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, previewConfigRestore, setCsrfToken } from './client'
 
 describe('Next API client', () => {
   it('uses same-origin credentials and never places credentials in a URL', async () => {
@@ -41,6 +41,15 @@ describe('Next API client', () => {
       await getTask('run/1')
       expect(fetchMock.mock.calls[0][0]).toBe('/api/system/tasks/run%2F1')
       expect(String(fetchMock.mock.calls[0][0])).not.toContain('password')
+    } finally { fetchMock.mockRestore() }
+  })
+
+  it('downloads task history through the scoped CSV endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('csv-fixture', { status: 200, headers: { 'content-type': 'text/csv' } }))
+    try {
+      const blob = await downloadTaskHistory()
+      expect(await blob.text()).toBe('csv-fixture')
+      expect(fetchMock).toHaveBeenCalledWith('/api/system/tasks/export', { credentials: 'include' })
     } finally { fetchMock.mockRestore() }
   })
 

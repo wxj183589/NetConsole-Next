@@ -8,7 +8,7 @@ import { ApiRequestError, type TaskDiagnosticManifest } from '../api/client'
 
 const api = vi.hoisted(() => ({
   cancelTask: vi.fn(), createH3cTaskDefinition: vi.fn(), getH3cProfiles: vi.fn(), getTaskCommands: vi.fn(),
-  getTasks: vi.fn(), getTaskDiagnostics: vi.fn(), downloadTaskDiagnostics: vi.fn(), resumeTask: vi.fn(), retryTask: vi.fn(), startH3cTaskDefinition: vi.fn(),
+  getTasks: vi.fn(), getTaskDiagnostics: vi.fn(), downloadTaskDiagnostics: vi.fn(), downloadTaskHistory: vi.fn(), resumeTask: vi.fn(), retryTask: vi.fn(), startH3cTaskDefinition: vi.fn(),
 }))
 const route = reactive({ fullPath: '/tasks' })
 vi.mock('../api/client', async original => ({ ...await original<object>(), ...api }))
@@ -110,6 +110,27 @@ describe('H3C VLAN readonly task selection', () => {
     const wrapper = render(); await flushPromises()
     await button(wrapper, '采集全机诊断').trigger('click'); await flushPromises()
     expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
+  })
+})
+
+describe('task history export', () => {
+  beforeEach(() => {
+    vi.resetAllMocks(); route.fullPath = '/tasks'
+    api.getTasks.mockResolvedValue([]); api.getH3cProfiles.mockResolvedValue([])
+    api.downloadTaskHistory.mockResolvedValue(new Blob(['csv-fixture']))
+  })
+
+  it('downloads the scoped task history CSV and releases the object URL', async () => {
+    const wrapper = render(); await flushPromises()
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:task-history')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    try {
+      await button(wrapper, '导出任务 CSV').trigger('click'); await flushPromises()
+      expect(api.downloadTaskHistory).toHaveBeenCalledOnce()
+      expect(click).toHaveBeenCalledOnce(); expect(createUrl).toHaveBeenCalledOnce(); expect(revokeUrl).toHaveBeenCalledWith('blob:task-history')
+      expect(wrapper.find('a[download]').exists()).toBe(false)
+    } finally { createUrl.mockRestore(); revokeUrl.mockRestore(); click.mockRestore() }
   })
 })
 

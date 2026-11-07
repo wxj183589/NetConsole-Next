@@ -1352,6 +1352,11 @@ export function getTerminalDevices(): Promise<TerminalDevice[]> { return request
 export function getH3cProfiles(): Promise<TerminalDevice[]> { return request('/api/system/h3c/profiles') }
 export function getSerialPorts(): Promise<string[]> { return request('/api/system/terminal/serial-ports') }
 export function getTasks(): Promise<TaskRun[]> { return request('/api/system/tasks') }
+export async function downloadTaskHistory(): Promise<Blob> {
+  const response = await fetch('/api/system/tasks/export', { credentials: 'include' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
+}
 export function getTask(runId: string): Promise<TaskRun> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}`)
 }

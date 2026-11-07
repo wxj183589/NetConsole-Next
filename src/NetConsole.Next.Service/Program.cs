@@ -52,6 +52,7 @@ builder.Services.AddSingleton<LinuxServerConnectionTests>();
 builder.Services.AddSingleton<TerminalTicketStore>();
 builder.Services.AddSingleton<TerminalRecordingService>();
 builder.Services.AddSingleton<TerminalExportService>();
+builder.Services.AddSingleton<TaskExportService>();
 builder.Services.AddSingleton<DesktopHelperIpc>();
 builder.Services.AddSingleton<HostToolRegistry>();
 builder.Services.AddSingleton<HostToolLaunchService>();
@@ -716,6 +717,12 @@ app.MapGet("/api/system/tasks", (HttpContext context, Catalog rawCatalog) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     return Results.Ok(rawCatalog.RecentTaskRuns(scope: CurrentSiteScope(context)));
+});
+app.MapGet("/api/system/tasks/export", (HttpContext context, Catalog rawCatalog, TaskExportService exports) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var result = exports.CreateCsv(rawCatalog, CurrentSiteScope(context));
+    return Results.File(result.Bytes, "text/csv; charset=utf-8", result.Name);
 });
 app.MapGet("/api/system/tasks/{runId}", (HttpContext context, string runId, Catalog rawCatalog) =>
 {

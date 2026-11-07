@@ -3,7 +3,7 @@ import { onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
-import { ApiRequestError, cancelTask, createH3cTaskDefinition, downloadTaskDiagnostics, getH3cProfiles, getTaskCommands, getTaskDiagnostics, getTasks, resumeTask, retryTask, startH3cTaskDefinition, type TaskCommand, type TaskDiagnosticManifest, type TaskRun, type TerminalDevice } from '../api/client'
+import { ApiRequestError, cancelTask, createH3cTaskDefinition, downloadTaskDiagnostics, downloadTaskHistory, getH3cProfiles, getTaskCommands, getTaskDiagnostics, getTasks, resumeTask, retryTask, startH3cTaskDefinition, type TaskCommand, type TaskDiagnosticManifest, type TaskRun, type TerminalDevice } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 import { canCancelTask, canResumeTask, canRetryTask, captureStatusLabel, parseStatusLabel, taskFailureLabel, taskStateLabel, taskTypeLabel } from '../taskViewModel'
 
@@ -13,6 +13,7 @@ const tasks = ref<TaskRun[]>([]); const loading = ref(false); const actionTaskId
 const diagnostics = ref<TaskDiagnosticManifest | null>(null); const diagnosticError = ref(''); const downloading = ref<string | null>(null)
 let commandGeneration = 0; let commandRequest: AbortController | null = null; let downloadRequest: AbortController | null = null
 const profiles = ref<TerminalDevice[]>([]); const selectedProfileId = ref(''); const selectedCommands = ref<string[]>(['display version']); const planTimeoutMs = ref(30000); const planLoading = ref(false)
+const historyDownloading = ref(false)
 const planCommands = [
   ['display version', '设备版本'], ['display interface brief', '接口摘要'], ['display device', '设备状态'],
   ['display lldp neighbor-information list', 'LLDP 邻居'], ['display wlan ap all', 'FIT-AP 列表'],
@@ -29,6 +30,16 @@ function selectAcPlan(): void {
 }
 async function refresh(): Promise<void> { closeCommands(); loading.value = true; try { tasks.value = await getTasks() } catch { ElMessage.error('任务 API 读取失败') } finally { loading.value = false } }
 async function refreshProfiles(): Promise<void> { try { profiles.value = await getH3cProfiles(); if (!selectedProfileId.value) selectedProfileId.value = profiles.value[0]?.id || '' } catch { profiles.value = [] } }
+async function downloadHistory(): Promise<void> {
+  if (historyDownloading.value) return
+  historyDownloading.value = true
+  try {
+    const blob = await downloadTaskHistory(); const url = URL.createObjectURL(blob); const link = document.createElement('a')
+    try { link.href = url; link.download = `tasks-${new Date().toISOString().slice(0, 19).replaceAll(/[-:T]/g, '')}.csv`; link.hidden = true; document.body.appendChild(link); link.click() }
+    finally { link.remove(); URL.revokeObjectURL(url) }
+  } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '任务历史导出失败') }
+  finally { historyDownloading.value = false }
+}
 function time(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function stateClass(state: string): string { return ['COMPLETED', 'SUCCEEDED', 'RUNNING'].includes(state) ? 'good' : ['FAILED', 'INTERRUPTED'].includes(state) ? 'bad' : 'warn' }
 async function showCommands(task: TaskRun): Promise<void> {
@@ -141,7 +152,7 @@ onBeforeUnmount(closeCommands)
 </script>
 <template>
   <NcLayout title="任务中心" description="采集任务的服务端状态、Raw 输出与解析状态">
-    <template #actions><el-button size="small" @click="refresh">刷新</el-button></template>
+    <template #actions><el-button size="small" :loading="historyDownloading" @click="downloadHistory">导出任务 CSV</el-button><el-button size="small" @click="refresh">刷新</el-button></template>
     <section v-if="auth.isSuperAdmin" class="card"><div class="card__header"><div><h2>新建采集计划</h2><span class="muted">固定只读命令，按顺序执行并分别保存 Raw / Parse 状态</span></div><span class="state-pill">{{ selectedCommands.length }} 条命令</span></div><div class="card__body"><div class="form-grid"><label class="form-field"><span>目标设备</span><select v-model="selectedProfileId"><option value="">选择 H3C 设备</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}:{{ profile.port }} · {{ profile.username }}</option></select></label><label class="form-field"><span>计划总超时</span><select v-model.number="planTimeoutMs"><option :value="10000">10 秒</option><option :value="30000">30 秒</option><option :value="60000">60 秒</option></select></label><div class="form-field form-field--full"><span>采集内容</span><div><el-button size="small" :disabled="planLoading" @click="selectAcPlan">选择 AC 基础采集</el-button><span class="muted"> 仅选择 AP 列表、地址和射频，确认后执行。</span></div><div class="overview-footer"><label v-for="item in planCommands" :key="item[0]" class="check-row"><input v-model="selectedCommands" type="checkbox" :value="item[0]" />{{ item[1] }}</label></div></div></div><div class="toolbar" style="margin-top:12px"><el-button type="primary" :loading="planLoading" :disabled="planLoading || !selectedProfileId || !selectedCommands.length" @click="createAndRunPlan">创建并执行计划</el-button><span class="muted">连接时自动使用设备已保存的用户名和密码，无需重复输入。</span></div><div class="toolbar" style="margin-top:12px"><el-button :disabled="planLoading || !selectedProfileId" :loading="planLoading" @click="createAndRunDiagnostic">采集全机诊断</el-button><span class="muted">只读显示诊断，最多 10 分钟；不会保存设备文件。完成后在命令明细下载 TXT / ZIP。</span></div></div></section>
     <div class="card"><div class="card__header"><h2>最近任务 <span class="state-pill">{{ tasks.length }} 条</span></h2><span class="state-pill">状态由服务端实时记录</span></div><div v-loading="loading" class="table-wrap"><table class="data-table"><thead><tr><th>操作</th><th>状态</th><th>时间</th><th>原始数据</th><th>识别结果</th><th>说明</th><th>任务操作</th><th>明细</th></tr></thead><tbody><tr v-for="task in tasks" :key="task.id"><td><span class="device-name">{{ taskTypeLabel(task.taskType) }}</span><span class="device-subline mono" :title="`内部任务编号：${task.id}`">内部编号 {{ task.id.slice(0, 8) }}</span></td><td><span :class="['state-pill', stateClass(task.state)]">{{ taskStateLabel(task.state) }}</span></td><td><span>{{ time(task.startedMs || task.queuedMs) }}</span><span class="device-subline">{{ task.endedMs ? `完成于 ${time(task.endedMs)}` : '仍在处理' }}</span></td><td>{{ captureStatusLabel(task.captureStatus) }}</td><td>{{ parseStatusLabel(task.parseStatus) }}</td><td class="muted">{{ taskFailureLabel(task.failureReason) }}</td><td><div class="table-actions"><el-button v-if="canCancelTask(task.state)" text size="small" :loading="actionTaskId === task.id" @click="runAction(task, 'cancel')">取消</el-button><el-button v-if="canRetryTask(task.state)" text size="small" :loading="actionTaskId === task.id" @click="runAction(task, 'retry')">重试</el-button><el-button v-if="canResumeTask(task.state)" text size="small" :loading="actionTaskId === task.id" @click="runAction(task, 'resume')">恢复</el-button><span v-if="!canCancelTask(task.state) && !canRetryTask(task.state) && !canResumeTask(task.state)" class="muted">—</span></div></td><td><el-button text size="small" @click="showCommands(task)">命令明细</el-button></td></tr><tr v-if="!tasks.length"><td colspan="8"><div class="empty-state"><div><strong>暂无任务数据</strong><small>任务中心只展示服务端真实创建的任务，不使用模拟数据填充。</small></div></div></td></tr></tbody></table></div></div>
     <el-dialog v-model="showCommandDialog" :title="commandTask ? `${taskTypeLabel(commandTask.taskType)} · 命令明细` : '命令明细'" width="min(1120px, calc(100vw - 32px))">
