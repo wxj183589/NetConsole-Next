@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
   createWirelessTask,
   getWirelessTasks,
   getWirelessTask,
+  retryWirelessTask,
   downloadWirelessTask,
   cancelH3cTaskPlan,
   getH3cTaskPlan,
@@ -35,7 +36,20 @@ const taskAcs = ref<string[]>([])
 const taskMembers = computed(() => domains.value.filter(domain => taskDomains.value.includes(domain.id)).flatMap(domain => domain.members).filter((member, index, all) => all.findIndex(item => item.deviceId === member.deviceId) === index))
 watch(taskDomains, () => { taskAcs.value = taskAcs.value.filter(id => taskMembers.value.some(member => member.deviceId === id)) })
 const taskHistory = ref<WirelessTaskSummary[]>([])
+const historySite = ref('')
+const historyAc = ref('')
+const historyState = ref('')
+const historySites = computed(() => [...new Set(taskHistory.value.flatMap(task => task.siteIds || []))].sort())
+const historyAcs = computed(() => [...new Set(taskHistory.value.flatMap(task => task.acDeviceIds || []))].sort())
+const historyStates = computed(() => [...new Set(['QUEUED', 'RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED', 'CANCELLED', 'TIMED_OUT', 'INTERRUPTED', ...taskHistory.value.map(task => task.state)])])
+const filteredTaskHistory = computed(() => taskHistory.value.filter(task =>
+  (!historySite.value || task.siteIds?.includes(historySite.value)) &&
+  (!historyAc.value || task.acDeviceIds?.includes(historyAc.value)) &&
+  (!historyState.value || task.state === historyState.value)))
 const taskDetail = ref<WirelessTaskReport | null>(null)
+const taskRetryBusy = ref(false)
+const taskRetryError = ref('')
+const taskRetryRunning = computed(() => taskDetail.value?.retries?.some(retry => ['QUEUED', 'RUNNING'].includes(retry.state)) || false)
 const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']
 const taskCommands = ref(['display version', 'display wlan ap all', 'display wlan ap all address'])
 const taskSubmitting = ref(false)
@@ -76,6 +90,14 @@ let collectionGeneration = 0
 let collectionDetailGeneration = 0
 let taskDetailGeneration = 0
 let taskPoll: ReturnType<typeof setTimeout> | undefined
+let refreshedTaskEvidence = ''
+let activatedOnce = false
+
+watch([historySite, historyAc, historyState], () => {
+  ++taskDetailGeneration; clearTimeout(taskPoll); taskRetryError.value = ''
+  if (taskDetail.value && filteredTaskHistory.value.some(task => task.id === taskDetail.value?.summary.id)) scheduleTaskPoll(taskDetail.value)
+  else taskDetail.value = null
+})
 
 const selectedDomain = computed(() => domains.value.find(domain => domain.id === selectedDomainId.value) || domains.value[0] || null)
 const visibleResources = computed(() => resources.value.filter(resource => {
@@ -169,15 +191,47 @@ async function loadTaskHistory(): Promise<void> {
   catch (cause) { ++taskDetailGeneration; clearTimeout(taskPoll); taskHistory.value = []; taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务历史读取失败' }
 }
 async function showTask(id: string): Promise<void> {
+  if (taskRetryBusy.value) return
   const generation = ++taskDetailGeneration
   clearTimeout(taskPoll)
-  if (taskDetail.value?.summary.id !== id) taskDetail.value = null
+  if (taskDetail.value?.summary.id !== id) { taskDetail.value = null; taskRetryError.value = '' }
   try {
     const detail = await getWirelessTask(id)
     if (generation !== taskDetailGeneration) return
     taskDetail.value = detail; taskError.value = ''
-    if (['QUEUED', 'RUNNING'].includes(detail.summary.state)) taskPoll = setTimeout(() => { void showTask(id) }, 3000)
-  } catch (cause) { if (generation === taskDetailGeneration) { taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务详情读取失败' } }
+    scheduleTaskPoll(detail)
+    await refreshFinishedTaskEvidence(detail)
+  } catch (cause) { if (generation === taskDetailGeneration) taskError.value = cause instanceof Error ? cause.message : '任务详情读取失败' }
+}
+async function refreshFinishedTaskEvidence(detail: WirelessTaskReport): Promise<void> {
+  if (['QUEUED', 'RUNNING'].includes(detail.summary.state) || detail.retries?.some(retry => ['QUEUED', 'RUNNING'].includes(retry.state))) return
+  const revision = `${detail.summary.id}:${detail.summary.updatedMs}:${(detail.retries || []).map(retry => `${retry.retryRunId}:${retry.state}`).join('|')}`
+  if (revision === refreshedTaskEvidence) return
+  refreshedTaskEvidence = revision
+  await refresh()
+}
+function scheduleTaskPoll(detail: WirelessTaskReport): void {
+  if (['QUEUED', 'RUNNING'].includes(detail.summary.state) || detail.retries?.some(retry => ['QUEUED', 'RUNNING'].includes(retry.state)))
+    taskPoll = setTimeout(() => { void showTask(detail.summary.id) }, 3000)
+}
+function canRetryItem(item: WirelessTaskReport['items'][number]): boolean {
+  return ['FAILED', 'TIMED_OUT', 'CANCELLED', 'INTERRUPTED'].includes(item.state) && Boolean(item.runId) && Boolean(item.commands?.some(command => command.state !== 'SUCCEEDED'))
+}
+async function retryAc(ordinal: number, commandIndexes?: number[]): Promise<void> {
+  if (!taskDetail.value || taskRetryBusy.value || taskRetryRunning.value) return
+  const id = taskDetail.value.summary.id
+  const generation = ++taskDetailGeneration
+  clearTimeout(taskPoll)
+  taskRetryBusy.value = true; taskRetryError.value = ''
+  try {
+    const detail = await retryWirelessTask(id, ordinal, commandIndexes)
+    if (generation !== taskDetailGeneration) return
+    taskDetail.value = detail
+    scheduleTaskPoll(detail)
+    await refreshFinishedTaskEvidence(detail)
+  } catch (cause) {
+    if (generation === taskDetailGeneration) taskRetryError.value = cause instanceof Error ? cause.message : '重试提交失败'
+  } finally { taskRetryBusy.value = false }
 }
 async function cancelTaskPlan(id: string): Promise<void> {
   try { await cancelH3cTaskPlan(id); await loadTaskHistory(); await showTask(id) }
@@ -336,6 +390,11 @@ function outcomeText(outcome: string): string {
 }
 
 onMounted(() => { void refresh(); void loadTaskHistory() })
+onActivated(() => {
+  // KeepAlive activates on first mount too. Reload all evidence on later visits.
+  if (activatedOnce) { void refresh(); void loadTaskHistory() }
+  activatedOnce = true
+})
 </script>
 
 <template>
@@ -378,15 +437,36 @@ onMounted(() => { void refresh(); void loadTaskHistory() })
         <section class="card wireless-task-history">
           <div class="card__header"><h2>无线任务历史</h2><el-button size="small" @click="loadTaskHistory">刷新</el-button></div>
           <p v-if="taskError && !domains.length" role="alert">{{ taskError }}</p>
+          <div class="toolbar wireless-history-filters">
+            <label>Site <select v-model="historySite" aria-label="任务历史 Site"><option value="">全部 Site</option><option v-for="site in historySites" :key="site" :value="site">{{ site }}</option></select></label>
+            <label>AC <select v-model="historyAc" aria-label="任务历史 AC"><option value="">全部 AC</option><option v-for="ac in historyAcs" :key="ac" :value="ac">{{ ac }}</option></select></label>
+            <label>状态 <select v-model="historyState" aria-label="任务历史状态"><option value="">全部状态</option><option v-for="state in historyStates" :key="state" :value="state">{{ state }}</option></select></label>
+            <el-button size="small" @click="historySite = ''; historyAc = ''; historyState = ''">清除筛选</el-button>
+          </div>
+          <p class="muted wireless-history-count">显示 {{ filteredTaskHistory.length }} / {{ taskHistory.length }} 条（仅筛选最近最多 200 条可见任务）</p>
           <div v-if="!taskHistory.length" class="empty-state">暂无可见任务</div>
-          <div v-for="task in taskHistory" :key="task.id" class="wireless-task-row"><button type="button" @click="showTask(task.id)">{{ formatTime(task.createdMs) }} · {{ task.state }} · {{ task.succeeded }}/{{ task.total }} 成功 · {{ task.failed }} 失败</button></div>
+          <div v-else-if="!filteredTaskHistory.length" class="empty-state">没有符合筛选条件的任务</div>
+          <div v-for="task in filteredTaskHistory" :key="task.id" class="wireless-task-row" :data-task-id="task.id"><button type="button" @click="showTask(task.id)">{{ formatTime(task.createdMs) }} · {{ task.state }} · {{ task.succeeded }}/{{ task.total }} 成功 · {{ task.failed }} 失败</button></div>
           <div v-if="taskDetail" class="wireless-task-detail">
             <h3>任务详情 · {{ taskDetail.summary.state }}</h3>
+            <p v-if="taskRetryError" role="alert">{{ taskRetryError }}</p>
+            <el-button size="small" :disabled="taskRetryBusy" @click="showTask(taskDetail.summary.id)">刷新详情</el-button>
             <p>任务 {{ taskDetail.summary.id }} · 创建 {{ formatTime(taskDetail.summary.createdMs) }} · 更新 {{ formatTime(taskDetail.summary.updatedMs) }} · 成功 {{ taskDetail.summary.succeeded }} / {{ taskDetail.summary.total }} · 失败 {{ taskDetail.summary.failed }}</p>
-            <div v-for="item in taskDetail.items" :key="item.ordinal">
+            <div v-for="item in taskDetail.items" :key="item.ordinal" class="wireless-task-ac">
               <p>{{ item.deviceId }} · {{ item.state }} · 采集 {{ item.captureStatus || '—' }} · 解析 {{ item.parseStatus || '—' }} <span v-if="item.error">· {{ item.error }}</span></p>
-              <p v-for="command in item.commands" :key="command.command" class="muted">{{ command.command }} · {{ command.state }} · 采集 {{ command.captureStatus || '—' }} · 解析 {{ command.parseStatus || '—' }} <span v-if="command.error">· {{ command.error }}</span></p>
+              <el-button v-if="canRetryItem(item)" size="small" :disabled="taskRetryBusy || taskRetryRunning" @click="retryAc(item.ordinal)">重试 {{ item.deviceId }} 的失败命令</el-button>
+              <p v-for="(command, index) in item.commands" :key="command.command" class="muted">{{ command.command }} · {{ command.state }} · 采集 {{ command.captureStatus || '—' }} · 解析 {{ command.parseStatus || '—' }} <span v-if="command.error">· {{ command.error }}</span>
+                <el-button v-if="canRetryItem(item) && command.state !== 'SUCCEEDED'" size="small" :disabled="taskRetryBusy || taskRetryRunning" @click="retryAc(item.ordinal, [index])">重试此命令</el-button>
+              </p>
             </div>
+            <section class="wireless-retry-history">
+              <h4>重试历史 · {{ taskDetail.retries?.length || 0 }} 次</h4>
+              <p v-if="!taskDetail.retries?.length">暂无重试记录</p>
+              <div v-for="retry in taskDetail.retries || []" :key="retry.retryRunId">
+                <p>{{ retry.deviceId }} · {{ retry.state }} · {{ formatTime(retry.createdMs) }} · 原任务 {{ retry.originalRunId }} · 重试 {{ retry.retryRunId }}</p>
+                <p v-for="command in retry.commands" :key="command.command">{{ command.command }} · {{ command.state }} <span v-if="command.error">· {{ command.error }}</span></p>
+              </div>
+            </section>
             <el-button size="small" @click="downloadTask(taskDetail.summary.id)">下载 ZIP</el-button>
             <el-button v-if="['QUEUED', 'RUNNING'].includes(taskDetail.summary.state)" size="small" @click="cancelTaskPlan(taskDetail.summary.id)">取消任务</el-button>
           </div>

@@ -29,7 +29,14 @@ internal sealed record TaskPlanReportItemSnapshot(
 
 internal sealed record TaskPlanReportSnapshot(
     TaskPlanSnapshot Plan,
-    IReadOnlyList<TaskPlanReportItemSnapshot> Items);
+    IReadOnlyList<TaskPlanReportItemSnapshot> Items,
+    IReadOnlyList<TaskPlanRetryReportSnapshot>? Retries = null);
+
+internal sealed record TaskPlanRetrySnapshot(string Id, int Ordinal, string OriginalRunId,
+    string RetryRunId, IReadOnlyList<int> CommandIndexes, string ActorUserId, long CreatedMs);
+
+internal sealed record TaskPlanRetryReportSnapshot(TaskPlanRetrySnapshot Retry, TaskRunSnapshot? Run,
+    IReadOnlyList<TaskCommandSnapshot> Commands);
 
 internal sealed partial class Catalog
 {
@@ -108,6 +115,49 @@ internal sealed partial class Catalog
         command.Parameters.AddWithValue("$ordinal", ordinal);
         command.ExecuteNonQuery();
         RefreshTaskPlanState(db, planId);
+    }
+
+    public TaskPlanRetrySnapshot CreateTaskPlanRetry(string planId, int ordinal, string originalRunId,
+        string retryRunId, IReadOnlyList<int> commandIndexes, string actorUserId)
+    {
+        if (commandIndexes.Count is < 1 or > 32 || commandIndexes.Any(index => index < 0) ||
+            commandIndexes.Distinct().Count() != commandIndexes.Count)
+            throw new ArgumentException("Retry command indexes are invalid.", nameof(commandIndexes));
+        var id = Guid.NewGuid().ToString("N");
+        var createdMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"INSERT INTO task_plan_retries
+            (id,plan_id,ordinal,original_run_id,retry_run_id,command_indexes_json,actor_user_id,created_ms)
+            SELECT $id,$plan,$ordinal,$original,$retry,$indexes,$actor,$created
+            WHERE EXISTS(SELECT 1 FROM task_plan_items WHERE plan_id=$plan AND ordinal=$ordinal AND run_id=$original)
+              AND EXISTS(SELECT 1 FROM task_runs WHERE id=$retry)";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$plan", planId);
+        command.Parameters.AddWithValue("$ordinal", ordinal);
+        command.Parameters.AddWithValue("$original", originalRunId);
+        command.Parameters.AddWithValue("$retry", retryRunId);
+        command.Parameters.AddWithValue("$indexes", JsonSerializer.Serialize(commandIndexes));
+        command.Parameters.AddWithValue("$actor", actorUserId);
+        command.Parameters.AddWithValue("$created", createdMs);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("Task retry association was not created.");
+        RefreshTaskPlanState(db, planId);
+        return new(id, ordinal, originalRunId, retryRunId, commandIndexes.ToArray(), actorUserId, createdMs);
+    }
+
+    public IReadOnlyList<TaskPlanRetrySnapshot> GetTaskPlanRetries(string planId)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = @"SELECT id,ordinal,original_run_id,retry_run_id,command_indexes_json,actor_user_id,created_ms
+            FROM task_plan_retries WHERE plan_id=$plan ORDER BY ordinal,created_ms,id";
+        command.Parameters.AddWithValue("$plan", planId);
+        using var reader = command.ExecuteReader();
+        var result = new List<TaskPlanRetrySnapshot>();
+        while (reader.Read())
+            result.Add(new(reader.GetString(0), reader.GetInt32(1), reader.GetString(2), reader.GetString(3),
+                JsonSerializer.Deserialize<int[]>(reader.GetString(4)) ?? Array.Empty<int>(), reader.GetString(5), reader.GetInt64(6)));
+        return result;
     }
 
     public TaskPlanSnapshot? GetTaskPlan(string id)

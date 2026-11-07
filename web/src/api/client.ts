@@ -1252,13 +1252,23 @@ export interface WirelessTaskPlan {
 export function createWirelessTask(domainIds: string[], commands: string[], acDeviceIds?: string[]): Promise<WirelessTaskPlan> {
   return request('/api/system/wireless/tasks', { method: 'POST', body: JSON.stringify({ domainIds, commands, acDeviceIds }) })
 }
-export interface WirelessTaskSummary { id: string; state: string; createdMs: number; updatedMs: number; total: number; succeeded: number; failed: number }
+export interface WirelessTaskSummary { id: string; state: string; createdMs: number; updatedMs: number; total: number; succeeded: number; failed: number; siteIds?: string[]; acDeviceIds?: string[] }
+export interface WirelessTaskCommandResult { command: string; state: string; error: string | null; captureStatus: string | null; parseStatus: string | null; capturedMs: number | null }
+export interface WirelessTaskRetryResult { ordinal: number; deviceId: string; originalRunId: string; retryRunId: string; state: string; createdMs: number; commandIndexes: number[]; commands: WirelessTaskCommandResult[] }
 export interface WirelessTaskReport {
   summary: WirelessTaskSummary
-  items: Array<{ ordinal: number; deviceId: string; state: string; error: string | null; runId: string | null; captureStatus: string | null; parseStatus: string | null; commands: Array<{ command: string; state: string; error: string | null; captureStatus: string | null; parseStatus: string | null; capturedMs: number | null }> }>
+  items: Array<{ ordinal: number; deviceId: string; state: string; error: string | null; runId: string | null; captureStatus: string | null; parseStatus: string | null; commands: WirelessTaskCommandResult[] }>
+  retries?: WirelessTaskRetryResult[] | null
 }
-export function getWirelessTasks(): Promise<WirelessTaskSummary[]> { return request('/api/system/wireless/tasks') }
+export function getWirelessTasks(filters: { siteId?: string; acDeviceId?: string; state?: string } = {}): Promise<WirelessTaskSummary[]> {
+  const query = new URLSearchParams({ limit: '200' })
+  for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value)
+  return request('/api/system/wireless/tasks?' + query.toString())
+}
 export function getWirelessTask(id: string): Promise<WirelessTaskReport> { return request('/api/system/wireless/tasks/' + encodeURIComponent(id)) }
+export function retryWirelessTask(id: string, ordinal: number, commandIndexes?: number[]): Promise<WirelessTaskReport> {
+  return request('/api/system/wireless/tasks/' + encodeURIComponent(id) + '/retry', { method: 'POST', body: JSON.stringify({ ordinal, commandIndexes }) })
+}
 export async function downloadWirelessTask(id: string): Promise<Blob> {
   const response = await fetch('/api/system/wireless/tasks/' + encodeURIComponent(id) + '/download', { credentials: 'include', cache: 'no-store' })
   if (!response.ok) throw new ApiRequestError(response.status, await response.text())

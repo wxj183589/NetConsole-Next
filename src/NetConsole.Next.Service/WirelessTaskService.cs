@@ -6,6 +6,8 @@ internal sealed record WirelessTaskCreateRequest(
     long TimeoutMs = 60_000,
     IReadOnlyList<string>? AcDeviceIds = null);
 
+internal sealed record WirelessTaskRetryRequest(int Ordinal, IReadOnlyList<int>? CommandIndexes = null);
+
 internal sealed record WirelessTaskPlanSnapshot(
     string Id,
     string State,
@@ -28,7 +30,8 @@ internal sealed class WirelessTaskException(string code, string message, int sta
 internal sealed class WirelessTaskService(
     WirelessReadModelService wireless,
     Catalog catalog,
-    H3cBatchTaskService plans)
+    H3cBatchTaskService plans,
+    P2B5SiteScopeStore siteScopes)
 {
     private static readonly string[] DefaultCommands =
     [
@@ -103,13 +106,26 @@ internal sealed class WirelessTaskService(
     internal static bool IsSupportedDeviceType(string deviceType) =>
         string.Equals(deviceType.Trim(), "AC", StringComparison.OrdinalIgnoreCase);
 
-    public IReadOnlyList<WirelessTaskSummary> List(string actorUserId, int limit = 50)
+    // Filtering covers this actor's latest 200 task plans, not an unbounded archive.
+    public IReadOnlyList<WirelessTaskSummary> List(string actorUserId, int limit = 50,
+        string? siteId = null, string? acDeviceId = null, string? state = null)
     {
         var results = new List<WirelessTaskSummary>();
-        foreach (var id in catalog.GetWirelessTaskPlanIds(actorUserId, limit))
+        var take = Math.Clamp(limit, 1, 200);
+        foreach (var id in catalog.GetWirelessTaskPlanIds(actorUserId, 200))
         {
             if (!WirelessTaskReportBuilder.IsWirelessId(id)) continue;
-            try { results.Add(GetReport(id, actorUserId).Summary); }
+            try
+            {
+                // Recheck current actor/target/endpoint/Site authority before filtering.
+                var summary = GetReport(id, actorUserId).Summary;
+                if (!string.IsNullOrWhiteSpace(siteId) && !(summary.SiteIds?.Contains(siteId.Trim(), StringComparer.Ordinal) ?? false) ||
+                    !string.IsNullOrWhiteSpace(acDeviceId) && !(summary.AcDeviceIds?.Contains(acDeviceId.Trim(), StringComparer.Ordinal) ?? false) ||
+                    !string.IsNullOrWhiteSpace(state) && !string.Equals(summary.State, state.Trim(), StringComparison.OrdinalIgnoreCase))
+                    continue;
+                results.Add(summary);
+                if (results.Count == take) break;
+            }
             catch (TaskScopeRevokedException) { }
             catch (KeyNotFoundException) { }
         }
@@ -120,10 +136,41 @@ internal sealed class WirelessTaskService(
     {
         if (!WirelessTaskReportBuilder.IsWirelessId(id)) throw new KeyNotFoundException();
         var report = plans.GetReport(id, actorUserId);
-        var devices = report.Plan.Items.ToDictionary(item => item.Ordinal,
-            item => catalog.GetTaskDefinition(item.DefinitionId)?.ScopeSnapshot?.DeviceId ?? "", EqualityComparer<int>.Default);
-        return WirelessTaskReportBuilder.Build(report, devices);
+        var creationScopes = report.Plan.Items.ToDictionary(item => item.Ordinal,
+            item => catalog.GetTaskDefinition(item.DefinitionId)?.ScopeSnapshot
+                ?? throw new TaskScopeRevokedException("TASK_SCOPE_SNAPSHOT_REQUIRED"));
+        var result = WirelessTaskReportBuilder.Build(report, creationScopes);
+        var actor = catalog.GetActiveTaskActor(actorUserId) ?? throw new TaskScopeRevokedException("TASK_ACTOR_REVOKED_REPORT");
+        var scope = siteScopes.Resolve(actor);
+        if (!scope.IsAuthorized) throw new TaskScopeRevokedException("TASK_SCOPE_DENIED_REPORT");
+        var projection = catalog.ReadWirelessTaskEvidence(result, scope).Projection;
+        var observations = projection.ApResources.SelectMany(resource => resource.Observations).ToArray();
+        _ = plans.GetVisible(id, actorUserId);
+        return result with { ObservationStatus = observations.Length > 0 ? "PUBLISHED" : "NOT_PUBLISHED",
+            Resources = projection.ApResources, Observations = observations };
     }
 
-    public byte[] Export(string id, string actorUserId) => WirelessTaskReportBuilder.Export(GetReport(id, actorUserId));
+    public WirelessTaskReport Retry(string id, WirelessTaskRetryRequest request,
+        WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    {
+        if (!string.Equals(actor.Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase))
+            throw new WirelessTaskException("WIRELESS_TASK_PERMISSION_DENIED", "无线采集任务需要 SUPERADMIN 权限。", 403);
+        if (!scope.IsAuthorized)
+            throw new WirelessTaskException("WIRELESS_TASK_SCOPE_DENIED", "当前账户没有可用的站点权限。", 403);
+        if (!WirelessTaskReportBuilder.IsWirelessId(id)) throw new KeyNotFoundException();
+        _ = plans.Retry(id, new H3cTaskPlanRetryRequest(request.Ordinal, request.CommandIndexes), actor.UserId);
+        return GetReport(id, actor.UserId);
+    }
+
+    public byte[] Export(string id, string actorUserId)
+    {
+        var report = GetReport(id, actorUserId);
+        var actor = catalog.GetActiveTaskActor(actorUserId) ?? throw new TaskScopeRevokedException("TASK_ACTOR_REVOKED_REPORT");
+        var scope = siteScopes.Resolve(actor);
+        if (!scope.IsAuthorized) throw new TaskScopeRevokedException("TASK_SCOPE_DENIED_REPORT");
+        var evidence = catalog.ReadWirelessTaskEvidence(report, scope).Evidence;
+        var bytes = WirelessTaskReportBuilder.Export(report, evidence);
+        _ = plans.GetVisible(id, actorUserId);
+        return bytes;
+    }
 }

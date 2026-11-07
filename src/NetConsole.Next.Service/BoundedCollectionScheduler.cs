@@ -85,7 +85,8 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
     public bool TrySchedule(DeviceCollectionRequest request, out string id)
         => TryScheduleCore(request, null, out id);
 
-    public bool TryScheduleDefinition(string definitionId, out string id, string? actorUserId = null)
+    public bool TryScheduleDefinition(string definitionId, out string id, string? actorUserId = null,
+        Action<string>? beforeEnqueue = null)
     {
         if (_catalog is null) throw new InvalidOperationException("A Catalog is required for persisted task definitions.");
         var definition = _catalog.GetTaskDefinition(definitionId)
@@ -95,11 +96,11 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
         var request = new DeviceCollectionRequest(definition.Target, definition.Command,
             TimeSpan.FromMilliseconds(definition.TimeoutMs));
         var scope = definition.TaskType == "H3C_SSH_READONLY" ? _scopeAuthorizer?.CaptureExecution(definition, actorUserId) : null;
-        return TryScheduleCore(request, definition, out id, scope);
+        return TryScheduleCore(request, definition, out id, scope, beforeEnqueue);
     }
 
     private bool TryScheduleCore(DeviceCollectionRequest request, TaskDefinitionSnapshot? definition, out string id,
-        TaskExecutionScope? scope = null)
+        TaskExecutionScope? scope = null, Action<string>? beforeEnqueue = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -122,6 +123,14 @@ internal sealed class BoundedCollectionScheduler : IAsyncDisposable
 
             id = definition is null ? Guid.NewGuid().ToString("N") : _catalog!.CreateTaskRun(definition, scope?.ActorUserId);
             var item = new WorkItem(id, request, submittedMs, definition, definition is not null, scope);
+            // Persist business associations before workers can observe the run.
+            try { beforeEnqueue?.Invoke(id); }
+            catch
+            {
+                if (item.Persisted) PersistState(item, "CANCELLED", "Admission association failed.");
+                item.Cancellation.Dispose();
+                throw;
+            }
 
             PruneCompletedHistory();
             _items[id] = item;

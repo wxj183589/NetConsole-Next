@@ -1720,7 +1720,9 @@ app.MapGet("/api/system/wireless/tasks", (HttpContext context, HttpRequest reque
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
     if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
     var limit = int.TryParse(request.Query["limit"], out var value) ? value : 50;
-    return Results.Ok(wirelessTasks.List(CurrentIdentity(context).UserId, Math.Clamp(limit, 1, 200)));
+    return Results.Ok(wirelessTasks.List(CurrentIdentity(context).UserId, Math.Clamp(limit, 1, 200),
+        request.Query["siteId"].FirstOrDefault(), request.Query["acDeviceId"].FirstOrDefault(),
+        request.Query["state"].FirstOrDefault()));
 });
 app.MapGet("/api/system/wireless/tasks/{id}", (HttpContext context, string id,
     WirelessTaskService wirelessTasks, Catalog catalog, P2B5SiteScopeStore scopes) =>
@@ -1731,12 +1733,26 @@ app.MapGet("/api/system/wireless/tasks/{id}", (HttpContext context, string id,
     catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
+app.MapPost("/api/system/wireless/tasks/{id}/retry", (HttpContext context, string id,
+    WirelessTaskRetryRequest request, WirelessTaskService wirelessTasks, Catalog catalog,
+    P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(wirelessTasks.Retry(id, request, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (WirelessTaskException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+});
 app.MapGet("/api/system/wireless/tasks/{id}/download", (HttpContext context, string id,
     WirelessTaskService wirelessTasks, Catalog catalog, P2B5SiteScopeStore scopes) =>
 {
     if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
     if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
     try { return Results.File(wirelessTasks.Export(id, CurrentIdentity(context).UserId), "application/zip", $"{id}.zip"); }
+    catch (TaskDiagnosticException ex) { return ex.Result(); }
     catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });

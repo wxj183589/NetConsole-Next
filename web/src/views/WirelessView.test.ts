@@ -1,10 +1,11 @@
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { WirelessAcDomain, WirelessApGroup, WirelessApGroupDetail } from '../api/client'
+import { defineComponent, ref, type Component } from 'vue'
+import type { WirelessAcDomain, WirelessApGroup, WirelessApGroupDetail, WirelessApResource } from '../api/client'
 import WirelessView from './WirelessView.vue'
 
 const api = vi.hoisted(() => ({
-  createWirelessTask: vi.fn(), getH3cTaskPlan: vi.fn(), getWirelessTasks: vi.fn(), getWirelessTask: vi.fn(), downloadWirelessTask: vi.fn(), cancelH3cTaskPlan: vi.fn(),
+  createWirelessTask: vi.fn(), getH3cTaskPlan: vi.fn(), getWirelessTasks: vi.fn(), getWirelessTask: vi.fn(), retryWirelessTask: vi.fn(), downloadWirelessTask: vi.fn(), cancelH3cTaskPlan: vi.fn(),
   getWirelessAcDomains: vi.fn(), getWirelessApGroup: vi.fn(), getWirelessApGroups: vi.fn(),
   getWirelessApResources: vi.fn(), getWirelessCollectionManifest: vi.fn(),
   getWirelessCollectionManifests: vi.fn(), getWirelessRuntimeState: vi.fn(),
@@ -38,8 +39,8 @@ function detail(value: WirelessApGroup): WirelessApGroupDetail {
     warnings: ['OFFLINE_FIXTURE_EVIDENCE'], provenance: { ...value } }
 }
 function page<T>(items: T[]) { return { items, hasMore: false, warnings: ['OFFLINE_FIXTURE_EVIDENCE'], sourceRevision: 'synthetic-revision' } }
-function render() {
-  return mount(WirelessView, { global: {
+function render(component: Component = WirelessView) {
+  return mount(component, { global: {
     directives: { loading: () => undefined },
     stubs: {
       NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
@@ -59,6 +60,61 @@ describe('AP group source identity', () => {
     api.getWirelessCollectionManifests.mockResolvedValue(page([]))
     api.getWirelessApGroups.mockResolvedValue(page([]))
     api.getWirelessApGroup.mockImplementation(async (id: string) => detail(group(id)))
+  })
+
+  function observedResource(revision: string): WirelessApResource {
+    return { id: 'physical-ap', displayName: 'Synthetic AP', identityStatus: 'CONFIRMED',
+      normalizedMacSet: ['001122334455'], sourceObservationIds: [revision], sourceAcDomainIds: [domain.id],
+      scopeStatus: 'FULL', firstSeenMs: domain.asOf, lastSeenMs: domain.asOf, sourceRevision: revision, projectionRevision: revision,
+      observations: [{ id: revision, resourceId: 'physical-ap', sourceAcDeviceId: 'ac-a', sourceAcDomainId: domain.id,
+        sourceSiteId: 'site-one', observedApName: 'Synthetic AP', normalizedMacSet: ['001122334455'],
+        rawState: 'R/M', normalizedState: 'RUNNING_MASTER', stateConfidence: 'HIGH', capturedMs: domain.asOf,
+        receivedMs: domain.asOf, rawManifestRef: revision, parserRevision: 'synthetic', sourceRevision: revision, relationStatus: 'OBSERVED' }] }
+  }
+
+  it('reloads Observation and collection evidence when a running task finishes', async () => {
+    vi.useFakeTimers()
+    try {
+      const summary = { id: 'freshness-task', state: 'RUNNING', createdMs: domain.asOf, updatedMs: domain.asOf, total: 1, succeeded: 0, failed: 0 }
+      api.getWirelessTasks.mockResolvedValue([summary])
+      api.getWirelessTask.mockResolvedValue({ summary, items: [] })
+      api.getWirelessApResources.mockResolvedValue(page([observedResource('old-raw-ref')]))
+      const wrapper = render()
+      await flushPromises()
+      expect(wrapper.get('.wireless-observation').text()).toContain('old-raw-ref')
+      await wrapper.get('.wireless-task-row button').trigger('click')
+      await flushPromises()
+      api.getWirelessApResources.mockResolvedValue(page([observedResource('published-raw-ref')]))
+      api.getWirelessTask.mockResolvedValue({ summary: { ...summary, state: 'SUCCEEDED', succeeded: 1, updatedMs: domain.asOf + 1 }, items: [] })
+      const collectionsBefore = api.getWirelessCollectionManifests.mock.calls.length
+      await vi.advanceTimersByTimeAsync(3000)
+      await flushPromises()
+      expect(wrapper.get('.wireless-observation').text()).toContain('published-raw-ref')
+      expect(wrapper.get('.wireless-observation').text()).not.toContain('old-raw-ref')
+      expect(api.getWirelessCollectionManifests.mock.calls.length).toBeGreaterThan(collectionsBefore)
+      const reads = api.getWirelessApResources.mock.calls.length
+      await wrapper.get('.wireless-task-detail button').trigger('click')
+      await flushPromises()
+      expect(api.getWirelessApResources).toHaveBeenCalledTimes(reads)
+      wrapper.unmount()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('reloads cached Observation projections when returning to the wireless tab', async () => {
+    const shown = ref(true)
+    const host = defineComponent({ components: { WirelessView }, setup: () => ({ shown }), template: '<KeepAlive><WirelessView v-if="shown" /></KeepAlive>' })
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('before-navigation')]))
+    const wrapper = render(host)
+    await flushPromises()
+    expect(api.getWirelessApResources).toHaveBeenCalledTimes(1)
+    shown.value = false
+    await flushPromises()
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('after-navigation')]))
+    shown.value = true
+    await flushPromises()
+    expect(wrapper.get('.wireless-observation').text()).toContain('after-navigation')
+    expect(wrapper.get('.wireless-observation').text()).not.toContain('before-navigation')
+    expect(api.getWirelessApResources).toHaveBeenCalledTimes(2)
   })
 
   it('creates a read-only task for selected domains and refreshes its state', async () => {
@@ -110,6 +166,49 @@ describe('AP group source identity', () => {
     expect(wrapper.get('.wireless-task-detail').text()).not.toContain('first')
   })
 
+  it('combines frozen Site, AC and state filters without inferring old scope from current domains', async () => {
+    const base = { state: 'FAILED', createdMs: domain.asOf, updatedMs: domain.asOf, total: 1, succeeded: 0, failed: 1 }
+    api.getWirelessTasks.mockResolvedValue([
+      { ...base, id: 'old-site-ac-a', siteIds: ['retired-site'], acDeviceIds: ['ac-a'] },
+      { ...base, id: 'new-site-ac-a', siteIds: ['site-one'], acDeviceIds: ['ac-a'] },
+      { ...base, id: 'old-site-ac-b', siteIds: ['retired-site'], acDeviceIds: ['ac-b'] },
+      { ...base, id: 'succeeded', state: 'SUCCEEDED', siteIds: ['retired-site'], acDeviceIds: ['ac-a'] },
+      { ...base, id: 'legacy-no-scope' },
+    ])
+    const wrapper = render()
+    await flushPromises()
+    const ids = () => wrapper.findAll('.wireless-task-row').map(row => row.attributes('data-task-id'))
+    expect(ids()).toHaveLength(5)
+    await wrapper.get('[aria-label="任务历史 Site"]').setValue('retired-site')
+    expect(ids()).toEqual(['old-site-ac-a', 'old-site-ac-b', 'succeeded'])
+    await wrapper.get('[aria-label="任务历史 AC"]').setValue('ac-a')
+    expect(ids()).toEqual(['old-site-ac-a', 'succeeded'])
+    await wrapper.get('[aria-label="任务历史状态"]').setValue('FAILED')
+    expect(ids()).toEqual(['old-site-ac-a'])
+    expect(wrapper.get('.wireless-history-count').text()).toContain('1 / 5')
+    await wrapper.get('[aria-label="任务历史状态"]').setValue('CANCELLED')
+    expect(ids()).toEqual([])
+    expect(wrapper.get('.wireless-task-history .empty-state').text()).toContain('没有符合筛选条件')
+    await wrapper.findAll('.wireless-history-filters button')[0].trigger('click')
+    expect(ids()).toHaveLength(5)
+    expect(api.getWirelessTasks).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates a pending task report when a history filter excludes it', async () => {
+    const summary = { id: 'pending-history', state: 'FAILED', createdMs: domain.asOf, updatedMs: domain.asOf, total: 1, succeeded: 0, failed: 1, siteIds: ['site-one'], acDeviceIds: ['ac-a'] }
+    api.getWirelessTasks.mockResolvedValue([summary])
+    let resolve!: (value: unknown) => void
+    api.getWirelessTask.mockReturnValue(new Promise(done => { resolve = done }))
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('.wireless-task-row button').trigger('click')
+    await wrapper.get('[aria-label="任务历史状态"]').setValue('SUCCEEDED')
+    resolve({ summary, items: [] })
+    await flushPromises()
+    expect(wrapper.find('.wireless-task-detail').exists()).toBe(false)
+    expect(wrapper.findAll('.wireless-task-row')).toHaveLength(0)
+  })
+
   it('shows task creation errors', async () => {
     api.createWirelessTask.mockRejectedValue(new Error('权限不足'))
     const wrapper = render()
@@ -118,6 +217,85 @@ describe('AP group source identity', () => {
     await wrapper.findAll('.wireless-task button')[0].trigger('click')
     await flushPromises()
     expect(wrapper.get('.wireless-task [role=alert]').text()).toContain('权限不足')
+  })
+
+  function failedReport() {
+    const command = (name: string, state: string) => ({ command: name, state, error: state === 'FAILED' ? 'TIMEOUT' : null, captureStatus: null, parseStatus: null, capturedMs: null })
+    return {
+      summary: { id: 'retry-plan', state: 'FAILED', createdMs: domain.asOf, updatedMs: domain.asOf, total: 2, succeeded: 1, failed: 1 },
+      items: [
+        { ordinal: 0, deviceId: 'ac-a', state: 'SUCCEEDED', runId: 'run-a', error: null, captureStatus: null, parseStatus: null, commands: [command('display version', 'SUCCEEDED')] },
+        { ordinal: 1, deviceId: 'ac-b', state: 'FAILED', runId: 'run-b', error: 'TIMEOUT', captureStatus: null, parseStatus: null, commands: [command('display version', 'SUCCEEDED'), command('display wlan ap all', 'FAILED')] },
+      ], retries: [],
+    }
+  }
+  async function openFailedReport() {
+    const report = failedReport()
+    api.getWirelessTasks.mockResolvedValue([report.summary])
+    api.getWirelessTask.mockResolvedValue(report)
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('.wireless-task-row button').trigger('click')
+    await flushPromises()
+    return { wrapper, report }
+  }
+
+  it('offers retry only on failed AC and defaults to its failed commands', async () => {
+    const { wrapper, report } = await openFailedReport()
+    api.retryWirelessTask.mockResolvedValue({ ...report, retries: [{ ordinal: 1, deviceId: 'ac-b', originalRunId: 'run-b', retryRunId: 'retry-b', state: 'SUCCEEDED', createdMs: domain.asOf, commandIndexes: [1], commands: report.items[1].commands.slice(1) }] })
+    expect(wrapper.findAll('.wireless-task-ac')[0].find('button').exists()).toBe(false)
+    const buttons = wrapper.findAll('.wireless-task-ac')[1].findAll('button')
+    expect(buttons).toHaveLength(2)
+    await buttons[0].trigger('click')
+    await flushPromises()
+    expect(api.retryWirelessTask).toHaveBeenCalledWith('retry-plan', 1, undefined)
+    expect(wrapper.get('.wireless-retry-history').text()).toContain('1 次')
+    expect(wrapper.get('.wireless-retry-history').text()).toContain('retry-b')
+  })
+
+  it('submits the original failed command index and blocks duplicate retry requests', async () => {
+    const { wrapper, report } = await openFailedReport()
+    let finish!: (value: unknown) => void
+    api.retryWirelessTask.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const button = wrapper.findAll('.wireless-task-ac')[1].findAll('button')[1]
+    await button.trigger('click')
+    await button.trigger('click')
+    expect(api.retryWirelessTask).toHaveBeenCalledTimes(1)
+    expect(api.retryWirelessTask).toHaveBeenCalledWith('retry-plan', 1, [1])
+    finish({ ...report, retries: [{ ordinal: 1, deviceId: 'ac-b', originalRunId: 'run-b', retryRunId: 'retry-b', state: 'RUNNING', createdMs: domain.asOf, commandIndexes: [1], commands: [] }] })
+    await flushPromises()
+    expect(button.attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps original detail after retry or detail refresh failure', async () => {
+    const { wrapper } = await openFailedReport()
+    api.retryWirelessTask.mockRejectedValue(new Error('重试队列已满'))
+    await wrapper.findAll('.wireless-task-ac')[1].findAll('button')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('retry-plan')
+    expect(wrapper.get('.wireless-task-detail [role=alert]').text()).toContain('重试队列已满')
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('ac-b')
+    api.getWirelessTask.mockRejectedValue(new Error('刷新暂不可用'))
+    await wrapper.get('.wireless-task-detail button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('ac-b')
+  })
+
+  it('polls running retries even when the original task has finished', async () => {
+    vi.useFakeTimers()
+    try {
+      const { wrapper, report } = await openFailedReport()
+      const retry = { ordinal: 1, deviceId: 'ac-b', originalRunId: 'run-b', retryRunId: 'retry-b', state: 'RUNNING', createdMs: domain.asOf, commandIndexes: [1], commands: [] }
+      api.retryWirelessTask.mockResolvedValue({ ...report, retries: [retry] })
+      await wrapper.findAll('.wireless-task-ac')[1].findAll('button')[0].trigger('click')
+      await flushPromises()
+      api.getWirelessTask.mockResolvedValue({ ...report, retries: [{ ...retry, state: 'SUCCEEDED' }] })
+      await vi.advanceTimersByTimeAsync(3000)
+      await flushPromises()
+      expect(wrapper.get('.wireless-retry-history').text()).toContain('SUCCEEDED')
+      expect(wrapper.findAll('.wireless-task-ac')[1].get('button').attributes('disabled')).toBeUndefined()
+      wrapper.unmount()
+    } finally { vi.useRealTimers() }
   })
 
   it('keeps same-name groups separate and reads details using the projection ID', async () => {

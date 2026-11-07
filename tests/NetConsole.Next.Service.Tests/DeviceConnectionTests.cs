@@ -2,6 +2,8 @@ using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 using System.Collections.Concurrent;
 using System.Net;
+using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 
 internal static class DeviceConnectionTests
@@ -17,7 +19,11 @@ internal static class DeviceConnectionTests
         await ExistingPlanCancellation();
         await ExistingPlanCurrentAuthority();
         await WirelessHistoryCurrentAuthority();
-        Console.WriteLine("DEVICE_CONNECTION_TESTS=9/9 PASS");
+        await WirelessExportRunIsolation();
+        await ConcurrentRetriesExecuteOnlyOnce();
+        await SuccessfulRetryCannotBeRepeated();
+        await RetryAssociationFailureNeverExecutes();
+        Console.WriteLine("DEVICE_CONNECTION_TESTS=13/13 PASS");
     }
 
     private static void RejectInvalidRequests()
@@ -168,7 +174,7 @@ internal static class DeviceConnectionTests
         var id = "wireless-plan-" + Guid.NewGuid().ToString("N");
         f.Plans.CreateAndSchedule(new(id, [f.Profile], "display version", 30_000), f.Actor.UserId);
         await f.Terminal(id);
-        var wireless = new WirelessTaskService(new WirelessReadModelService(f.Catalog), f.Catalog, f.Plans);
+        var wireless = new WirelessTaskService(new WirelessReadModelService(f.Catalog), f.Catalog, f.Plans, f.Scopes);
         Assert(wireless.List(f.Actor.UserId).Single().Id == id, "authorized wireless history is visible");
         Assert(wireless.GetReport(id, f.Actor.UserId).Items.Single().DeviceId == f.Device, "report uses stable inventory identity");
         Assert(wireless.Export(id, f.Actor.UserId).Length > 0, "authorized export is available");
@@ -181,6 +187,102 @@ internal static class DeviceConnectionTests
         }
     }
 
+    private static async Task WirelessExportRunIsolation()
+    {
+        using var f = new Fixture();
+        var wireless = new WirelessTaskService(new WirelessReadModelService(f.Catalog), f.Catalog, f.Plans, f.Scopes);
+        var first = "wireless-plan-" + Guid.NewGuid().ToString("N");
+        var second = "wireless-plan-" + Guid.NewGuid().ToString("N");
+        f.Factory.Hold = true;
+        var active = f.Plans.CreateAndSchedule(new(first, [f.Profile], "display version", 30_000), f.Actor.UserId);
+        await f.Factory.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert(wireless.GetReport(first, f.Actor.UserId).ObservationStatus == "NOT_PUBLISHED", "active task has no published observations");
+        using (var zip = new ZipArchive(new MemoryStream(wireless.Export(first, f.Actor.UserId))))
+            Assert(zip.GetEntry("raw-results/manifest.json") is not null && !zip.Entries.Any(e => e.FullName.EndsWith(".txt")), "active task exports explicit unavailable raw");
+        _ = f.Plans.Cancel(first, f.Actor.UserId);
+        await f.Terminal(first);
+        f.Factory.Hold = false;
+        f.Plans.CreateAndSchedule(new(second, [f.Profile], "display version", 30_000), f.Actor.UserId);
+        var terminal = await f.Terminal(second);
+        var runId = terminal.Items.Single().RunId!;
+        using var archive = new ZipArchive(new MemoryStream(wireless.Export(second, f.Actor.UserId)));
+        var raw = archive.GetEntry($"raw-results/{runId}/command-001.txt");
+        Assert(raw is not null && archive.Entries.All(e => active.Items.Single().RunId is not { } previous || !e.FullName.Contains(previous)), "export contains only its own run");
+        using var reader = new StreamReader(raw!.Open(), Encoding.UTF8);
+        var text = reader.ReadToEnd();
+        Assert(text.Contains("<REDACTED>") && !text.Contains("fixture-password"), "raw credentials are redacted");
+    }
+
+    private static async Task ConcurrentRetriesExecuteOnlyOnce()
+    {
+        using var f = new Fixture();
+        f.Factory.Fail = true;
+        var original = f.Start([f.Device]);
+        Assert((await f.Terminal(original.Id)).State == "FAILED", "fixture original run fails");
+        f.Factory.Fail = false;
+        f.Factory.Hold = true;
+        using var ready = new CountdownEvent(2);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<bool> Request()
+        {
+            ready.Signal();
+            await start.Task;
+            try { f.Plans.Retry(original.Id, new(0), f.Actor.UserId); return true; }
+            catch (InvalidOperationException) { return false; }
+        }
+        var a = Task.Run(Request);
+        var b = Task.Run(Request);
+        Assert(ready.Wait(TimeSpan.FromSeconds(5)), "both concurrent retry requests are ready");
+        start.SetResult();
+        var admitted = await Task.WhenAll(a, b);
+        var retry = f.Catalog.GetTaskPlanRetries(original.Id).Single();
+        Assert(admitted.Count(value => value) == 1, "exactly one concurrent retry is admitted");
+        f.Factory.Release.TrySetResult();
+        await f.RunTerminal(retry.RetryRunId);
+        Assert(f.Factory.Commands.Count == 2 && f.Catalog.GetTaskPlanRetries(original.Id).Count == 1,
+            "concurrent duplicate retry cannot execute or persist a second attempt");
+    }
+
+    private static async Task SuccessfulRetryCannotBeRepeated()
+    {
+        using var f = new Fixture();
+        f.Factory.Fail = true;
+        var original = f.Start([f.Device]);
+        await f.Terminal(original.Id);
+        f.Factory.Fail = false;
+        f.Plans.Retry(original.Id, new(0), f.Actor.UserId);
+        var retry = f.Catalog.GetTaskPlanRetries(original.Id).Single();
+        Assert((await f.RunTerminal(retry.RetryRunId)).State == "SUCCEEDED", "retry succeeds");
+        foreach (var indexes in new IReadOnlyList<int>?[] { null, [0] })
+        {
+            var rejected = false;
+            try { f.Plans.Retry(original.Id, new(0, indexes), f.Actor.UserId); }
+            catch (InvalidOperationException) { rejected = true; }
+            Assert(rejected, "both default and explicit requests reject a successful retry command");
+        }
+        Assert(f.Factory.Commands.Count == 2 && f.Catalog.GetTaskPlanRetries(original.Id).Count == 1,
+            "successful retry preserves original history without executing it again");
+    }
+
+    private static async Task RetryAssociationFailureNeverExecutes()
+    {
+        using var f = new Fixture();
+        f.Factory.Fail = true;
+        var original = f.Start([f.Device]);
+        var terminal = await f.Terminal(original.Id);
+        f.Factory.Fail = false;
+        f.Execute("CREATE TRIGGER reject_retry BEFORE INSERT ON task_plan_retries BEGIN SELECT RAISE(ABORT,'synthetic association failure'); END");
+        var rejected = false;
+        try { f.Plans.Retry(original.Id, new(0), f.Actor.UserId); }
+        catch (SqliteException) { rejected = true; }
+        var rejectedRun = f.Catalog.RecentTaskRuns().Single(run => run.Id != terminal.Items.Single().RunId);
+        Assert(rejected && rejectedRun.State == "CANCELLED" && f.Factory.Commands.Count == 1 &&
+            f.Catalog.GetTaskPlanRetries(original.Id).Count == 0 &&
+            f.Catalog.GetTaskRunCommands(rejectedRun.Id).All(command => command.State == "CANCELLED" && command.RawOutputPath is null) &&
+            f.Catalog.QueryH3cFacts(f.Profile, history: true).Count == 0,
+            "failed association must cancel before enqueue, execute zero commands and publish zero facts");
+    }
+
     private sealed class Fixture : IDisposable
     {
         public string Root { get; }
@@ -188,6 +290,7 @@ internal static class DeviceConnectionTests
         public WebUserIdentity Actor { get; }
         public Factory Factory { get; } = new();
         public H3cBatchTaskService Plans { get; }
+        public P2B5SiteScopeStore Scopes { get; }
         public DeviceConnectionTestService Tests { get; }
         public string Profile { get; }
         public string Device { get; }
@@ -204,7 +307,7 @@ internal static class DeviceConnectionTests
             Catalog = new(settings);
             Catalog.Initialize();
             Actor = new WebAuthStore(settings).TryLogin("superadmin", "superadmin", "127.0.0.1", out _)!.User;
-            var scopes = new P2B5SiteScopeStore(settings);
+            var scopes = Scopes = new P2B5SiteScopeStore(settings);
             var authorizer = new TaskSiteScopeAuthorizer(Catalog, scopes);
             _scheduler = new(Factory, 2, 8, Catalog, resultSink: new H3cTaskRawResultSink(Catalog), scopeAuthorizer: authorizer);
             Plans = new(Catalog, authorizer, scopes, _scheduler);
@@ -228,6 +331,16 @@ internal static class DeviceConnectionTests
             {
                 var plan = Plans.GetVisible(id, Actor.UserId);
                 if (plan.State is not ("QUEUED" or "RUNNING")) return plan;
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+        public async Task<TaskRunSnapshot> RunTerminal(string id)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (true)
+            {
+                var run = Catalog.GetTaskRun(id)!;
+                if (run.State is not ("QUEUED" or "RUNNING" or "CONNECTING")) return run;
                 await Task.Delay(10, timeout.Token);
             }
         }
@@ -260,8 +373,10 @@ internal static class DeviceConnectionTests
     private sealed class Factory : IDeviceSessionFactory
     {
         public bool Hold;
+        public bool Fail;
         public ConcurrentQueue<string> Commands { get; } = new();
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDeviceSession Create(string target) => new Session(this);
         private sealed class Session(Factory owner) : IDeviceSession
         {
@@ -270,8 +385,9 @@ internal static class DeviceConnectionTests
             {
                 owner.Commands.Enqueue(command);
                 owner.Entered.TrySetResult();
-                if (owner.Hold) await Task.Delay(Timeout.Infinite, token);
-                return "H3C Comware Software, Version 7.1.070, Release 6635\n";
+                if (owner.Fail) throw new IOException("synthetic collection failure");
+                if (owner.Hold) await owner.Release.Task.WaitAsync(token);
+                return "H3C Comware Software, Version 7.1.070, Release 6635\npassword fixture-password\n";
             }
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
