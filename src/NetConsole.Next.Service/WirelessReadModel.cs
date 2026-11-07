@@ -620,11 +620,12 @@ internal sealed partial class Catalog
                 .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true))
                 .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source &&
                     item.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"));
+            var verifiedCollection = apFact.CollectedRawVerified && addressFact?.CollectedRawVerified == true;
             var addressByName = ParseAddressFacts(addressFact?.PayloadJson);
             var apRows = H3cComwareParser.ParseWlanApAll(ReadOutput(apFact.PayloadJson));
             foreach (var row in apRows)
             {
-                addressByName.TryGetValue(row.Name, out var address);
+                addressByName.TryGetValue(row.Name, out var addresses);
                 var rawState = (row.State ?? string.Empty).Trim().ToUpperInvariant();
                 var normalized = rawState switch
                 {
@@ -633,10 +634,9 @@ internal sealed partial class Catalog
                     "I" when version is not null => "OFFLINE",
                     _ => "UNKNOWN"
                 };
-                if (preserved || apFact.Status == "STALE" || apFact.Source == H3cOfflineFixtureSource) normalized = "STALE";
-                else if (apFact.Status != "LIVE_VERIFIED") normalized = "UNKNOWN";
+                if (preserved || !verifiedCollection || apFact.Source == H3cOfflineFixtureSource) normalized = "STALE";
                 observations.Add(new(device.Id, device.Name, device.SiteId, device.Model, version, row.Name,
-                    row.Serial, address is null ? Array.Empty<string>() : new[] { address }, row.Model, row.Group,
+                    row.Serial, addresses ?? Array.Empty<string>(), row.Model, row.Group,
                     rawState, normalized, normalized is "UNKNOWN" or "STALE" ? "LOW" : "HIGH", apFact.CapturedMs,
                     "fact:" + apFact.Id, "h3c.ap.v1", apFact.Id));
             }
@@ -667,12 +667,12 @@ internal sealed partial class Catalog
         return null;
     }
 
-    private static Dictionary<string, string> ParseAddressFacts(string? payload)
+    private static Dictionary<string, string[]> ParseAddressFacts(string? payload)
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var output = ReadOutput(payload ?? string.Empty);
-        foreach (var row in H3cComwareParser.ParseWlanApAllAddress(output))
-            result[row.Name] = row.MacAddress ?? string.Empty;
-        return result;
+        return H3cComwareParser.ParseWlanApAllAddress(output)
+            .GroupBy(row => row.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(row => row.MacAddress ?? string.Empty)
+                .Where(mac => !string.IsNullOrWhiteSpace(mac)).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
     }
 }

@@ -94,7 +94,10 @@ internal sealed partial class Catalog
         using var request = JsonDocument.Parse(requestJson);
         var commands = ReadTaskCommands(request.RootElement);
         var scope = CaptureH3cFactScope(db, transaction, profileId);
-        if (scope is null) return new("CAPTURE_SCOPE_NOT_PROVEN", 0);
+        var creation = ReadTaskScope(request.RootElement);
+        if (scope is null || creation?.Endpoint is null || creation.Version != 1 || creation.DeviceId != scope.DeviceId ||
+            creation.ProfileId != profileId || creation.SiteId != scope.SiteId || creation.Endpoint.Host != scope.Host || creation.Endpoint.Port != scope.Port)
+            return new("CAPTURE_SCOPE_NOT_PROVEN", 0);
         var profile = GetH3cDeviceProfile(profileId);
         if (profile is null) return new("CAPTURE_SCOPE_NOT_PROVEN", 0);
         var outputs = new Dictionary<string, string>(StringComparer.Ordinal);

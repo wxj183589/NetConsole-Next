@@ -266,7 +266,8 @@ internal sealed partial class Catalog
             command.CommandText = $@"SELECT ap.id,ap.status,ap.source,ap.captured_ms,ap.payload_json,addr.payload_json,
                 EXISTS(SELECT 1 FROM h3c_facts identity WHERE identity.profile_id=ap.profile_id AND identity.kind='device.identity'
                     AND identity.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND identity.captured_ms<=ap.captured_ms
-                    AND identity.source=ap.source AND {versionProof})
+                    AND identity.source=ap.source AND {versionProof}),
+                ({H3cFactRawVerificationPredicate("ap")} AND {H3cFactRawVerificationPredicate("addr")})
                 FROM h3c_facts ap LEFT JOIN h3c_facts addr ON addr.profile_id=ap.profile_id
                     AND addr.kind='command.display.wlan.ap.all.address' AND addr.source=ap.source AND addr.captured_ms=ap.captured_ms
                     AND addr.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND {addrProof}
@@ -284,7 +285,7 @@ internal sealed partial class Catalog
                 var revision = reader.GetString(0);
                 var status = reader.GetString(1);
                 var verification = reader.GetString(2) == H3cOfflineFixtureSource ? "OFFLINE_FIXTURE" :
-                    status == "LIVE_VERIFIED" ? "LIVE_VERIFIED" : "UNVERIFIED";
+                    status == "LIVE_VERIFIED" || reader.GetInt64(7) != 0 ? "LIVE_VERIFIED" : "UNVERIFIED";
                 var captured = reader.GetInt64(3);
                 var rows = status is "FAILED" or "UNSUPPORTED" or "EMPTY" or "PARTIAL" ?
                     Array.Empty<H3cApFact>() : H3cComwareParser.ParseWlanApAll(ReadOutput(reader.GetString(4)));
@@ -298,8 +299,8 @@ internal sealed partial class Catalog
                 var addresses = ParseAddressFacts(reader.IsDBNull(5) ? null : reader.GetString(5));
                 foreach (var row in rows)
                 {
-                    addresses.TryGetValue(row.Name, out var mac);
-                    var macs = mac is null ? Array.Empty<string>() : new[] { mac };
+                    addresses.TryGetValue(row.Name, out var addressSet);
+                    var macs = addressSet ?? Array.Empty<string>();
                     if (!WirelessRuntimeStateProjection.MatchesIdentity(resource, row.Serial, macs))
                     {
                         if (WirelessProjectionEngine.NormalizeSerial(row.Serial) == resource.SerialEvidence && WirelessProjectionEngine.NormalizeMacSet(macs).Count == 0)

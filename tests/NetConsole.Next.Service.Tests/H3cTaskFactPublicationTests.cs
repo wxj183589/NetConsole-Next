@@ -18,11 +18,12 @@ internal static class H3cTaskFactPublicationTests
         LegacyDefinitionsCannotAcquireEndpointProof();
         await ReferencedCommandCannotInvalidateAdmittedRaw();
         await MultiCommandRawOutputsRemainIndependent();
+        await VerifiedWirelessCollectionPublishesEffectiveObservation();
         await MultiCommandRawCannotRelabelDeviceHost();
         await SuccessfulMultiCommandRunRequiresCompleteManifestSet();
         await MultiCommandFailureKeepsEarlierRawBounded();
         await VlanTablePublishesWholeRevisionsWithRawAndScope();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=14/14 PASS");
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=15/15 PASS");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()
@@ -210,6 +211,30 @@ internal static class H3cTaskFactPublicationTests
             "a failed later command must retain earlier Raw as partial evidence without publishing facts");
     }
 
+    private static async Task VerifiedWirelessCollectionPublishesEffectiveObservation()
+    {
+        using var f = new Fixture();
+        var definition = Guid.NewGuid().ToString("N");
+        var commands = new[] { H3cCommandPolicy.DisplayVersion, H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress };
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, commands[0], TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: commands);
+        await using var scheduler = f.Scheduler(new Factory());
+        Assert(scheduler.TryScheduleDefinition(definition, out var runId, "local-api-token"), "wireless task admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (scheduler.Get(runId)!.State is not ("SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT"))
+            await Task.Delay(10, timeout.Token);
+        var service = new WirelessReadModelService(f.Catalog);
+        var resource = service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single();
+        var observation = resource.Observations.Single();
+        var runtime = service.GetRuntimeState(resource.Id, P2B5SiteScopeDecision.Global)!;
+        Assert(resource.IdentityStatus == "CONFIRMED" && observation.NormalizedState == "RUNNING_MASTER" &&
+            observation.NormalizedMacSet.Count == 2 && runtime.Current?.NormalizedState == "RUNNING_MASTER",
+            "coherent verified multi-command Raw must publish identity, observation and effective runtime state");
+        f.Execute("UPDATE raw_segments SET state='INCOMPLETE' WHERE task_run_id='" + runId + "'");
+        var revoked = service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single();
+        Assert(revoked.Observations.Single().NormalizedState == "STALE", "damaged Raw must not retain effective live state");
+    }
+
     private static async Task MultiCommandRawCannotRelabelDeviceHost()
     {
         using var f = new Fixture();
@@ -347,7 +372,7 @@ internal static class H3cTaskFactPublicationTests
         {
             H3cCommandPolicy.DisplayVersion => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "display_version.txt")),
             H3cCommandPolicy.DisplayWlanApAll => "<AC>display wlan ap all\nAP-ONE 1 R/M WA6320 SERIAL-001 group-a 1 day\n<AC>",
-            H3cCommandPolicy.DisplayWlanApAllAddress => "<AC>display wlan ap all address\nAP-ONE 192.0.2.42 4c6f-d608-0400\n<AC>",
+            H3cCommandPolicy.DisplayWlanApAllAddress => "<AC>display wlan ap all address\nAP-ONE 192.0.2.42 4c6f-d608-0400\nAP-ONE 192.0.2.43 4c6f-d608-0401\n<AC>",
             _ => throw new InvalidOperationException("unexpected fixture command")
         };
         public IDeviceSession Create(string target) => new Session(this);
