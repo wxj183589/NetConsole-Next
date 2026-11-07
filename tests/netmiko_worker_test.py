@@ -64,6 +64,58 @@ def jump_client():
 
 
 class NetmikoWorkerTests(unittest.TestCase):
+    def test_description_writer_sends_only_narrow_commands_and_hides_output(self):
+        for host, port, driver in (("192.168.56.2", 22, "hp_comware"), ("192.168.56.5", 22, "hp_comware"),
+                                   ("192.168.56.3", 22, "hp_comware"), ("192.168.56.4", 23, "hp_comware_telnet")):
+            for description in ("r69 verification", None):
+                with self.subTest(host=host, description=description):
+                    target = connection()
+                    target.host, target.port = host, port
+                    target.send_config_set.return_value = "SYNTHETIC_PRIVATE_CONFIGURATION_RESPONSE"
+                    worker = module.Worker()
+                    worker.connection, worker.driver = target, driver
+                    result = worker.configure_description({"interface_name": "GigabitEthernet1/0/1", "description": description})
+                    self.assertEqual(result, {"state": "COMMANDS_SENT"})
+                    target.send_config_set.assert_called_once()
+                    args, kwargs = target.send_config_set.call_args
+                    self.assertEqual(args[0], ["interface GigabitEthernet1/0/1", "undo description" if description is None else "description " + description])
+                    self.assertTrue(kwargs["cmd_verify"])
+                    self.assertIn("Unrecognized command", kwargs["error_pattern"])
+
+    def test_description_writer_rejects_endpoints_protocol_jump_and_injection(self):
+        target = connection()
+        target.host, target.port = "192.168.56.3", 22
+        target.send_config_set.return_value = ""
+        worker = module.Worker()
+        worker.connection, worker.driver = target, "hp_comware"
+        for interface, description in (("GigabitEthernet1/0/1\n", "safe"), ("GigabitEthernet1/0/1;save", "safe"),
+                                       ("Vlan-interface1", "safe"), ("GigabitEthernet1/0/1", "injected\nsave"),
+                                       ("GigabitEthernet1/0/1", "oops;reboot"), ("GigabitEthernet1/0/1", " trailing ")):
+            with self.subTest(interface=interface, description=description):
+                with self.assertRaises(ValueError):
+                    worker.configure_description({"interface_name": interface, "description": description})
+        valid = {"interface_name": "GigabitEthernet1/0/1", "description": "safe"}
+        for host, port, driver in (("192.168.56.9", 22, "hp_comware"), ("192.168.56.3", 23, "hp_comware_telnet"),
+                                   ("192.168.56.4", 23, "hp_comware"), ("192.168.56.3", 22, "cisco_ios")):
+            target.host, target.port, worker.driver = host, port, driver
+            with self.assertRaises(ValueError):
+                worker.configure_description(valid)
+        target.host, target.port, worker.driver = "192.168.56.3", 22, "hp_comware"
+        worker.jump_client = mock.Mock()
+        with self.assertRaises(ValueError):
+            worker.configure_description(valid)
+        target.send_config_set.assert_not_called()
+
+    def test_description_writer_propagates_uncertain_write_without_replay(self):
+        target = connection()
+        target.host, target.port = "192.168.56.3", 22
+        target.send_config_set.side_effect = ReadTimeout("synthetic uncertain write")
+        worker = module.Worker()
+        worker.connection, worker.driver = target, "hp_comware"
+        with self.assertRaises(ReadTimeout):
+            worker.configure_description({"interface_name": "GigabitEthernet1/0/1", "description": "safe"})
+        target.send_config_set.assert_called_once()
+
     def test_protocol_specific_default_ports_and_range_validation(self):
         self.assertEqual(module.resolve_port("ssh"), 22)
         self.assertEqual(module.resolve_port("telnet"), 23)

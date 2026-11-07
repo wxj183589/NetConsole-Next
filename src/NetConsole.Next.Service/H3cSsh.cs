@@ -329,6 +329,14 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
         return result.GetProperty("output").GetString() ?? string.Empty;
     }
 
+    internal async Task ConfigureDescriptionAsync(string interfaceName, string? description,
+        CancellationToken cancellationToken)
+    {
+        if (!IsConnected) throw new H3cConnectionLostException();
+        await RequestAsync(new { op = "configure_description", interface_name = interfaceName,
+            description }, cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task WriteChannelAsync(string data, CancellationToken cancellationToken)
     {
         if (!IsConnected || !_interactive) throw new IOException("Netmiko interactive channel is not connected.");

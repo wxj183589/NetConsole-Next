@@ -1195,6 +1195,31 @@ export async function downloadConfigBackup(id: string): Promise<Blob> {
 export function getConfigBackupDiff(baseId: string, targetId: string): Promise<ConfigBackupDiff> {
   return request('/api/system/config-backups/' + encodeURIComponent(baseId) + '/diff/' + encodeURIComponent(targetId))
 }
+export interface CompleteConfigurationBackup {
+  id: string; profileId: string; deviceId: string; siteId: string; capturedMs: number
+  taskId: string; rawSha256: string; rawByteCount: number; model: string; softwareVersion: string
+  integrity: string; restorable: boolean; state: string
+}
+export interface SimulatorConfigurationChange {
+  id: string; profileId: string; deviceId: string; siteId: string; interfaceName: string; state: string
+  beforeBackupId: string; afterBackupId?: string | null; rollbackBackupId?: string | null
+  error?: string | null; createdMs: number; completedMs?: number | null
+}
+export function getCompleteConfigurations(profileId: string): Promise<CompleteConfigurationBackup[]> {
+  return request('/api/system/simulator-config/backups?profileId=' + encodeURIComponent(profileId))
+}
+export function captureCompleteConfiguration(profileId: string): Promise<CompleteConfigurationBackup> {
+  return request('/api/system/simulator-config/backups/' + encodeURIComponent(profileId), { method: 'POST' })
+}
+export function getCompleteConfigurationView(id: string): Promise<{ backup: CompleteConfigurationBackup; redactedConfiguration: string }> {
+  return request('/api/system/simulator-config/backups/' + encodeURIComponent(id) + '/view')
+}
+export function getSimulatorConfigurationChanges(profileId: string): Promise<SimulatorConfigurationChange[]> {
+  return request('/api/system/simulator-config/changes?profileId=' + encodeURIComponent(profileId))
+}
+export function changeSimulatorDescription(payload: { profileId: string; expectedBackupId: string; interfaceName: string; description: string | null }): Promise<SimulatorConfigurationChange> {
+  return request('/api/system/simulator-config/description', { method: 'POST', body: JSON.stringify(payload) })
+}
 export function previewConfigRestore(payload: { snapshotId: string; targetProfileId: string; expectedCurrentSnapshotId?: string }): Promise<ConfigRestorePreview> {
   return request('/api/system/config-backups/restore/preview', { method: 'POST', body: JSON.stringify(payload) })
 }

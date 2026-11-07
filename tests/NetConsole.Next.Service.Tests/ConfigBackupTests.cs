@@ -331,6 +331,15 @@ internal static class ConfigBackupTests
             "large differences must retain total counts and cap each ordered preview at 256 lines");
         // A full 12,000 x 12,000 integer LCS table would allocate over 500 MiB.
         Check(allocatedBytes < 32 * 1024 * 1024, "large comparisons must use bounded memory instead of a full quadratic table");
+        var corrupt = fixture.Backups.Get(largeSecond.Items.Single().SnapshotId!, P2B5SiteScopeDecision.Global)!;
+        var corruptPath = Path.Combine(fixture.Root, "backup", "config", fixture.Profile, corrupt.DownloadName!);
+        var original = File.ReadAllBytes(corruptPath);
+        original[0] ^= 1;
+        File.WriteAllBytes(corruptPath, original);
+        Check(fixture.Backups.OpenDownload(corrupt.Id, P2B5SiteScopeDecision.Global) is null &&
+            fixture.Backups.Diff(largeFirst.Items.Single().SnapshotId!, corrupt.Id, P2B5SiteScopeDecision.Global) is null &&
+            fixture.Backups.Diff(corrupt.Id, largeFirst.Items.Single().SnapshotId!, P2B5SiteScopeDecision.Global) is null,
+            "same-length corruption must reject downloads and comparisons in either direction");
         Assert(failures.Count == 0, string.Join("; ", failures));
     }
 

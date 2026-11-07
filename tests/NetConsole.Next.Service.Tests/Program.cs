@@ -103,6 +103,8 @@ else if (args.Length > 0 && args[0] == "--config-backup-tests")
     await ConfigBackupTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--config-restore-tests")
     await ConfigRestoreTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--simulator-config-tests")
+    await SimulatorConfigurationTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--config-backup-schedule-tests")
     await ConfigBackupScheduleTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--smart-config-tests")
@@ -185,6 +187,8 @@ internal static class SchedulerTests
         await H3cDiagnosticCaptureTests.RunAsync();
         await ConfigBackupTests.RunAsync();
         await ConfigRestoreTests.RunAsync();
+        await SimulatorConfigurationTests.RunAsync();
+        PrivateConfigurationFileTests.Run();
         await ConfigBackupScheduleTests.RunAsync();
         await NetworkDiagnosticsTests.RunAsync();
         await NetworkTracerouteTests.RunAsync();

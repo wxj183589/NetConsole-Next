@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import ConfigBackupSchedules from '../components/ConfigBackupSchedules.vue'
+import SimulatorConfiguration from '../components/SimulatorConfiguration.vue'
 import { ApiRequestError, createConfigBackup, downloadConfigBackup, executeConfigRestore, getConfigBackupBatch, getConfigBackups, getDeviceInventoryDetail, getH3cProfiles, getConfigBackupDiff, getModuleStates, previewConfigRestore, type ConfigBackupBatch, type ConfigBackupDiff, type ConfigBackupKind, type ConfigBackupSnapshot, type ConfigRestoreExecutionResult, type ConfigRestorePreview, type DeviceInventoryItem, type TerminalDevice } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
@@ -243,6 +244,7 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
       </div>
     </section>
     <ConfigBackupSchedules v-if="moduleAvailable && isSuperAdmin && configurationKind !== 'STARTUP_BODY'" :selected-profile-ids="selected" :configuration-kind="configurationKind" :context-profile-id="hasDeviceContext ? profileId : undefined" />
+    <SimulatorConfiguration v-if="moduleAvailable && isSuperAdmin && selectedProfile && ['192.168.56.2', '192.168.56.3', '192.168.56.4', '192.168.56.5'].includes(selectedProfile.host)" :key="profileId" :profile-id="profileId" />
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">

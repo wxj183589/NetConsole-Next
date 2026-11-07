@@ -81,6 +81,7 @@ builder.Services.AddSingleton<DeviceConnectionTestService>();
 builder.Services.AddSingleton<ConfigBackupService>();
 builder.Services.AddSingleton<IConfigRestoreWriter, DisabledConfigRestoreWriter>();
 builder.Services.AddSingleton<ConfigRestoreService>();
+builder.Services.AddSingleton<SimulatorConfigurationService>();
 builder.Services.AddSingleton<ConfigBackupScheduleService>();
 builder.Services.AddSingleton<SmartConfigurationService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
@@ -921,6 +922,49 @@ app.MapPost("/api/system/smart-config/preview", (HttpContext context,
         var status = ex.Code.EndsWith("DENIED", StringComparison.Ordinal) ? StatusCodes.Status403Forbidden : StatusCodes.Status400BadRequest;
         return Results.Json(new { error = ex.Code, detail = ex.Message, deviceWriteAllowed = false }, statusCode: status);
     }
+});
+app.MapGet("/api/system/simulator-config/backups", (HttpContext context, string profileId, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(configurations.List(profileId, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/simulator-config/backups/{profileId}", async (HttpContext context, string profileId,
+    SimulatorConfigurationService configurations, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(await configurations.CaptureAsync(profileId, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+});
+app.MapGet("/api/system/simulator-config/backups/{id}/view", (HttpContext context, string id, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return configurations.View(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } view ? Results.Ok(view) : Results.NotFound(); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapGet("/api/system/simulator-config/changes", (HttpContext context, string profileId, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(configurations.Changes(profileId, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/simulator-config/description", async (HttpContext context, SimulatorDescriptionChangeRequest request,
+    SimulatorConfigurationService configurations, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(await configurations.ChangeDescriptionAsync(request, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
 });
 app.MapPost("/api/system/config-backups/restore/preview", (HttpContext context,
     ConfigRestorePreviewRequest request, ConfigRestoreService restores) =>

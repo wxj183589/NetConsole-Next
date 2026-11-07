@@ -305,14 +305,8 @@ internal sealed class ConfigBackupService(
     {
         var snapshot = Get(id, scope);
         if (snapshot is null || snapshot.DownloadName is null) return null;
-        var path = SnapshotPath(snapshot);
-        if (!File.Exists(path) || IsReparse(path)) return null;
-        var bytes = File.ReadAllBytes(path);
-        if (bytes.LongLength != snapshot.ByteCount ||
-            !string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), snapshot.Sha256, StringComparison.OrdinalIgnoreCase))
-            return null;
-        return (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan), snapshot.DownloadName);
+        var stream = OpenVerified(snapshot);
+        return stream is null ? null : (stream, snapshot.DownloadName);
     }
 
     public ConfigBackupDiff? Diff(string baseId, string targetId, P2B5SiteScopeDecision scope)
@@ -321,8 +315,11 @@ internal sealed class ConfigBackupService(
         var target = Get(targetId, scope);
         if (baseline is null || target is null || baseline.ProfileId != target.ProfileId ||
             baseline.ConfigurationKind != target.ConfigurationKind) return null;
-        var baseLines = ReadLines(SnapshotPath(baseline));
-        var targetLines = ReadLines(SnapshotPath(target));
+        using var baseStream = OpenVerified(baseline);
+        using var targetStream = OpenVerified(target);
+        if (baseStream is null || targetStream is null) return null;
+        var baseLines = ReadLines(baseStream);
+        var targetLines = ReadLines(targetStream);
         var start = 0;
         while (start < baseLines.Count && start < targetLines.Count &&
                string.Equals(baseLines[start], targetLines[start], StringComparison.Ordinal)) start++;
@@ -649,12 +646,34 @@ internal sealed class ConfigBackupService(
         { return null; }
     }
 
-    private static IReadOnlyList<string> ReadLines(string path)
+    private FileStream? OpenVerified(ConfigBackupSnapshot snapshot)
     {
-        using var stream = File.OpenRead(path);
-        if (stream.Length is < 1 or > H3cRawOutput.MaximumBytes)
-            throw new InvalidDataException("Configuration backup exceeds the bounded Raw limit.");
-        using var reader = new StreamReader(stream, Encoding.UTF8);
+        FileStream? stream = null;
+        try
+        {
+            var path = SnapshotPath(snapshot);
+            if (!File.Exists(path) || IsReparse(path)) return null;
+            stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length == snapshot.ByteCount &&
+                string.Equals(Convert.ToHexString(SHA256.HashData(stream)), snapshot.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                stream.Position = 0;
+                return stream;
+            }
+            stream.Dispose();
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            stream?.Dispose();
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<string> ReadLines(Stream stream)
+    {
+        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
         var lines = new List<string>();
         while (reader.ReadLine() is { } line) lines.Add(line);
         return lines;

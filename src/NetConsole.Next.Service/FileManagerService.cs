@@ -209,6 +209,7 @@ internal sealed class FileManagerService
         if (lower.StartsWith("catalog.sqlite", StringComparison.Ordinal) || lower.EndsWith(".sqlite", StringComparison.Ordinal) || lower.Contains(".sqlite-", StringComparison.Ordinal) || lower.EndsWith(".open", StringComparison.Ordinal)) return true;
         if (lower.Contains("credential") || lower.Contains("password")) return true;
         var normalized = path.Replace('\\', '/').ToLowerInvariant();
-        return normalized.Contains("/credentials/") || normalized.EndsWith("/credentials");
+        return normalized.Contains("/credentials/") || normalized.EndsWith("/credentials") ||
+            normalized.Contains("/backup/config-complete/") || normalized.EndsWith("/backup/config-complete");
     }
 }

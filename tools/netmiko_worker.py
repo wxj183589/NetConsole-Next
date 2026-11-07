@@ -365,6 +365,37 @@ class Worker:
             raise ReadTimeout("diagnostic did not reach its terminal prompt")
         return output
 
+    def configure_description(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Narrow simulator-only Writer; never accepts arbitrary command lists."""
+        if self.connection is None:
+            raise RuntimeError("worker is not connected")
+        endpoint = (str(getattr(self.connection, "host", "")), int(getattr(self.connection, "port", 0)))
+        if endpoint not in {("192.168.56.2", 22), ("192.168.56.5", 22),
+                            ("192.168.56.3", 22), ("192.168.56.4", 23)}:
+            raise ValueError("configuration Writer requires an authorized simulator endpoint")
+        required_driver = "hp_comware_telnet" if endpoint == ("192.168.56.4", 23) else "hp_comware"
+        if self.driver != required_driver or self.jump_client is not None or self.jump_channel is not None:
+            raise ValueError("configuration Writer requires a Comware driver")
+        interface = request.get("interface_name")
+        description = request.get("description")
+        if not isinstance(interface, str) or not re.fullmatch(
+                r"(?:GigabitEthernet|Ten-GigabitEthernet|Bridge-Aggregation)[0-9]+(?:/[0-9]+){0,3}", interface):
+            raise ValueError("unsupported interface name")
+        if description is not None and (not isinstance(description, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9 _.,:/()\-]{0,79}", description) or description != description.strip()):
+            raise ValueError("unsupported description")
+        if not self.connection.is_alive():
+            raise ConnectionLostError()
+        # Netmiko owns system-view entry, prompt detection and exit. A rejected
+        # command remains a failed write even when the transport stayed alive.
+        output = self.connection.send_config_set(
+            ["interface " + interface, "undo description" if description is None else "description " + description],
+            read_timeout=30, cmd_verify=True,
+            error_pattern=r"(?im)^\s*(?:%|Error:|Unrecognized command|Incomplete command|Wrong parameter|Permission denied)")
+        if len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
+            raise OutputLimitError("configuration response exceeded worker limit")
+        return {"state": "COMMANDS_SENT"}
+
     def shell_read(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.connection is None or not self.interactive:
             raise RuntimeError("worker interactive channel is not open")
@@ -476,6 +507,8 @@ def main() -> int:
                 result = worker.connect(request)
             elif operation == "execute":
                 result = worker.execute(request)
+            elif operation == "configure_description":
+                result = worker.configure_description(request)
             elif operation == "shell_read":
                 result = worker.shell_read(request)
             elif operation == "shell_write":
