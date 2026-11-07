@@ -955,7 +955,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
                 FROM raw_segments r JOIN task_runs t ON t.id=r.task_run_id
                 WHERE r.source_id LIKE 'h3c-%' AND r.state IN ('FINALIZED','INCOMPLETE') AND r.record_count=1
                   AND r.task_run_id IS NOT NULL
-                  AND NOT EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.task_run_id=r.task_run_id)";
+                  AND NOT EXISTS(SELECT 1 FROM task_run_raw_outputs o WHERE o.task_run_id=r.task_run_id)
+                  AND NOT EXISTS(SELECT 1 FROM task_run_command_outputs o WHERE o.task_run_id=r.task_run_id)";
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 candidates.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));

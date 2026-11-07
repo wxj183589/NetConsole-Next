@@ -184,6 +184,15 @@ internal static class H3cTaskFactPublicationTests
         var facts = f.Catalog.QueryH3cFacts(f.Profile, history: true);
         Assert(facts.Count >= 2 && facts.All(item => item.CollectedRawVerified),
             "complete multi-command facts must retain a verified collection-level Raw provenance");
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var recovery = f.Catalog.RecoverRawSegments();
+            Assert(recovery.FailedFiles == 0 &&
+                f.Scalar($"SELECT COUNT(*) FROM task_run_command_outputs WHERE task_run_id='{runId}'") == "2" &&
+                f.Scalar($"SELECT COUNT(*) FROM task_run_raw_outputs WHERE task_run_id='{runId}'") == "0" &&
+                f.Catalog.QueryH3cFacts(f.Profile, history: true).All(item => item.CollectedRawVerified),
+                "restart recovery must retain command-level manifests without treating their segments as orphan single-command results");
+        }
     }
 
     private static async Task MultiCommandFailureKeepsEarlierRawBounded()
