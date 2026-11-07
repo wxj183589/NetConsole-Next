@@ -722,6 +722,7 @@ app.MapGet("/api/system/tasks/export", (HttpContext context, Catalog rawCatalog,
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     var result = exports.CreateCsv(rawCatalog, CurrentSiteScope(context));
+    context.Response.Headers.CacheControl = "no-store";
     return Results.File(result.Bytes, "text/csv; charset=utf-8", result.Name);
 });
 app.MapGet("/api/system/tasks/{runId}", (HttpContext context, string runId, Catalog rawCatalog) =>

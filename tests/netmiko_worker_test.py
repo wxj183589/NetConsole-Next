@@ -64,6 +64,22 @@ def jump_client():
 
 
 class NetmikoWorkerTests(unittest.TestCase):
+    def test_protocol_specific_default_ports_and_range_validation(self):
+        self.assertEqual(module.resolve_port("ssh"), 22)
+        self.assertEqual(module.resolve_port("telnet"), 23)
+        self.assertEqual(module.resolve_port("TELNET", None), 23)
+        for value in (0, 65536, "not-a-port"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    module.resolve_port("ssh", value)
+
+        for protocol, expected in (("ssh", 22), ("telnet", 23)):
+            with self.subTest(protocol=protocol):
+                target = connection()
+                with mock.patch.object(module, "ConnectHandler", return_value=target) as handler:
+                    module.Worker().connect(request(protocol=protocol, port=None))
+                    self.assertEqual(handler.call_args.kwargs["port"], expected)
+
     def test_official_ssh_telnet_driver_mappings_and_one_session_preparation(self):
         expected = {
             ("h3c", "ssh"): "hp_comware",

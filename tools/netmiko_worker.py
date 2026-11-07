@@ -97,6 +97,19 @@ def resolve_driver(vendor: str, protocol: str, device_type: str | None = None) -
     return candidate
 
 
+def resolve_port(protocol: str, value: Any = None) -> int:
+    """Apply the standard SSH/Telnet port only when the caller omitted it."""
+    normalized = protocol.strip().lower()
+    default = 23 if normalized == "telnet" else 22
+    try:
+        port = default if value is None else int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("network port must be an integer") from error
+    if not 1 <= port <= 65535:
+        raise ValueError("network port is outside the supported range")
+    return port
+
+
 def host_key_details(connection: Any) -> tuple[str | None, str | None]:
     transport = getattr(connection, "remote_conn_pre", None)
     transport = getattr(transport, "get_transport", lambda: None)()
@@ -193,7 +206,9 @@ class Worker:
             raise
 
     def _connect(self, request: dict[str, Any], legacy_host_key: bool = False) -> dict[str, Any]:
-        self.driver = resolve_driver(request.get("vendor", ""), request.get("protocol", "ssh"), request.get("device_type"))
+        protocol = request.get("protocol", "ssh")
+        self.driver = resolve_driver(request.get("vendor", ""), protocol, request.get("device_type"))
+        target_port = resolve_port(protocol, request.get("port"))
         # SSH forwarding is never applied to Telnet sessions.
         jump = request.get("jump_host") if not self.driver.endswith("_telnet") else None
         jump_key_type = None
@@ -216,7 +231,7 @@ class Worker:
                 raise JumpHostConnectionError() from exc
             jump_key = self.jump_client.get_transport().get_remote_server_key()
             jump_key_type, jump_key_fingerprint = key_details(jump_key)
-            target_addr = (request["host"], int(request.get("port", 22)))
+            target_addr = (request["host"], target_port)
             # Preserve the existing forwarding source tuple.  Host-key trust
             # and rotation are persisted by the parent after authentication.
             source_addr = (jump["host"], int(jump.get("port", 22)))
@@ -230,7 +245,7 @@ class Worker:
         params = {
             "device_type": self.driver,
             "host": request["host"],
-            "port": int(request.get("port", 22)),
+            "port": target_port,
             "username": request["username"],
             "password": request["password"],
             "conn_timeout": float(request.get("conn_timeout", 10)),
