@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.ServiceProcess;
 using System.Text;
 using NetConsole.Next.Credentials;
+using NetConsole.Next.LocalManager;
+using System.Text.Json;
 
 const string serviceName = "NetConsoleNext";
 
@@ -21,6 +23,28 @@ if (args[0] == "credential")
     return ManageCredential(args);
 if (args[0] == "web-password")
     return ManageWebPassword(args);
+if (args[0] == "doctor")
+{
+    if (args.Length > 3) return InvalidArguments();
+    try
+    {
+        var root = args.Length > 1 ? args[1] : Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_DATA_ROOT");
+        if (string.IsNullOrWhiteSpace(root) && OperatingSystem.IsWindows())
+            root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NetConsoleNext", "data");
+        if (string.IsNullOrWhiteSpace(root)) throw new ArgumentException("Provide a managed data root.");
+        var portText = args.Length > 2 ? args[2] : Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WEB_PORT") ?? "18771";
+        if (!int.TryParse(portText, out var port) || port is < 1 or > 65535) throw new ArgumentException("Invalid loopback port.");
+        using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
+        var report = await LocalDeploymentDoctor.RunAsync(root, port, client);
+        Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+        return report.State == "PASS" ? 0 : 1;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine("Deployment diagnosis failed: " + ex.GetType().Name + ".");
+        return 2;
+    }
+}
 
 if (args.Length != 1 || args[0] is not ("status" or "start" or "stop" or "restart"))
 {
@@ -73,6 +97,7 @@ static void PrintHelp()
     Console.WriteLine("  start                     Start the local Windows service");
     Console.WriteLine("  stop                      Stop the local Windows service");
     Console.WriteLine("  restart                   Restart the local Windows service");
+    Console.WriteLine("  doctor [data-root] [port] Diagnose managed root, instance, health, SQLite, Raw and Netmiko without device access");
     Console.WriteLine("  open-web [port]           Open the loopback service page in the default browser");
     Console.WriteLine("  open-data [data-root]     Open the isolated local data directory");
     Console.WriteLine("  open-raw [data-root]      Open the Raw collection directory");
@@ -95,6 +120,13 @@ static int InvalidArguments()
 static void StopService(ServiceController service)
 {
     service.Refresh();
+    if (service.Status == ServiceControllerStatus.StartPending)
+        service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+    if (service.Status == ServiceControllerStatus.StopPending)
+    {
+        service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(45));
+        return;
+    }
     if (service.Status != ServiceControllerStatus.Stopped)
     {
         service.Stop();
@@ -105,6 +137,13 @@ static void StopService(ServiceController service)
 static void StartService(ServiceController service)
 {
     service.Refresh();
+    if (service.Status == ServiceControllerStatus.StopPending)
+        service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(45));
+    if (service.Status == ServiceControllerStatus.StartPending)
+    {
+        service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+        return;
+    }
     if (service.Status != ServiceControllerStatus.Running)
     {
         service.Start();

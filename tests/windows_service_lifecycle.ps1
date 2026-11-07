@@ -56,12 +56,19 @@ try {
 
     Invoke-Manager "status"
     Invoke-Manager "start"
+    Invoke-Manager "start"
     $firstHealth = Wait-Health
     if ($firstHealth.healthState -ne "HEALTHY" -or $firstHealth.sqliteIntegrityAtStartup -ne "ok") {
         throw "Fresh Windows service did not report healthy isolated storage: $($firstHealth | ConvertTo-Json -Compress)"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $dataRoot ".netconsole-next-root"))) {
         throw "Service account could not initialize the ProgramData root marker."
+    }
+    $doctorText = & $managerExe doctor $dataRoot 18771
+    Assert-ExitCode "Local Manager doctor"
+    $doctor = ($doctorText -join "`n") | ConvertFrom-Json
+    if ($doctor.state -ne "PASS" -or $doctor.processId -ne $firstHealth.processId) {
+        throw "Doctor did not verify the installed instance and worker."
     }
     $tokenPath = Join-Path $dataRoot "local-api-token"
     if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) { throw "Service did not create its local API token." }
@@ -122,6 +129,7 @@ try {
         Remove-Item -LiteralPath $credentialInput -Force -ErrorAction SilentlyContinue
     }
 
+    Invoke-Manager "stop"
     Invoke-Manager "stop"
     Invoke-Manager "start"
     Wait-Health | Out-Null
