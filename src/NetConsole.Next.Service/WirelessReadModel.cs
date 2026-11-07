@@ -620,6 +620,23 @@ internal sealed partial class Catalog
                 .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true))
                 .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source &&
                     item.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"));
+            if (addressFact is null && apFact.CollectedRawVerified)
+            {
+                var addresses = QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true);
+                var prior = QueryH3cFacts(profileId, apKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true)
+                    .Where(item => item.CapturedMs < apFact.CapturedMs && item.CollectedRawVerified && Usable(item))
+                    .Select(item => (Ap: item, Address: addresses.FirstOrDefault(address => address.Source == item.Source &&
+                        address.CapturedMs == item.CapturedMs && address.CollectedRawVerified &&
+                        address.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"))))
+                    .FirstOrDefault(pair => pair.Address is not null && ParseAddressFacts(pair.Address.PayloadJson).Count > 0);
+                if (prior.Address is not null)
+                {
+                    apFact = prior.Ap;
+                    addressFact = prior.Address;
+                    preserved = true;
+                    if (selectedSource) warnings.Add("AP_ADDRESS_INCOMPLETE_PREVIOUS_EVIDENCE_PRESERVED");
+                }
+            }
             var verifiedCollection = apFact.CollectedRawVerified && addressFact?.CollectedRawVerified == true;
             var addressByName = ParseAddressFacts(addressFact?.PayloadJson);
             var apRows = H3cComwareParser.ParseWlanApAll(ReadOutput(apFact.PayloadJson));

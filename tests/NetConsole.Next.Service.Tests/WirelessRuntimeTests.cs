@@ -17,7 +17,8 @@ internal static class WirelessRuntimeTests
         OfflineReplayCannotReplaceLiveEvidence();
         ResourceHistoryRecordsEffectiveChangesAndKeepsProvenance();
         SimultaneousFailoverDoesNotInventIntermediateApChanges();
-        Console.WriteLine("WIRELESS_RUNTIME_TESTS=13/13 PASS");
+        AsynchronousSourcesRequireCompleteFreshRounds();
+        Console.WriteLine("WIRELESS_RUNTIME_TESTS=14/14 PASS");
     }
 
     private static readonly WirelessRuntimePolicy Policy = new(10_000);
@@ -178,6 +179,20 @@ internal static class WirelessRuntimeTests
             "same-time HA source role changes do not change the physical AP's effective state or create order-dependent transitions");
         var conflict = Project(new[] { Sample(15_000, "R/M"), Sample(15_000, "R/M", "AC2") });
         Assert(conflict.Current is null && conflict.NormalizedState == "CONFLICT", "initial dual-master conflict cannot manufacture an effective AP Current");
+    }
+
+    private static void AsynchronousSourcesRequireCompleteFreshRounds()
+    {
+        var samples = new[] { Sample(1_000, "R/M"), Sample(1_060, "R/B", "AC2"),
+            Sample(15_000, "R/B", "AC2"), Sample(15_060, "R/M"),
+            Sample(16_000, "R/B"), Sample(16_060, "R/M", "AC2") };
+        var state = Project(samples, now: 17_000);
+        Assert(state.Current?.NormalizedState == "RUNNING_MASTER" && state.Current.CapturedMs == 16_060 &&
+            state.Recent10?.Count == 0 && state.Sources.All(item => item.Recent10.Count == 1),
+            "asynchronous source updates and expired earlier rounds must not create aggregate failovers");
+        var partial = Project(samples.Take(3), now: 16_000);
+        Assert(partial.Current?.CapturedMs == 1_060 && partial.Recent10?.Count == 0,
+            "a partial round must preserve the previous aggregate evidence");
     }
 
     private static void Assert(bool condition, string message)

@@ -19,11 +19,12 @@ internal static class H3cTaskFactPublicationTests
         await ReferencedCommandCannotInvalidateAdmittedRaw();
         await MultiCommandRawOutputsRemainIndependent();
         await VerifiedWirelessCollectionPublishesEffectiveObservation();
+        await MissingAddressPreservesOnlyVerifiedSameRunEvidence();
         await MultiCommandRawCannotRelabelDeviceHost();
         await SuccessfulMultiCommandRunRequiresCompleteManifestSet();
         await MultiCommandFailureKeepsEarlierRawBounded();
         await VlanTablePublishesWholeRevisionsWithRawAndScope();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=15/15 PASS");
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=16/16 PASS");
     }
 
     private static async Task PublishesSealedCommandAndSurvivesRestart()
@@ -246,6 +247,42 @@ internal static class H3cTaskFactPublicationTests
         f.Execute("UPDATE raw_segments SET state='INCOMPLETE' WHERE task_run_id='" + runId + "'");
         var revoked = service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single();
         Assert(revoked.Observations.Single().NormalizedState == "STALE", "damaged Raw must not retain effective live state");
+    }
+
+    private static async Task MissingAddressPreservesOnlyVerifiedSameRunEvidence()
+    {
+        using var f = new Fixture();
+        var commands = new[] { H3cCommandPolicy.DisplayVersion, H3cCommandPolicy.DisplayWlanApAll, H3cCommandPolicy.DisplayWlanApAllAddress };
+        var definition = Guid.NewGuid().ToString("N");
+        f.Catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", f.Profile, commands[0], TimeSpan.FromSeconds(5),
+            scopeSnapshot: f.Authorizer.CaptureDefinition(f.Profile, "local-api-token"), commands: commands);
+        await using var scheduler = f.Scheduler(new Factory { Execute = command => command == H3cCommandPolicy.DisplayWlanApAll
+            ? "<AC>display wlan ap all\nAP-ONE 1 R/M WA6320 SERIAL-001 group-a 1 day\n<AC>" : Factory.Output(command) });
+        Assert(scheduler.TryScheduleDefinition(definition, out var firstRun, "local-api-token"), "complete wireless task admitted");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (scheduler.Get(firstRun)!.State is not ("SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT"))
+            await Task.Delay(10, timeout.Token);
+        Assert(scheduler.Get(firstRun)!.State == "SUCCEEDED", "complete wireless task succeeded");
+        var service = new WirelessReadModelService(f.Catalog);
+        var original = service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single();
+        await Task.Delay(30, timeout.Token);
+        var later = await f.Run(scheduler, H3cCommandPolicy.DisplayWlanApAll);
+        Assert(later.State == "SUCCEEDED", "incomplete wireless task succeeded");
+        var snapshot = service.GetSnapshot(P2B5SiteScopeDecision.Global);
+        var preserved = snapshot.ApResources.Single();
+        var runtime = service.GetRuntimeState(original.Id, P2B5SiteScopeDecision.Global)!;
+        Assert(preserved.Id == original.Id && preserved.IdentityStatus == "CONFIRMED" &&
+            preserved.Observations.Single().SourceRevision == original.Observations.Single().SourceRevision &&
+            snapshot.Warnings.Contains("AP_ADDRESS_INCOMPLETE_PREVIOUS_EVIDENCE_PRESERVED") &&
+            runtime.Sources.Single().LatestOutcome == "INCOMPLETE" && runtime.Current?.NormalizedState == "RUNNING_MASTER",
+            "an AP-only run preserves the previous complete verified pair and reports a source-wide incomplete attempt");
+        await Task.Delay(30, timeout.Token);
+        await f.Run(scheduler, H3cCommandPolicy.DisplayWlanApAllAddress);
+        Assert(service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single().Observations.Single().SourceRevision == original.Observations.Single().SourceRevision,
+            "an address from another run must not be paired with the later AP-only run");
+        f.Execute("UPDATE raw_segments SET state='INCOMPLETE' WHERE task_run_id='" + firstRun + "'");
+        Assert(service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.All(item => item.IdentityStatus != "CONFIRMED"),
+            "revoked historical Raw cannot preserve a confirmed identity");
     }
 
     private static async Task MultiCommandRawCannotRelabelDeviceHost()

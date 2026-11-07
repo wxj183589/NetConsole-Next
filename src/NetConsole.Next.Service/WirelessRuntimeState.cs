@@ -158,16 +158,23 @@ internal sealed class WirelessRuntimeStateProjection
         AggregateHistory(string resourceId, IReadOnlyList<WirelessAggregateSourceEvidence> evidence, int expectedSources, long windowMs)
     {
         var latest = new Dictionary<string, WirelessAggregateSourceEvidence>(StringComparer.Ordinal);
+        var updated = new HashSet<string>(StringComparer.Ordinal);
         WirelessAggregateEffectiveState? current = null;
         WirelessAggregateEffectiveState? previous = null;
         var changes = new List<WirelessAggregateChange>();
         foreach (var batch in evidence.OrderBy(item => item.CapturedMs).GroupBy(item => item.CapturedMs))
         {
-            // Same-time source updates are one observation boundary, not a made-up
-            // intermediate failover state caused by iteration order.
-            foreach (var item in batch) latest[item.SourceAcDeviceId] = item;
+            foreach (var item in batch)
+            {
+                latest[item.SourceAcDeviceId] = item;
+                updated.Add(item.SourceAcDeviceId);
+            }
             var members = latest.Values.Where(item => item.CapturedMs + windowMs > batch.Key)
                 .OrderBy(item => item.SourceAcDeviceId, StringComparer.Ordinal).ToArray();
+            // Without a collection batch identifier, require new, fresh evidence
+            // from every known source before advancing the aggregate history.
+            if (members.Length != expectedSources || updated.Count != expectedSources) continue;
+            updated.Clear();
             var masters = members.Count(item => item.NormalizedState == "RUNNING_MASTER");
             if (masters > 1) continue; // Preserve the prior effective AP state; conflict remains independently visible.
             var value = masters == 1 ? "RUNNING_MASTER" : members.Any(item => item.NormalizedState == "RUNNING_BACKUP") ? "RUNNING_BACKUP" :
@@ -267,7 +274,8 @@ internal sealed partial class Catalog
                 EXISTS(SELECT 1 FROM h3c_facts identity WHERE identity.profile_id=ap.profile_id AND identity.kind='device.identity'
                     AND identity.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND identity.captured_ms<=ap.captured_ms
                     AND identity.source=ap.source AND {versionProof}),
-                ({H3cFactRawVerificationPredicate("ap")} AND {H3cFactRawVerificationPredicate("addr")})
+                ({H3cFactRawVerificationPredicate("ap")} AND {H3cFactRawVerificationPredicate("addr")}),
+                {H3cFactRawVerificationPredicate("ap")}
                 FROM h3c_facts ap LEFT JOIN h3c_facts addr ON addr.profile_id=ap.profile_id
                     AND addr.kind='command.display.wlan.ap.all.address' AND addr.source=ap.source AND addr.captured_ms=ap.captured_ms
                     AND addr.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND {addrProof}
@@ -297,6 +305,13 @@ internal sealed partial class Catalog
                     continue;
                 }
                 var addresses = ParseAddressFacts(reader.IsDBNull(5) ? null : reader.GetString(5));
+                if (reader.IsDBNull(5) && reader.GetInt64(8) != 0)
+                {
+                    // This is a source-wide collection outcome, not AP identity evidence.
+                    incomplete.Add(source.SourceAcDeviceId);
+                    samples.Add(new(source.SourceAcDeviceId, source.SourceSiteId, null, Array.Empty<string>(), "",
+                        "INCOMPLETE", verification, false, captured, revision, "fact:" + revision, "h3c.ap.v1"));
+                }
                 foreach (var row in rows)
                 {
                     addresses.TryGetValue(row.Name, out var addressSet);
