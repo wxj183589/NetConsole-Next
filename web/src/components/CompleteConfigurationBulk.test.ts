@@ -167,6 +167,21 @@ describe('complete configuration bulk workflow', () => {
     wrapper.unmount()
   })
 
+  it('preserves an old terminal result while disabling unavailable batch details without a request', async () => {
+    api.getCompleteConfigurationSchedules.mockResolvedValue([{ ...plan, lastState: 'SUCCEEDED', lastBatchId: 'old-batch', lastBatchAvailable: false }])
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('最近执行明细未保留，可查看各设备完整历史')
+    expect(button(wrapper, '查看最近执行').attributes('disabled')).toBeDefined()
+    await button(wrapper, '查看最近执行').trigger('click'); await flushPromises()
+    expect(api.getCompleteConfigurationBatch).not.toHaveBeenCalled()
+    expect(api.createCompleteConfigurationBatch).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.get('details button').trigger('click')
+    expect(wrapper.emitted('inspect')).toEqual([['p1']])
+    wrapper.unmount()
+  })
+
   it('reports unavailable scheduled history without leaking raw server content', async () => {
     api.getCompleteConfigurationSchedules.mockResolvedValue([{ ...plan, lastBatchId: 'expired-batch' }])
     api.getCompleteConfigurationBatch.mockRejectedValue(new Error('PRIVATE_SERVER_DATA'))

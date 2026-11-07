@@ -24,13 +24,174 @@ internal static class CompleteConfigurationBatchTests
         DomainResolutionUsesExactMembers();
         TargetResolutionDeniesForeignSites();
         await RevokedScheduleDoesNotConnect();
-        Console.WriteLine("CompleteConfigurationBatch: 11/11 PASS");
+        await CompletedScheduleBatchSurvivesRestart();
+        await MissingLegacyBatchIsExplicit();
+        await CompletedBatchHistoryIsBounded();
+        await DamagedBatchStoreFailsClosed();
+        await FailedBatchPublicationIsExplicit();
+        DanglingMetadataPartsCannotEscapeStorage();
+        FailureCodesRemainPersistable();
+        Console.WriteLine("CompleteConfigurationBatch: 18/18 PASS");
+    }
+
+    private static async Task CompletedScheduleBatchSurvivesRestart()
+    {
+        using var f = new Fixture();
+        f.Factory.FailedProfile = f.Second;
+        var plan = f.Schedules.Create(new([f.First, f.Second], ConfigBackupKinds.CompleteRunning, 60), Actor, Scope);
+        var running = f.Schedules.RunNow(plan.Id, Actor, Scope)!;
+        var completed = await f.Finish(f.Backups.GetBatch(running.LastBatchId!, Actor, Scope)!);
+        f.Schedules.RunDueSchedules(plan.CreatedMs);
+        var paused = f.Schedules.SetEnabled(plan.Id, false, Actor, Scope)!;
+        Assert(paused.LastBatchAvailable && paused.LastState == "PARTIAL", "completed plan exposes its exact readable batch");
+        var json = File.ReadAllText(Path.Combine(f.Root, "backup", "config-batches.json"));
+        Assert(!json.Contains("192.168") && !json.Contains("SYNTHETIC_PRIVATE") && !json.Contains("FIXTURE_REFERENCE"),
+            "batch metadata must not persist endpoint, private content or credentials");
+        f.RestartBackups();
+        var restored = f.Backups.GetBatch(completed.Id, Actor, Scope)!;
+        var restoredPlan = f.Schedules.List(Actor, Scope).Single();
+        Assert(restored is { State: "PARTIAL", Succeeded: 1, Failed: 1 } && restored.CompletedMs == completed.CompletedMs &&
+            restored.Items.SequenceEqual(completed.Items) && restoredPlan.LastBatchAvailable &&
+            !restoredPlan.Enabled && restoredPlan.LastBatchId == completed.Id,
+            "same-root restart preserves exact batch item results, version links and paused plan availability");
+        Assert(f.Backups.GetBatch(completed.Id, Actor with { UserId = "other-owner" }, Scope) is null &&
+            f.Backups.GetBatch(completed.Id, Actor with { Role = "ADMIN" }, Scope) is null &&
+            f.Backups.GetBatch(completed.Id, Actor, new("AUTHORIZED", false, new HashSet<string> { "foreign" }, "fixture", "claims")) is null,
+            "persisted batches keep current owner, role and scope restrictions");
+        f.Sql("UPDATE device_inventory SET terminal_profile_id=NULL WHERE terminal_profile_id='" + f.First +
+            "'; DELETE FROM h3c_device_profiles WHERE id='" + f.First + "'");
+        Assert(!f.Schedules.List(Actor, Scope).Single().LastBatchAvailable,
+            "plan availability must use current target visibility rather than a stored true flag");
+    }
+
+    private static async Task MissingLegacyBatchIsExplicit()
+    {
+        using var f = new Fixture();
+        var plan = f.Schedules.Create(new([f.First], ConfigBackupKinds.CompleteRunning, 60), Actor, Scope);
+        var running = f.Schedules.RunNow(plan.Id, Actor, Scope)!;
+        await f.Finish(f.Backups.GetBatch(running.LastBatchId!, Actor, Scope)!);
+        f.Schedules.RunDueSchedules(plan.CreatedMs);
+        f.Schedules.SetEnabled(plan.Id, false, Actor, Scope);
+        File.Delete(Path.Combine(f.Root, "backup", "config-batches.json")); // Simulate pre-fix memory-only metadata.
+        f.RestartBackups();
+        var legacy = f.Schedules.List(Actor, Scope).Single();
+        Assert(legacy.LastState == "SUCCEEDED" && legacy.LastBatchId == running.LastBatchId && !legacy.LastBatchAvailable &&
+            f.Complete.List(f.First, Actor, Scope).Count == 1 && f.Factory.Opens.Count == 1,
+            "unrecoverable legacy metadata is explicit without inventing results or recollecting devices");
+    }
+
+    private static async Task CompletedBatchHistoryIsBounded()
+    {
+        using var f = new Fixture();
+        var original = await f.Finish(f.Start(f.First));
+        var store = new ConfigBackupBatchHistoryStore(f.Settings);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 1000;
+        var batches = Enumerable.Range(0, ConfigBackupService.MaximumCompletedBatchMetadata + 1)
+            .Select(index => original with { Id = Guid.NewGuid().ToString("N"), CreatedMs = now + index, CompletedMs = now + index }).ToArray();
+        foreach (var batch in batches) store.Store(batch);
+        var restored = new ConfigBackupBatchHistoryStore(f.Settings);
+        Assert(restored.Get(batches[0].Id) is null && restored.Get(original.Id) is null &&
+            batches.Skip(1).All(item => restored.Get(item.Id) is not null) && f.Complete.List(f.First, Actor, Scope).Count == 1,
+            "only latest 128 terminal metadata records survive restart; backup versions remain untouched");
+    }
+
+    private static Task DamagedBatchStoreFailsClosed()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "backup", "config-batches.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string damaged = "{invalid-original-evidence";
+        File.WriteAllText(path, damaged);
+        f.RestartBackups();
+        Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Start(f.First));
+        Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Backups.GetBatch("missing", Actor, Scope));
+        Assert(f.Factory.Opens.IsEmpty && File.ReadAllText(path) == damaged,
+            "damaged optional history must preserve evidence and reject collection before connecting");
+        return Task.CompletedTask;
+    }
+
+    private static async Task FailedBatchPublicationIsExplicit()
+    {
+        using var f = new Fixture();
+        var original = await f.Finish(f.Start(f.First));
+        var path = Path.Combine(f.Root, "backup", "config-batches.json");
+        var before = File.ReadAllText(path);
+        f.Factory.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var running = f.Start(f.First);
+        await Wait(() => f.Factory.Opens.Count == 2);
+        Directory.CreateDirectory(path + ".part");
+        f.Factory.Hold.TrySetResult(true);
+        await Wait(() =>
+        {
+            try { f.Backups.GetBatch(running.Id, Actor, Scope); return false; }
+            catch (ConfigBackupException ex) when (ex.Code == "CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE") { return true; }
+        });
+        Assert(File.ReadAllText(path) == before && new ConfigBackupBatchHistoryStore(f.Settings).Get(original.Id) is not null &&
+            f.Complete.List(f.First, Actor, Scope).Count == 2,
+            "failed atomic metadata publication is explicit, preserves old history and never deletes captured versions");
+        Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Start(f.First));
+    }
+
+    private static void DanglingMetadataPartsCannotEscapeStorage()
+    {
+        using var f = new Fixture();
+        var batch = new ConfigBackupBatch(Guid.NewGuid().ToString("N"), Actor.UserId, "PARTIAL", 1, 2, 1, 1, 0, 1,
+            [new(f.First, "FAILED", null, "CONFIG_BACKUP_TIMED_OUT")], ConfigBackupKinds.CompleteRunning);
+        var directory = Path.Combine(f.Root, "backup");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(f.Root, "must-not-be-created.json");
+        foreach (var name in new[] { "config-batches.json", "config-schedules.json" })
+        {
+            var link = Path.Combine(directory, name + ".part");
+            File.CreateSymbolicLink(link, target);
+            try
+            {
+                Assert(!File.Exists(target) && new FileInfo(link).LinkTarget is not null, "fixture must use a dangling file link");
+                if (name == "config-batches.json")
+                    Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => new ConfigBackupBatchHistoryStore(f.Settings).Store(batch));
+                else
+                    Expect("CONFIG_BACKUP_SCHEDULE_STORE_UNAVAILABLE", () =>
+                        f.Schedules.Create(new([f.First], ConfigBackupKinds.CompleteRunning, 60), Actor, Scope));
+                Assert(!File.Exists(target) && new FileInfo(link).LinkTarget is not null && f.Factory.Opens.IsEmpty,
+                    "dangling metadata parts must never create external targets or connect devices");
+            }
+            finally { File.Delete(link); }
+        }
+    }
+
+    private static void FailureCodesRemainPersistable()
+    {
+        using var f = new Fixture();
+        var store = new ConfigBackupBatchHistoryStore(f.Settings);
+        foreach (var (reason, expected) in new[]
+        {
+            ("Collection request exceeded its timeout.", "CONFIG_BACKUP_TIMED_OUT"),
+            ("REVOKED_AFTER_START:TASK_TARGET_REVOKED", "REVOKED_AFTER_START:TASK_TARGET_REVOKED"),
+            ("ResultPersistence:IOException", "ResultPersistence:IOException"),
+            ("SessionDispose:InvalidOperationException", "SessionDispose:InvalidOperationException"),
+            ("arbitrary transport text with fixture-secret", "CONFIG_BACKUP_COLLECTION_FAILED")
+        })
+        {
+            var state = new ConfigBackupService.BatchState(Guid.NewGuid().ToString("N"), Actor.UserId,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), [new(f.First, null!, "FAILED", null, reason)], ConfigBackupKinds.Running);
+            state.Complete();
+            var snapshot = state.Snapshot();
+            Assert(snapshot.Items.Single().Error == expected, "terminal publication must normalize free-form failures into safe stable codes");
+            store.Store(snapshot);
+            Assert(new ConfigBackupBatchHistoryStore(f.Settings).Get(snapshot.Id)?.Items.Single().Error == expected,
+                "existing timeout, revocation and persistence error shapes must survive restart without poisoning the store");
+        }
+        Assert(!File.ReadAllText(Path.Combine(f.Root, "backup", "config-batches.json")).Contains("fixture-secret"),
+            "free-form failure details must not enter durable metadata");
     }
 
     private static async Task PrivateBatchPreservesOriginals()
     {
         using var f = new Fixture();
-        var batch = await f.Finish(f.Start(f.First, f.Second));
+        var admission = f.Start(f.First, f.Second);
+        Assert(admission.State == "RUNNING" && admission.CompletedMs is null && admission.Items.All(item => item.State == "QUEUED"),
+            "admission response must capture queued work before dispatch, never race durable terminal publication");
+        var batch = await f.Finish(admission);
         Assert(batch.Succeeded == 2 && batch.State == "SUCCEEDED", "both devices must have complete private backups");
         foreach (var profile in new[] { f.First, f.Second })
         {
@@ -184,7 +345,7 @@ internal static class CompleteConfigurationBatchTests
         public Factory Factory { get; } = new();
         public UnexpectedFactory SanitizedFactory { get; } = new();
         public SimulatorConfigurationService Complete { get; }
-        public ConfigBackupService Backups { get; }
+        public ConfigBackupService Backups { get; private set; }
         public ConfigBackupScheduleService Schedules { get; set; }
         public string First { get; }
         public string Second { get; }
@@ -212,6 +373,12 @@ internal static class CompleteConfigurationBatchTests
         }
         public ConfigBackupScheduleService NewSchedules() => new(Catalog, _scopeStore, _authorizer, Backups, Settings,
             NullLogger<ConfigBackupScheduleService>.Instance);
+        public void RestartBackups()
+        {
+            Schedules.Dispose();
+            Backups = new(Catalog, _scheduler, _authorizer, Settings, new SimulatorConfigurationService(Catalog, Settings, Factory));
+            Schedules = NewSchedules();
+        }
         public ConfigBackupBatch Start(params string[] profiles) => Backups.Start(profiles, Actor, Scope, ConfigBackupKinds.CompleteRunning);
         public async Task<ConfigBackupBatch> Finish(ConfigBackupBatch batch, bool internalMetadata = false)
         {

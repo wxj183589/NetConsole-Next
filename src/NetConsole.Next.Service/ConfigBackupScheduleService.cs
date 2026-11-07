@@ -21,7 +21,8 @@ internal sealed record ConfigBackupScheduleSnapshot(
     long? LastCompletedMs,
     string LastState,
     string? LastError,
-    string? LastBatchId);
+    string? LastBatchId,
+    bool LastBatchAvailable = false);
 
 // This service only admits existing backup batches. Device connections, current
 // credentials, Raw, version files and command policy remain in their existing owners.
@@ -84,7 +85,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
                 throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_LIMIT", "最多保留 64 个定时备份计划，请先删除不再使用的计划。", 409);
             Commit(item);
         }
-        return Copy(item);
+        return Copy(item, current, scope);
     }
 
     public IReadOnlyList<ConfigBackupScheduleSnapshot> List(WebUserIdentity actor, P2B5SiteScopeDecision scope,
@@ -95,7 +96,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
             return _schedules.Values.Where(item => IsVisible(item, current, scope) &&
                     (profileId is null || item.ProfileIds.Contains(profileId, StringComparer.Ordinal)))
                 .OrderByDescending(item => item.CreatedMs).ThenBy(item => item.Id, StringComparer.Ordinal)
-                .Select(Copy).ToArray();
+                .Select(item => Copy(item, current, scope)).ToArray();
     }
 
     public ConfigBackupScheduleSnapshot? SetEnabled(string id, bool enabled, WebUserIdentity actor,
@@ -105,14 +106,14 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
         lock (_gate)
         {
             if (!_schedules.TryGetValue(id, out var item) || !IsVisible(item, current, scope)) return null;
-            if (item.Enabled == enabled) return Copy(item);
+            if (item.Enabled == enabled) return Copy(item, current, scope);
             if (enabled) RequireTargets(item.ProfileIds, current, scope, item.ConfigurationKind);
             item = item with { Enabled = enabled,
                 NextRunMs = enabled ? NextDue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), item.IntervalMinutes) : null };
             Commit(item);
             // Disabling stops future admissions. An already admitted read-only
             // batch keeps its own existing task lifetime and authorization checks.
-            return Copy(item);
+            return Copy(item, current, scope);
         }
     }
 
@@ -183,7 +184,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
                 throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_ACTIVE_LIMIT", "定时备份并发已满，请稍后重试。", 409);
             RequireTargets(item.ProfileIds, current, currentScope, item.ConfigurationKind);
             Admit(item, now, advanceDue: false);
-            return Copy(_schedules[id]);
+            return Copy(_schedules[id], current, scope);
         }
     }
 
@@ -281,8 +282,17 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
         item.OwnerUserId == actor.UserId && scope.IsAuthorized &&
         (scope.IsGlobal || item.ProfileIds.All(profile => _catalog.H3cProfileIsInScope(profile, scope)));
 
-    private static ConfigBackupScheduleSnapshot Copy(ConfigBackupScheduleSnapshot item) =>
-        item with { ProfileIds = item.ProfileIds.ToArray() };
+    private ConfigBackupScheduleSnapshot Copy(ConfigBackupScheduleSnapshot item, WebUserIdentity actor,
+        P2B5SiteScopeDecision scope)
+    {
+        var available = false;
+        if (item.LastBatchId is not null)
+        {
+            try { available = _backups.GetBatch(item.LastBatchId, actor, scope) is not null; }
+            catch (ConfigBackupException ex) when (ex.Code == "CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE") { }
+        }
+        return item with { ProfileIds = item.ProfileIds.ToArray(), LastBatchAvailable = available };
+    }
 
     private static long NextDue(long nowMs, int intervalMinutes) => checked(nowMs + intervalMinutes * 60_000L);
     private static string SafeError(string? value) => value is { Length: > 0 and <= 128 } &&
@@ -305,7 +315,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
             CheckStorePath();
             Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
             var part = _storePath + ".part";
-            if (File.Exists(part) && IsReparse(part)) throw new InvalidDataException("Schedule part is a reparse point.");
+            if (IsReparse(part)) throw new InvalidDataException("Schedule part is a reparse point.");
             using (var stream = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 stream.Write(bytes);
@@ -363,14 +373,16 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
 
     private void CheckStorePath()
     {
-        var directory = new DirectoryInfo(Path.GetDirectoryName(_storePath)!);
-        if ((directory.Exists && IsReparse(directory.FullName)) ||
-            (directory.Parent is { Exists: true } parent && IsReparse(parent.FullName)) ||
-            (File.Exists(_storePath) && IsReparse(_storePath)))
-            throw new InvalidDataException("Schedule storage cannot be a reparse point.");
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(_storePath)!); directory is not null; directory = directory.Parent)
+            if (IsReparse(directory.FullName)) throw new InvalidDataException("Schedule storage cannot be a reparse point.");
+        if (IsReparse(_storePath)) throw new InvalidDataException("Schedule storage cannot be a reparse point.");
     }
 
-    private static bool IsReparse(string path) => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+    private static bool IsReparse(string path)
+    {
+        var info = new FileInfo(path);
+        return info.LinkTarget is not null || (info.Exists && (info.Attributes & FileAttributes.ReparsePoint) != 0);
+    }
     private sealed record RunningBatch(string OwnerUserId, string BatchId);
     private sealed record StoreDocument(int Version, IReadOnlyList<ConfigBackupScheduleSnapshot> Schedules);
 }

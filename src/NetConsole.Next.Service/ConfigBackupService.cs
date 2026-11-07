@@ -149,6 +149,7 @@ internal sealed class ConfigBackupService(
     private readonly HashSet<string> _scheduledPins = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _profileGates = new(StringComparer.Ordinal);
     private readonly string _root = Path.Combine(settings.DataRoot, "backup", "config");
+    private readonly ConfigBackupBatchHistoryStore _batchHistory = new(settings);
 
     public ConfigBackupBatch Start(IReadOnlyList<string> profileIds, WebUserIdentity actor,
         P2B5SiteScopeDecision scope, string? configurationKind = null, bool retainUntilObserved = false)
@@ -177,12 +178,14 @@ internal sealed class ConfigBackupService(
         var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items, kind);
         lock (_batchGate)
         {
+            _batchHistory.RequireAvailable();
             _batches[id] = batch;
             if (retainUntilObserved) _scheduledPins.Add(id);
             PruneCompletedBatches();
         }
+        var admitted = batch.Snapshot();
         _ = Task.Run(() => RunBatchAsync(batch), CancellationToken.None);
-        return batch.Snapshot();
+        return admitted;
     }
 
     // Startup body collection is deliberately separate from the three regular
@@ -209,9 +212,10 @@ internal sealed class ConfigBackupService(
         }
         var id = Guid.NewGuid().ToString("N");
         var batch = new BatchState(id, actor.UserId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), items, ConfigBackupKinds.StartupBody);
-        lock (_batchGate) { _batches[id] = batch; PruneCompletedBatches(); }
+        lock (_batchGate) { _batchHistory.RequireAvailable(); _batches[id] = batch; PruneCompletedBatches(); }
+        var admitted = batch.Snapshot();
         _ = Task.Run(() => RunStartupBodyBatchAsync(batch), CancellationToken.None);
-        return batch.Snapshot();
+        return admitted;
     }
 
     public StartupConfigurationReference? GetStartupReference(string id, P2B5SiteScopeDecision scope)
@@ -248,16 +252,30 @@ internal sealed class ConfigBackupService(
 
     public ConfigBackupBatch? GetBatch(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
     {
-        if (!_batches.TryGetValue(id, out var batch) || batch.ActorUserId != actor.UserId) return null;
-        if (!scope.IsAuthorized || batch.Items.Any(item => !catalog.H3cProfileIsInScope(item.ProfileId, scope))) return null;
-        return batch.Snapshot();
+        if (actor.Role != "SUPERADMIN" || !scope.IsAuthorized) return null;
+        var current = catalog.GetActiveTaskActor(actor.UserId);
+        if (current?.Role != "SUPERADMIN") return null;
+        lock (_batchGate)
+        {
+            _batchHistory.RequireAvailable();
+            var batch = _batches.TryGetValue(id, out var live) ? live.Snapshot() : _batchHistory.Get(id);
+            if (batch is null || batch.ActorUserId != actor.UserId ||
+                batch.Items.Any(item => !catalog.H3cProfileIsInScope(item.ProfileId, scope))) return null;
+            return batch;
+        }
     }
 
     // Internal scheduling metadata only. A removed profile can hide the public
     // scoped view while its already admitted batch still needs to finish. This
     // does not expose configuration output, snapshots, credentials or a new API.
-    internal ConfigBackupBatch? GetScheduledBatchStatus(string id, string ownerUserId) =>
-        _batches.TryGetValue(id, out var batch) && batch.ActorUserId == ownerUserId ? batch.Snapshot() : null;
+    internal ConfigBackupBatch? GetScheduledBatchStatus(string id, string ownerUserId)
+    {
+        lock (_batchGate)
+        {
+            _batchHistory.RequireAvailable();
+            return _batches.TryGetValue(id, out var batch) && batch.ActorUserId == ownerUserId ? batch.Snapshot() : null;
+        }
+    }
 
     internal bool AcknowledgeScheduledBatch(string id, string ownerUserId)
     {
@@ -413,7 +431,7 @@ internal sealed class ConfigBackupService(
             finally { parallel.Release(); }
         }).ToArray();
         await Task.WhenAll(tasks).ConfigureAwait(false);
-        lock (_batchGate) { batch.Complete(); PruneCompletedBatches(); }
+        CompleteBatch(batch);
     }
 
     private async Task RunStartupBodyItemAsync(BatchState batch, BatchItemState item)
@@ -507,9 +525,18 @@ internal sealed class ConfigBackupService(
             finally { parallel.Release(); }
         }).ToArray();
         await Task.WhenAll(tasks).ConfigureAwait(false);
+        CompleteBatch(batch);
+    }
+
+    private void CompleteBatch(BatchState batch)
+    {
         lock (_batchGate)
         {
             batch.Complete();
+            // Public readers take this same gate, so completion is never
+            // announced before the bounded metadata document is durable.
+            try { _batchHistory.Store(batch.Snapshot()); }
+            catch (ConfigBackupException) { /* Subsequent batch reads/admissions explicitly return 503. */ }
             PruneCompletedBatches();
         }
     }
@@ -736,6 +763,11 @@ internal sealed class ConfigBackupService(
     private static bool IsReparse(string path) =>
         (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 
+    private static string? SafeBatchError(string? error) => error is null ? null :
+        error == "Collection request exceeded its timeout." ? "CONFIG_BACKUP_TIMED_OUT" :
+        error.Length is > 0 and <= 128 && error.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or ':')
+            ? error : "CONFIG_BACKUP_COLLECTION_FAILED";
+
     internal sealed class BatchState
     {
         public BatchState(string id, string actorUserId, long createdMs, IReadOnlyList<BatchItemState> items,
@@ -752,7 +784,7 @@ internal sealed class ConfigBackupService(
             CompletedMs is null ? "RUNNING" : Items.Any(item => item.State == "FAILED") ? "PARTIAL" : "SUCCEEDED",
             CreatedMs, CompletedMs, Items.Count, Items.Count(item => item.State is "SUCCEEDED" or "FAILED"),
             Items.Count(item => item.State == "SUCCEEDED"), Items.Count(item => item.State == "FAILED"),
-            Items.Select(item => new ConfigBackupBatchItem(item.ProfileId, item.State, item.SnapshotId, item.Error)).ToArray(), ConfigurationKind);
+            Items.Select(item => new ConfigBackupBatchItem(item.ProfileId, item.State, item.SnapshotId, SafeBatchError(item.Error))).ToArray(), ConfigurationKind);
     }
 
     internal sealed class BatchItemState(string profileId, TaskScopeSnapshot scope, string state,

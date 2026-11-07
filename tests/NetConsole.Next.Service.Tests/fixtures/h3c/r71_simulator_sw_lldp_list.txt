@@ -2,7 +2,7 @@ display lldp neighbor-information list
 Chassis ID : * -- -- Nearest nontpmr bridge neighbor
              # -- -- Nearest customer bridge neighbor
              Default -- -- Nearest bridge neighbor
-Local Interface Chassis ID      Port ID                         System Name     
+Local Interface Chassis ID      Port ID                         System Name
 GE1/0/1         4c48-8d10-0100  GigabitEthernet1/0/1            AC1
 GE1/0/2         4c48-cb6e-0400  GigabitEthernet0/0/0            4c48-cb6e-0400
 GE1/0/3         1cc0-ab25-0600  GigabitEthernet1/0/0            ac2

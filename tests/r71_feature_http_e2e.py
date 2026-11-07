@@ -218,6 +218,23 @@ def run(dll):
         with closing(sqlite3.connect(root / "catalog.db")) as db:
             network_runs = db.execute("SELECT COUNT(*) FROM task_runs WHERE task_type IN ('H3C_SSH_READONLY','ICMP_PROBE','TCP_PROBE')").fetchone()[0]
         check(network_runs == 0, "NO_DEVICE_COLLECTION_OR_PROBE_RUNS_ADMITTED")
+        stop(process)
+        process = None
+        history = root / "backup" / "config-batches.json"
+        history.parent.mkdir(parents=True, exist_ok=True)
+        damaged = '{"version":1,"batches":['
+        history.write_text(damaged, encoding="utf-8")
+        process, base = start(dll, root, run_dir)
+        owner = Client(base)
+        owner.login("superadmin", "superadmin")
+        failure = expect(owner, "/api/system/config-backups/batches/missing-fixture-batch",
+                         status=503, label="DAMAGED_BATCH_STORE_HTTP_503")
+        failure = json.loads(failure)
+        check(failure["error"] == "CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE" and
+              history.read_text(encoding="utf-8") == damaged,
+              "DAMAGED_BATCH_STORE_EXPLICIT_CODE_AND_EVIDENCE_PRESERVED")
+        check(expect(owner, FAULTS)["total"] == 3,
+              "DAMAGED_BATCH_STORE_DOES_NOT_STOP_FAULT_CENTER")
         report["status"] = "PASS"
     except BaseException as error:
         report.update(status="FAIL", error=repr(error))

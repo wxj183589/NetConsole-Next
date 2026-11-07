@@ -884,8 +884,12 @@ app.MapPost("/api/system/config-backups/startup-body", (HttpContext context, Con
 app.MapGet("/api/system/config-backups/batches/{id}", (HttpContext context, string id, ConfigBackupService backups) =>
 {
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
-    return backups.GetBatch(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } batch
-        ? Results.Ok(batch) : Results.NotFound();
+    try
+    {
+        return backups.GetBatch(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } batch
+            ? Results.Ok(batch) : Results.NotFound();
+    }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
 app.MapGet("/api/system/config-backups", (HttpContext context, string profileId, string? configurationKind,
     ConfigBackupService backups) =>

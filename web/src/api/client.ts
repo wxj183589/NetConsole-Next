@@ -660,6 +660,7 @@ export interface ConfigBackupSchedule {
   lastState?: string | null
   lastError?: string | null
   lastBatchId?: string | null
+  lastBatchAvailable?: boolean
 }
 
 export interface ConfigBackupSnapshot {

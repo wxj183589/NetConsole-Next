@@ -290,7 +290,13 @@ try {
       await rows.first().locator('summary').click()
       const detail=await rows.first().innerText()
       assert(schedules[0].profileIds.every(id=>detail.includes(id)),'Plan details must display frozen profile IDs')
-      const index=schedules.findIndex(plan=>plan.lastBatchId)
+      for(let i=0;i<schedules.length;i++){
+        if(schedules[i].lastBatchId && schedules[i].lastBatchAvailable===false){
+          assert(await rows.nth(i).getByRole('button',{name:'查看最近执行',exact:true}).isDisabled(),'Unavailable old batch must not offer a broken request')
+          assert((await rows.nth(i).innerText()).includes('最近执行明细未保留'),'Unavailable old batch must retain an explicit explanation')
+        }
+      }
+      const index=schedules.findIndex(plan=>plan.lastBatchId && plan.lastBatchAvailable!==false)
       if(index>=0){
         const response=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/system/config-backups/batches/${schedules[index].lastBatchId}`)
         await rows.nth(index).getByRole('button',{name:'查看最近执行',exact:true}).click()
