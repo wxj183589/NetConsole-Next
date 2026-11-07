@@ -1236,6 +1236,20 @@ export function previewSmartConfiguration(payload: { templateId: string; variabl
 export function getWirelessAcDomains(params: { page?: number; pageSize?: number; sourceAcId?: string } = {}): Promise<WirelessPage<WirelessAcDomain>> {
   return request(queryPath('/api/system/wireless/ac-domains', params))
 }
+export interface WirelessTaskPlan {
+  id: string
+  state: string
+  scopeStatus: string
+  claimsRevision: string
+  domainIds: string[]
+  acDeviceIds: string[]
+  commands: string[]
+  plan: H3cTaskPlan
+  createdMs: number
+}
+export function createWirelessTask(domainIds: string[], commands: string[]): Promise<WirelessTaskPlan> {
+  return request('/api/system/wireless/tasks', { method: 'POST', body: JSON.stringify({ domainIds, commands }) })
+}
 export function getWirelessApResources(params: { page?: number; pageSize?: number; serial?: string; mac?: string; domainId?: string; sourceAcId?: string; search?: string } = {}): Promise<WirelessPage<WirelessApResource>> {
   return request(queryPath('/api/system/wireless/ap-resources', params))
 }

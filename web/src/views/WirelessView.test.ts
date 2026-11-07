@@ -4,6 +4,7 @@ import type { WirelessAcDomain, WirelessApGroup, WirelessApGroupDetail } from '.
 import WirelessView from './WirelessView.vue'
 
 const api = vi.hoisted(() => ({
+  createWirelessTask: vi.fn(), getH3cTaskPlan: vi.fn(),
   getWirelessAcDomains: vi.fn(), getWirelessApGroup: vi.fn(), getWirelessApGroups: vi.fn(),
   getWirelessApResources: vi.fn(), getWirelessCollectionManifest: vi.fn(),
   getWirelessCollectionManifests: vi.fn(), getWirelessRuntimeState: vi.fn(),
@@ -57,6 +58,33 @@ describe('AP group source identity', () => {
     api.getWirelessCollectionManifests.mockResolvedValue(page([]))
     api.getWirelessApGroups.mockResolvedValue(page([]))
     api.getWirelessApGroup.mockImplementation(async (id: string) => detail(group(id)))
+  })
+
+  it('creates a read-only task for selected domains and refreshes its state', async () => {
+    const plan = { id: 'plan-one', state: 'QUEUED', items: [{ ordinal: 0, target: 'ac-a', state: 'QUEUED' }] }
+    api.createWirelessTask.mockResolvedValue({ id: plan.id, plan })
+    api.getH3cTaskPlan.mockResolvedValue({ ...plan, state: 'RUNNING' })
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('.wireless-task input').setValue(true)
+    await wrapper.findAll('.wireless-task button')[0].trigger('click')
+    await flushPromises()
+    expect(api.createWirelessTask).toHaveBeenCalledWith(['domain-one'], ['display version'])
+    expect(wrapper.get('.wireless-task-result').text()).toContain('QUEUED')
+    await wrapper.findAll('.wireless-task button')[1].trigger('click')
+    await flushPromises()
+    expect(api.getH3cTaskPlan).toHaveBeenCalledWith('plan-one')
+    expect(wrapper.get('.wireless-task-result').text()).toContain('RUNNING')
+  })
+
+  it('shows task creation errors', async () => {
+    api.createWirelessTask.mockRejectedValue(new Error('权限不足'))
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('.wireless-task input').setValue(true)
+    await wrapper.findAll('.wireless-task button')[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.wireless-task [role=alert]').text()).toContain('权限不足')
   })
 
   it('keeps same-name groups separate and reads details using the projection ID', async () => {

@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
+  createWirelessTask,
+  getH3cTaskPlan,
   getWirelessAcDomains,
   getWirelessApGroup,
   getWirelessApGroups,
@@ -17,9 +19,18 @@ import {
   type WirelessCollectionManifest,
   type WirelessCollectionManifestDetail,
   type WirelessRuntimeState,
+  type WirelessTaskPlan,
+  type H3cTaskPlan,
 } from '../api/client'
 
 const loading = ref(false)
+const taskDomains = ref<string[]>([])
+const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']
+const taskCommands = ref(['display version'])
+const taskSubmitting = ref(false)
+const taskError = ref('')
+const taskResult = ref<WirelessTaskPlan | null>(null)
+const taskPlan = ref<H3cTaskPlan | null>(null)
 const domains = ref<WirelessAcDomain[]>([])
 const resources = ref<WirelessApResource[]>([])
 const groups = ref<WirelessApGroup[]>([])
@@ -124,6 +135,24 @@ function selectDomain(domain: WirelessAcDomain): void {
   selectedResourceId.value = ''
   void loadGroups(domain.id)
   void loadCollectionManifests(domain.id)
+}
+async function createTask(): Promise<void> {
+  if (!taskDomains.value.length || !taskCommands.value.length || taskSubmitting.value) return
+  taskSubmitting.value = true
+  taskError.value = ''
+  taskResult.value = null
+  taskPlan.value = null
+  try {
+    taskResult.value = await createWirelessTask(taskDomains.value, taskCommands.value)
+    taskPlan.value = taskResult.value.plan
+  } catch (cause) {
+    taskError.value = cause instanceof Error ? cause.message : '无线采集任务创建失败'
+  } finally { taskSubmitting.value = false }
+}
+async function refreshTask(): Promise<void> {
+  if (!taskResult.value) return
+  try { taskPlan.value = await getH3cTaskPlan(taskResult.value.id); taskError.value = '' }
+  catch (cause) { taskError.value = cause instanceof Error ? cause.message : '任务状态读取失败' }
 }
 function selectAc(domain: WirelessAcDomain, deviceId: string): void {
   selectedDomainId.value = domain.id
@@ -231,6 +260,7 @@ async function refresh(): Promise<void> {
     if (resourceResult.status === 'fulfilled') resources.value = resourceResult.value
     else failed.push('AP 资源')
     if (failed.length === 2) throw new Error('AC Domain 和 AP 资源均读取失败')
+    taskDomains.value = taskDomains.value.filter(id => domains.value.some(domain => domain.id === id))
     if (failed.length) {
       const details = [domainResult, resourceResult]
         .filter(result => result.status === 'rejected')
@@ -292,6 +322,18 @@ onMounted(() => { void refresh() })
       </aside>
 
       <main class="wireless-main">
+        <section v-if="domains.length" class="card wireless-task">
+          <div class="card__header"><h2>无线采集任务</h2></div>
+          <div><label v-for="domain in domains" :key="domain.id" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskDomains" type="checkbox" :value="domain.id">{{ domain.displayName }}</label></div>
+          <div><label v-for="command in taskCommandOptions" :key="command" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskCommands" type="checkbox" :value="command">{{ command }}</label></div>
+          <el-button size="small" :loading="taskSubmitting" :disabled="!taskDomains.length || !taskCommands.length || taskSubmitting" @click="createTask">开始只读采集</el-button>
+          <p v-if="taskError" role="alert">{{ taskError }}</p>
+          <div v-if="taskResult && taskPlan" class="wireless-task-result">
+            <p>任务 {{ taskResult.id }} · {{ taskPlan.state }} · {{ taskPlan.items.length }} 台 AC</p>
+            <p v-for="item in taskPlan.items" :key="item.ordinal">{{ item.target }} · {{ item.state }} <span v-if="item.error">· {{ item.error }}</span></p>
+            <el-button size="small" @click="refreshTask">刷新任务状态</el-button>
+          </div>
+        </section>
         <div v-if="error && !domains.length" class="card empty-state"><div><strong>无线业务暂不可用</strong><small>{{ error }}</small></div></div>
         <template v-else-if="selectedDomain">
           <section class="card wireless-domain-header">
