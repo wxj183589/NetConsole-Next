@@ -1,5 +1,30 @@
 # 全天候动态任务池
 
+## 2026-11-08 R7.0 当前增量与优先级
+
+当前分支 `codex-A/netconsole-next-r3-dual-ac`，R7起点 `2551b26`；最终功能提交与Gate见 `docs/r7-autonomous/R7_FINAL_ACCEPTANCE.md`，不使用下方历史检查点作为本轮HEAD或验收。整体 **PARTIAL**；不Push、Merge、Release。
+
+| ID | 优先级 | 本轮实际增量 / 剩余任务 | 状态与验收边界 |
+| --- | --- | --- | --- |
+| R70-E-01 | P1 | Quick Ping连续采样/统计/取消/历史 | IMPLEMENTED_PARTIAL；.NET ICMP/TCP、2–60样本/8目标/单目标120s；真实TCP链通过；原版长期fping/压缩保留/IP占用未迁移 |
+| R70-B-01 | P1 | 健康/故障证据、显式只读恢复与补采结果 | IMPLEMENTED_PARTIAL；健康7/7、Vue5/5，真实AC只读连接/补采链；不代表宕机或业务恢复 |
+| R70-D-01 | P1 | 设备详情真实能力、无线角色/能力证据 | IMPLEMENTED_PARTIAL；设备详情13/13/typecheck；UNKNOWN/STALE/来源清晰；新部署浏览器复验由最终Gate记录 |
+| R70-A-01 | P0 | 完整配置上下文比较、脱敏导出、实时恢复预览 | IMPLEMENTED_PARTIAL；比较10/10；预览writeAllowed=false，任意历史整机恢复未实现 |
+| R70-A-02 | P0 | 原生检查点/replace实际互操作 | BLOCKED；真实SW commit无新增ID，NATIVE_CHECKPOINT_NOT_CREATED；replace交互未证实，描述/replace前阻断；测试14/14不等于实机PASS |
+| R70-C-01 | P1外部 | 双AC实际切换与关键业务恢复 | BLOCKED_EXTERNAL；两AC Common、同AP R/M/R/B，不是DEVICE_VERIFIED_HA；不执行未知切换 |
+| R70-D-02 | P1外部 | FIT原生Telnet认证 | BLOCKED_EXTERNAL；已有凭据曾拒绝，不猜密不重复撞密；AC托管身份/组/观测继续可用 |
+| R70-G-01 | P0 | doctor、新部署最终Gate、Windows安装/SCM | PARTIAL；doctor10/10及源码实际运行通过，SCM语法通过；安装/崩溃/升级/独立包路径未完整验收 |
+| R70-A-03 | P1 | 完整私有备份批量/Site/Domain/定时 | TODO；现有私有单设备和旧脱敏批量/计划必须分开，不能宣称同一能力 |
+| R70-E-02 | P1 | Syslog授权查询/筛选/原文Vue viewer | TODO；后端UDP/Raw基础存在但无独立viewer，当前端口0，不称实时日志可用 |
+| R70-E-03 | P1 | 原版长期Quick Ping迁移合同 | TODO；先定义资源上限/终止/进程身份/保留，不把有界采样改成无界循环 |
+| R70-E-04 | P2 | Mesh/MR专业分析报表、长期健康通知、图形拓扑 | TODO；已有通用事实/导出不等于专项产品闭环 |
+| R70-E-05 | P1 | 25项迁移矩阵/状态/报告 | UPDATED；逐项原版源码/API/UI/测试/操作边界，整体PARTIAL |
+
+优先按真实阻断和业务价值推进：最终运行验收→受支持设备上的安全恢复→完整私有备份与Syslog查看→长期Ping合同→专业分析/报表。外部认证/HA受阻不阻断其它产品任务。详细映射见 [25项矩阵](../r6-feature-parity/ORIGINAL_TO_NEXT_FEATURE_MATRIX.md) 和 [R7迁移报告](../r7-autonomous/R7_ORIGINAL_FEATURE_MIGRATION_REPORT.md)。
+
+下文为历史检查点；其中“当前”“下一优先级”“未实现”仅对其所属提交有效，R7状态以上方与最终验收为准。
+
+
 ## 2026-11-07 Continuation checkpoint：41bd2e2
 
 Branch：`codex-A/netconsole-next-r3-dual-ac`。本轮已完成并本地提交：同设备取消竞态、STARTUP_BODY 两阶段只读采集/UI 与 restore 明确拒绝边界、R3 identity review/revision 只读合同。整体仍 **PARTIAL / REAL_DEVICE_PENDING**，不 Push、Merge、Release。
