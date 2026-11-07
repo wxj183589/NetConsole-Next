@@ -51,4 +51,53 @@ describe('TopologyView', () => {
     expect(wrapper.text()).toContain('192.0.2.12 的 LLDP 关系读取失败')
     expect(wrapper.text()).toContain('接入交换机')
   })
+
+  it('filters exact device, interface and Site without merging same-named neighbors', async () => {
+    api.getH3cProfiles.mockResolvedValue([profile, { ...profile, id: 'profile-2', host: '192.0.2.12' }])
+    api.getH3cLldpClaims.mockResolvedValueOnce({ ...claims, relations: [...claims.relations, { ...claims.relations[0], localInterface: 'GigabitEthernet1/0/10', relationKey: 'ten' }] }).mockResolvedValueOnce({ ...claims, profileId: 'profile-2', relations: [{ ...claims.relations[0], profileId: 'profile-2', siteId: 'site-2', relationKey: 'other' }] })
+    const wrapper = render(); await flushPromises()
+    const rows = () => wrapper.get('[aria-label="LLDP 关系表"]').findAll('tbody tr')
+    expect(rows()).toHaveLength(3)
+    await wrapper.get('[aria-label="LLDP 来源设备"]').setValue('profile-1')
+    await wrapper.get('[aria-label="LLDP 本地接口"]').setValue('GigabitEthernet1/0/1')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0].text()).not.toContain('GigabitEthernet1/0/10')
+    await wrapper.get('[aria-label="LLDP Site"]').setValue('site-2')
+    expect(wrapper.text()).toContain('当前筛选没有匹配关系')
+    await wrapper.get('[aria-label="LLDP 来源设备"]').setValue('profile-2')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0].text()).toContain('192.0.2.12')
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(2)
+  })
+
+  it('exports only visible facts with scope and failed-profile metadata and no new API reads', async () => {
+    api.getH3cProfiles.mockResolvedValue([profile, { ...profile, id: 'failed-profile', host: '192.0.2.12' }])
+    api.getH3cLldpClaims.mockResolvedValueOnce(claims).mockRejectedValueOnce(new Error('denied'))
+    const parts: BlobPart[][] = []
+    vi.stubGlobal('Blob', class { constructor(value: BlobPart[]) { parts.push(value) } })
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:topology'), revokeObjectURL: vi.fn() })
+    let filename = ''
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { filename = this.download })
+    try {
+      const wrapper = render(); await flushPromises()
+      await wrapper.findAll('button').find(item => item.text() === '导出当前筛选 LLDP CSV')!.trigger('click')
+      expect(filename).toMatch(/^lldp-relations-.*\.csv$/)
+      const csv = String(parts[0]![0])
+      expect(csv).toContain('"profile-1","192.0.2.10","stable-1"')
+      expect(csv).toContain('"AUTHORIZED","claims-1"')
+      expect(csv).toContain('failed-profile')
+      expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(2)
+    } finally { click.mockRestore(); vi.unstubAllGlobals() }
+  })
+
+  it('discards an older refresh response instead of replacing the latest evidence', async () => {
+    let first!: (value: unknown) => void
+    api.getDeviceInventory.mockReturnValueOnce(new Promise(resolve => { first = resolve }))
+    const wrapper = render()
+    await wrapper.findAll('button').find(item => item.text() === '刷新')!.trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('接入交换机')
+    first({ ...inventory, items: [] }); await flushPromises()
+    expect(wrapper.text()).toContain('核心交换机')
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(1)
+  })
 })

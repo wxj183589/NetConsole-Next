@@ -26,7 +26,7 @@ async function load(): Promise<void> {
   busy.value = true; error.value = ''; schedules.value = []
   try {
     const next = await getConfigBackupSchedules(props.contextProfileId)
-    if (current === sequence) schedules.value = next
+    if (current === sequence) schedules.value = next.filter(item => item.configurationKind !== ('COMPLETE_RUNNING' as string))
   } catch (cause) { if (current === sequence) fail(cause) }
   finally { if (current === sequence) busy.value = false }
 }
@@ -38,7 +38,7 @@ async function mutate(operation: () => Promise<unknown>): Promise<void> {
     await operation()
     if (current !== sequence) return
     const next = await getConfigBackupSchedules(props.contextProfileId)
-    if (current === sequence) schedules.value = next
+    if (current === sequence) schedules.value = next.filter(item => item.configurationKind !== ('COMPLETE_RUNNING' as string))
   } catch (cause) { if (current === sequence) fail(cause) }
   finally { if (current === sequence) busy.value = false }
 }

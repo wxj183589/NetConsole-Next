@@ -15,7 +15,9 @@ internal static class H3cConnectionPolicyTests
         await StopsAfterTheAlternateFails();
         await CancellationPreventsAnotherAttempt();
         await ConnectionProbeReportsTheActualProtocol();
-        Console.WriteLine("H3C_CONNECTION_POLICY_TESTS=PASS (6 groups)");
+        await ConnectionProbeHonorsFrozenBoundary();
+        await RevocationStopsAlternateAndReconnect();
+        Console.WriteLine("H3C_CONNECTION_POLICY_TESTS=PASS (8 groups)");
     }
 
     private static H3cDeviceProfileSnapshot Profile() => new("a1111111111111111111111111111111", "192.0.2.77", 2323,
@@ -99,14 +101,8 @@ internal static class H3cConnectionPolicyTests
 
     private static async Task ConnectionProbeReportsTheActualProtocol()
     {
-        var root = Path.Combine(Path.GetTempPath(), "next-connection-policy-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
+        await WithCatalog(async catalog =>
         {
-            var catalog = new Catalog(new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = 0,
-                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 65536 });
-            catalog.Initialize();
-            catalog.CreateH3cDeviceProfile(Profile());
             var factory = new Factory((attempt, _) => attempt == 0 ? new H3cConnectionTimeoutException() : null);
             var service = new H3cConnectionTestService(catalog, new H3cSshDeviceSessionFactory(catalog, new Credentials(), factory));
             var result = await service.TestAsync(Profile().Id, CancellationToken.None);
@@ -121,8 +117,7 @@ internal static class H3cConnectionPolicyTests
             Assert(result is { Protocol: "TELNET", Status: "CONNECT_TIMEOUT" } && failed.Instances.Count == 2,
                 "connection test must retain the final protocol and must not repeat a failed fallback");
             Assert(catalog.SshHostKeyHistory(Profile().Id).Count == 0, "failed SSH and successful Telnet must not commit an SSH fingerprint");
-        }
-        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+        });
     }
 
     private static async Task ThrowsSame(Exception expected, Func<Task> operation)
@@ -130,6 +125,148 @@ internal static class H3cConnectionPolicyTests
         try { await operation(); }
         catch (Exception actual) when (ReferenceEquals(expected, actual)) { return; }
         throw new InvalidOperationException("The original attempt failure must be preserved.");
+    }
+
+    private static async Task ConnectionProbeHonorsFrozenBoundary()
+    {
+        await WithCatalog(async catalog =>
+        {
+            var revoked = false;
+            var rejection = new TaskScopeRevokedException("SYNTHETIC_SCOPE_REVOKED");
+            void Boundary() { if (revoked) throw rejection; }
+            var created = 0;
+            var session = new ProbeSession();
+            var factory = new SessionFactory(() => { created++; return session; });
+            var service = new H3cConnectionTestService(catalog, factory);
+            revoked = true;
+            await ThrowsSame(rejection, () => service.TestAsync(Profile().Id, CancellationToken.None, Boundary));
+            Assert(created == 0, "revoked recovery must not create a session");
+
+            revoked = false;
+            factory = new SessionFactory(() => { revoked = true; return session; });
+            await ThrowsSame(rejection, () => new H3cConnectionTestService(catalog, factory)
+                .TestAsync(Profile().Id, CancellationToken.None, Boundary));
+            Assert(session.ConnectCount == 0 && session.Disposed, "a target rebound in the factory must be disposed without connecting");
+
+            foreach (var phase in new[] { "CONNECT", "COMMAND", "COMMAND_FAILURE", "COMMAND_TIMEOUT" })
+            {
+                revoked = false;
+                session = new ProbeSession
+                {
+                    Connected = () => { if (phase == "CONNECT") revoked = true; },
+                    Executing = () =>
+                    {
+                        revoked = true;
+                        if (phase == "COMMAND_FAILURE") throw new IOException("synthetic");
+                        if (phase == "COMMAND_TIMEOUT") throw new OperationCanceledException();
+                    }
+                };
+                await ThrowsSame(rejection, () => new H3cConnectionTestService(catalog, new SessionFactory(() => session))
+                    .TestAsync(Profile().Id, CancellationToken.None, Boundary));
+                Assert(session.Disposed && session.CommandCount == (phase == "CONNECT" ? 0 : 1),
+                    "revocation must stop commands after connect and prevent stale or degraded success results");
+            }
+        });
+    }
+
+    private static async Task RevocationStopsAlternateAndReconnect()
+    {
+        await WithCatalog(async catalog =>
+        {
+            foreach (var phase in new[] { "ALTERNATE", "CONNECT_RETRY", "COMMAND_RETRY" })
+            {
+                var revoked = false;
+                var rejection = new TaskScopeRevokedException("SYNTHETIC_SCOPE_REVOKED");
+                void Boundary() { if (revoked) throw rejection; }
+                var physicalCreates = 0;
+                var physical = new ProbeTransport(
+                    () =>
+                    {
+                        if (phase == "COMMAND_RETRY") return;
+                        revoked = true;
+                        if (phase == "ALTERNATE") throw new H3cProtocolNegotiationException();
+                        throw new H3cConnectionLostException();
+                    },
+                    () => { revoked = true; throw new H3cConnectionLostException(); });
+                IH3cSshTransport CreatePhysical() { physicalCreates++; return physical; }
+                var transports = new DelegateTransportFactory(() => phase == "ALTERNATE" ? CreatePhysical() :
+                    new NetmikoRetryTransport(CreatePhysical, H3cCommandPolicy.IsAllowed, (_, _) => Task.CompletedTask));
+                var service = new H3cConnectionTestService(catalog,
+                    new H3cSshDeviceSessionFactory(catalog, new Credentials(), transports));
+                await ThrowsSame(rejection, () => service.TestAsync(Profile().Id, CancellationToken.None, Boundary));
+                Assert(physicalCreates == 1 && transports.CreateCount == 1 && physical.Disposed,
+                    "revocation must prevent alternate/reconnect transport creation and release the original transport");
+                Assert(physical.CommandCount == (phase == "COMMAND_RETRY" ? 1 : 0),
+                    "a lost device-info channel must not replay after authorization revocation");
+            }
+        });
+    }
+
+    private static async Task WithCatalog(Func<Catalog, Task> test)
+    {
+        var workspace = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
+            (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace"));
+        var root = Path.Combine(workspace, "test-data", "connection-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = new Catalog(new RuntimeSettings { DataRoot = root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 65536 });
+            catalog.Initialize();
+            catalog.CreateH3cDeviceProfile(Profile());
+            await test(catalog);
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+
+    private sealed class SessionFactory(Func<IDeviceSession> create) : IDeviceSessionFactory
+    {
+        public IDeviceSession Create(string target) => create();
+    }
+
+    private sealed class ProbeSession : IDeviceSession
+    {
+        public Action? Connected { get; init; }
+        public Action? Executing { get; init; }
+        public int ConnectCount { get; private set; }
+        public int CommandCount { get; private set; }
+        public bool Disposed { get; private set; }
+        public Task ConnectAsync(CancellationToken cancellationToken) { ConnectCount++; Connected?.Invoke(); return Task.CompletedTask; }
+        public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+        {
+            CommandCount++;
+            Executing?.Invoke();
+            return Task.FromResult("H3C Comware Software, Version 7.1.070, Release 1234\n");
+        }
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    private sealed class DelegateTransportFactory(Func<IH3cSshTransport> create) : IH3cSshTransportFactory
+    {
+        public int CreateCount { get; private set; }
+        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) { CreateCount++; return create(); }
+    }
+
+    private sealed class ProbeTransport(Action connecting, Action executing) : IH3cSshTransport
+    {
+        public bool IsConnected { get; private set; }
+        public bool Disposed { get; private set; }
+        public int CommandCount { get; private set; }
+        public Task ConnectAsync(Func<string?, string?, bool> verifyHostKey, CancellationToken cancellationToken)
+        {
+            connecting();
+            Assert(verifyHostKey("ssh-ed25519", Key), "synthetic pinned key must be accepted");
+            IsConnected = true;
+            return Task.CompletedTask;
+        }
+        public Task<string> ExecuteAsync(string command, CancellationToken cancellationToken)
+        {
+            CommandCount++;
+            executing();
+            return Task.FromResult(string.Empty);
+        }
+        public void Abort() => IsConnected = false;
+        public void Dispose() { IsConnected = false; Disposed = true; }
     }
 
     private static void Assert(bool condition, string message)

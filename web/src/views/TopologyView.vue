@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Connection, Document, Refresh, Warning } from '@element-plus/icons-vue'
 import NcLayout from '../components/NcLayout.vue'
@@ -10,13 +10,9 @@ import {
   type DeviceInventoryItem,
   type DeviceInventoryPage,
   type H3cLldpClaims,
-  type H3cLldpRelation,
   type TerminalDevice,
 } from '../api/client'
-
-interface TopologyRelation extends H3cLldpRelation {
-  profileHost: string
-}
+import { topologyRelationsCsv, type TopologyRelation } from '../api/topologyExport'
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -24,6 +20,16 @@ const inventory = ref<DeviceInventoryPage | null>(null)
 const relations = ref<TopologyRelation[]>([])
 const claims = ref<H3cLldpClaims[]>([])
 const partialErrors = ref<string[]>([])
+const failedProfiles = ref<string[]>([])
+const loadedMs = ref(0)
+const filterProfile = ref(''); const filterInterface = ref(''); const filterSite = ref<string | null>(null)
+let generation = 0
+const profileOptions = computed(() => [...new Map(relations.value.map(row => [row.profileId, row.profileHost])).entries()].sort((a, b) => a[0].localeCompare(b[0])))
+const interfaceOptions = computed(() => [...new Set(relations.value.filter(row => !filterProfile.value || row.profileId === filterProfile.value).map(row => row.localInterface))].sort())
+const siteOptions = computed(() => [...new Set(relations.value.map(row => row.siteId))].sort())
+const filteredRelations = computed(() => relations.value.filter(row => (!filterProfile.value || row.profileId === filterProfile.value) && (!filterInterface.value || row.localInterface === filterInterface.value) && (filterSite.value === null || row.siteId === filterSite.value)))
+const potentiallyTruncatedProfiles = computed(() => claims.value.filter(item => item.relations.length >= 1000).map(item => item.profileId))
+watch(filterProfile, () => { filterInterface.value = '' })
 
 const assets = computed<DeviceInventoryItem[]>(() => inventory.value?.items || [])
 const summary = computed(() => inventory.value?.summary || {
@@ -54,32 +60,48 @@ function errorText(cause: unknown, fallback: string): string {
 function profileRelations(profile: TerminalDevice, result: PromiseSettledResult<H3cLldpClaims>): void {
   if (result.status === 'fulfilled') {
     claims.value.push(result.value)
-    relations.value.push(...result.value.relations.map(relation => ({ ...relation, profileHost: profile.host })))
+    relations.value.push(...result.value.relations.map(relation => ({ ...relation, profileHost: profile.host, scopeState: result.value.scopeState, claimsRevision: result.value.claimsRevision ?? '' })))
   } else {
+    failedProfiles.value.push(profile.id)
     partialErrors.value.push(`${profile.host} 的 LLDP 关系读取失败`)
   }
 }
 async function refresh(): Promise<void> {
+  const current = ++generation
   loading.value = true
   errorMessage.value = ''
   partialErrors.value = []
+  failedProfiles.value = []; loadedMs.value = 0
+  filterProfile.value = ''; filterInterface.value = ''; filterSite.value = null
   inventory.value = null
   claims.value = []
   relations.value = []
   try {
     const [inventoryResult, profilesResult] = await Promise.all([getDeviceInventory({ page: 1, pageSize: 100 }), getH3cProfiles()])
+    if (current !== generation) return
     inventory.value = inventoryResult
     const relationResults = await Promise.allSettled(profilesResult.map(profile => getH3cLldpClaims(profile.id, { history: false, limit: 1000 })))
+    if (current !== generation) return
     relationResults.forEach((result, index) => profileRelations(profilesResult[index], result))
+    loadedMs.value = Date.now()
   } catch (cause) {
+    if (current !== generation) return
     errorMessage.value = errorText(cause, '拓扑与资产数据读取失败，请刷新重试。')
     ElMessage.error(errorMessage.value)
   } finally {
-    loading.value = false
+    if (current === generation) loading.value = false
   }
+}
+function exportRelations(): void {
+  if (loading.value || !loadedMs.value || !filteredRelations.value.length) return
+  const text = topologyRelationsCsv(filteredRelations.value, { loadedMs: loadedMs.value, exportedMs: Date.now(), failedProfiles: failedProfiles.value, potentiallyTruncatedProfiles: potentiallyTruncatedProfiles.value })
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `lldp-relations-${new Date().toISOString().replaceAll(':', '-')}.csv`; anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 onMounted(() => { void refresh() })
+onBeforeUnmount(() => { ++generation })
 </script>
 
 <template>
@@ -110,8 +132,18 @@ onMounted(() => { void refresh() })
           <div class="card__body table-wrap"><table class="data-table"><thead><tr><th>状态</th><th>设备</th><th>管理地址</th><th>厂商 / 类型</th><th>局点 / 分组</th><th>更新时间</th></tr></thead><tbody><tr v-for="asset in assets" :key="asset.id"><td><span :class="['state-pill', statusClass(asset.connectionStatus)]">{{ statusLabel(asset.connectionStatus) }}</span></td><td><b>{{ asset.name }}</b><small class="device-subline mono">{{ asset.deviceId || asset.id }}</small></td><td class="mono">{{ asset.managementIp || asset.managementAddress }}:{{ asset.port }}</td><td>{{ asset.vendor }}<small class="device-subline">{{ asset.deviceType }} · {{ asset.model || '型号未知' }}</small></td><td>{{ asset.site }}<small class="device-subline">{{ asset.group || '未分组' }}</small></td><td>{{ formatTime(asset.updatedAt || asset.lastSeenMs) }}</td></tr><tr v-if="!assets.length"><td colspan="6"><div class="empty-state"><el-icon><Document /></el-icon><strong>暂无资产</strong><small>当前授权范围没有服务端设备库存记录。</small></div></td></tr></tbody></table></div>
         </section>
         <section class="card">
-          <div class="card__header"><div><h2>LLDP 邻居关系</h2><p>关系来源、捕获时间和 revision 保留在每一行，避免把历史或未知状态当作当前拓扑。</p></div><span class="state-pill info">{{ relationCount }} 条</span></div>
-          <div class="card__body table-wrap"><table class="data-table"><thead><tr><th>来源设备</th><th>本地接口</th><th>邻居设备 / 端口</th><th>邻居管理地址</th><th>Site</th><th>捕获时间 / 来源</th></tr></thead><tbody><tr v-for="relation in relations" :key="`${relation.profileId}:${relation.relationKey}:${relation.factRevision}`"><td><b>{{ relation.profileHost }}</b><small class="device-subline mono">{{ relation.profileId }}</small></td><td class="mono">{{ relation.localInterface }}</td><td>{{ relation.neighborDevice }}<small class="device-subline mono">{{ relation.neighborPort || '端口未知' }}</small></td><td class="mono">{{ relation.neighborManagementAddress || '地址未知' }}</td><td>{{ relation.siteId || 'Site 未知' }}</td><td>{{ formatTime(relation.capturedMs) }}<small class="device-subline">{{ relation.source }} · {{ relation.changeKind }} · {{ relation.factRevision }}</small></td></tr><tr v-if="!relations.length"><td colspan="6"><div class="empty-state"><el-icon><Connection /></el-icon><strong>暂无 LLDP 关系</strong><small>当前授权范围没有带 scope 的 LLDP 关系事实，页面不会绘制推断拓扑。</small></div></td></tr></tbody></table></div>
+          <div class="card__header"><div><h2>LLDP 邻居关系</h2><p>关系来源、捕获时间和 revision 保留在每一行，避免把历史或未知状态当作当前拓扑。</p></div><span class="state-pill info">{{ filteredRelations.length }} / {{ relationCount }} 条</span></div>
+          <div class="card__body">
+            <div class="toolbar">
+              <label class="form-field"><span>来源设备（精确档案）</span><select v-model="filterProfile" aria-label="LLDP 来源设备" :disabled="loading"><option value="">全部设备</option><option v-for="[id, host] in profileOptions" :key="id" :value="id">{{ host }} · {{ id }}</option></select></label>
+              <label class="form-field"><span>本地接口（精确）</span><select v-model="filterInterface" aria-label="LLDP 本地接口" :disabled="loading"><option value="">全部接口</option><option v-for="name in interfaceOptions" :key="name" :value="name">{{ name }}</option></select></label>
+              <label class="form-field"><span>Site（精确）</span><select v-model="filterSite" aria-label="LLDP Site" :disabled="loading"><option :value="null">全部 Site</option><option v-for="id in siteOptions" :key="id" :value="id">{{ id || 'Site 未知' }}</option></select></label>
+              <el-button :disabled="loading || !filteredRelations.length" @click="exportRelations">导出当前筛选 LLDP CSV</el-button>
+            </div>
+            <p class="muted">仅筛选和导出当前已加载的授权事实，每档案最多读取 1000 条；不触发设备采集。加载时间 {{ formatTime(loadedMs) }}，各行捕获时间可能不同，不代表同一时刻的网络快照。</p>
+            <p v-if="potentiallyTruncatedProfiles.length" class="data-quality-note" role="status">{{ potentiallyTruncatedProfiles.length }} 个档案达到单次读取上限，导出已标记可能不完整。</p>
+            <div class="table-wrap"><table class="data-table" aria-label="LLDP 关系表"><thead><tr><th>来源设备</th><th>本地接口</th><th>邻居设备 / 端口</th><th>邻居管理地址</th><th>Site</th><th>捕获时间 / 来源</th></tr></thead><tbody><tr v-for="relation in filteredRelations" :key="`${relation.profileId}:${relation.relationKey}:${relation.factRevision}`"><td><b>{{ relation.profileHost }}</b><small class="device-subline mono">{{ relation.profileId }}</small></td><td class="mono">{{ relation.localInterface }}</td><td>{{ relation.neighborDevice }}<small class="device-subline mono">{{ relation.neighborPort || '端口未知' }}</small></td><td class="mono">{{ relation.neighborManagementAddress || '地址未知' }}</td><td>{{ relation.siteId || 'Site 未知' }}</td><td>{{ formatTime(relation.capturedMs) }}<small class="device-subline">{{ relation.source }} · {{ relation.changeKind }} · {{ relation.factRevision }}</small><small class="device-subline">{{ relation.scopeState }} · claims {{ relation.claimsRevision || '—' }}</small></td></tr><tr v-if="!filteredRelations.length"><td colspan="6"><div class="empty-state"><el-icon><Connection /></el-icon><strong>{{ relations.length ? '当前筛选没有匹配关系' : '暂无 LLDP 关系' }}</strong><small>当前授权范围没有匹配的 LLDP 关系事实，页面不会绘制推断拓扑。</small></div></td></tr></tbody></table></div>
+          </div>
         </section>
         <div v-if="loadedEmpty" class="card" data-testid="topology-empty"><div class="empty-state"><strong>当前工作区暂无可用拓扑或资产数据</strong><small>服务端返回了空库存和空 LLDP 关系。</small></div></div>
       </template>

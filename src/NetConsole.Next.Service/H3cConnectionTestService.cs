@@ -30,17 +30,24 @@ internal sealed class H3cConnectionTestService(
     // wait for minutes in that case.
     private static readonly TimeSpan DeviceInfoTimeout = TimeSpan.FromSeconds(15);
 
-    public async Task<H3cConnectionTestResult?> TestAsync(string deviceId, CancellationToken cancellationToken)
+    public async Task<H3cConnectionTestResult?> TestAsync(string deviceId, CancellationToken cancellationToken,
+        Action? operationBoundary = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        operationBoundary?.Invoke();
         var profile = catalog.GetH3cDeviceProfile(deviceId);
         if (profile is null) return null;
         var started = Stopwatch.GetTimestamp();
         var protocol = ProtocolFor(profile);
         try
         {
+            operationBoundary?.Invoke();
             await using var session = sessions.Create(deviceId);
+            if (operationBoundary is not null) session.SetOperationBoundary(operationBoundary);
+            operationBoundary?.Invoke();
             try { await session.ConnectAsync(cancellationToken).ConfigureAwait(false); }
             finally { protocol = session.Protocol; }
+            operationBoundary?.Invoke();
             // Explicit Telnet and AUTO fallback use the same authenticated
             // session as collection. A login probe need not run another command.
             if (protocol == "TELNET")
@@ -51,19 +58,22 @@ internal sealed class H3cConnectionTestService(
             {
                 var versionOutput = await session.ExecuteAsync(H3cCommandPolicy.DisplayVersion, deviceInfoTimeout.Token)
                     .ConfigureAwait(false);
+                operationBoundary?.Invoke();
                 var version = H3cComwareParser.ParseVersion(versionOutput);
                 return Success(profile, started, protocol, version);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                operationBoundary?.Invoke();
                 // Authentication and host-key handling already succeeded.  A
                 // device-info command timeout is a useful, bounded result and
                 // must not be reported as an HTTP 500 or a failed login.
                 return ConnectedWithoutDeviceInfo(profile, started,
                     "连接成功，但设备信息识别超时");
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is not TaskScopeRevokedException && !cancellationToken.IsCancellationRequested)
             {
+                operationBoundary?.Invoke();
                 // The SSH handshake and password authentication have already
                 // completed.  Older HCL images may close or stall an Exec
                 // channel; preserve the useful login result and keep the
@@ -72,12 +82,14 @@ internal sealed class H3cConnectionTestService(
                     "连接成功，但设备信息识别失败");
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not TaskScopeRevokedException)
         {
+            operationBoundary?.Invoke();
             return Failure(profile, started, protocol, MapFailure(ex));
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            operationBoundary?.Invoke();
             // Telnet login uses a short internal read window.  Translate that
             // timeout to the same safe connection result as SSH instead of
             // letting the request pipeline emit an unhandled 500.

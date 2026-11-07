@@ -15,6 +15,12 @@ export interface HealthSnapshot {
   rawWriteAvailable: boolean
   rawSegments?: { finalized: number; incomplete: number; missing: number }
   udpReceived: number
+  udpAccepted?: number
+  udpDropped?: number
+  udpQueueDepth?: number
+  udpQueueCapacity?: number
+  lastReceivedMs?: number | null
+  lastPersistedMs?: number | null
   rawFlushedRecords: number
   h3cMetrics?: { activeSshSessions: number; collectionFailures: number }
   unresolvedIntegrityIssues?: number
@@ -1075,7 +1081,7 @@ export function clearCsrfToken(): void {
   csrfToken = ''
 }
 
-async function request<T>(path: string, init: RequestInit = {}, allowErrorBody = false): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}, allowErrorBody = false): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (init.method && !['GET', 'HEAD'].includes(init.method.toUpperCase()) && csrfToken) {
@@ -1676,6 +1682,7 @@ export interface H3cOperationalCapability {
 }
 export interface H3cOperationalCapabilityView {
   profileId: string; model: string | null; version: string | null; release: string | null; asOf: number
+  controllerRole?: string | null; controllerRoleNormalized?: string | null
   capabilities: H3cOperationalCapability[]
 }
 export function getH3cOperationalCapabilities(profileId: string): Promise<H3cOperationalCapabilityView> {

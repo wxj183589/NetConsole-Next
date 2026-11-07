@@ -23,6 +23,7 @@ const planCommands = [
   ['display wlan ap unauthenticated', '未认证 AP'], ['display wlan ap all lldp', 'AP LLDP'],
   ['display wlan ap all verbose', 'AP 详细回显'], ['display cpu-usage', 'CPU 使用率'],
   ['display memory', '内存使用'], ['display device manuinfo', '设备制造信息'],
+  ['display wlan ac-role', '控制器角色'],
 ] as const
 function selectAcPlan(): void {
   selectedCommands.value = ['display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']

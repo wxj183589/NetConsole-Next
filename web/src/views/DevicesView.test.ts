@@ -15,7 +15,8 @@ vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: vi.fn()
 const profile = { id: 'connection-b', host: '192.0.2.10' }
 const item = { id: 'inventory-b', name: '交换机乙', managementIp: profile.host, vendor: 'H3C', deviceType: 'SWITCH', terminalProfileId: profile.id, siteId: 'local', isValid: true, qualityIssues: [] }
 const detail = () => ({ item: { ...item }, terminalProfileId: profile.id, terminalProfile: { ...profile }, recentSessions: [], auditEvents: [] })
-const capabilities = () => ({ profileId: profile.id, model: 'S9850-HCL', version: '7.1.070', release: 'R6555', asOf: Date.now(), capabilities: [
+const capabilities = () => ({ profileId: profile.id, model: 'S9850-HCL', version: '7.1.070', release: 'R6555', controllerRole: 'Common', controllerRoleNormalized: 'COMMON', asOf: Date.now(), capabilities: [
+  { key: 'AC_ROLE_READ', state: 'VERIFIED', reason: 'COLLECTED_RAW_VERIFIED', evidenceIds: ['raw-role-1'], capturedMs: Date.now(), source: 'NETMIKO_SSH', freshness: 'RECENT' },
   { key: 'INTERFACE_READ', state: 'VERIFIED', reason: 'COLLECTED_RAW_VERIFIED', evidenceIds: ['raw-interface-1'], capturedMs: Date.now(), source: 'NETMIKO_SSH', freshness: 'RECENT' },
   { key: 'LLDP_READ', state: 'STALE', reason: 'EVIDENCE_EXPIRED', evidenceIds: ['raw-lldp-1'], capturedMs: Date.now() - 600000, source: 'NETMIKO_SSH', freshness: 'STALE' },
   { key: 'HA_SWITCH', state: 'UNKNOWN', reason: 'NOT_VERIFIED', evidenceIds: [], capturedMs: null, source: 'NONE', freshness: 'UNKNOWN' },
@@ -98,7 +99,7 @@ describe('device detail configuration backup entry', () => {
     const { wrapper } = await render()
     expect(api.getH3cOperationalCapabilities).toHaveBeenCalledWith(profile.id)
     const evidence = wrapper.get('[data-testid="device-operational-capabilities"]')
-    for (const text of ['S9850-HCL', '7.1.070', 'R6555', 'VERIFIED', 'STALE', 'UNKNOWN', 'NETMIKO_SSH', 'raw-interface-1', 'raw-lldp-1']) expect(evidence.text()).toContain(text)
+    for (const text of ['S9850-HCL', '7.1.070', 'R6555', 'Common → COMMON', '控制器角色读取', 'raw-role-1', 'VERIFIED', 'STALE', 'UNKNOWN', 'NETMIKO_SSH', 'raw-interface-1', 'raw-lldp-1']) expect(evidence.text()).toContain(text)
     expect(wrapper.text()).not.toContain('当前版本没有对应设备详情 API')
   })
 

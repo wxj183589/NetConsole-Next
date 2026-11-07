@@ -22,7 +22,10 @@ internal static class SimulatorConfigurationTests
         await VerifyLiveRevocation();
         await VerifySerialization();
         await VerifyCaptureErrors();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=12/12 PASS");
+        await VerifyReconnectFailureRecovery();
+        await RejectChangedReadbackVersion();
+        await RejectChangedRollbackVersion();
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=15/15 PASS");
     }
 
     private static async Task CaptureAndRedact()
@@ -77,7 +80,7 @@ internal static class SimulatorConfigurationTests
         var backup = await fixture.Capture();
         var change = await fixture.Change(backup, "verified-description");
         Assert(change.State == "VERIFIED" && change.BeforeBackupId is not null && change.AfterBackupId is not null &&
-            change.RollbackBackupId is null && fixture.Factory.Writes == 1, "Writer success requires persisted before and verified after snapshots");
+            change.RollbackBackupId is null && fixture.Factory.Writes == 1 && fixture.Factory.Opens == 3, "Writer success requires persisted before and verified after snapshots");
         Assert(SimulatorConfigurationService.Description(fixture.Factory.Text, Interface) == "verified-description", "readback must contain desired description");
         var next = fixture.Service.List(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Single(item => item.Id == change.AfterBackupId);
         var noChange = await fixture.Change(next, "verified-description");
@@ -105,7 +108,8 @@ internal static class SimulatorConfigurationTests
             var failureExpected = mode is "rollback-fails" or "unrelated-drift";
             Assert(change.State == (failureExpected ? "ROLLBACK_FAILED" : "ROLLBACK_VERIFIED") && change.Error is not null,
                 $"{mode}: uncertain write or readback mismatch must attempt independent recovery and report evidence");
-            Assert(fixture.Factory.Opens == 3 && fixture.Factory.Writes == 2, "recovery must use a new bounded session and exactly one rollback write");
+            var expectedOpens = mode == "rollback-fails" ? 3 : mode == "throw-after-write" ? 4 : 5;
+            Assert(fixture.Factory.Opens == expectedOpens && fixture.Factory.Writes == 2, "recovery must close write sessions, reconnect for readback and perform exactly one rollback write");
             if (!failureExpected)
                 Assert(fixture.Factory.Text == Original && change.RollbackBackupId is not null, "successful rollback requires full original configuration equality");
         }
@@ -188,6 +192,39 @@ internal static class SimulatorConfigurationTests
         catch (OperationCanceledException) { }
     }
 
+    private static async Task VerifyReconnectFailureRecovery()
+    {
+        using var fixture = new Fixture();
+        var backup = await fixture.Capture();
+        fixture.Factory.FailOpenAt = 3;
+        var change = await fixture.Change(backup, "new-description");
+        Assert(change.State == "ROLLBACK_VERIFIED" && change.Error == "CONFIG_DEVICE_CONNECTION_LOST" &&
+            change.AfterBackupId is null && change.RollbackBackupId is not null && fixture.Factory.Opens == 5 &&
+            fixture.Factory.Text == Original && fixture.Factory.MaximumActive == 1,
+            "a failed fresh readback connection requires independent rollback and fresh rollback verification");
+    }
+
+    private static async Task RejectChangedReadbackVersion()
+    {
+        using var fixture = new Fixture();
+        var backup = await fixture.Capture();
+        fixture.Factory.Mode = "readback-version-drift";
+        var change = await fixture.Change(backup, "new-description");
+        Assert(change.State == "ROLLBACK_VERIFIED" && change.Error == "CONFIG_CHANGE_READBACK_MISMATCH",
+            "matching description cannot hide a changed device software version after reconnect");
+    }
+
+    private static async Task RejectChangedRollbackVersion()
+    {
+        using var fixture = new Fixture();
+        var backup = await fixture.Capture();
+        fixture.Factory.Mode = "rollback-version-drift";
+        var change = await fixture.Change(backup, "new-description");
+        Assert(change.State == "ROLLBACK_FAILED" && change.RollbackBackupId is not null &&
+            change.Error!.Contains("CONFIG_ROLLBACK_READBACK_MISMATCH") && fixture.Factory.Text == Original,
+            "matching restored configuration alone cannot verify rollback after device version drift");
+    }
+
     private static async Task Reject<T>(Func<Task<T>> action, string code)
     {
         try { await action(); }
@@ -237,19 +274,29 @@ internal static class SimulatorConfigurationTests
         public string Text = Original;
         public string Mode = "normal";
         public int Opens;
+        public int FailOpenAt;
+        public int Active;
+        public int MaximumActive;
         public int Writes;
         public bool DelayReads;
         public Action? OnConfigurationRead;
         public Exception? OpenError;
         public Task<ISimulatorConfigurationSession> OpenAsync(H3cDeviceProfileSnapshot profile, CancellationToken cancellationToken)
-        { Opens++; if (OpenError is not null) throw OpenError; return Task.FromResult<ISimulatorConfigurationSession>(new Session(this)); }
+        {
+            Opens++;
+            if (OpenError is not null) throw OpenError;
+            if (Opens == FailOpenAt) throw new H3cConnectionLostException();
+            Active++; MaximumActive = Math.Max(MaximumActive, Active);
+            return Task.FromResult<ISimulatorConfigurationSession>(new Session(this));
+        }
         private sealed class Session(Factory owner) : ISimulatorConfigurationSession
         {
             public async Task<string> ReadAsync(string command, CancellationToken cancellationToken)
             {
                 if (owner.DelayReads) await Task.Delay(15, cancellationToken);
                 if (command == H3cCommandPolicy.DisplayVersion)
-                    return "H3C Comware Software, Version 7.1.070, Release 3507P26\nH3C WA6638 uptime is 1 day\n";
+                    return "H3C Comware Software, Version 7.1.070, Release " +
+                        ((owner.Mode == "readback-version-drift" && owner.Writes == 1 || owner.Mode == "rollback-version-drift" && owner.Writes == 2) ? "9999" : "3507P26") + "\nH3C WA6638 uptime is 1 day\n";
                 Assert(command == H3cCommandPolicy.DisplayCurrentConfiguration, "only two read commands are expected");
                 if (owner.Mode == "fail-readback" && owner.Writes == 1) throw new IOException("synthetic readback interruption");
                 owner.OnConfigurationRead?.Invoke();
@@ -266,10 +313,10 @@ internal static class SimulatorConfigurationTests
                     if (description is not null) owner.Text = owner.Text.Replace("interface " + interfaceName + "\n", "interface " + interfaceName + "\n description " + description + "\n");
                 }
                 if (owner.Writes == 1 && owner.Mode == "unrelated-drift") owner.Text = owner.Text.Replace("sysname fixture", "sysname drifted");
-                if (owner.Writes == 1 && owner.Mode is "throw-after-write" or "rollback-fails") throw new IOException("synthetic uncertain write");
+                if (owner.Writes == 1 && owner.Mode is "throw-after-write" or "rollback-fails" or "rollback-version-drift") throw new IOException("synthetic uncertain write");
                 return Task.CompletedTask;
             }
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            public ValueTask DisposeAsync() { owner.Active--; return ValueTask.CompletedTask; }
         }
     }
 }

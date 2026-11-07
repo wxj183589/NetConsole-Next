@@ -22,6 +22,7 @@ const acCommands = [
   { command: 'display cpu-usage', label: 'AC CPU', required: false },
   { command: 'display memory', label: 'AC 内存', required: false },
   { command: 'display device manuinfo', label: 'AC 制造信息', required: false },
+  { command: 'display wlan ac-role', label: '控制器报告角色', required: false },
 ].map(item => ({ ...item, kind: `command.${item.command.replaceAll(' ', '.')}` }))
 const acKinds = new Set(acCommands.map(item => item.kind))
 const relations = ref<H3cLldpRelation[]>([])

@@ -73,7 +73,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
             .Select(item => item.Trim()).Distinct(StringComparer.Ordinal).ToArray();
         if (profiles.Length is < 1 or > MaximumProfiles || profiles.Any(item => !IsSafeId(item)))
             throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_TARGET_LIMIT", "每个计划请选择 1 至 32 台设备。", 400);
-        RequireTargets(profiles, current, scope);
+        RequireTargets(profiles, current, scope, kind);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var item = new ConfigBackupScheduleSnapshot(Guid.NewGuid().ToString("N"), current.UserId, profiles,
             kind, request.IntervalMinutes, true, now, NextDue(now, request.IntervalMinutes), null, null,
@@ -106,7 +106,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
         {
             if (!_schedules.TryGetValue(id, out var item) || !IsVisible(item, current, scope)) return null;
             if (item.Enabled == enabled) return Copy(item);
-            if (enabled) RequireTargets(item.ProfileIds, current, scope);
+            if (enabled) RequireTargets(item.ProfileIds, current, scope, item.ConfigurationKind);
             item = item with { Enabled = enabled,
                 NextRunMs = enabled ? NextDue(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), item.IntervalMinutes) : null };
             Commit(item);
@@ -181,7 +181,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
                 {
                     var actor = CurrentOwner(item.OwnerUserId);
                     var scope = _scopes.Resolve(actor);
-                    RequireTargets(item.ProfileIds, actor, scope);
+                    RequireTargets(item.ProfileIds, actor, scope, item.ConfigurationKind);
                     // Start captures a new endpoint/scope now; its scheduler
                     // resolves the profile's current credential for this run.
                     batch = _backups.Start(item.ProfileIds, actor, scope, item.ConfigurationKind, retainUntilObserved: true);
@@ -226,7 +226,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
             throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_OWNER_REVOKED", "计划所有者已停用或不再具备执行权限。", 403);
     }
 
-    private void RequireTargets(IReadOnlyList<string> profiles, WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    private void RequireTargets(IReadOnlyList<string> profiles, WebUserIdentity actor, P2B5SiteScopeDecision scope, string kind)
     {
         if (!scope.IsAuthorized)
             throw new ConfigBackupException("CONFIG_BACKUP_SCOPE_DENIED", "当前 Site 权限不可用。", 403);
@@ -241,6 +241,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
                 string.Equals(target.DeviceType, "FIT_AP", StringComparison.OrdinalIgnoreCase))
                 throw new ConfigBackupException("CONFIG_BACKUP_TARGET_UNSUPPORTED", "当前配置备份仅支持独立管理的 H3C 设备。", 409);
             _ = _taskScopes.CaptureDefinition(profile, actor.UserId);
+            _backups.ValidateCompleteTarget(profile, actor, scope, kind);
         }
     }
 

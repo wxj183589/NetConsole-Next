@@ -51,7 +51,7 @@ const taskDetail = ref<WirelessTaskReport | null>(null)
 const taskRetryBusy = ref(false)
 const taskRetryError = ref('')
 const taskRetryRunning = computed(() => taskDetail.value?.retries?.some(retry => ['QUEUED', 'RUNNING'].includes(retry.state)) || false)
-const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']
+const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio', 'display wlan ac-role']
 const taskCommands = ref(['display version', 'display wlan ap all', 'display wlan ap all address'])
 const taskSubmitting = ref(false)
 const taskError = ref('')

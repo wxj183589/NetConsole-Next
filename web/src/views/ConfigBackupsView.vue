@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import ConfigBackupSchedules from '../components/ConfigBackupSchedules.vue'
 import SimulatorConfiguration from '../components/SimulatorConfiguration.vue'
+import CompleteConfigurationBulk from '../components/CompleteConfigurationBulk.vue'
 import { ApiRequestError, createConfigBackup, downloadConfigBackup, executeConfigRestore, getConfigBackupBatch, getConfigBackups, getDeviceInventoryDetail, getH3cProfiles, getConfigBackupDiff, getModuleStates, previewConfigRestore, type ConfigBackupBatch, type ConfigBackupDiff, type ConfigBackupKind, type ConfigBackupSnapshot, type ConfigRestoreExecutionResult, type ConfigRestorePreview, type DeviceInventoryItem, type TerminalDevice } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
@@ -227,6 +228,7 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
     <template #actions><el-button size="small" :loading="loading" @click="refresh">刷新</el-button></template>
     <section v-if="!isSuperAdmin" class="data-quality-note">当前角色不能执行配置备份；页面仍可显示已有授权历史。</section>
     <section v-if="unavailable" class="data-quality-note" role="status">{{ unavailable }}</section>
+    <CompleteConfigurationBulk v-if="moduleAvailable && isSuperAdmin" :selected-profile-ids="selected" @inspect="profileId = $event" />
     <section v-if="moduleAvailable" class="card">
       <div class="card__header"><h2>{{ hasDeviceContext ? '当前设备' : '选择设备' }}</h2><span class="state-pill">{{ selected.length }} 台</span></div>
       <div class="card__body">

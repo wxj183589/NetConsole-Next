@@ -74,15 +74,16 @@ internal sealed record ConfigBackupDiff(
 internal static class ConfigBackupKinds
 {
     public const string Running = "RUNNING";
+    public const string CompleteRunning = "COMPLETE_RUNNING";
     public const string Saved = "SAVED";
     public const string StartupInfo = "STARTUP_INFO";
     public const string StartupBody = "STARTUP_BODY";
 
     public static bool IsSupported(string? kind) => kind is Running or Saved or StartupInfo or StartupBody;
-    public static bool IsScheduled(string? kind) => kind is Running or Saved or StartupInfo;
+    public static bool IsScheduled(string? kind) => kind is Running or Saved or StartupInfo or CompleteRunning;
     public static string CommandFor(string kind) => kind switch
     {
-        Running => H3cCommandPolicy.DisplayCurrentConfiguration,
+        Running or CompleteRunning => H3cCommandPolicy.DisplayCurrentConfiguration,
         Saved => H3cCommandPolicy.DisplaySavedConfiguration,
         StartupInfo => H3cCommandPolicy.DisplayStartup,
         _ => throw new ConfigBackupException("CONFIG_BACKUP_KIND_UNSUPPORTED", "请选择运行配置、保存配置或启动配置指向。", 400)
@@ -135,7 +136,8 @@ internal sealed class ConfigBackupService(
     Catalog catalog,
     BoundedCollectionScheduler scheduler,
     TaskSiteScopeAuthorizer taskScopes,
-    RuntimeSettings settings)
+    RuntimeSettings settings,
+    SimulatorConfigurationService? completeConfigurations = null)
 {
     private const int MaxProfilesPerBatch = 32;
     private const int MaxHistory = 100;
@@ -167,6 +169,7 @@ internal sealed class ConfigBackupService(
                 throw new ConfigBackupException("CONFIG_BACKUP_TARGET_NOT_VISIBLE", "所选设备不在当前 Site 权限范围内。", 404);
             var snapshot = taskScopes.CaptureDefinition(profileId, actor.UserId);
             RequireSupportedTarget(profileId);
+            ValidateCompleteTarget(profileId, actor, scope, kind);
             items.Add(new(profileId, snapshot, "QUEUED", null, null));
         }
 
@@ -220,6 +223,16 @@ internal sealed class ConfigBackupService(
         using var stream = opened.Value.Stream;
         using var reader = new StreamReader(stream, Encoding.UTF8);
         return StartupConfigurationSupport.Inspect(reader.ReadToEnd());
+    }
+
+    internal void ValidateCompleteTarget(string profileId, WebUserIdentity actor,
+        P2B5SiteScopeDecision scope, string kind)
+    {
+        if (kind != ConfigBackupKinds.CompleteRunning) return;
+        if (completeConfigurations is null)
+            throw new ConfigBackupException("CONFIG_COMPLETE_SERVICE_UNAVAILABLE", "完整配置服务不可用。", 503);
+        try { completeConfigurations.ValidateCaptureTarget(profileId, actor, scope); }
+        catch (ConfigRestoreException ex) { throw new ConfigBackupException(ex.Code, "完整配置目标不符合授权条件。", ex.StatusCode); }
     }
 
     private void RequireSupportedTarget(string profileId)
@@ -509,6 +522,19 @@ internal sealed class ConfigBackupService(
         {
             RequireSupportedTarget(item.ProfileId);
             item.State = "RUNNING";
+            if (batch.ConfigurationKind == ConfigBackupKinds.CompleteRunning)
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                var actor = catalog.GetActiveTaskActor(batch.ActorUserId)
+                    ?? throw new TaskScopeRevokedException("TASK_ACTOR_REVOKED_ADMISSION");
+                var backup = await completeConfigurations!.CaptureFrozenAsync(item.ProfileId, actor,
+                    P2B5SiteScopeDecision.Global, item.Scope, deadline.Token).ConfigureAwait(false);
+                item.TaskRunId = backup.TaskId;
+                item.SnapshotId = backup.Id;
+                item.State = "SUCCEEDED";
+                return;
+            }
+
             var definitionId = $"config-backup-{batch.Id[..16]}-{Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(item.ProfileId))).ToLowerInvariant()[..12]}";
             catalog.CreateTaskDefinition(definitionId, "H3C_SSH_READONLY",
@@ -554,13 +580,15 @@ internal sealed class ConfigBackupService(
             catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "SUCCEEDED", item.ProfileId, runId,
                 Array.Empty<string>(), $"snapshot={snapshot.Id};kind={snapshot.ConfigurationKind};version={snapshot.Version}");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             item.State = "FAILED";
             item.Error = ex switch
             {
                 TaskScopeRevokedException scope => scope.Reason,
                 ConfigBackupException backup => backup.Code,
+                ConfigRestoreException restore => restore.Code,
+                OperationCanceledException => "CONFIG_BACKUP_TIMED_OUT",
                 _ => ex.GetType().Name
             };
             catalog.TryRecordDeviceAuditEvent(batch.ActorUserId, "CONFIG_BACKUP", "FAILED", item.ProfileId,

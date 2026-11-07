@@ -15,6 +15,7 @@ internal static class H3cAcResources
     public const string DisplayCpuUsage = "display cpu-usage";
     public const string DisplayMemory = "display memory";
     public const string DisplayDeviceManuinfo = "display device manuinfo";
+    public const string DisplayWlanAcRole = "display wlan ac-role";
 
     public static IReadOnlyList<string> RequiredCommands { get; } = Array.AsReadOnly(new[]
     {
@@ -31,17 +32,18 @@ internal static class H3cAcResources
     public static IReadOnlyList<string> OverviewCommands { get; } = Array.AsReadOnly(new[]
     {
         DisplayCpuUsage, DisplayMemory, H3cCommandPolicy.DisplayVersion,
-        H3cCommandPolicy.DisplayDevice, DisplayDeviceManuinfo
+        H3cCommandPolicy.DisplayDevice, DisplayDeviceManuinfo, DisplayWlanAcRole
     });
 
     public static bool IsAllowed(string command) => command is
         DisplayWlanApAllRadioBbssid or DisplayWlanApAllConnectionRecord or DisplayWlanApAllRadioType or
         DisplayWlanApUnauthenticated or DisplayWlanApAllLldp or DisplayWlanApAllVerbose or
-        DisplayCpuUsage or DisplayMemory or DisplayDeviceManuinfo;
+        DisplayCpuUsage or DisplayMemory or DisplayDeviceManuinfo or DisplayWlanAcRole;
 
     public static H3cParseResult? TryParse(string command, string output, bool completedExec = false)
     {
         if (!IsAllowed(command)) return null;
+        if (command == DisplayWlanAcRole) return H3cControllerRoleParser.ParseJson(output, completedExec);
         var transcript = ParseTranscript(command, output, completedExec);
         var status = transcript.Status switch
         {

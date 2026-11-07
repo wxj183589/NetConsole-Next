@@ -8,9 +8,10 @@ internal static class H3cAcResourceTests
     public static async Task RunAsync()
     {
         FixedCommandsAndTranscriptStates();
+        ControllerRoleStates();
         await FullPlanPublishesEverySealedCommand();
         OptionalFailureStatesRemainEvidence();
-        Console.WriteLine("H3C_AC_RESOURCE_TESTS=3/3 PASS");
+        Console.WriteLine("H3C_AC_RESOURCE_TESTS=4/4 PASS");
     }
 
     private static void FixedCommandsAndTranscriptStates()
@@ -21,7 +22,8 @@ internal static class H3cAcResourceTests
         foreach (var command in H3cAcResources.OptionalCommands.Concat(H3cAcResources.OverviewCommands))
             Assert(H3cCommandPolicy.IsAllowed(command), "fixed inherited optional/overview commands must use the shared command policy");
         foreach (var command in new[] { "display wlan ap name guessed verbose", "display wlan ap address",
-            "display wlan ap all verbose; system-view", "display wlan ap all verbose\nsystem-view" })
+            "display wlan ap all verbose; system-view", "display wlan ap all verbose\nsystem-view",
+            "display wlan ac-role; system-view", "display wlan ac-role\nsystem-view" })
             Assert(!H3cAcResources.IsAllowed(command) && H3cAcResources.TryParse(command, "output") is null,
                 "unverified templates, aliases and extra CLI operations are never inferred");
 
@@ -65,7 +67,7 @@ internal static class H3cAcResourceTests
         do { await Task.Delay(10, timeout.Token); run = scheduler.Get(id)!; }
         while (run.State is not ("SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT"));
         var facts = fixture.Catalog.QueryH3cFacts(fixture.Profile);
-        Assert(run.State == "SUCCEEDED" && facts.Count == commands.Length && facts.All(item => item.CollectedRawVerified),
+        Assert(run.State == "SUCCEEDED" && facts.Count == commands.Length + 1 && facts.All(item => item.CollectedRawVerified),
             "every required/optional/overview command including Radio publishes a fact backed by the sealed multi-command Raw");
         foreach (var command in commands)
         {
@@ -77,11 +79,46 @@ internal static class H3cAcResourceTests
                 !string.IsNullOrEmpty(json.RootElement.GetProperty("output").GetString()),
                 "command facts retain exact command text, output and captured profile/Raw provenance");
         }
+        var role = facts.Single(item => item.Kind == "controller.role");
+        var capability = H3cOperationalCapabilities.Project(fixture.Profile, facts, role.CapturedMs);
+        Assert(role.Status == "STALE" && role.CollectedRawVerified && capability.ControllerRole == "Common" &&
+            capability.ControllerRoleNormalized == "COMMON" &&
+            capability.Capabilities.Single(item => item.Key == "AC_ROLE_READ").State == "VERIFIED" &&
+            capability.Capabilities.Single(item => item.Key == "HA_SWITCH").State == "UNKNOWN",
+            "sealed controller Common evidence proves role read only, independently of AP redundancy and HA switching");
         Assert(new Catalog(fixture.Settings).QueryH3cFacts(fixture.Profile).All(item => item.CollectedRawVerified),
             "Radio and optional command Raw provenance survives Catalog restart");
         var groups = new WirelessReadModelService(fixture.Catalog).GetSnapshot(P2B5SiteScopeDecision.Global).ApGroups;
         Assert(groups.Count == 1 && groups.Single().GroupIdentityStatus == "CANDIDATE" && groups.Single().SourceGroupKey is null,
             "AP-list group names never become fabricated vendor group IDs through the expanded command plan");
+    }
+
+    private static void ControllerRoleStates()
+    {
+        const string command = H3cAcResources.DisplayWlanAcRole;
+        foreach (var sample in new[]
+        {
+            (Body: "Current AC role: Common.", Status: "PARSED", Raw: "Common", Normalized: "COMMON"),
+            (Body: "Current AC role: Master.", Status: "PARSED", Raw: "Master", Normalized: "MASTER"),
+            (Body: "Current AC role: Backup.", Status: "PARSED", Raw: "Backup", Normalized: "BACKUP"),
+            (Body: "Current AC role: Vendor role.", Status: "UNRECOGNIZED", Raw: "Vendor role", Normalized: "UNKNOWN"),
+            (Body: "AP-ONE R/M", Status: "UNRECOGNIZED", Raw: (string?)null, Normalized: "UNKNOWN"),
+            (Body: "Current AC role: Common.\nCurrent AC role: Backup.", Status: "PARTIAL", Raw: (string?)null, Normalized: "UNKNOWN"),
+            (Body: "% Unrecognized command found at '^' position.", Status: "UNSUPPORTED", Raw: (string?)null, Normalized: "UNKNOWN"),
+            (Body: "Permission denied", Status: "UNSUPPORTED", Raw: (string?)null, Normalized: "UNKNOWN"),
+            (Body: "Current AC role: Common.\n---- More ----", Status: "PARTIAL", Raw: (string?)null, Normalized: "UNKNOWN"),
+            (Body: "", Status: "EMPTY", Raw: (string?)null, Normalized: "UNKNOWN")
+        })
+        {
+            var role = H3cControllerRoleParser.Parse(Wrap(command, sample.Body));
+            Assert(role.Status == sample.Status && role.RawRole == sample.Raw && role.NormalizedRole == sample.Normalized,
+                "controller roles preserve unsupported, conflict, partial and raw role states without inferring from AP roles");
+            Assert(H3cComwareParser.Parse(command, Wrap(command, sample.Body)).Status == sample.Status,
+                "shared command parser uses typed controller-role states");
+        }
+        Assert(H3cControllerRoleParser.Parse("Current AC role: Common.").Status == "PARTIAL" &&
+            H3cControllerRoleParser.Parse("Current AC role: Common.", completedExec: true).Status == "PARSED",
+            "stripped controller output requires sealed transport completion");
     }
 
     private static void OptionalFailureStatesRemainEvidence()
@@ -120,6 +157,7 @@ internal static class H3cAcResourceTests
                 H3cCommandPolicy.DisplayWlanApAll => "AP-ONE 1 R/M WA6320 SERIAL-001 group-a 1 day",
                 H3cCommandPolicy.DisplayWlanApAllAddress => "AP-ONE 192.0.2.71 4c6f-d608-0400",
                 H3cCommandPolicy.DisplayWlanApAllRadio => "AP-ONE 1 149 80 17",
+                H3cAcResources.DisplayWlanAcRole => "Current AC role: Common.",
                 _ => "AP-ONE explicit vendor text"
             });
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;

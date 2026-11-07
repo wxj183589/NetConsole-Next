@@ -40,6 +40,7 @@ async function render(query: LocationQueryRaw = { deviceId: 'device-b' }, role =
   const wrapper = mount(component, { global: { plugins: [pinia, router], stubs: {
     NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
     ConfigBackupSchedules: true,
+    CompleteConfigurationBulk: true,
     'el-button': { props: ['loading'], template: '<button :data-loading="loading"><slot/></button>' },
   } } })
   wrappers.push(wrapper); await flushPromises()

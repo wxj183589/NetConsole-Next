@@ -139,6 +139,7 @@ internal sealed class UdpSyslogWorker(
         var pendingRecords = 0;
         long pendingBytes = 0;
         var pendingSince = 0L;
+        var segmentSince = 0L;
         try
         {
             while (true)
@@ -146,13 +147,13 @@ internal sealed class UdpSyslogWorker(
                 while (pendingRecords < FlushBatchRecords && queue.TryRead(out var datagram))
                 {
                     stats.MarkDequeued(datagram.Payload.Length);
-                    segment ??= writerFactory.Create(catalog);
+                    if (segment is null) { segment = writerFactory.Create(catalog); segmentSince = Stopwatch.GetTimestamp(); }
                     var beforeBytes = segment.Bytes;
                     await segment.AppendAsync(datagram);
                     pendingRecords++;
                     pendingBytes += segment.Bytes - beforeBytes;
                     if (pendingSince == 0) pendingSince = Stopwatch.GetTimestamp();
-                    if (segment.Bytes >= 4 * 1024 * 1024)
+                    if (segment.Bytes >= 4 * 1024 * 1024 || Stopwatch.GetElapsedTime(segmentSince) >= TimeSpan.FromSeconds(5))
                     {
                         await FlushPendingAsync(sealSegment: true);
                         break;
@@ -169,7 +170,21 @@ internal sealed class UdpSyslogWorker(
 
                 if (pendingRecords == 0)
                 {
-                    if (!await queue.WaitToReadAsync()) break;
+                    if (segment is null) { if (!await queue.WaitToReadAsync()) break; }
+                    else
+                    {
+                        var remaining = TimeSpan.FromSeconds(5) - Stopwatch.GetElapsedTime(segmentSince);
+                        if (remaining > TimeSpan.Zero)
+                        {
+                            using var sealTimeout = new CancellationTokenSource(remaining);
+                            try { if (!await queue.WaitToReadAsync(sealTimeout.Token)) break; else continue; }
+                            catch (OperationCanceledException) when (sealTimeout.IsCancellationRequested) { }
+                        }
+                        await segment.SealAsync();
+                        stats.RecordSegmentSealLatency(segment.LastSealDurationMs);
+                        stats.RecordCatalogWriteLatency(segment.LastCatalogWriteDurationMs);
+                        segment = null;
+                    }
                     continue;
                 }
 

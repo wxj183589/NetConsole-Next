@@ -12,11 +12,14 @@ internal static class ModuleRegistryRouting
         if (value.StartsWith("/api/system/zte/", StringComparison.Ordinal)) return "zte";
         if (value.StartsWith("/api/system/h3c/", StringComparison.Ordinal)) return "h3c";
         if (value.StartsWith("/api/system/config-backups", StringComparison.Ordinal) ||
-            value.StartsWith("/api/system/config-backup-schedules", StringComparison.Ordinal)) return "config-backups";
+            value.StartsWith("/api/system/config-backup-schedules", StringComparison.Ordinal) ||
+            value.StartsWith("/api/system/complete-configuration/", StringComparison.Ordinal) ||
+            value.StartsWith("/api/system/simulator-config/", StringComparison.Ordinal)) return "config-backups";
         if (value.StartsWith("/api/system/network-planning/", StringComparison.Ordinal)) return "network-planning";
         if (value.StartsWith("/api/system/terminal/", StringComparison.Ordinal)) return "terminal";
         if (value.StartsWith("/api/system/tasks", StringComparison.Ordinal)) return "tasks";
-        if (value.StartsWith("/api/system/diagnostics/", StringComparison.Ordinal)) return "tools";
+        if (value.StartsWith("/api/system/diagnostics/", StringComparison.Ordinal) ||
+            value.StartsWith("/api/system/syslog/", StringComparison.Ordinal)) return "tools";
         if (value.StartsWith("/api/system/wireless/", StringComparison.Ordinal)) return "wireless";
         if (value.StartsWith("/api/system/rail-reference/", StringComparison.Ordinal)) return "rail";
         if (value.StartsWith("/api/system/host-tools", StringComparison.Ordinal)) return "tools";

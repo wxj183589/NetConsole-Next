@@ -122,6 +122,25 @@ describe('simulator configuration changes', () => {
     expect(api.changeSimulatorDescription).not.toHaveBeenCalled()
     wrapper.unmount(); click.mockRestore(); vi.unstubAllGlobals()
   })
+  it('exports the selected sanitized comparison with metadata and truncation evidence', async () => {
+    const report = { ...comparison, truncated: true }
+    api.compareCompleteConfigurations.mockResolvedValue(report)
+    const create = vi.fn(() => 'blob:comparison')
+    vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: vi.fn() })
+    const parts: BlobPart[][] = []
+    vi.stubGlobal('Blob', class { constructor(value: BlobPart[]) { parts.push(value) } })
+    let filename = ''
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { filename = this.download })
+    const wrapper = render()
+    await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
+    await button(wrapper, '比较完整配置').trigger('click'); await flushPromises()
+    await button(wrapper, '导出脱敏比较报告').trigger('click')
+    expect(filename).toBe('configuration-diff-complete-a-complete-b.json')
+    expect(JSON.parse(String(parts[0]![0]))).toEqual(report)
+    expect(create).toHaveBeenCalledOnce()
+    expect(api.changeSimulatorDescription).not.toHaveBeenCalled()
+    wrapper.unmount(); click.mockRestore(); vi.unstubAllGlobals()
+  })
   it('requires independent confirmation for native checkpoint restoration and displays its evidence', async () => {
     api.getCompleteConfigurations.mockResolvedValue([{ ...backup, host: '192.168.56.3', model: 'S6850' }])
     const wrapper = render()

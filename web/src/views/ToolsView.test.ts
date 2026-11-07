@@ -35,6 +35,7 @@ const wrappers: VueWrapper[] = []
 async function render(role = 'SUPERADMIN') {
   const pinia = createPinia(); setActivePinia(pinia); useAuthStore().user = { username: 'tester', role } as never
   const wrapper = mount(ToolsView, { global: { plugins: [pinia], directives: { loading: {} }, stubs: {
+    SyslogWorkspace: true,
     NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
     'el-button': { props: ['loading'], template: '<button :data-loading="loading"><slot/></button>' },
   } } })

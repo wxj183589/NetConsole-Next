@@ -13,6 +13,8 @@ using var singleInstance = SingleInstanceGuard.Acquire();
 var settings = RuntimeSettings.FromEnvironment();
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "NetConsoleNext");
+if (OperatingSystem.IsWindows())
+    builder.Services.Configure<EventLogSettings>(options => { if (OperatingSystem.IsWindows()) options.SourceName = "NetConsoleNext"; });
 // Interactive/offline runs use console and the data-root rolling log. The
 // Windows default EventLog provider can throw on an ordinary warning when its
 // source is unavailable, defeating optional-subsystem fault isolation.
@@ -79,6 +81,7 @@ builder.Services.AddSingleton(sp => new BoundedCollectionScheduler(
 builder.Services.AddSingleton<H3cBatchTaskService>();
 builder.Services.AddSingleton<DeviceConnectionTestService>();
 builder.Services.AddSingleton<ConfigBackupService>();
+builder.Services.AddSingleton<CompleteConfigurationTargets>();
 builder.Services.AddSingleton<IConfigRestoreWriter, DisabledConfigRestoreWriter>();
 builder.Services.AddSingleton<ConfigRestoreService>();
 builder.Services.AddSingleton<SimulatorConfigurationService>();
@@ -86,6 +89,8 @@ builder.Services.AddSingleton<ConfigBackupScheduleService>();
 builder.Services.AddSingleton<SmartConfigurationService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
 builder.Services.AddSingleton<OperationalHealthService>();
+builder.Services.AddSingleton<FaultCenterService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<FaultCenterService>());
 builder.Services.AddSingleton<OperationalRecoveryService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
@@ -984,6 +989,24 @@ app.MapPost("/api/system/simulator-config/checkpoints/verify", async (HttpContex
     if (DeviceSiteScopeGuard(context) is { } denied) return denied;
     try { return Results.Ok(await configurations.VerifyNativeCheckpointRestoreAsync(request, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
     catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+});
+app.MapFaultCenter();
+app.MapPost("/api/system/complete-configuration/targets", (HttpContext context, CompleteConfigurationTargetRequest request, CompleteConfigurationTargets targets) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(targets.Resolve(request, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigBackupException ex) { return Results.Json(new { error = ex.Code, message = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+});
+app.MapPost("/api/system/syslog/query", (HttpContext context, SyslogQuery query, Catalog rawCatalog) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(rawCatalog.QuerySyslog(query, CurrentSiteScope(context), context.RequestAborted)); }
+    catch (ArgumentException) { return Results.BadRequest(new { error = "SYSLOG_QUERY_INVALID" }); }
     catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
 });
 app.MapGet("/api/system/operations/health", (HttpContext context, int? page, OperationalHealthService health) =>

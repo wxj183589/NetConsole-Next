@@ -93,12 +93,24 @@ internal sealed partial class SimulatorConfigurationService
         _root = Path.Combine(settings.DataRoot, "backup", "config-complete");
     }
 
-    public async Task<CompleteConfigurationBackup> CaptureAsync(string profileId, WebUserIdentity actor,
+    public Task<CompleteConfigurationBackup> CaptureAsync(string profileId, WebUserIdentity actor,
         P2B5SiteScopeDecision scope, CancellationToken cancellationToken)
+    {
+        _ = Target(profileId, actor, scope);
+        return CaptureFrozenAsync(profileId, actor, scope, _scopes.CaptureDefinition(profileId, actor.UserId), cancellationToken);
+    }
+
+    internal void ValidateCaptureTarget(string profileId, WebUserIdentity actor, P2B5SiteScopeDecision scope) =>
+        _ = Target(profileId, actor, scope);
+
+    internal async Task<CompleteConfigurationBackup> CaptureFrozenAsync(string profileId, WebUserIdentity actor,
+        P2B5SiteScopeDecision scope, TaskScopeSnapshot frozen, CancellationToken cancellationToken)
     {
         var target = Target(profileId, actor, scope);
         var id = Guid.NewGuid().ToString("N");
-        var execution = new TaskExecutionScope(_scopes.CaptureDefinition(profileId, actor.UserId), actor.UserId, id);
+        if (frozen.ActorUserId != actor.UserId) throw new TaskScopeRevokedException("TASK_ACTOR_REVOKED_ADMISSION");
+        var execution = new TaskExecutionScope(frozen, actor.UserId, id);
+        _scopes.Require(execution, profileId, "ADMISSION");
         var gate = Gate(target);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -177,27 +189,33 @@ internal sealed partial class SimulatorConfigurationService
         {
             SaveChange(operation);
             Require(execution, "CONNECT");
-            await using var session = await _sessions.OpenAsync(target, cancellationToken).ConfigureAwait(false);
-            before = await Capture(session, target, execution, cancellationToken).ConfigureAwait(false);
-            var beforeText = Encoding.UTF8.GetString(VerifiedBytes(before, false));
-            if (Normalize(beforeText) != Normalize(expectedText) || before.Model != expected.Model || before.SoftwareVersion != expected.SoftwareVersion)
-                throw Failure("CONFIG_CHANGE_CURRENT_CHANGED", "设备当前配置或版本已变化，请重新备份并比较。");
-            previous = Description(beforeText, request.InterfaceName!);
-            operation = operation with { BeforeBackupId = before.Id };
-            if (previous == request.Description)
-                return Finish(operation with { State = "NO_CHANGE", AfterBackupId = before.Id }, actor);
-            // Store the uncertain boundary before entering Netmiko. A process
-            // interruption leaves an explicit review state instead of success.
-            operation = operation with { State = "REQUIRES_REVIEW" };
-            SaveChange(operation);
-            Require(execution, "WRITE");
-            Audit(actor, "SIMULATOR_DESCRIPTION_WRITE_ADMISSION", operation.Id, target.Id, "REQUIRES_REVIEW");
-            writeAttempted = true;
-            await session.SetDescriptionAsync(request.InterfaceName!, request.Description, cancellationToken).ConfigureAwait(false);
-            var after = await Capture(session, target, execution, cancellationToken).ConfigureAwait(false);
+            string beforeText;
+            await using (var session = await _sessions.OpenAsync(target, cancellationToken).ConfigureAwait(false))
+            {
+                before = await Capture(session, target, execution, cancellationToken).ConfigureAwait(false);
+                beforeText = Encoding.UTF8.GetString(VerifiedBytes(before, false));
+                if (Normalize(beforeText) != Normalize(expectedText) || before.Model != expected.Model || before.SoftwareVersion != expected.SoftwareVersion)
+                    throw Failure("CONFIG_CHANGE_CURRENT_CHANGED", "设备当前配置或版本已变化，请重新备份并比较。");
+                previous = Description(beforeText, request.InterfaceName!);
+                operation = operation with { BeforeBackupId = before.Id };
+                if (previous == request.Description)
+                    return Finish(operation with { State = "NO_CHANGE", AfterBackupId = before.Id }, actor);
+                // Store the uncertain boundary before entering Netmiko. A process
+                // interruption leaves an explicit review state instead of success.
+                operation = operation with { State = "REQUIRES_REVIEW" };
+                SaveChange(operation);
+                Require(execution, "WRITE");
+                Audit(actor, "SIMULATOR_DESCRIPTION_WRITE_ADMISSION", operation.Id, target.Id, "REQUIRES_REVIEW");
+                writeAttempted = true;
+                await session.SetDescriptionAsync(request.InterfaceName!, request.Description, cancellationToken).ConfigureAwait(false);
+            }
+            Require(execution, "VERIFY_RECONNECT");
+            await using var verify = await _sessions.OpenAsync(target, cancellationToken).ConfigureAwait(false);
+            var after = await Capture(verify, target, execution, cancellationToken).ConfigureAwait(false);
             operation = operation with { AfterBackupId = after.Id };
             var afterText = Encoding.UTF8.GetString(VerifiedBytes(after, false));
-            if (Description(afterText, request.InterfaceName!) != request.Description ||
+            if (after.Model != before.Model || after.SoftwareVersion != before.SoftwareVersion ||
+                Description(afterText, request.InterfaceName!) != request.Description ||
                 WithoutDescription(beforeText, request.InterfaceName!) != WithoutDescription(afterText, request.InterfaceName!))
                 throw Failure("CONFIG_CHANGE_READBACK_MISMATCH", "设备重读结果与预期不一致。");
             return Finish(operation with { State = "VERIFIED" }, actor);
@@ -213,12 +231,17 @@ internal sealed partial class SimulatorConfigurationService
             try
             {
                 Require(execution, "ROLLBACK_CONNECT");
-                await using var session = await _sessions.OpenAsync(target, recovery.Token).ConfigureAwait(false);
-                Require(execution, "ROLLBACK_WRITE");
-                await session.SetDescriptionAsync(request.InterfaceName!, previous, recovery.Token).ConfigureAwait(false);
-                var rollback = await Capture(session, target, execution, recovery.Token).ConfigureAwait(false);
+                await using (var session = await _sessions.OpenAsync(target, recovery.Token).ConfigureAwait(false))
+                {
+                    Require(execution, "ROLLBACK_WRITE");
+                    await session.SetDescriptionAsync(request.InterfaceName!, previous, recovery.Token).ConfigureAwait(false);
+                }
+                Require(execution, "ROLLBACK_VERIFY_RECONNECT");
+                await using var verify = await _sessions.OpenAsync(target, recovery.Token).ConfigureAwait(false);
+                var rollback = await Capture(verify, target, execution, recovery.Token).ConfigureAwait(false);
                 operation = operation with { RollbackBackupId = rollback.Id };
-                if (Normalize(Encoding.UTF8.GetString(VerifiedBytes(before, false))) !=
+                if (rollback.Model != before.Model || rollback.SoftwareVersion != before.SoftwareVersion ||
+                    Normalize(Encoding.UTF8.GetString(VerifiedBytes(before, false))) !=
                     Normalize(Encoding.UTF8.GetString(VerifiedBytes(rollback, false))))
                     throw Failure("CONFIG_ROLLBACK_READBACK_MISMATCH", "回滚后的配置与变更前快照不一致。");
                 return Finish(operation with { State = "ROLLBACK_VERIFIED" }, actor);

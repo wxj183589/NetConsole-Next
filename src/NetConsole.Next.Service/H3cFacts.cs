@@ -194,6 +194,17 @@ internal sealed partial class Catalog
             Add("device.identity", "device", version, version.Recognized ? "STALE" : "UNSUPPORTED");
         }
 
+        if (outputs.TryGetValue(H3cAcResources.DisplayWlanAcRole, out var roleOutput))
+        {
+            var role = H3cControllerRoleParser.Parse(roleOutput, completedExec: provenance is not null);
+            Add("controller.role", "device", role, role.Status switch
+            {
+                "PARSED" => "STALE",
+                "UNRECOGNIZED" => "UNSUPPORTED",
+                _ => role.Status
+            });
+        }
+
         if (outputs.TryGetValue(H3cCommandPolicy.DisplayVlanAll, out var vlanOutput))
         {
             // A table is one immutable revision. Per-VLAN Current rows would

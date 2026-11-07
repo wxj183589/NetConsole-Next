@@ -1,7 +1,21 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string] $ServiceExecutable
+    [string] $ServiceExecutable,
+    [string] $DataRoot = (Join-Path $env:ProgramData "NetConsoleNext\data"),
+    [ValidateRange(1, 65535)] [int] $WebPort = 18771,
+    [ValidateRange(0, 65535)] [int] $SyslogPort = 0,
+    [switch] $EnableH3c,
+    [switch] $EnableTerminal,
+    [string] $NetmikoPython,
+    [string] $NetmikoWorker,
+    [switch] $PlanOnly
 )
+
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'service-installation-plan.ps1')
+$plan = Get-ServiceInstallationPlan -ServiceExecutable $ServiceExecutable -DataRoot $DataRoot -WebPort $WebPort `
+    -SyslogPort $SyslogPort -EnableH3c:$EnableH3c -EnableTerminal:$EnableTerminal -NetmikoPython $NetmikoPython -NetmikoWorker $NetmikoWorker
+if ($PlanOnly) { $plan | ConvertTo-Json -Depth 4; return }
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -16,14 +30,21 @@ if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf)) {
 
 $serviceName = "NetConsoleNext"
 $serviceAccount = "NT SERVICE\$serviceName"
-$dataRoot = Join-Path $env:ProgramData "NetConsoleNext\data"
+$dataRoot = $plan.DataRoot
 $serviceDirectory = Split-Path -Parent $servicePath
-New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 
 $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existing) {
     throw "Service $serviceName already exists. Stop and inspect it before replacing it."
 }
+# Fail before creating directories/SCM entries if the reviewed loopback ports are occupied.
+$portProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $WebPort)
+try { $portProbe.Start() } finally { $portProbe.Stop() }
+if ($SyslogPort -ne 0) {
+    $udpProbe = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Loopback, $SyslogPort))
+    $udpProbe.Dispose()
+}
+New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 
 $quotedPath = '"' + $servicePath + '"'
 $created = $false
@@ -31,6 +52,14 @@ try {
     & sc.exe create $serviceName binPath= $quotedPath start= auto obj= $serviceAccount | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed with exit code $LASTEXITCODE." }
     $created = $true
+
+    # SCM does not inherit the installing user's environment. Persist only the reviewed
+    # instance settings in the service's own Environment value, never machine-wide.
+    New-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName" `
+        -Name Environment -PropertyType MultiString -Value $plan.Environment -Force | Out-Null
+    if (-not [Diagnostics.EventLog]::SourceExists($serviceName)) {
+        [Diagnostics.EventLog]::CreateEventSource($serviceName, 'Application')
+    }
 
     & sc.exe sidtype $serviceName unrestricted | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe sidtype failed with exit code $LASTEXITCODE." }

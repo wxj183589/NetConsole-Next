@@ -3,13 +3,14 @@ using System.Text.Json;
 namespace NetConsole.Next.Service;
 
 internal sealed record OperationalMetric(string State, double? Value, string Unit, long? CapturedMs,
-    IReadOnlyList<string> EvidenceIds);
+    IReadOnlyList<string> EvidenceIds, string? ResourceKey = null);
 internal sealed record OperationalDeviceHealth(string DeviceId, string Name, string SiteId, string? ProfileId,
     string State, OperationalMetric Reachability, OperationalMetric CpuPercent, OperationalMetric MemoryPercent,
     OperationalMetric InterfaceDown, OperationalMetric LldpNeighbors, IReadOnlyList<string> Warnings,
     OperationalMetric? PingDelayMs = null, OperationalMetric? PacketLossPercent = null);
 internal sealed record OperationalFaultEvent(string Id, string DeviceId, string SiteId, string Kind,
-    string Severity, string State, long AtMs, string EvidenceType, string EvidenceId, string Detail);
+    string Severity, string State, long AtMs, string EvidenceType, string EvidenceId, string Detail,
+    string? ResourceKey = null);
 internal sealed record OperationalHealthSnapshot(long AsOfMs, long FreshnessWindowMs, int Page, long TotalDevices,
     bool HasMore, IReadOnlyList<OperationalDeviceHealth> Devices, IReadOnlyList<OperationalFaultEvent> Events,
     IReadOnlyList<string> Limitations);
@@ -24,6 +25,8 @@ internal sealed record OperationalRecoveryReport(string Id, string DeviceId, str
 internal static class OperationalHealthProjection
 {
     public const long FreshnessWindowMs = 300_000;
+    public static string ProbeResource(string protocol, string address, int? port) =>
+        JsonSerializer.Serialize(new object?[] { protocol, address, port });
     public static OperationalDeviceHealth Device(DeviceInventoryItem device,
         IReadOnlyList<H3cFactSnapshot> facts, long now)
     {
@@ -97,11 +100,13 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                 health = health with
                 {
                     PingDelayMs = new(sample.AverageMs is null ? "UNKNOWN" : "OBSERVED", sample.AverageMs, "ms", ping.EndedMs, [pingEvidence.RunId]),
-                    PacketLossPercent = new("OBSERVED", sample.LossPercent, "%", ping.EndedMs, [pingEvidence.RunId])
+                    PacketLossPercent = new("OBSERVED", sample.LossPercent, "%", ping.EndedMs, [pingEvidence.RunId],
+                        OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port))
                 };
                 if (sample.LossPercent > 0)
                     events.Add(new("loss:" + ping.Id, device.Id, device.SiteId, "PROBE_PACKET_LOSS", "WARNING", "OBSERVED",
-                        ping.EndedMs!.Value, "DIAGNOSTIC", pingEvidence.RunId, $"{sample.Protocol} 探测样本存在丢失；不据此断定设备离线。"));
+                        ping.EndedMs!.Value, "DIAGNOSTIC", pingEvidence.RunId, $"{sample.Protocol} 探测样本存在丢失；不据此断定设备离线。",
+                        OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port)));
             }
             devices.Add(health);
             foreach (var fact in facts.Where(f => f.IsCurrent && f.CollectedRawVerified &&
@@ -109,7 +114,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                 f.Status is not ("FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY") &&
                 f.Kind == "interface" && OperationalHealthProjection.LinkState(f.PayloadJson) == "DOWN"))
                 events.Add(new("interface:" + fact.Id, device.Id, device.SiteId, "INTERFACE_DOWN", "WARNING",
-                    "OBSERVED", fact.CapturedMs, "FACT", fact.Id, "接口链路观测为 DOWN；管理关闭也可能产生此状态。"));
+                    "OBSERVED", fact.CapturedMs, "FACT", fact.Id, "接口链路观测为 DOWN；管理关闭也可能产生此状态。", fact.IdentityKey));
             if (health.Warnings.Contains("VERIFIED_EVIDENCE_STALE"))
             {
                 var latest = facts.Where(f => f.CollectedRawVerified && f.CapturedMs <= now).MaxBy(f => f.CapturedMs)!;
@@ -142,13 +147,13 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                 events.Add(new("ap:" + resource.Id + ":" + runtime.SourceRevision, evidence.SourceAcDeviceId,
                     evidence.SourceSiteId, "AP_" + runtime.NormalizedState, "WARNING", runtime.NormalizedState,
                     evidence.Current!.CapturedMs, "WIRELESS_RUNTIME", resource.Id,
-                    $"AP {resource.DisplayName}：{runtime.NormalizedState}；依据授权 AC 的有效状态证据。"));
+                    $"AP {resource.DisplayName}：{runtime.NormalizedState}；依据授权 AC 的有效状态证据。", resource.Id));
             foreach (var change in (runtime.Recent10 ?? []).Where(c => c.CapturedMs <= now &&
                 now - c.CapturedMs <= runtime.FreshnessWindowMs).Take(5))
                 events.Add(new("ap-change:" + change.Id, evidence.SourceAcDeviceId, evidence.SourceSiteId,
                     "AP_EFFECTIVE_STATE_CHANGED", "INFO", change.NormalizedState, change.CapturedMs,
                     "WIRELESS_RUNTIME", resource.Id,
-                    $"AP {resource.DisplayName}：{change.PreviousState} → {change.NormalizedState}；有效状态变化，不将缺采样视为切换。"));
+                    $"AP {resource.DisplayName}：{change.PreviousState} → {change.NormalizedState}；有效状态变化，不将缺采样视为切换。", resource.Id));
         }
         return new(now, OperationalHealthProjection.FreshnessWindowMs, page, inventory.Total, inventory.HasMore,
             devices, events.OrderByDescending(e => e.AtMs).Take(100).ToArray(),
@@ -190,7 +195,7 @@ internal sealed class OperationalRecoveryService(Catalog catalog, TaskSiteScopeA
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<OperationalRecoveryReport> RecoverAsync(OperationalRecoveryRequest request,
-        string actorUserId, CancellationToken cancellationToken)
+        string actorUserId, CancellationToken cancellationToken, TaskScopeSnapshot? expectedTarget = null)
     {
         if (!await _gate.WaitAsync(0, cancellationToken)) throw new InvalidOperationException("OPERATIONAL_RECOVERY_BUSY");
         try
@@ -204,8 +209,9 @@ internal sealed class OperationalRecoveryService(Catalog catalog, TaskSiteScopeA
             if (detail is null || string.IsNullOrWhiteSpace(request.ExpectedProfileId) ||
                 detail.TerminalProfileId != request.ExpectedProfileId)
                 throw new TaskScopeRevokedException("OPERATIONAL_TARGET_CHANGED");
-            var frozen = authorizer.CaptureDefinition(request.ExpectedProfileId, actorUserId);
-            if (frozen.DeviceId != request.DeviceId) throw new TaskScopeRevokedException("OPERATIONAL_TARGET_CHANGED");
+            var frozen = expectedTarget ?? authorizer.CaptureDefinition(request.ExpectedProfileId, actorUserId);
+            if (frozen.DeviceId != request.DeviceId || frozen.ProfileId != request.ExpectedProfileId || frozen.ActorUserId != actorUserId)
+                throw new TaskScopeRevokedException("OPERATIONAL_TARGET_CHANGED");
             var id = "recovery-" + Guid.NewGuid().ToString("N");
             var execution = new TaskExecutionScope(frozen, actorUserId, id);
             var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -214,7 +220,8 @@ internal sealed class OperationalRecoveryService(Catalog catalog, TaskSiteScopeA
             var probeOrdinal = 0;
             var attempts = await OperationalRecoveryRunner.ProbeAsync(async () =>
                 {
-                    var status = (await connection.TestAsync(frozen.ProfileId, cancellationToken))?.Status ?? "TARGET_UNAVAILABLE";
+                    var status = (await connection.TestAsync(frozen.ProfileId, cancellationToken,
+                        () => authorizer.Require(execution, frozen.ProfileId, "RECOVERY_TRANSPORT")))?.Status ?? "TARGET_UNAVAILABLE";
                     catalog.TryRecordDeviceAuditEvent(actorUserId, "OPERATIONAL_RECOVERY_PROBE", status, request.DeviceId,
                         null, [], $"{id};attempt={++probeOrdinal}");
                     return status;

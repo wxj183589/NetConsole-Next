@@ -6,6 +6,7 @@ internal static class H3cOperationalCapabilityTests
 {
     public static void Run()
     {
+        VerifyLiveIdentityParsing();
         const long now = 1_800_000_000_000;
         static H3cFactSnapshot Fact(string id, string kind, string status, long time, bool raw = true,
             bool current = true, string profile = "p") =>
@@ -43,6 +44,23 @@ internal static class H3cOperationalCapabilityTests
         Assert(Capability(failed, "AP_INVENTORY_READ").State == "PARTIAL" &&
             Capability(failed, "AP_INVENTORY_READ").EvidenceIds.SequenceEqual(new[] { "latest" }),
             "latest partial capture must not fall back to older success");
+        var failedIdentity = H3cOperationalCapabilities.Project("p", new[]
+        { Fact("old-identity", "device.identity", "STALE", now - 2),
+          Fact("new-identity", "device.identity", "FAILED", now - 1) }, now);
+        Assert(failedIdentity.Model is null && failedIdentity.Version is null &&
+            Capability(failedIdentity, "DEVICE_IDENTITY").State == "FAILED",
+            "latest failed identity cannot expose metadata from older successful revision");
+        var roleFact = Fact("role", "controller.role", "STALE", now - 1) with
+        { PayloadJson = "{\"rawRole\":\"Common\",\"normalizedRole\":\"COMMON\"}" };
+        var controller = H3cOperationalCapabilities.Project("p", new[] { roleFact }, now);
+        Assert(controller.ControllerRole == "Common" && controller.ControllerRoleNormalized == "COMMON" &&
+            Capability(controller, "AC_ROLE_READ").State == "VERIFIED" && Capability(controller, "HA_SWITCH").State == "UNKNOWN",
+            "controller role read is independent of HA switching and AP primary/backup observations");
+        var failedRole = H3cOperationalCapabilities.Project("p", new[]
+        { roleFact, roleFact with { Id = "new-role", CapturedMs = now, Status = "PARTIAL" } }, now);
+        Assert(failedRole.ControllerRole is null && failedRole.ControllerRoleNormalized is null &&
+            Capability(failedRole, "AC_ROLE_READ").State == "PARTIAL",
+            "a latest partial controller role cannot expose old successful role fields");
 
         var obs = new[]
         {
@@ -73,6 +91,30 @@ internal static class H3cOperationalCapabilityTests
         { AcDomains = Array.Empty<WirelessAcDomainView>(), ApResources = Array.Empty<WirelessApResourceView>() });
         Assert(empty.Domains.Count == 0 && empty.FitAps.Count == 0, "restricted snapshot must not repopulate hidden evidence");
         Console.WriteLine("PASS: H3C evidence capabilities; scope, freshness, provenance, HA separation and AC-managed FIT access");
+    }
+
+    private static void VerifyLiveIdentityParsing()
+    {
+        const string ac = "display version\nH3C Comware Software, Version 7.1.064, Alpha 7165\n" +
+            "H3C WX5540H-HCL uptime is 1 week, 0 days, 11 hours, 14 minutes\n" +
+            "Slot 1:\nType : LSR1SRP2C1\n<AC1>";
+        var parsed = H3cComwareParser.ParseVersion(ac);
+        Assert(parsed.Model == "WX5540H-HCL" && parsed.Version == "7.1.064" && parsed.Release == "Alpha 7165",
+            "actual HCL identity must include chassis model and Alpha release without using board type");
+        var sw = H3cComwareParser.ParseVersion("H3C Comware Software, Version 7.1.070, Release 6635P01\nH3C S6850-56HF uptime is 1 day");
+        Assert(sw.Model == "S6850-56HF" && sw.Release == "6635P01", "existing Release format must remain compatible");
+        var absent = H3cComwareParser.ParseVersion("H3C Comware Software, Version 7.1.064\nBoot image: flash:/wx5540.bin\nType : WX5540");
+        Assert(absent.Recognized && absent.Model is null && absent.Release is null,
+            "image paths and board types are not chassis identity evidence");
+        var conflict = H3cComwareParser.ParseVersion(ac + "\nH3C OTHER uptime is 1 day");
+        Assert(conflict.Model is null, "conflicting chassis model lines must remain unknown");
+        var unrecognized = H3cComwareParser.ParseVersion("H3C WX5540H-HCL uptime is 1 day");
+        Assert(!unrecognized.Recognized && unrecognized.Model is null, "model alone cannot recognize Comware version");
+        var facts = new[] { new H3cFactSnapshot("parsed", "p", "device.identity", "device", "STALE", "SIMULATOR", 1000, true,
+            JsonSerializer.Serialize(parsed, new JsonSerializerOptions(JsonSerializerDefaults.Web))) };
+        var view = H3cOperationalCapabilities.Project("p", facts, 1001);
+        Assert(view.Model == "WX5540H-HCL" && view.Release == "Alpha 7165",
+            "real parser output must reach operational capability metadata through normal fact serialization");
     }
 
     private static void Assert(bool value, string message)

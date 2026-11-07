@@ -6,7 +6,11 @@ internal sealed record H3cOperationalCapability(string Key, string State, string
     IReadOnlyList<string> EvidenceIds, long? CapturedMs, string Source, string Freshness);
 
 internal sealed record H3cOperationalCapabilityView(string ProfileId, string? Model, string? Version,
-    string? Release, long AsOf, IReadOnlyList<H3cOperationalCapability> Capabilities);
+    string? Release, long AsOf, IReadOnlyList<H3cOperationalCapability> Capabilities)
+{
+    public string? ControllerRole { get; init; }
+    public string? ControllerRoleNormalized { get; init; }
+}
 
 internal sealed record WirelessRoleEvidence(string AcDeviceId, string ObservationId, string RawState,
     string NormalizedState, long CapturedMs, string RawManifestRef, string SourceRevision);
@@ -33,14 +37,13 @@ internal static class H3cOperationalCapabilities
     {
         var facts = scopedFacts.Where(f => f.ProfileId == profileId && f.IsCurrent && f.CapturedMs <= nowMs)
             .OrderByDescending(f => f.CapturedMs).ThenBy(f => f.Id, StringComparer.Ordinal).ToArray();
-        var identity = facts.FirstOrDefault(f => f.Kind == "device.identity" &&
-            f.Status is not ("FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY"));
-        string? Field(string key)
+        var identity = facts.FirstOrDefault(f => f.Kind == "device.identity");
+        static string? Field(H3cFactSnapshot? fact, string key)
         {
-            if (identity is null) return null;
+            if (fact is null || fact.Status is "FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY") return null;
             try
             {
-                using var json = JsonDocument.Parse(identity.PayloadJson);
+                using var json = JsonDocument.Parse(fact.PayloadJson);
                 return json.RootElement.TryGetProperty(key, out var property) && property.ValueKind == JsonValueKind.String
                     ? property.GetString() : null;
             }
@@ -48,7 +51,7 @@ internal static class H3cOperationalCapabilities
         }
         var specifications = new (string Key, string Kind)[]
         {
-            ("DEVICE_IDENTITY", "device.identity"), ("INTERFACE_READ", "interface"),
+            ("DEVICE_IDENTITY", "device.identity"), ("AC_ROLE_READ", "controller.role"), ("INTERFACE_READ", "interface"),
             ("VLAN_READ", "vlan.table"), ("LLDP_READ", "lldp.neighbor"),
             ("AP_INVENTORY_READ", "command.display.wlan.ap.all"),
             ("AP_ADDRESS_READ", "command.display.wlan.ap.all.address"),
@@ -62,7 +65,12 @@ internal static class H3cOperationalCapabilities
             Array.Empty<string>(), null, "NONE", "UNKNOWN"));
         capabilities.Add(new("WHOLE_CONFIGURATION_RESTORE", "UNKNOWN", "RESTORE_READBACK_AND_SERVICE_VERIFICATION_REQUIRED",
             Array.Empty<string>(), null, "NONE", "UNKNOWN"));
-        return new(profileId, Field("model"), Field("version"), Field("release"), nowMs, capabilities);
+        var role = facts.FirstOrDefault(f => f.Kind == "controller.role");
+        return new(profileId, Field(identity, "model"), Field(identity, "version"), Field(identity, "release"), nowMs, capabilities)
+        {
+            ControllerRole = Field(role, "rawRole"),
+            ControllerRoleNormalized = Field(role, "normalizedRole")
+        };
     }
 
     private static H3cOperationalCapability Evaluate(string key, H3cFactSnapshot[] candidates, long nowMs)

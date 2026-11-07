@@ -45,10 +45,7 @@ internal sealed class RuntimeSettings
             root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NetConsoleNext", "data");
         if (string.IsNullOrWhiteSpace(root))
             throw new InvalidOperationException("Set NETCONSOLE_NEXT_DATA_ROOT to an isolated new directory.");
-        var full = Path.GetFullPath(root);
-        if (string.Equals(full.TrimEnd(Path.DirectorySeparatorChar),
-            Path.GetPathRoot(full)?.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Data root cannot be a filesystem root.");
+        var full = ValidateDataRoot(root);
         var bindText = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_SYSLOG_BIND") ?? "127.0.0.1";
         if (!IPAddress.TryParse(bindText, out var bind))
             throw new InvalidOperationException("NETCONSOLE_NEXT_SYSLOG_BIND must be a valid IP address.");
@@ -94,6 +91,25 @@ internal sealed class RuntimeSettings
                 ? ParseBoundedInt("NETCONSOLE_NEXT_ARCHIVE_TEST_COPY_DELAY_MS", 0, 0, 1_000)
                 : 0
         };
+    }
+
+    internal static string ValidateDataRoot(string root)
+    {
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        if (string.Equals(full, Path.TrimEndingDirectorySeparator(Path.GetPathRoot(full)!), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Data root cannot be a filesystem root.");
+        // Reject legacy roots by name before inspecting the filesystem. Next must
+        // never initialize, migrate or probe an original NetConsole data tree.
+        foreach (var legacy in new[] { @"D:\NetConsoleData", @"D:\NetConsoleData-dev" })
+            if (string.Equals(full, legacy, StringComparison.OrdinalIgnoreCase) ||
+                full.StartsWith(legacy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Data root cannot use an original NetConsole data directory.");
+        try { P2B2MigrationPathSecurity.ValidateNoReparsePoints(full); }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidOperationException("Data root ancestors must be accessible directories without symlinks, junctions or reparse points.", exception);
+        }
+        return full;
     }
 
     private static int ParsePort(string key, int fallback, bool zeroAllowed)

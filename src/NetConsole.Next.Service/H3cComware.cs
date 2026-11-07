@@ -198,7 +198,10 @@ internal sealed record H3cProfileView(
     string HostKeyUpdatePolicy, bool AllowLegacyAlgorithms, string TerminalEncoding,
     string TerminalProtocol, bool AllowTelnetFallback);
 
-internal sealed record H3cVersionInfo(string Vendor, string Version, string? Release, bool Recognized);
+internal sealed record H3cVersionInfo(string Vendor, string Version, string? Release, bool Recognized)
+{
+    public string? Model { get; init; }
+}
 
 internal sealed record H3cInterfaceStatus(
     string InterfaceName,
@@ -236,8 +239,11 @@ internal sealed record H3cParseResult(string Status, string Json);
 
 internal static partial class H3cComwareParser
 {
-    [GeneratedRegex(@"H3C Comware Software,\s*Version\s+([^,\s]+)(?:,\s*Release\s+([^\r\n]+))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"H3C Comware Software,\s*Version\s+([^,\s]+)(?:,\s*(Release|Alpha|Beta)\s+([^\r\n]+))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex VersionPattern();
+
+    [GeneratedRegex(@"(?im)^\s*H3C\s+([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s+uptime\s+is\s+[^\r\n]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex ModelPattern();
 
     [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9/._:-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex InterfaceNamePattern();
@@ -250,9 +256,15 @@ internal static partial class H3cComwareParser
 
     public static H3cVersionInfo ParseVersion(string output)
     {
-        var match = VersionPattern().Match(NormalizeTerminalText(output));
+        var text = NormalizeTerminalText(output);
+        var match = VersionPattern().Match(text);
+        var models = ModelPattern().Matches(text).Select(m => m.Groups[1].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var release = !match.Groups[2].Success ? null :
+            (match.Groups[2].Value.Equals("Release", StringComparison.OrdinalIgnoreCase) ? "" : match.Groups[2].Value + " ") +
+            match.Groups[3].Value.Trim();
         return match.Success
-            ? new("H3C Comware", match.Groups[1].Value, match.Groups[2].Success ? match.Groups[2].Value.Trim() : null, true)
+            ? new("H3C Comware", match.Groups[1].Value, release, true) { Model = models.Length == 1 ? models[0] : null }
             : new("unknown", string.Empty, null, false);
     }
 

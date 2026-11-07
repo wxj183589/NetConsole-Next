@@ -24,7 +24,7 @@ const showCredential = ref(false); const credentialProfileId = ref(''); const cr
 const selected = ref<DeviceInventoryDetail | null>(null); const importPreview = ref<DeviceImportPreview | null>(null); const importCsv = ref('')
 const operationalCapabilities = ref<H3cOperationalCapabilityView | null>(null)
 const capabilityLoading = ref(false); const capabilityError = ref(''); const capabilityUnavailable = ref('')
-const capabilityLabels: Record<string, string> = { DEVICE_IDENTITY: '设备身份', INTERFACE_READ: '接口读取', VLAN_READ: 'VLAN 读取', LLDP_READ: 'LLDP 读取', AP_INVENTORY_READ: 'AP 清单', AP_ADDRESS_READ: 'AP 地址', AP_RADIO_READ: 'AP 射频', AP_DETAILS_READ: 'AP 详情', CPU_READ: 'CPU 读取', MEMORY_READ: '内存读取', HA_SWITCH: 'HA 切换', WHOLE_CONFIGURATION_RESTORE: '整机配置恢复' }
+const capabilityLabels: Record<string, string> = { DEVICE_IDENTITY: '设备身份', AC_ROLE_READ: '控制器角色读取', INTERFACE_READ: '接口读取', VLAN_READ: 'VLAN 读取', LLDP_READ: 'LLDP 读取', AP_INVENTORY_READ: 'AP 清单', AP_ADDRESS_READ: 'AP 地址', AP_RADIO_READ: 'AP 射频', AP_DETAILS_READ: 'AP 详情', CPU_READ: 'CPU 读取', MEMORY_READ: '内存读取', HA_SWITCH: 'HA 切换', WHOLE_CONFIGURATION_RESTORE: '整机配置恢复' }
 const backupModuleState = ref<'unknown' | 'enabled' | 'disabled'>('unknown')
 const backupUnavailableReason = computed(() => {
   const detail = selected.value
@@ -416,7 +416,7 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
       <p v-else-if="capabilityError" role="alert">{{ capabilityError }}</p>
       <p v-else-if="capabilityUnavailable" class="detail-empty">{{ capabilityUnavailable }}</p>
       <template v-else-if="operationalCapabilities">
-        <div class="detail-grid"><div><span>已采集型号</span><b>{{ operationalCapabilities.model || 'UNKNOWN' }}</b></div><div><span>已采集版本 / Release</span><b>{{ operationalCapabilities.version || 'UNKNOWN' }} / {{ operationalCapabilities.release || 'UNKNOWN' }}</b></div></div>
+        <div class="detail-grid"><div><span>已采集型号</span><b>{{ operationalCapabilities.model || 'UNKNOWN' }}</b></div><div><span>已采集版本 / Release</span><b>{{ operationalCapabilities.version || 'UNKNOWN' }} / {{ operationalCapabilities.release || 'UNKNOWN' }}</b></div><div><span>控制器报告角色</span><b>{{ operationalCapabilities.controllerRole || 'UNKNOWN' }} → {{ operationalCapabilities.controllerRoleNormalized || 'UNKNOWN' }}</b></div></div>
         <p class="muted">证据截至 {{ formatTime(operationalCapabilities.asOf) }}。VERIFIED 表示近期原始采集已验证；STALE 表示证据过期；UNKNOWN 表示缺少验证。设备报告角色不代表 HA 切换成功。</p>
         <div v-if="!operationalCapabilities.capabilities.length" class="detail-empty">暂无设备能力证据，状态 UNKNOWN。</div>
         <div v-else class="table-wrap"><table class="data-table"><thead><tr><th>能力</th><th>状态 / 新鲜度</th><th>来源 / 捕获时间</th><th>证据 / 原因</th></tr></thead><tbody><tr v-for="capability in operationalCapabilities.capabilities" :key="capability.key"><td>{{ capabilityLabels[capability.key] || capability.key }}</td><td>{{ capability.state }} / {{ capability.freshness }}</td><td>{{ capability.source }}<br />{{ capability.capturedMs ? formatTime(capability.capturedMs) : '无捕获时间' }}</td><td>{{ capability.evidenceIds.join(' / ') || '无证据' }}<br />{{ capability.reason }}</td></tr></tbody></table></div>

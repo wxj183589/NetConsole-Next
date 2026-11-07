@@ -33,6 +33,12 @@ else if (args.Length > 0 && args[0] == "--p2b5-export-migrate")
     await P2B5ExportMigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b5-rail-reference-migrate")
     await P2B5RailReferenceMigrationChild.RunAsync(args[1..]);
+else if (args.Length > 0 && args[0] == "--syslog-query-tests")
+    await SyslogQueryTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--complete-config-batch-tests")
+    await CompleteConfigurationBatchTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--fault-center-tests")
+    await FaultCenterTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--runtime-settings-tests")
     RuntimeSettingsTests.Run();
 else if (args.Length > 0 && args[0] == "--archive-tests")
@@ -155,6 +161,9 @@ internal static class SchedulerTests
     public static async Task RunAsync()
     {
         WirelessTaskTests.Run();
+        await SyslogQueryTests.RunAsync();
+        await CompleteConfigurationBatchTests.RunAsync();
+        await FaultCenterTests.RunAsync();
         await CompleteConfigurationComparisonTests.RunAsync();
         await OperationalHealthTests.RunAsync();
         await NetworkQuickPingTests.RunAsync();

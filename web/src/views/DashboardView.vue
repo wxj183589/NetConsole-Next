@@ -5,6 +5,7 @@ import { Bell, CircleCheck, DataLine, List, Monitor, TrendCharts, Warning } from
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import OperationalHealth from '../components/OperationalHealth.vue'
+import FaultCenter from '../components/FaultCenter.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -140,6 +141,7 @@ onBeforeUnmount(() => { active = false; generation++; window.removeEventListener
     </div>
 
     <OperationalHealth :can-recover="auth.user?.role === 'SUPERADMIN'" />
+    <FaultCenter :can-recover="auth.user?.role === 'SUPERADMIN'" />
 
     <div class="section-label">运行边界</div>
     <div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>Raw 写入：{{ health?.rawWriteAvailable ? '可用' : '不可用' }}</span><span><el-icon><CircleCheck /></el-icon>Syslog：{{ health?.syslogEnabled ? '已启用' : '未启用' }}</span><span><el-icon><CircleCheck /></el-icon>H3C：{{ health?.h3cCollectionEnabled ? '已启用' : '未启用' }}</span><span><el-icon><Warning /></el-icon>在线状态必须由真实会话或采集结果确认</span></div></div>

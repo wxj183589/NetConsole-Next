@@ -23,4 +23,30 @@ describe('wireless capability evidence', () => {
     await wrapper.get('button').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toBe('scope revoked'); expect(wrapper.text()).not.toContain('old-revision')
   })
+  it('shows independent AC roles with freshness and traceable evidence', async () => {
+    const observations = [
+      { observationId: 'one', acDeviceId: 'ac1', rawState: 'R/M', normalizedState: 'RUNNING_MASTER', capturedMs: 999_999, rawManifestRef: 'raw-one', sourceRevision: 'rev-one' },
+      { observationId: 'two', acDeviceId: 'ac2', rawState: 'R/B', normalizedState: 'RUNNING_BACKUP', capturedMs: 699_999, rawManifestRef: 'raw-two', sourceRevision: 'rev-two' },
+    ]
+    api.getWirelessOperationalCapabilities.mockResolvedValue({ asOf: 1_000_000, sourceRevision: 'revision', domains: [
+      { domainId: 'domain', domainKind: 'UNKNOWN', topologyEvidence: 'CANDIDATE', topologyEvidenceRefs: ['topology-ref'], deviceRoleEvidence: 'DEVICE_REPORTED_ROLE', haVerification: 'NOT_TESTED', reason: 'NO_SWITCH', observations },
+    ], fitAps: [] })
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.text()).toContain('ac1 · R/M → RUNNING_MASTER · RECENT')
+    expect(wrapper.text()).toContain('ac2 · R/B → RUNNING_BACKUP · STALE')
+    expect(wrapper.text()).toContain('raw-two'); expect(wrapper.text()).toContain('rev-two')
+    expect(wrapper.text()).toContain('topology-ref')
+    expect(wrapper.text()).toContain('当前范围暂无所选 AP')
+    expect(wrapper.text()).toContain('NOT_TESTED')
+  })
+  it('invalidates an outstanding read when the selected resource changes', async () => {
+    let finishOld!: (value: unknown) => void
+    api.getWirelessOperationalCapabilities.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+      .mockResolvedValueOnce({ asOf: 2000, sourceRevision: 'new-revision', domains: [], fitAps: [] })
+    const wrapper = render()
+    await wrapper.setProps({ resourceId: 'new-ap' }); await flushPromises()
+    finishOld({ asOf: 1000, sourceRevision: 'forbidden-old-revision', domains: [], fitAps: [] }); await flushPromises()
+    expect(wrapper.text()).toContain('new-revision')
+    expect(wrapper.text()).not.toContain('forbidden-old-revision')
+  })
 })

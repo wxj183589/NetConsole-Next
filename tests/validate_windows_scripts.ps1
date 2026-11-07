@@ -2,6 +2,8 @@ $ErrorActionPreference = "Stop"
 $repository = Split-Path -Parent $PSScriptRoot
 $scripts = @(
     (Join-Path $repository "scripts/install-service.ps1"),
+    (Join-Path $repository "scripts/service-installation-plan.ps1"),
+    (Join-Path $repository "tests/service_installation_plan_tests.ps1"),
     (Join-Path $repository "scripts/uninstall-service.ps1"),
     (Join-Path $repository "tools/Reset-WebPassword.ps1"),
     (Join-Path $repository "tools/acceptance/Test-WebPR2-Host.ps1"),

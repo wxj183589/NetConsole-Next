@@ -30,6 +30,18 @@ internal static class RuntimeSettingsTests
         }
 
         Console.WriteLine("PASS: Web binding accepts loopback only and rejects wildcard, LAN and remote opt-in values");
+        foreach (var root in new[] { @"D:\", @"D:\NetConsoleData", @"D:\NetConsoleData-dev", @"d:\netconsoledata\site\new", @"D:\NetConsoleData-dev\new" })
+        {
+            try { RuntimeSettings.ValidateDataRoot(root); throw new Exception("Forbidden data root accepted: " + root); }
+            catch (InvalidOperationException exception) when (exception.Message.StartsWith("Data root cannot", StringComparison.Ordinal)) { }
+        }
+        var repository = new DirectoryInfo(Environment.CurrentDirectory);
+        while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
+            repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
+        var candidate = Path.Combine(repository.Parent!.FullName, "test-data", "runtime-validation-" + Guid.NewGuid().ToString("N"));
+        Assert(RuntimeSettings.ValidateDataRoot(candidate) == candidate && !Directory.Exists(candidate),
+            "runtime validation must accept an isolated nonexistent root without creating it");
+        Console.WriteLine("PASS: runtime data root rejects filesystem/legacy roots before IO; isolated validation creates no data");
     }
 
     private static void ExpectInvalid(string value)
