@@ -81,7 +81,11 @@ internal static class H3cLldpTopologyProjection
             var neighborIdentity = FirstNonEmpty(chassis, neighborName, management);
             if (neighborIdentity is null) return false;
             var neighborDevice = FirstNonEmpty(neighborName, chassis, management) ?? neighborIdentity;
-            var relationKey = $"{Normalize(localInterface)}|{NormalizeIdentity(neighborIdentity)}";
+            // Scope the relation to the observed local device and Site. Port
+            // names are only unique within one device; omitting this context
+            // would merge identical ports from separate devices into one
+            // history stream.
+            var relationKey = $"{Normalize(siteId)}|{NormalizeIdentity(localDeviceId)}|{Normalize(localInterface)}|{NormalizeIdentity(neighborIdentity)}";
             observation = new(localDeviceId, siteId, localInterface, neighborDevice, neighborPort,
                 management, chassis, relationKey);
             return true;

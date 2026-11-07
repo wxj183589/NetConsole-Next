@@ -8,8 +8,9 @@ internal static class H3cLldpTopologyTests
     public static void Run()
     {
         ProjectionClassifiesHistoryWithoutDeletes();
+        RelationHistoryIsScopedToLocalDeviceAndSite();
         OfflineFixtureProjectsScopedRelation();
-        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=2/2 PASS");
+        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=3/3 PASS");
     }
 
     private static void ProjectionClassifiesHistoryWithoutDeletes()
@@ -50,8 +51,23 @@ internal static class H3cLldpTopologyTests
             "offline LLDP fixture must produce a scoped relation with provenance");
     }
 
+    private static void RelationHistoryIsScopedToLocalDeviceAndSite()
+    {
+        const string profile = "profile-topology-scope";
+        var facts = new[]
+        {
+            Fact(profile, "fact-device-a", 1000, "GE1/0/1", "SW-A", "Ten-Gig1/0/1", device: "device-a", site: "site-a"),
+            Fact(profile, "fact-device-b", 2000, "GE1/0/1", "SW-A", "Ten-Gig1/0/1", device: "device-b", site: "site-b")
+        };
+        var relations = H3cLldpTopologyProjection.Project(profile, facts);
+        Assert(relations.Count == 2 && relations.All(item => item.ChangeKind == "FIRST_SEEN"),
+            "identical ports and neighbors on different local devices must have independent histories");
+        Assert(relations.Select(item => item.RelationKey).Distinct(StringComparer.Ordinal).Count() == 2,
+            "LLDP relation keys must retain local device and Site scope");
+    }
+
     private static H3cFactSnapshot Fact(string profile, string id, long captured, string local,
-        string neighbor, string port)
+        string neighbor, string port, string device = "device-a", string site = "site-a")
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -60,7 +76,7 @@ internal static class H3cLldpTopologyTests
             neighborInterface = port,
             managementAddress = "10.0.0.2",
             chassisId = "4c6f-d608-0400",
-            capturedScope = new { version = 1, deviceId = "device-a", profileId = profile, siteId = "site-a" }
+            capturedScope = new { version = 1, deviceId = device, profileId = profile, siteId = site }
         });
         return new(id, profile, "lldp.neighbor", $"{local}|{port}|chassis", "STALE", "fixture", captured, true, payload);
     }
