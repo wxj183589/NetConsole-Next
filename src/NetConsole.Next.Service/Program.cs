@@ -33,6 +33,7 @@ builder.Services.AddSingleton<P2B5SiteScopeStore>();
 builder.Services.AddSingleton<TaskSiteScopeAuthorizer>();
 builder.Services.AddSingleton<ITaskScopeAuthorizer>(sp => sp.GetRequiredService<TaskSiteScopeAuthorizer>());
 builder.Services.AddSingleton<WirelessReadModelService>();
+builder.Services.AddSingleton<WirelessTaskService>();
 builder.Services.AddSingleton<WirelessIdentityLifecycleService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
@@ -1693,6 +1694,19 @@ app.MapGet("/api/system/wireless/ac-domains", (HttpContext context, HttpRequest 
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
     { return WirelessAuthorityUnavailable(ex); }
+});
+app.MapPost("/api/system/wireless/tasks", (HttpContext context, WirelessTaskCreateRequest request,
+    WirelessTaskService wirelessTasks, Catalog catalog) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
+    try
+    {
+        var result = wirelessTasks.Create(request, CurrentIdentity(context), CurrentSiteScope(context));
+        return Results.Accepted($"/api/system/h3c/task-plans/{result.Id}", result);
+    }
+    catch (WirelessTaskException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 
 app.MapGet("/api/system/wireless/ac-domains/{id}", (HttpContext context, string id,
