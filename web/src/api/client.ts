@@ -1247,8 +1247,20 @@ export interface WirelessTaskPlan {
   plan: H3cTaskPlan
   createdMs: number
 }
-export function createWirelessTask(domainIds: string[], commands: string[]): Promise<WirelessTaskPlan> {
-  return request('/api/system/wireless/tasks', { method: 'POST', body: JSON.stringify({ domainIds, commands }) })
+export function createWirelessTask(domainIds: string[], commands: string[], acDeviceIds?: string[]): Promise<WirelessTaskPlan> {
+  return request('/api/system/wireless/tasks', { method: 'POST', body: JSON.stringify({ domainIds, commands, acDeviceIds }) })
+}
+export interface WirelessTaskSummary { id: string; state: string; createdMs: number; updatedMs: number; total: number; succeeded: number; failed: number }
+export interface WirelessTaskReport {
+  summary: WirelessTaskSummary
+  items: Array<{ ordinal: number; deviceId: string; state: string; error: string | null; runId: string | null; captureStatus: string | null; parseStatus: string | null; commands: Array<{ command: string; state: string; error: string | null; captureStatus: string | null; parseStatus: string | null; capturedMs: number | null }> }>
+}
+export function getWirelessTasks(): Promise<WirelessTaskSummary[]> { return request('/api/system/wireless/tasks') }
+export function getWirelessTask(id: string): Promise<WirelessTaskReport> { return request('/api/system/wireless/tasks/' + encodeURIComponent(id)) }
+export async function downloadWirelessTask(id: string): Promise<Blob> {
+  const response = await fetch('/api/system/wireless/tasks/' + encodeURIComponent(id) + '/download', { credentials: 'include', cache: 'no-store' })
+  if (!response.ok) throw new ApiRequestError(response.status, await response.text())
+  return response.blob()
 }
 export function getWirelessApResources(params: { page?: number; pageSize?: number; serial?: string; mac?: string; domainId?: string; sourceAcId?: string; search?: string } = {}): Promise<WirelessPage<WirelessApResource>> {
   return request(queryPath('/api/system/wireless/ap-resources', params))

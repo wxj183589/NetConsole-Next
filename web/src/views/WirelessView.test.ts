@@ -4,7 +4,7 @@ import type { WirelessAcDomain, WirelessApGroup, WirelessApGroupDetail } from '.
 import WirelessView from './WirelessView.vue'
 
 const api = vi.hoisted(() => ({
-  createWirelessTask: vi.fn(), getH3cTaskPlan: vi.fn(),
+  createWirelessTask: vi.fn(), getH3cTaskPlan: vi.fn(), getWirelessTasks: vi.fn(), getWirelessTask: vi.fn(), downloadWirelessTask: vi.fn(), cancelH3cTaskPlan: vi.fn(),
   getWirelessAcDomains: vi.fn(), getWirelessApGroup: vi.fn(), getWirelessApGroups: vi.fn(),
   getWirelessApResources: vi.fn(), getWirelessCollectionManifest: vi.fn(),
   getWirelessCollectionManifests: vi.fn(), getWirelessRuntimeState: vi.fn(),
@@ -53,6 +53,7 @@ function render() {
 describe('AP group source identity', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    api.getWirelessTasks.mockResolvedValue([])
     api.getWirelessAcDomains.mockResolvedValue(page([domain]))
     api.getWirelessApResources.mockResolvedValue(page([]))
     api.getWirelessCollectionManifests.mockResolvedValue(page([]))
@@ -69,12 +70,25 @@ describe('AP group source identity', () => {
     await wrapper.get('.wireless-task input').setValue(true)
     await wrapper.findAll('.wireless-task button')[0].trigger('click')
     await flushPromises()
-    expect(api.createWirelessTask).toHaveBeenCalledWith(['domain-one'], ['display version'])
+    expect(api.createWirelessTask).toHaveBeenCalledWith(['domain-one'], ['display version'], undefined)
     expect(wrapper.get('.wireless-task-result').text()).toContain('QUEUED')
     await wrapper.findAll('.wireless-task button')[1].trigger('click')
     await flushPromises()
     expect(api.getH3cTaskPlan).toHaveBeenCalledWith('plan-one')
     expect(wrapper.get('.wireless-task-result').text()).toContain('RUNNING')
+  })
+
+  it('loads task history and reads a selected report', async () => {
+    const summary = { id: 'history-one', state: 'FAILED', createdMs: domain.asOf, total: 1, succeeded: 0, failed: 1 }
+    api.getWirelessTasks.mockResolvedValue([summary])
+    api.getWirelessTask.mockResolvedValue({ summary, items: [{ ordinal: 0, deviceId: 'ac-a', state: 'FAILED', error: 'TIMEOUT' }] })
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('.wireless-task-row button').trigger('click')
+    await flushPromises()
+    expect(api.getWirelessTask).toHaveBeenCalledWith('history-one')
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('ac-a')
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('TIMEOUT')
   })
 
   it('shows task creation errors', async () => {

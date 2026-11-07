@@ -1714,6 +1714,33 @@ app.MapPost("/api/system/wireless/tasks", (HttpContext context, WirelessTaskCrea
     { return WirelessAuthorityUnavailable(ex); }
 });
 
+app.MapGet("/api/system/wireless/tasks", (HttpContext context, HttpRequest request,
+    WirelessTaskService wirelessTasks, Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    var limit = int.TryParse(request.Query["limit"], out var value) ? value : 50;
+    return Results.Ok(wirelessTasks.List(CurrentIdentity(context).UserId, Math.Clamp(limit, 1, 200)));
+});
+app.MapGet("/api/system/wireless/tasks/{id}", (HttpContext context, string id,
+    WirelessTaskService wirelessTasks, Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(wirelessTasks.GetReport(id, CurrentIdentity(context).UserId)); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+});
+app.MapGet("/api/system/wireless/tasks/{id}/download", (HttpContext context, string id,
+    WirelessTaskService wirelessTasks, Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "WIRELESS_TASK_PERMISSION_DENIED");
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.File(wirelessTasks.Export(id, CurrentIdentity(context).UserId), "application/zip", $"{id}.zip"); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status403Forbidden); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+});
+
 app.MapGet("/api/system/wireless/ac-domains/{id}", (HttpContext context, string id,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {

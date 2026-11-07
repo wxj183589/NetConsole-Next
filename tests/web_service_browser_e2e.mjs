@@ -167,10 +167,20 @@ try {
   await page.getByRole('heading', { name: 'Raw 采集' }).waitFor()
   await page.screenshot({ path: path.join(output, 'service-files-1920.png'), fullPage: true })
 
+  for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
+    await page.setViewportSize(viewport)
+    for (const [label, expected] of [['无线业务', '无线任务历史'], ['配置备份', null]]) {
+      await page.locator('.app-sidebar').getByRole('button', { name: label }).click()
+      await page.getByRole('heading', { name: label }).waitFor()
+      if (expected) await page.getByRole('heading', { name: expected }).waitFor()
+      await page.screenshot({ path: path.join(output, `service-${label === '无线业务' ? 'wireless' : 'config'}-${viewport.width}.png`), fullPage: true })
+    }
+  }
+
   if (apiFailures.length || pageErrors.length) {
     throw new Error(`service browser diagnostics: api=${apiFailures.join(' | ')} page=${pageErrors.join(' | ')}`)
   }
-  console.log('PASS: real service-backed browser E2E at 1920x1080 (login, device create/detail persistence, SmartConfig dry-run, overview, tasks, tools, files)')
+  console.log('PASS: service-backed browser E2E at 1920x1080 and 2560x1440 (login, device persistence, SmartConfig dry-run, navigation, wireless history and configuration page)')
 } finally {
   try {
     if (browser) await browser.close()

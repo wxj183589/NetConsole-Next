@@ -4,6 +4,10 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import {
   createWirelessTask,
+  getWirelessTasks,
+  getWirelessTask,
+  downloadWirelessTask,
+  cancelH3cTaskPlan,
   getH3cTaskPlan,
   getWirelessAcDomains,
   getWirelessApGroup,
@@ -21,10 +25,17 @@ import {
   type WirelessRuntimeState,
   type WirelessTaskPlan,
   type H3cTaskPlan,
+  type WirelessTaskSummary,
+  type WirelessTaskReport,
 } from '../api/client'
 
 const loading = ref(false)
 const taskDomains = ref<string[]>([])
+const taskAcs = ref<string[]>([])
+const taskMembers = computed(() => domains.value.filter(domain => taskDomains.value.includes(domain.id)).flatMap(domain => domain.members).filter((member, index, all) => all.findIndex(item => item.deviceId === member.deviceId) === index))
+watch(taskDomains, () => { taskAcs.value = taskAcs.value.filter(id => taskMembers.value.some(member => member.deviceId === id)) })
+const taskHistory = ref<WirelessTaskSummary[]>([])
+const taskDetail = ref<WirelessTaskReport | null>(null)
 const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']
 const taskCommands = ref(['display version'])
 const taskSubmitting = ref(false)
@@ -143,11 +154,31 @@ async function createTask(): Promise<void> {
   taskResult.value = null
   taskPlan.value = null
   try {
-    taskResult.value = await createWirelessTask(taskDomains.value, taskCommands.value)
+    taskResult.value = await createWirelessTask(taskDomains.value, taskCommands.value, taskAcs.value.length ? taskAcs.value : undefined)
     taskPlan.value = taskResult.value.plan
+    await loadTaskHistory()
   } catch (cause) {
     taskError.value = cause instanceof Error ? cause.message : '无线采集任务创建失败'
   } finally { taskSubmitting.value = false }
+}
+async function loadTaskHistory(): Promise<void> {
+  try { taskHistory.value = await getWirelessTasks(); taskError.value = '' }
+  catch (cause) { taskHistory.value = []; taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务历史读取失败' }
+}
+async function showTask(id: string): Promise<void> {
+  taskDetail.value = null
+  try { taskDetail.value = await getWirelessTask(id); taskError.value = '' }
+  catch (cause) { taskError.value = cause instanceof Error ? cause.message : '任务详情读取失败' }
+}
+async function cancelTaskPlan(id: string): Promise<void> {
+  try { await cancelH3cTaskPlan(id); await loadTaskHistory(); await showTask(id) }
+  catch (cause) { taskError.value = cause instanceof Error ? cause.message : '取消任务失败' }
+}
+async function downloadTask(id: string): Promise<void> {
+  try {
+    const url = URL.createObjectURL(await downloadWirelessTask(id))
+    const link = document.createElement('a'); link.href = url; link.download = `wireless-task-${id}.zip`; link.click(); URL.revokeObjectURL(url)
+  } catch (cause) { taskError.value = cause instanceof Error ? cause.message : '任务下载失败' }
 }
 async function refreshTask(): Promise<void> {
   if (!taskResult.value) return
@@ -295,7 +326,7 @@ function outcomeText(outcome: string): string {
     PARSE_FAILED: '解析失败', UNKNOWN: '未知状态', CONFLICT: '来源冲突', CLOCK_SKEW: '采集时间异常', NOT_COLLECTED: '未采集' } as Record<string, string>)[outcome] || outcome
 }
 
-onMounted(() => { void refresh() })
+onMounted(() => { void refresh(); void loadTaskHistory() })
 </script>
 
 <template>
@@ -325,6 +356,7 @@ onMounted(() => { void refresh() })
         <section v-if="domains.length" class="card wireless-task">
           <div class="card__header"><h2>无线采集任务</h2></div>
           <div><label v-for="domain in domains" :key="domain.id" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskDomains" type="checkbox" :value="domain.id">{{ domain.displayName }}</label></div>
+          <div v-if="taskMembers.length"><span>AC（不选则采集全部成员）：</span><label v-for="member in taskMembers" :key="member.deviceId" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskAcs" type="checkbox" :value="member.deviceId">{{ member.displayName }}</label></div>
           <div><label v-for="command in taskCommandOptions" :key="command" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskCommands" type="checkbox" :value="command">{{ command }}</label></div>
           <el-button size="small" :loading="taskSubmitting" :disabled="!taskDomains.length || !taskCommands.length || taskSubmitting" @click="createTask">开始只读采集</el-button>
           <p v-if="taskError" role="alert">{{ taskError }}</p>
@@ -332,6 +364,18 @@ onMounted(() => { void refresh() })
             <p>任务 {{ taskResult.id }} · {{ taskPlan.state }} · {{ taskPlan.items.length }} 台 AC</p>
             <p v-for="item in taskPlan.items" :key="item.ordinal">{{ item.target }} · {{ item.state }} <span v-if="item.error">· {{ item.error }}</span></p>
             <el-button size="small" @click="refreshTask">刷新任务状态</el-button>
+          </div>
+        </section>
+        <section class="card wireless-task-history">
+          <div class="card__header"><h2>无线任务历史</h2><el-button size="small" @click="loadTaskHistory">刷新</el-button></div>
+          <p v-if="taskError && !domains.length" role="alert">{{ taskError }}</p>
+          <div v-if="!taskHistory.length" class="empty-state">暂无可见任务</div>
+          <div v-for="task in taskHistory" :key="task.id" class="wireless-task-row"><button type="button" @click="showTask(task.id)">{{ formatTime(task.createdMs) }} · {{ task.state }} · {{ task.succeeded }}/{{ task.total }} 成功 · {{ task.failed }} 失败</button></div>
+          <div v-if="taskDetail" class="wireless-task-detail">
+            <h3>任务详情 · {{ taskDetail.summary.state }}</h3>
+            <p v-for="item in taskDetail.items" :key="item.ordinal">{{ item.deviceId }} · {{ item.state }} · 采集 {{ item.captureStatus || '—' }} · 解析 {{ item.parseStatus || '—' }} <span v-if="item.error">· {{ item.error }}</span></p>
+            <el-button size="small" @click="downloadTask(taskDetail.summary.id)">下载 ZIP</el-button>
+            <el-button v-if="['QUEUED', 'RUNNING'].includes(taskDetail.summary.state)" size="small" @click="cancelTaskPlan(taskDetail.summary.id)">取消任务</el-button>
           </div>
         </section>
         <div v-if="error && !domains.length" class="card empty-state"><div><strong>无线业务暂不可用</strong><small>{{ error }}</small></div></div>
@@ -434,6 +478,9 @@ onMounted(() => { void refresh() })
 .wireless-tree__member { padding: 7px 10px 7px 20px; font-size: 12px; }
 .tree-branch { display: inline-block; width: 15px; color: var(--nc-text-muted); }
 .wireless-main { min-width: 0; display: grid; gap: 14px; }
+.wireless-task, .wireless-task-history { padding: 14px; }
+.wireless-task-row button { border: 0; background: transparent; color: var(--nc-text); cursor: pointer; padding: 8px 0; text-align: left; }
+.wireless-task-detail { border-top: 1px solid var(--nc-border); margin-top: 8px; padding-top: 8px; overflow-wrap: anywhere; }
 .wireless-domain-header { display: flex; justify-content: space-between; gap: 12px; padding: 18px 20px; }
 .wireless-domain-header h2 { margin: 2px 0 4px; font-size: 20px; }
 .wireless-subtitle { margin: 0; color: var(--nc-text-secondary); font-size: 12px; }
