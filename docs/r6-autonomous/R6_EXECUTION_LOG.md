@@ -18,4 +18,5 @@
 - 配置备份页新增恢复预览、dry-run 和写入阻断状态；现有服务 writer 仍 fail-closed，409 不被渲染为恢复成功。
 - R6.1 验证：Web 20 文件/211 tests PASS；SmartConfig C# 5/5 PASS；完整 C# harness EXIT 0；Release Service build 0 warnings/errors；Vite 2095 modules PASS。
 - 白名单模拟器四个端口 TCP 可达；本轮没有可安全注入的认证凭据，因此没有执行 SSH/Telnet 登录、配置读取、HA 切换或设备写入。
+- 新增 `tests/r6_1_browser_e2e.mjs`：使用脱敏 API fixture 在 1920x1080、2560x1440 完成 SmartConfig、Topology/Asset、ConfigRestore dry-run 与模拟 409 fail-closed 浏览器验收；page error 检查通过，截图保存于工作区 `build/r6-1-browser-e2e/`。
 - R6.1 产品与检查点本地提交：`fdf9b20`；远端 push、merge、release 仍禁止。
