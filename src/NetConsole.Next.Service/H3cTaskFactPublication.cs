@@ -166,14 +166,22 @@ internal sealed partial class Catalog
                 AND raw_r.source_id=raw_t.source_id AND raw_r.sha256=raw_o.raw_segment_sha256)
             OR EXISTS(SELECT 1 FROM task_run_command_outputs multi_o
                 JOIN task_runs multi_t ON multi_t.id=multi_o.task_run_id
+                JOIN task_definitions multi_d ON multi_d.id=multi_t.definition_id
                 JOIN raw_segments multi_r ON multi_r.relative_path=multi_o.relative_path
+                JOIN json_each({Field("commands")}) proof ON json_extract(proof.value,'$.index')=multi_o.command_index
                 WHERE multi_o.task_run_id={Field("runId")} AND {Field("version")}=1
                     AND {alias}.source='H3C_TASK_RAW:' || multi_t.id
-                    AND {Field("command")}='MULTI' AND multi_t.state='SUCCEEDED'
+                    AND multi_d.target={alias}.profile_id AND {Field("command")}='MULTI' AND multi_t.state='SUCCEEDED'
                     AND multi_o.capture_status='COMPLETE' AND multi_r.state='FINALIZED'
                     AND multi_r.record_count=1 AND multi_r.task_run_id=multi_t.id
-                    AND multi_r.source_id=multi_t.source_id
+                    AND multi_r.source_id=multi_t.source_id AND multi_r.sha256=multi_o.raw_segment_sha256
+                    AND multi_o.command=json_extract(proof.value,'$.command')
+                    AND multi_o.sha256=json_extract(proof.value,'$.outputSha256')
+                    AND multi_o.raw_segment_sha256=json_extract(proof.value,'$.segmentSha256')
+                    AND multi_o.captured_ms=json_extract(proof.value,'$.capturedMs')
                 GROUP BY multi_o.task_run_id
-                HAVING COUNT(*)=json_array_length({Field("commands")})))";
+                HAVING COUNT(*)=json_array_length({Field("commands")}) AND COUNT(DISTINCT multi_o.command_index)=COUNT(*) AND COUNT(*)=(SELECT COUNT(*)
+                    FROM task_run_command_outputs all_o WHERE all_o.task_run_id=multi_t.id)
+                    AND MAX(multi_o.captured_ms)={alias}.captured_ms AND MAX(multi_o.captured_ms)={Field("capturedMs")}))";
     }
 }

@@ -230,6 +230,10 @@ internal static class H3cTaskFactPublicationTests
         Assert(resource.IdentityStatus == "CONFIRMED" && observation.NormalizedState == "RUNNING_MASTER" &&
             observation.NormalizedMacSet.Count == 2 && runtime.Current?.NormalizedState == "RUNNING_MASTER",
             "coherent verified multi-command Raw must publish identity, observation and effective runtime state");
+        f.Execute("UPDATE task_run_command_outputs SET sha256='REPLACED' WHERE task_run_id='" + runId + "' AND command_index=0");
+        Assert(service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single().Observations.Single().NormalizedState == "STALE" &&
+            service.GetRuntimeState(resource.Id, P2B5SiteScopeDecision.Global)!.Current?.NormalizedState != "RUNNING_MASTER",
+            "replaced command metadata must revoke verified provenance even when the segment count is unchanged");
         f.Execute("UPDATE raw_segments SET state='INCOMPLETE' WHERE task_run_id='" + runId + "'");
         var revoked = service.GetSnapshot(P2B5SiteScopeDecision.Global).ApResources.Single();
         Assert(revoked.Observations.Single().NormalizedState == "STALE", "damaged Raw must not retain effective live state");

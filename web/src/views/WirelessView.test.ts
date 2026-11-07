@@ -70,7 +70,7 @@ describe('AP group source identity', () => {
     await wrapper.get('.wireless-task input').setValue(true)
     await wrapper.findAll('.wireless-task button')[0].trigger('click')
     await flushPromises()
-    expect(api.createWirelessTask).toHaveBeenCalledWith(['domain-one'], ['display version'], undefined)
+    expect(api.createWirelessTask).toHaveBeenCalledWith(['domain-one'], ['display version', 'display wlan ap all', 'display wlan ap all address'], undefined)
     expect(wrapper.get('.wireless-task-result').text()).toContain('QUEUED')
     await wrapper.findAll('.wireless-task button')[1].trigger('click')
     await flushPromises()

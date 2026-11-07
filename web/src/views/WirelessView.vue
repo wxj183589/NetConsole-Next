@@ -37,7 +37,7 @@ watch(taskDomains, () => { taskAcs.value = taskAcs.value.filter(id => taskMember
 const taskHistory = ref<WirelessTaskSummary[]>([])
 const taskDetail = ref<WirelessTaskReport | null>(null)
 const taskCommandOptions = ['display version', 'display wlan ap all', 'display wlan ap all address', 'display wlan ap all radio']
-const taskCommands = ref(['display version'])
+const taskCommands = ref(['display version', 'display wlan ap all', 'display wlan ap all address'])
 const taskSubmitting = ref(false)
 const taskError = ref('')
 const taskResult = ref<WirelessTaskPlan | null>(null)
