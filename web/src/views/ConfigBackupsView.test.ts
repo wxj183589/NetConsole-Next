@@ -143,6 +143,16 @@ describe('device configuration backup context', () => {
     expect(api.executeConfigRestore).not.toHaveBeenCalledWith(expect.objectContaining({ apply: true }))
   })
 
+  it('does not show a delayed restore preview after switching devices', async () => {
+    const pending = deferred<object>()
+    api.previewConfigRestore.mockReturnValue(pending.promise)
+    const { wrapper } = await render({})
+    await wrapper.findAll('button').find(item => item.text() === '恢复预览')!.trigger('click')
+    await wrapper.get('select[aria-label=备份设备]').setValue('profile-b'); await flushPromises()
+    pending.resolve({ id: 'old-preview', snapshotId: 'profile-a-v2' }); await flushPromises()
+    expect(wrapper.find('[aria-label="配置恢复预览"]').exists()).toBe(false)
+  })
+
   it('surfaces a blocked writer without claiming restore success', async () => {
     api.executeConfigRestore.mockRejectedValue(new ApiRequestError(409, 'CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE'))
     const { wrapper } = await render()

@@ -52,7 +52,7 @@ function saveBlob(blob: Blob, name: string): void { const url = URL.createObject
 function clearHistory(): void {
   ++historySequence; ++diffSequence; ++contentSequence
   content.value = null; contentLoading.value = false
-  history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false; restorePreview.value = null; restoreResult.value = null
+  history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false; restorePreview.value = null; restoreResult.value = null; restoring.value = false
 }
 function clearTarget(): void {
   clearHistory(); ++backupSequence
@@ -183,29 +183,35 @@ async function compare(): Promise<void> {
 }
 async function previewRestore(snapshot: ConfigBackupSnapshot): Promise<void> {
   if (!isSuperAdmin.value || !moduleAvailable.value || !profileId.value || (snapshot.state && snapshot.state !== 'SUCCEEDED') || !['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))) return
+  const context = contextSequence; const sequence = historySequence
   restoring.value = true; restorePreview.value = null; restoreResult.value = null
   try {
-    restorePreview.value = await previewConfigRestore({ snapshotId: snapshot.id, targetProfileId: profileId.value })
+    const preview = await previewConfigRestore({ snapshotId: snapshot.id, targetProfileId: profileId.value })
+    if (context === contextSequence && sequence === historySequence) restorePreview.value = preview
   } catch (cause) {
-    reportOperationError(cause, '配置恢复预览失败，请刷新后重试')
-  } finally { restoring.value = false }
+    if (context === contextSequence && sequence === historySequence) reportOperationError(cause, '配置恢复预览失败，请刷新后重试')
+  } finally { if (context === contextSequence && sequence === historySequence) restoring.value = false }
 }
 async function runRestore(apply: boolean): Promise<void> {
   const preview = restorePreview.value
   if (!preview || restoring.value) return
+  const context = contextSequence; const sequence = historySequence
   restoring.value = true
   try {
-    restoreResult.value = await executeConfigRestore({ previewId: preview.id, confirmationToken: preview.confirmationToken, apply })
+    const result = await executeConfigRestore({ previewId: preview.id, confirmationToken: preview.confirmationToken, apply })
+    if (context !== contextSequence || sequence !== historySequence) return
+    restoreResult.value = result
     if (restoreResult.value.state === 'DRY_RUN') ElMessage.info('恢复 dry-run 已完成，未向设备发送写命令')
     else if (restoreResult.value.state === 'SUCCEEDED') ElMessage.success('配置恢复完成，请重新采集验证')
     else ElMessage.warning(restoreResult.value.detail || '配置恢复未完成')
   } catch (cause) {
+    if (context !== contextSequence || sequence !== historySequence) return
     const message = cause instanceof ApiRequestError && cause.message.includes('CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE')
       ? '当前恢复写入适配器未启用，设备未被修改'
       : (cause instanceof Error ? cause.message : '配置恢复未完成')
     restoreResult.value = { previewId: preview.id, state: 'BLOCKED', detail: message, completedMs: Date.now() }
     ElMessage.error(message)
-  } finally { restoring.value = false }
+  } finally { if (context === contextSequence && sequence === historySequence) restoring.value = false }
 }
 onMounted(() => { void refresh() })
 watch(() => route.query.deviceId, () => { if (active && route.path === '/config-backups') void refresh() }, { flush: 'sync' })
