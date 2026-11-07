@@ -155,4 +155,15 @@ describe('AP group source identity', () => {
     expect(wrapper.findAll('.wireless-group-row.selected')).toHaveLength(1)
     expect(wrapper.get('.wireless-group-row.selected').text()).toContain('AC|ac-b|source-key')
   })
+
+  it('keeps the available domain visible when AP resources fail', async () => {
+    api.getWirelessApResources.mockRejectedValue(new Error('AP 服务暂不可用'))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.get('.wireless-domain-header').text()).toContain('Synthetic Domain')
+    const alerts = wrapper.findAll('[role=alert]').map(item => item.text()).join(' ')
+    expect(alerts).toContain('AP 资源读取失败')
+    expect(alerts).toContain('已保留其余可用数据')
+    expect(wrapper.find('.wireless-main').text()).not.toContain('无线业务暂不可用')
+  })
 })

@@ -28,6 +28,7 @@ const selectedAcId = ref('')
 const selectedResourceId = ref('')
 const search = ref('')
 const error = ref('')
+const partialError = ref('')
 const groupError = ref('')
 const groupDetail = ref<WirelessApGroupDetail | null>(null)
 const groupDetailLoading = ref(false)
@@ -217,14 +218,25 @@ async function refresh(): Promise<void> {
   collectionDetailError.value = ''
   ++collectionDetailGeneration
   warnings.value = []
+  partialError.value = ''
   try {
-    const [domainItems, resourceItems] = await Promise.all([
+    const [domainResult, resourceResult] = await Promise.allSettled([
       readAll(params => getWirelessAcDomains(params)),
       readAll(params => getWirelessApResources(params)),
     ])
     if (generation !== refreshGeneration) return
-    domains.value = domainItems
-    resources.value = resourceItems
+    const failed: string[] = []
+    if (domainResult.status === 'fulfilled') domains.value = domainResult.value
+    else failed.push('AC Domain')
+    if (resourceResult.status === 'fulfilled') resources.value = resourceResult.value
+    else failed.push('AP 资源')
+    if (failed.length === 2) throw new Error('AC Domain 和 AP 资源均读取失败')
+    if (failed.length) {
+      const details = [domainResult, resourceResult]
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason instanceof Error ? result.reason.message : '服务端返回错误')
+      partialError.value = `${failed.join('、')}读取失败，已保留其余可用数据。${details.join(' ')}`
+    }
     if (!domains.value.some(domain => domain.id === selectedDomainId.value)) selectedDomainId.value = domains.value[0]?.id || ''
     if (!selectedDomain.value?.members.some(member => member.deviceId === selectedAcId.value)) selectedAcId.value = ''
     page.value = 1
@@ -236,6 +248,7 @@ async function refresh(): Promise<void> {
     if (generation !== refreshGeneration) return
     domains.value = []; resources.value = []; groups.value = []; collectionManifests.value = []
     selectedDomainId.value = ''; selectedAcId.value = ''; selectedResourceId.value = ''
+    partialError.value = ''
     error.value = cause instanceof Error ? cause.message : '无线业务数据读取失败'
     ElMessage.error(error.value)
   } finally { if (generation === refreshGeneration) loading.value = false }
@@ -260,6 +273,7 @@ onMounted(() => { void refresh() })
     <template #actions><el-button size="small" :loading="loading" @click="refresh">刷新数据</el-button></template>
 
     <el-alert v-if="warnings.includes('OFFLINE_FIXTURE_EVIDENCE')" title="离线演示数据 · 非模拟器实时状态" type="warning" :closable="false" show-icon />
+    <el-alert v-if="partialError" :title="partialError" type="warning" :closable="false" show-icon />
     <div class="wireless-layout" v-loading="loading">
       <aside class="card wireless-sidebar">
         <div class="card__header"><h2>AC Domain</h2><span class="state-pill info">{{ domains.length }} 个</span></div>
@@ -360,7 +374,7 @@ onMounted(() => { void refresh() })
             </template>
           </section>
         </template>
-        <div v-else class="card empty-state"><div><strong>暂无无线业务数据</strong><small>AC Domain API 返回空集合。</small></div></div>
+        <div v-else class="card empty-state"><div><strong>{{ partialError ? '无线业务部分可用' : '暂无无线业务数据' }}</strong><small>{{ partialError || 'AC Domain API 返回空集合。' }}</small></div></div>
       </main>
     </div>
   </NcLayout>
