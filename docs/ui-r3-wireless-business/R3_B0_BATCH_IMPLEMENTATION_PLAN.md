@@ -1,5 +1,9 @@
 # R3-B0 R3 实施批次计划（修订版）
 
+## 2026-11-07 implementation update
+
+R3 decisions are `APPROVED/FROZEN`. B1 through the current read-model slice are implemented partially in product code, including schema v24 persistence, AC/AP projection, identity/runtime/group services, claims-guarded routes and Wireless UI. B6 wireless business task execution and full 57-scenario acceptance remain pending. The plan below is retained as the original batch contract and exit criteria.
+
 修订日期：2026-11-04
 状态：`FROZEN_DESIGN_NOT_IMPLEMENTED`。冻结基线：`NETCONSOLE-NEXT-R3-WIRELESS-BASELINE-20261105-R1`。这是批准后的实施顺序，不是本轮实施授权。
 

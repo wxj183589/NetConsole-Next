@@ -1,5 +1,11 @@
 # R3-B0 最终准入报告
 
+## 2026-11-07 R6.6/R3 continuation update
+
+The seven decisions are now `APPROVED/FROZEN` under the amended OPTION_A package. The repository has since implemented a partial R3 read path: schema v24 wireless projection persistence, AC/AP typed read models, identity lifecycle boundaries, runtime state projection, AP group projection, Site claims guards and the Wireless UI. These capabilities are covered by isolated fixtures and service/browser tests.
+
+Current implementation status remains **PARTIAL**. Wireless task-plan execution, authenticated simulator collection, HA/failover evidence, Windows 125% acceptance and the full 57-scenario business gate are still open. This update supersedes the historical pre-approval statements below without rewriting their audit history.
+
 日期：2026-11-04  
 基线：`b3f1a2d6303e5196c2aced62afb7ee8a1b8e9362`  
 分支：`codex-A/netconsole-next-r2-device-management-ui`  

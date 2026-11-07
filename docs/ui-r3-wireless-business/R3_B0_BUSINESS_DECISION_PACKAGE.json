@@ -14,10 +14,10 @@
   "implementationStatus": {
     "businessDecision": "FROZEN",
     "apiDesign": "DESIGNED",
-    "apiImplementation": "NOT_IMPLEMENTED",
-    "databaseMigration": "NOT_STARTED",
-    "databaseChangeAuthorized": false,
-    "r3Ui": "NOT_STARTED"
+    "apiImplementation": "IMPLEMENTED_PARTIAL",
+    "databaseMigration": "IMPLEMENTED_PARTIAL_SCHEMA24",
+    "databaseChangeAuthorized": true,
+    "r3Ui": "IMPLEMENTED_PARTIAL"
   },
   "counts": {
     "decisionsIdentified": 7,

@@ -13,7 +13,7 @@
 
 七项当前选择均为 `selectedOption=OPTION_A`、`approvalStatus=APPROVED`、`status=FROZEN`，修订版本为 `20261104-amended`。D04 的修订是 Domain-owned AP Group 必须有明确 domain-shared evidence，否则使用 AC-owned；D06 的修订是有效执行目标取创建 scope snapshot 与当前授权目标的交集，并在受保护边界重检 claims。
 
-冻结只改变业务决策状态，不宣称实现完成：`API_DESIGN=DESIGNED`、`API_IMPLEMENTATION=NOT_IMPLEMENTED`、`DATABASE_MIGRATION=NOT_STARTED`、`R3_UI_IMPLEMENTATION=NOT_STARTED`。2026-11-04 的 amendment、approval sheet 和 readiness 报告仍是批准前历史记录。
+冻结只改变业务决策状态，不宣称整体实现完成。当前源码已有 schema v24 无线投影持久化、claims-guarded read API、Runtime/Group/Identity 读模型和 Wireless UI，均为 `IMPLEMENTED_PARTIAL`；无线业务任务、真实设备认证/采集和完整 57 场景验收仍未完成。2026-11-04 的 amendment、approval sheet 和 readiness 报告中的历史状态保留为当时记录。
 
 ## 使用说明
 
