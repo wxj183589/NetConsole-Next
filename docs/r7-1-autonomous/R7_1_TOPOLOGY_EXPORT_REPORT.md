@@ -21,3 +21,7 @@
 - `vue-tsc --noEmit`：PASS。
 
 无后端 schema / 路由变更，无设备连接，无原版仓库修改，无旧数据根访问。最终静态构建、浏览器操作、Git 与 DevStatus 由根集成统一执行。
+
+## 最终集成补录
+
+完整最终harness EXIT0、真实SW三邻居产品重采、精确筛选及820bytes非空CSV浏览器验收已完成；双分辨率截图目视、0错误。前期空态和失败证据保留，最终范围见 [最终验收](R7_1_FINAL_ACCEPTANCE.md)、[LLDP实录修复](R7_1_LLDP_REAL_CAPTURE_REPAIR_REPORT.md) 和 [测试证据](R7_1_TEST_EVIDENCE.md)。

@@ -71,3 +71,7 @@
 仅使用 Next Workspace 内测试与隔离 runtime；未访问、复制或修改 `D:\NetConsoleData`、`D:\NetConsoleData-dev`，未把旧项目运行数据作为测试目标。运行产品采集证据只增加授权只读备份及相应元数据，未执行配置写入、整机恢复或 HA 切换；暂停的 SW 计划及自然到期 AC1 计划由根集成统一收尾。整产品维持 **PARTIAL**。
 
 详情：本目录 `R7_1_CONFIG_MANAGEMENT_REPORT.md`、`R7_1_FAULT_RECOVERY_REPORT.md`、`R7_1_SYSLOG_EVENT_CLASSIFICATION_REPORT.md`、`R7_1_DEPLOYMENT_WORKER_LIFECYCLE_REPORT.md`。
+
+## 最终集成补录
+
+完整最终harness EXIT0、真实SW三邻居产品重采、精确筛选及820bytes非空CSV浏览器验收已完成；双分辨率截图目视、0错误。前期空态和失败证据保留，最终范围见 [最终验收](R7_1_FINAL_ACCEPTANCE.md)、[LLDP实录修复](R7_1_LLDP_REAL_CAPTURE_REPAIR_REPORT.md) 和 [测试证据](R7_1_TEST_EVIDENCE.md)。

@@ -94,3 +94,22 @@ Next 的 `tools/netmiko_worker.py` 仅实现 SW 受控 `configuration commit`，
 无效、越界或非数字值使启动明确失败，避免静默取消配额。达到阈值时先查看计划失败项与磁盘可用量，再由管理员在确认容量后调整环境变量并受控重启；本轮没有提供自动历史删除接口，也没有删除任何既有备份。勿以整根真实数据复制解决容量问题。
 
 新增定向验证：schedule 19/19、simulator 19/19、complete batch 11/11；覆盖删除运行计划的终态回收、最高版本正文损坏仍递增、结构损坏拒绝、连接前与发布前容量边界、孤立文件计额、旧历史不受限、不同设备并发共用配额及环境变量上下界。Web 计划/批量/完整历史 34 项覆盖容量提示保留成功历史。隔离 Release harness build 0 warnings / 0 errors。新增容量代码尚未作为 live 满盘测试执行，避免填满运行数据磁盘；由根集成重启最新 Service 后复验正常路径。
+
+## 自然到期真实备份终态
+
+2026-11-08 02:16:40.761 CST 原始due保持不变；实际准入02:16:42.009，延迟1248ms；02:16:45.533批次完成。计划 `6334c82406a348689bf29dd186137351`，真实AC1 `192.168.56.2`，批次 `d5c37492c99d46cc9e74c211acd08b55` SUCCEEDED（1成功/0失败），快照 `e09a1c6418f94eca8dadf84e41e81d21`，版本6。原件4768bytes SHA256 `17f3c0862e0fe7ee71065e34fd01eb5ea8eb35e88a331a5f247c442ac03ff25a`；脱敏4522bytes SHA256 `82d38a4a7b14f52011a02baa7cc505fcd0b1f382182e5ea467e4a742820c2980`。两文件及API视图均校验通过。manifest的restorable表示备份结构完整，不代表真实整机restore已开放或验收。
+
+观察器EXIT0，`reports/r71-natural-schedule-observation.json` 为 PASS_NATURAL_DUE_REAL_AC1_BACKUP，189次采样，未改时钟/due、未run-now、未写设备。终态后通过API暂停同一计划，enabled=false/nextRunMs=null。观察含受控Service重启和Raw/配置读取，并非24H长稳。
+
+追加浏览器检查 `reports/r71-browser-natural-closure-20261108/result.json` 发现旧SW计划最近批次仅内存、重启后404，原失败保留。后续已修复新批次持久历史及旧记录可用性提示，原失败保留；最终跨重启验证见下节。
+
+## 批次历史修复与最终运行验收
+
+真实SW新增批次跨Service重启后仍可读；旧内存批次明确不可用且按钮禁用，不伪造旧历史。新终态元数据持久化最多128条/4MiB，读取重新检查当前owner/角色/Site，配置版本保留策略独立。专项见 [批次重启验收](R7_1_BATCH_HISTORY_RESTART_REPORT.md)。
+
+- 最终源码完整Service harness `reports/r71-service-harness-history-final.log` EXIT0，complete batch18/18、schedule19/19及既有全回归通过。`r71-harness-history-build.log`、`r71-service-history-build.log`均0 warnings/errors。
+- 最终Web27文件306项、typecheck、Vite2115modules PASS；相关日志为 `r71-web-history-final.log`、`r71-typecheck-history-final.log`、`r71-vite-history-final.log`。
+- HTTP26组PASS，含损坏批次存储503及保留证据/其它服务继续运行；`reports/r71-feature-http-20261108-022949-aa3f4c.json`。
+- `reports/r71-browser-history-final-20261108/result.json`：真实已构建UI登录及7业务步骤全部PASS，0 API/page/console错误，1920/2560共22张截图；跨重启配置页两张截图已目视。旧404失败与新增HTTP测试解析错误日志均保留，未降低Gate。
+- `reports/r71-runtime-history-final.json`与`r71-doctor-history-final.json`：HEALTHY / doctor PASS，两个UI均HTTP200；自然AC1及新SW验收计划均成功且暂停，nextRunMs=null；无活动Python子Worker。Service交互运行，仍不是SCM验收。
+- 最终产品提交 `2cb89b2`，之前产品提交 `9135589`、`d40f971`、`5026584`；后续只更新报告与交接。不Push/Merge/Release。

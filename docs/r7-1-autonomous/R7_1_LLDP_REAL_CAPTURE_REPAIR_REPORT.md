@@ -37,7 +37,7 @@ list 没有管理地址，故关系的 management address 必须为 null。没�
 - `Phase9VendorParsers.cs`：按明确表头区分已有 system-name-first、已有合成 neighbor 列及真实 local-interface-first 布局；跳过表头前说明；部分、分页、未知或错误行不构成完整集合。
 - `H3cComware.cs`：沿用解析结果数组形态，完整空表允许 PARSED，失败状态明确返回。
 - `H3cFacts.cs`、`H3cLldpListTable.cs`：仅带产品 Raw provenance 的完整 LLDP list 发布 `lldp.table` 集合 revision。完整空表也有 revision。新增的 table 退役操作仅匹配同 profile、完全相同 captured scope、精确 `H3C_TASK_RAW:` 来源、较旧捕获时刻的 LLDP 邻居 Current；该操作不会匹配其他来源/范围/事实种类，不删除历史，不产生 REMOVED。同范围采集证据的更老首次发布或重放不能因本次集合更新复活 Current。表元数据不是 `lldp.neighbor`，不进入关系投影。
-- 实录 fixture `tests/NetConsole.Next.Service.Tests/fixtures/h3c/r71_simulator_sw_lldp_list.txt` 直接取自以上已校验 Raw 输出，仅含白名单模拟器 LLDP 内容，无凭据。
+- 实录 fixture `tests/NetConsole.Next.Service.Tests/fixtures/h3c/r71_simulator_sw_lldp_list.txt` 取自以上已校验 Raw 输出（仅清理行尾空白），仅含白名单模拟器 LLDP 内容，无凭据。
 - 探针 `tests/r71_product_lldp_probe.py` 补充精确三关系语义、管理地址为空、scope/source、事实 Raw verified，以及两段输出/分段 SHA 和字节数验证。
 
 边界：上述过滤只约束新增的 table 退役及采集集合排序操作。既有通用事实 Current 继承仍以 `profile_id + kind + identity_key` 为键，没有把 source 或 captured scope 纳入键；不同来源/范围若使用同一 identity，较新事实仍可能继承并替换该键的 Current。本批没有实现跨来源/范围的独立 Current authority。测试中用于验证过滤保留的其他来源/范围行均使用不同 identity，不能据此宣称同 identity 隔离。
@@ -57,5 +57,3 @@ list 没有管理地址，故关系的 management address 必须为 null。没�
 - 产品集合发布将旧5条错误 Current 退役，保留原事实历史，新的 Current 为上表正确3条；未手工删除或修改事实、Raw，不写设备，不读取设备凭据。list/verbose 输出SHA与首次实录一致，新分段SHA分别为 `0d2e8437ee978750bfd8c31a5a4145c4b1b677e5daa1524abc531c264ccd0ad1`、`b3bd45e01aedefa3a5d5ebd1b5750e6772bd73d7914599e81699757eb2a644f1`。
 - 浏览器直接访问 Service18771 已构建UI：加载3条关系，精确 profile + GE1/0/2 + Site local 筛选得到1条；CSV820bytes/1数据行，source/factRevision/relationKey 与API逐项核对。API/page/console错误0，浏览器无额外设备连接。`reports/r71-browser-lldp-closure-20261108/result.json`。
 - 1920/2560两张截图已逐张目视，无溢出、重叠。不能据此扩大为全站身份消歧、同identity跨来源Current隔离或完整图形拓扑验收。
-
-

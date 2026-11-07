@@ -1,6 +1,32 @@
 # 全天候动态任务池
 
-## 2026-11-08 R7.0 当前增量与优先级
+## 2026-11-08 R7.1 当前入口
+
+分支 `codex-A/netconsole-next-r3-dual-ac`；产品本地提交 `9135589`、`d40f971`、`5026584`、`2cb89b2`。七工作流多批次已集成；整体 **PARTIAL**。不Push/Merge/Release，设备配置写入0。
+
+当前结论以 [最终验收](../r7-1-autonomous/R7_1_FINAL_ACCEPTANCE.md)、[剩余问题](../r7-1-autonomous/R7_1_REMAINING_GAPS.md)、[运行交接](../r7-1-autonomous/R7_1_RUNTIME_HANDOFF.md) 为准，下方历史TODO/PID/统计不代表当前结果。
+
+Web27文件306项、typecheck/Vite2115modules PASS；完整Service harness `r71-service-harness-history-final.log` EXIT0，构建0warnings/errors；HTTP26组及最新静态浏览器登录/7业务步骤PASS，0错误。真实LLDP3邻居与旧5Current退役、精确筛选/CSV已验；自然AC1到期备份版本6/hash PASS且暂停。新SW备份跨重启明细可读，旧丢失明细明确禁用，128条/4MiB终态元数据持久化。
+
+| 能力 | 当前结论 / 下一门禁 |
+| --- | --- |
+| 完整配置批量/固定范围/计划/差异导出 | 已实现并经真实只读备份验证；旧明细不追造，磁盘长期保留另验 |
+| 故障生命周期/聚合/补采/重试/历史/导出 | 已实现；真实业务恢复及长期无人值守待验，默认不启用补采 |
+| Syslog查询/诊断/CSV/分类、拓扑/运维入口 | 已实现；远端设备Syslog、长期保留与更多原版能力继续迁移 |
+| 任意历史整机恢复 | BLOCKED：native checkpoint/transfer/staging/replace未验证，不将描述Writer作为整机恢复 |
+| 双AC切换/业务恢复 | NOT_TESTED：Master/Backup/Ready观察已得，无已验证可恢复切换路径，不断共享管理链路 |
+| FIT直接认证 | AUTH_CREDENTIAL_UNAVAILABLE：不猜密；经AC身份观察不替代直接CLI |
+| Windows SCM | PENDING_EXTERNAL：实际安装/自启/崩溃恢复/升级回滚另验 |
+| 精确候选apphost ICMP | FAIL/PARTIAL：权限根因未定位，重跑原Gate前不得升级PASS |
+| 无线权威/Mesh/长期fping/多厂商/现场兼容 | PARTIAL，按剩余问题继续实施与验收 |
+
+保留Vite `http://127.0.0.1:5174` PID37420；Service/静态UI `http://127.0.0.1:18771` PID85584。HEALTHY/doctor PASS，两验收计划暂停；最终DLLhash及日志见交接。不要另起同根Service或停止其它任务进程；未访问旧真实数据根。
+
+## R7.0 及更早检查点（完整历史）
+
+下方保留原始检查点与证据。其 TODO/未实现及优先级不再是当前任务池：完整私有备份批量/计划和 Syslog viewer 已在 R7.1 实现；恢复、HA、FIT、SCM 与候选 ICMP 等仍以上方及 R7.1 专项为准。
+
+## 2026-11-08 R7.0 增量与优先级（历史）
 
 当前分支 `codex-A/netconsole-next-r3-dual-ac`，R7起点 `2551b26`；最终功能提交与Gate见 `docs/r7-autonomous/R7_FINAL_ACCEPTANCE.md`，不使用下方历史检查点作为本轮HEAD或验收。整体 **PARTIAL**；不Push、Merge、Release。
 
