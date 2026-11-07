@@ -142,6 +142,10 @@ internal sealed class ConfigRestoreService(
             return new(operation.Id, "DRY_RUN", "已完成恢复预览，未向设备发送写命令。", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
+        if (!source.Restorable)
+            throw new ConfigRestoreException("CONFIG_RESTORE_SOURCE_NOT_RESTORABLE",
+                "该备份只包含脱敏配置或配置指向，不能用于设备恢复。", 409);
+
         var claimed = catalog.TryClaimConfigRestoreOperation(operation.Id, actor.UserId,
             request.ConfirmationToken, out var claimFailure);
         if (claimed is null)

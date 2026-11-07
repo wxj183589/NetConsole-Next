@@ -12,6 +12,11 @@ internal static class ConfigRestoreTests
         var first = await fixture.Backup(actor);
         var source = fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global,
             ConfigBackupKinds.Running).Single(item => item.Id == first.Items.Single().SnapshotId);
+        Assert(source.ContentClass == "REDACTED_CONFIGURATION" && !source.Restorable,
+            "sanitized snapshots must never be identified as restorable");
+        var forged = System.Text.Json.JsonSerializer.Deserialize<ConfigBackupSnapshot>(
+            System.Text.Json.JsonSerializer.Serialize(source).Replace("\"Restorable\":false", "\"Restorable\":true", StringComparison.Ordinal));
+        Assert(forged is { Restorable: false }, "manifest data cannot override the restorable classification");
 
         ExpectCode(() => fixture.Restore.Preview(
             new(source.Id, fixture.Profile), reader, P2B5SiteScopeDecision.Global),
@@ -29,6 +34,8 @@ internal static class ConfigRestoreTests
 
         var startup = await fixture.Backup(actor, ConfigBackupKinds.StartupInfo);
         var startupSnapshot = fixture.Backups.Get(startup.Items.Single().SnapshotId!, P2B5SiteScopeDecision.Global)!;
+        Assert(startupSnapshot.ContentClass == "CONFIGURATION_REFERENCE" && !startupSnapshot.Restorable,
+            "startup references are not full backups");
         ExpectCode(() => fixture.Restore.Preview(
             new(startupSnapshot.Id, fixture.Profile), actor, P2B5SiteScopeDecision.Global),
             "CONFIG_RESTORE_KIND_UNSUPPORTED");
@@ -50,43 +57,13 @@ internal static class ConfigRestoreTests
 
         var applyPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
             P2B5SiteScopeDecision.Global);
-        var applied = await fixture.Restore.ExecuteAsync(
-            new(applyPreview.Id, applyPreview.ConfirmationToken, Apply: true), actor,
-            P2B5SiteScopeDecision.Global, CancellationToken.None);
-        Assert(applied.State == "APPLIED" && fixture.Writer.Calls == 1 &&
-            fixture.Writer.Configuration is not null &&
-            !fixture.Writer.Configuration.Contains("super-secret", StringComparison.Ordinal),
-            "an enabled writer must receive only the sanitized snapshot configuration");
-        Assert(fixture.Catalog.GetConfigRestoreOperation(applyPreview.Id)?.State == "SUCCEEDED",
-            "a completed writer result must be reflected in the durable restore state");
-        var status = fixture.Restore.GetStatus(applyPreview.Id, actor, P2B5SiteScopeDecision.Global);
-        Assert(status is { State: "SUCCEEDED", AttemptId: not null } &&
-            status.SourceSnapshotId == applyPreview.SnapshotId && status.Detail == "fixture writer",
-            "restore status must expose the durable outcome without exposing confirmation material");
         await ExpectCodeAsync(() => fixture.Restore.ExecuteAsync(
             new(applyPreview.Id, applyPreview.ConfirmationToken, Apply: true), actor,
-            P2B5SiteScopeDecision.Global, CancellationToken.None),
-            "CONFIG_RESTORE_PREVIEW_NOT_FOUND");
-
-        var concurrentWriter = new BlockingWriter();
-        using var concurrent = new Fixture(concurrentWriter);
-        var concurrentBatch = await concurrent.Backup(actor);
-        var concurrentSource = concurrent.Backups.Get(concurrentBatch.Items.Single().SnapshotId!,
-            P2B5SiteScopeDecision.Global)!;
-        var concurrentPreview = concurrent.Restore.Preview(new(concurrentSource.Id, concurrent.Profile), actor,
-            P2B5SiteScopeDecision.Global);
-        var firstApply = concurrent.Restore.ExecuteAsync(
-            new(concurrentPreview.Id, concurrentPreview.ConfirmationToken, Apply: true), actor,
-            P2B5SiteScopeDecision.Global, CancellationToken.None);
-        await concurrentWriter.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await ExpectCodeAsync(() => concurrent.Restore.ExecuteAsync(
-            new(concurrentPreview.Id, concurrentPreview.ConfirmationToken, Apply: true), actor,
-            P2B5SiteScopeDecision.Global, CancellationToken.None),
-            "CONFIG_RESTORE_PREVIEW_NOT_FOUND");
-        concurrentWriter.Release.TrySetResult();
-        var concurrentResult = await firstApply;
-        Assert(concurrentResult.State == "APPLIED" && concurrentWriter.Calls == 1,
-            "a restore confirmation must be consumed before writer execution to prevent concurrent duplicate writes");
+            P2B5SiteScopeDecision.Global, CancellationToken.None), "CONFIG_RESTORE_SOURCE_NOT_RESTORABLE");
+        Assert(fixture.Writer.Calls == 0, "a sanitized snapshot must never reach an enabled writer");
+        var status = fixture.Restore.GetStatus(applyPreview.Id, actor, P2B5SiteScopeDecision.Global);
+        Assert(status is { State: "PREVIEWED", AttemptId: null } && status.SourceSnapshotId == source.Id,
+            "blocked restore must not claim a write attempt");
 
         var invalidPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
             P2B5SiteScopeDecision.Global);
@@ -151,26 +128,11 @@ internal static class ConfigRestoreTests
         await ExpectCodeAsync(() => disabled.Restore.ExecuteAsync(
             new(disabledPreview.Id, disabledPreview.ConfirmationToken, Apply: true), actor,
             P2B5SiteScopeDecision.Global, CancellationToken.None),
-            "CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE");
-        Assert(disabled.Catalog.GetConfigRestoreOperation(disabledPreview.Id)?.State == "REQUIRES_REVIEW",
-            "an exception raised after entering the writer boundary must require review instead of automatic retry");
+            "CONFIG_RESTORE_SOURCE_NOT_RESTORABLE");
+        Assert(disabled.Catalog.GetConfigRestoreOperation(disabledPreview.Id)?.State == "PREVIEWED",
+            "a blocked restore must not claim a write attempt");
 
-        using var uncertain = new Fixture(new UncertainWriter());
-        var uncertainFirst = await uncertain.Backup(actor);
-        var uncertainSnapshot = uncertain.Backups.Get(uncertainFirst.Items.Single().SnapshotId!,
-            P2B5SiteScopeDecision.Global)!;
-        var uncertainPreview = uncertain.Restore.Preview(new(uncertainSnapshot.Id, uncertain.Profile), actor,
-            P2B5SiteScopeDecision.Global);
-        await ExpectCodeAsync(() => uncertain.Restore.ExecuteAsync(
-            new(uncertainPreview.Id, uncertainPreview.ConfirmationToken, Apply: true), actor,
-            P2B5SiteScopeDecision.Global, CancellationToken.None),
-            "FIXTURE_REMOTE_OUTCOME_UNKNOWN");
-        var uncertainStatus = uncertain.Catalog.GetConfigRestoreOperation(uncertainPreview.Id);
-        Assert(uncertainStatus is { State: "REQUIRES_REVIEW" } &&
-            uncertainStatus.Detail?.Contains("设备侧结果未知", StringComparison.Ordinal) == true,
-            "a writer exception must persist an unknown remote outcome and forbid replay");
-
-        Console.WriteLine("CONFIG_RESTORE_TESTS=16/16 PASS");
+        Console.WriteLine("CONFIG_RESTORE_TESTS=PASS (redacted restore blocked; preview, scope and token checks)");
     }
 
     private static void ExpirePlan(Catalog catalog, string id)

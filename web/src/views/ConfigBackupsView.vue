@@ -246,6 +246,7 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">
+        <p class="muted">当前版本均为脱敏内容或配置指向，不可用于恢复写入。</p>
         <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" :loading="contentLoading" @click="viewContent(snapshot)">查看</el-button><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
       </div>
     </section>
@@ -257,7 +258,7 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
       <div class="card__header"><div><h2>配置恢复预览</h2><small>仅当前设备、当前 Site 和当前账户可确认；预览不会修改设备</small></div><span class="state-pill warn">{{ restorePreview.compatibility }}</span></div>
       <div class="card__body">
         <div class="form-grid"><div><span class="muted">来源版本</span><strong>v{{ history.find(item => item.id === restorePreview?.snapshotId)?.version ?? '—' }}</strong></div><div><span class="muted">变化</span><strong>新增 {{ restorePreview.addedLines }} · 删除 {{ restorePreview.removedLines }} · 修改 {{ restorePreview.changedLines }}</strong></div><div><span class="muted">有效期</span><strong>{{ time(restorePreview.expiresMs) }}</strong></div></div>
-        <p class="data-quality-note">当前服务的设备写入适配器默认关闭。可执行 dry-run 验证确认合同；点击执行恢复只会在写入适配器可用且现场验收完成时发送设备命令。</p>
+        <p class="data-quality-note">现有备份为脱敏配置或配置指向，不具备恢复条件。可执行 dry-run；设备写入将被阻断。</p>
         <div class="toolbar"><el-button :loading="restoring" @click="runRestore(false)">执行 dry-run</el-button><el-button type="danger" :loading="restoring" @click="runRestore(true)">执行恢复</el-button><span v-if="restoreResult" class="muted">{{ restoreResult.state }} · {{ restoreResult.detail }}</span></div>
       </div>
     </section>

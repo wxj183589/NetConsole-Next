@@ -32,7 +32,13 @@ internal sealed record ConfigBackupSnapshot(
     bool CanDownload,
     string? DownloadName,
     string ConfigurationKind = ConfigBackupKinds.Running,
-    string? Command = null);
+    string? Command = null)
+{
+    // Existing snapshots retain only sanitized output, including old manifests.
+    public string ContentClass => ConfigurationKind == ConfigBackupKinds.StartupInfo
+        ? "CONFIGURATION_REFERENCE" : "REDACTED_CONFIGURATION";
+    public bool Restorable => false;
+}
 
 internal sealed record ConfigBackupBatchItem(
     string ProfileId,

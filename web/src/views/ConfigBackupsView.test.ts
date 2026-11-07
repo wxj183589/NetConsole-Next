@@ -137,6 +137,7 @@ describe('device configuration backup context', () => {
     await previewButtons[1].trigger('click'); await flushPromises()
     expect(api.previewConfigRestore).toHaveBeenCalledWith({ snapshotId: 'profile-b-v1', targetProfileId: 'profile-b' })
     expect(wrapper.text()).toContain('配置恢复预览')
+    expect(wrapper.text()).toContain('不具备恢复条件')
     await button(wrapper, '执行 dry-run').trigger('click'); await flushPromises()
     expect(api.executeConfigRestore).toHaveBeenCalledWith({ previewId: 'restore-preview', confirmationToken: 'token', apply: false })
     expect(wrapper.text()).toContain('DRY_RUN')

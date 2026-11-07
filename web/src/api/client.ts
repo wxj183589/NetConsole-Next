@@ -666,6 +666,8 @@ export interface ConfigBackupSnapshot {
   downloadName?: string | null
   configurationKind?: ConfigBackupKind
   command?: string | null
+  contentClass?: 'REDACTED_CONFIGURATION' | 'CONFIGURATION_REFERENCE'
+  restorable?: boolean
 }
 
 export interface ConfigBackupBatch {
