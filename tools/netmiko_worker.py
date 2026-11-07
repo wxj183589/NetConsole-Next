@@ -396,6 +396,36 @@ class Worker:
             raise OutputLimitError("configuration response exceeded worker limit")
         return {"state": "COMMANDS_SENT"}
 
+    def commit_configuration_checkpoint(self, request: dict[str, Any]) -> dict[str, Any]:
+        """SW simulator only. Prompt completion never proves checkpoint creation."""
+        if self.connection is None:
+            raise RuntimeError("worker is not connected")
+        endpoint = (str(getattr(self.connection, "host", "")), int(getattr(self.connection, "port", 0)))
+        if (endpoint != ("192.168.56.3", 22) or self.driver != "hp_comware" or
+                self.jump_client is not None or self.jump_channel is not None):
+            raise ValueError("native checkpoint requires the authorized direct SW SSH simulator")
+        if not self.connection.is_alive():
+            raise ConnectionLostError()
+        try:
+            self.connection.config_mode()
+            prompt = self.connection.find_prompt()
+            if not isinstance(prompt, str) or not re.fullmatch(r"\[[^\r\n\[\]]{1,250}\]", prompt.strip()):
+                raise ValueError("checkpoint requires a bounded system-view prompt")
+            pattern = r"(?m:^[ \t]*" + re.escape(prompt.strip()) + r"[ \t\r\n]*\Z)"
+            output = self.connection.send_command("configuration commit", expect_string=pattern,
+                read_timeout=30, auto_find_prompt=False, cmd_verify=True, strip_prompt=False, strip_command=False)
+            if not isinstance(output, str) or len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
+                raise OutputLimitError("checkpoint response exceeded worker limit")
+            if re.search(pattern, output) is None:
+                raise ReadTimeout("checkpoint did not return to its terminal prompt")
+            self.connection.exit_config_mode()
+            # The service must re-read and uniquely identify the new commit ID
+            # before it permits any controlled configuration mutation.
+            return {"output": output}
+        except Exception:
+            self.close()
+            raise
+
     def shell_read(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.connection is None or not self.interactive:
             raise RuntimeError("worker interactive channel is not open")
@@ -509,6 +539,8 @@ def main() -> int:
                 result = worker.execute(request)
             elif operation == "configure_description":
                 result = worker.configure_description(request)
+            elif operation == "commit_configuration_checkpoint":
+                result = worker.commit_configuration_checkpoint(request)
             elif operation == "shell_read":
                 result = worker.shell_read(request)
             elif operation == "shell_write":

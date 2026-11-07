@@ -19,8 +19,13 @@ internal sealed record SimulatorConfigurationChange(string Id, string ProfileId,
 
 internal interface ISimulatorConfigurationSession : IAsyncDisposable
 {
+    bool SupportsNativeCheckpointRestore => false;
     Task<string> ReadAsync(string command, CancellationToken cancellationToken);
     Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken);
+    Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Device-native checkpoints are unavailable in this session.");
+    Task<string> RestoreConfigurationCheckpointAsync(string commitId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Device-native checkpoint replacement is unavailable in this session.");
 }
 internal interface ISimulatorConfigurationSessionFactory
 {
@@ -60,11 +65,15 @@ internal sealed class NetmikoConfigurationSessionFactory(Catalog catalog) : ISim
         public Task<string> ReadAsync(string command, CancellationToken cancellationToken) => transport.ExecuteAsync(command, cancellationToken);
         public Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken) =>
             transport.ConfigureDescriptionAsync(interfaceName, description, cancellationToken);
+        public Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken) =>
+            transport.CommitConfigurationCheckpointAsync(cancellationToken);
+        public Task<string> RestoreConfigurationCheckpointAsync(string commitId, CancellationToken cancellationToken) =>
+            transport.RestoreConfigurationCheckpointAsync(commitId, cancellationToken);
         public ValueTask DisposeAsync() { transport.Dispose(); return ValueTask.CompletedTask; }
     }
 }
 
-internal sealed class SimulatorConfigurationService
+internal sealed partial class SimulatorConfigurationService
 {
     private readonly Catalog _catalog;
     private readonly TaskSiteScopeAuthorizer _scopes;

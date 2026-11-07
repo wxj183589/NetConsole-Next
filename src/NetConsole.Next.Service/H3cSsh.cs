@@ -337,6 +337,21 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
             description }, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConnected) throw new H3cConnectionLostException();
+        var result = await RequestAsync(new { op = "commit_configuration_checkpoint" }, cancellationToken).ConfigureAwait(false);
+        return result.GetProperty("output").GetString() ?? throw new H3cWorkerProtocolException();
+    }
+
+    internal Task<string> RestoreConfigurationCheckpointAsync(string commitId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // The authorized simulator accepts commit syntactically but creates no checkpoint.
+        // A replace confirmation exchange has therefore never been observed. Do not guess it.
+        throw new NotSupportedException("CONFIG_CHECKPOINT_REPLACE_INTERACTION_UNVERIFIED");
+    }
+
     internal async Task WriteChannelAsync(string data, CancellationToken cancellationToken)
     {
         if (!IsConnected || !_interactive) throw new IOException("Netmiko interactive channel is not connected.");

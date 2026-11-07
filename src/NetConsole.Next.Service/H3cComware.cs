@@ -54,7 +54,7 @@ internal static class H3cCommandPolicy
         DisplayWlanApAllAddress or DisplayWlanApAllRadio or DisplayWlanMeshLink or DisplayWlanMeshProfile or
         DisplayWlanServiceTemplateAll or DisplayWlanClient or DisplayLldpNeighborInformationList or
         DisplayLldpNeighborInformationVerbose or DisplayTransceiverDiagnosisInterface or
-        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup || IsStartupFileReadCommand(command) || H3cAcResources.IsAllowed(command) ||
+        DisplayCurrentConfiguration or DisplaySavedConfiguration or DisplayStartup or SimulatorConfigurationService.CheckpointListCommand || IsStartupFileReadCommand(command) || H3cAcResources.IsAllowed(command) ||
         command == H3cDiagnosticCapture.Command;
 }
 

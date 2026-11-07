@@ -64,6 +64,39 @@ def jump_client():
 
 
 class NetmikoWorkerTests(unittest.TestCase):
+    def test_checkpoint_commit_is_fixed_sw_command_without_automatic_confirmation(self):
+        target = connection()
+        target.host, target.port = "192.168.56.3", 22
+        target.find_prompt.return_value = "[sw1]"
+        target.send_command.return_value = "configuration commit\r\n[sw1]"
+        worker = module.Worker()
+        worker.connection, worker.driver = target, "hp_comware"
+        self.assertEqual(worker.commit_configuration_checkpoint({})["output"], "configuration commit\r\n[sw1]")
+        target.send_command.assert_called_once()
+        self.assertEqual(target.send_command.call_args.args, ("configuration commit",))
+        target.exit_config_mode.assert_called_once()
+        self.assertNotIn("confirmation_response", target.send_command.call_args.kwargs)
+
+    def test_checkpoint_commit_rejects_wrong_endpoint_jump_unknown_prompt_and_confirmation(self):
+        target = connection()
+        target.host, target.port = "192.168.56.2", 22
+        worker = module.Worker()
+        worker.connection, worker.driver = target, "hp_comware"
+        with self.assertRaises(ValueError):
+            worker.commit_configuration_checkpoint({})
+        target.send_command.assert_not_called()
+        target.host = "192.168.56.3"
+        worker.jump_channel = object()
+        with self.assertRaises(ValueError):
+            worker.commit_configuration_checkpoint({})
+        worker.jump_channel = None
+        target.find_prompt.return_value = "[sw1]"
+        target.send_command.return_value = "Continue? [Y/N]"
+        with self.assertRaises(ReadTimeout):
+            worker.commit_configuration_checkpoint({})
+        self.assertEqual(target.send_command.call_count, 1)
+        target.disconnect.assert_called_once()
+
     def test_description_writer_sends_only_narrow_commands_and_hides_output(self):
         for host, port, driver in (("192.168.56.2", 22, "hp_comware"), ("192.168.56.5", 22, "hp_comware"),
                                    ("192.168.56.3", 22, "hp_comware"), ("192.168.56.4", 23, "hp_comware_telnet")):
