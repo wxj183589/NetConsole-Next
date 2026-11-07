@@ -37,6 +37,10 @@ internal static class WirelessTaskTests
         var manifestEntry = archive.GetEntry("manifest.json")!;
         using var manifestStream = manifestEntry.Open();
         using var manifest = JsonDocument.Parse(manifestStream);
+        Assert(manifest.RootElement.GetProperty("generatedMs").GetInt64() > 0 &&
+            manifest.RootElement.GetProperty("source").GetString() == "TASK_PLAN_REPORT", "manifest identifies generation and source");
+        foreach (var name in new[] { "task-summary.json", "ac-execution-results.json", "ap-resources.json", "ap-observations.json", "parser-summary.json", "failure-details.json" })
+            Assert(archive.GetEntry(name) is not null, "export includes " + name);
         foreach (var file in manifest.RootElement.GetProperty("files").EnumerateArray())
         {
             var entry = archive.GetEntry(file.GetProperty("name").GetString()!)!;

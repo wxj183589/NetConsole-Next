@@ -74,6 +74,8 @@ let groupGeneration = 0
 let groupDetailGeneration = 0
 let collectionGeneration = 0
 let collectionDetailGeneration = 0
+let taskDetailGeneration = 0
+let taskPoll: ReturnType<typeof setTimeout> | undefined
 
 const selectedDomain = computed(() => domains.value.find(domain => domain.id === selectedDomainId.value) || domains.value[0] || null)
 const visibleResources = computed(() => resources.value.filter(resource => {
@@ -130,7 +132,7 @@ async function loadRuntime(): Promise<void> {
     if (generation === runtimeGeneration) runtimeError.value = cause instanceof Error ? cause.message : '状态历史读取失败'
   } finally { if (generation === runtimeGeneration) runtimeLoading.value = false }
 }
-onBeforeUnmount(() => { ++runtimeGeneration; runtimeController?.abort() })
+onBeforeUnmount(() => { ++runtimeGeneration; runtimeController?.abort(); ++taskDetailGeneration; clearTimeout(taskPoll) })
 const domainApCount = computed(() => visibleResources.value.length)
 const scopeLabel = computed(() => selectedDomain.value?.siteScopeStatus || '—')
 const runtimeLabel = computed(() => {
@@ -157,18 +159,25 @@ async function createTask(): Promise<void> {
     taskResult.value = await createWirelessTask(taskDomains.value, taskCommands.value, taskAcs.value.length ? taskAcs.value : undefined)
     taskPlan.value = taskResult.value.plan
     await loadTaskHistory()
+    await showTask(taskResult.value.id)
   } catch (cause) {
     taskError.value = cause instanceof Error ? cause.message : '无线采集任务创建失败'
   } finally { taskSubmitting.value = false }
 }
 async function loadTaskHistory(): Promise<void> {
   try { taskHistory.value = await getWirelessTasks(); taskError.value = '' }
-  catch (cause) { taskHistory.value = []; taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务历史读取失败' }
+  catch (cause) { ++taskDetailGeneration; clearTimeout(taskPoll); taskHistory.value = []; taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务历史读取失败' }
 }
 async function showTask(id: string): Promise<void> {
-  taskDetail.value = null
-  try { taskDetail.value = await getWirelessTask(id); taskError.value = '' }
-  catch (cause) { taskError.value = cause instanceof Error ? cause.message : '任务详情读取失败' }
+  const generation = ++taskDetailGeneration
+  clearTimeout(taskPoll)
+  if (taskDetail.value?.summary.id !== id) taskDetail.value = null
+  try {
+    const detail = await getWirelessTask(id)
+    if (generation !== taskDetailGeneration) return
+    taskDetail.value = detail; taskError.value = ''
+    if (['QUEUED', 'RUNNING'].includes(detail.summary.state)) taskPoll = setTimeout(() => { void showTask(id) }, 3000)
+  } catch (cause) { if (generation === taskDetailGeneration) { taskDetail.value = null; taskError.value = cause instanceof Error ? cause.message : '任务详情读取失败' } }
 }
 async function cancelTaskPlan(id: string): Promise<void> {
   try { await cancelH3cTaskPlan(id); await loadTaskHistory(); await showTask(id) }
@@ -373,7 +382,11 @@ onMounted(() => { void refresh(); void loadTaskHistory() })
           <div v-for="task in taskHistory" :key="task.id" class="wireless-task-row"><button type="button" @click="showTask(task.id)">{{ formatTime(task.createdMs) }} · {{ task.state }} · {{ task.succeeded }}/{{ task.total }} 成功 · {{ task.failed }} 失败</button></div>
           <div v-if="taskDetail" class="wireless-task-detail">
             <h3>任务详情 · {{ taskDetail.summary.state }}</h3>
-            <p v-for="item in taskDetail.items" :key="item.ordinal">{{ item.deviceId }} · {{ item.state }} · 采集 {{ item.captureStatus || '—' }} · 解析 {{ item.parseStatus || '—' }} <span v-if="item.error">· {{ item.error }}</span></p>
+            <p>任务 {{ taskDetail.summary.id }} · 创建 {{ formatTime(taskDetail.summary.createdMs) }} · 更新 {{ formatTime(taskDetail.summary.updatedMs) }} · 成功 {{ taskDetail.summary.succeeded }} / {{ taskDetail.summary.total }} · 失败 {{ taskDetail.summary.failed }}</p>
+            <div v-for="item in taskDetail.items" :key="item.ordinal">
+              <p>{{ item.deviceId }} · {{ item.state }} · 采集 {{ item.captureStatus || '—' }} · 解析 {{ item.parseStatus || '—' }} <span v-if="item.error">· {{ item.error }}</span></p>
+              <p v-for="command in item.commands" :key="command.command" class="muted">{{ command.command }} · {{ command.state }} · 采集 {{ command.captureStatus || '—' }} · 解析 {{ command.parseStatus || '—' }} <span v-if="command.error">· {{ command.error }}</span></p>
+            </div>
             <el-button size="small" @click="downloadTask(taskDetail.summary.id)">下载 ZIP</el-button>
             <el-button v-if="['QUEUED', 'RUNNING'].includes(taskDetail.summary.state)" size="small" @click="cancelTaskPlan(taskDetail.summary.id)">取消任务</el-button>
           </div>

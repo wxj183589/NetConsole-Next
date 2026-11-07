@@ -91,6 +91,25 @@ describe('AP group source identity', () => {
     expect(wrapper.get('.wireless-task-detail').text()).toContain('TIMEOUT')
   })
 
+  it('does not restore an old task detail after a newer selection', async () => {
+    const first = { id: 'first', state: 'FAILED', createdMs: domain.asOf, updatedMs: domain.asOf, total: 1, succeeded: 0, failed: 1 }
+    const second = { ...first, id: 'second' }
+    api.getWirelessTasks.mockResolvedValue([first, second])
+    let resolveFirst!: (value: unknown) => void
+    api.getWirelessTask.mockImplementation((id: string) => id === 'first'
+      ? new Promise(resolve => { resolveFirst = resolve })
+      : Promise.resolve({ summary: second, items: [] }))
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.findAll('.wireless-task-row button')[0].trigger('click')
+    await wrapper.findAll('.wireless-task-row button')[1].trigger('click')
+    await flushPromises()
+    resolveFirst({ summary: first, items: [] })
+    await flushPromises()
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('second')
+    expect(wrapper.get('.wireless-task-detail').text()).not.toContain('first')
+  })
+
   it('shows task creation errors', async () => {
     api.createWirelessTask.mockRejectedValue(new Error('权限不足'))
     const wrapper = render()

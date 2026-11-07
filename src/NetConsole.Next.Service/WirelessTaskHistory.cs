@@ -59,9 +59,19 @@ internal static class WirelessTaskReportBuilder
         {
             ["task-summary.json"] = JsonSerializer.SerializeToUtf8Bytes(report.Summary, options),
             ["ac-execution-results.json"] = JsonSerializer.SerializeToUtf8Bytes(report.Items, options),
-            ["observations.json"] = JsonSerializer.SerializeToUtf8Bytes(new { status = report.ObservationStatus, items = Array.Empty<object>() }, options)
+            ["ap-resources.json"] = JsonSerializer.SerializeToUtf8Bytes(new { status = report.ObservationStatus, items = Array.Empty<object>() }, options),
+            ["ap-observations.json"] = JsonSerializer.SerializeToUtf8Bytes(new { status = report.ObservationStatus, items = Array.Empty<object>() }, options),
+            ["parser-summary.json"] = JsonSerializer.SerializeToUtf8Bytes(report.Items.Select(item => new {
+                item.DeviceId, item.RunId, item.ParseStatus,
+                commands = item.Commands.Select(command => new { command.Command, command.ParseStatus })
+            }), options),
+            ["failure-details.json"] = JsonSerializer.SerializeToUtf8Bytes(report.Items
+                .Where(item => item.Error is not null || item.Commands.Any(command => command.Error is not null))
+                .Select(item => new { item.DeviceId, item.State, item.Error,
+                    commands = item.Commands.Where(command => command.Error is not null).Select(command => new { command.Command, command.State, command.Error }) }), options)
         };
-        var manifest = new { version = 1, taskId = report.Summary.Id, observationStatus = report.ObservationStatus,
+        var manifest = new { version = 2, taskId = report.Summary.Id, generatedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            source = "TASK_PLAN_REPORT", observationStatus = report.ObservationStatus,
             files = files.Select(file => new { name = file.Key, bytes = file.Value.Length,
                 sha256 = Convert.ToHexString(SHA256.HashData(file.Value)).ToLowerInvariant() }).ToArray() };
         files["manifest.json"] = JsonSerializer.SerializeToUtf8Bytes(manifest, options);
