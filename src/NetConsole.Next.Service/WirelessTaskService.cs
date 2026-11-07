@@ -75,11 +75,12 @@ internal sealed class WirelessTaskService(
             var detail = catalog.GetDeviceInventoryDetail(member.DeviceId, scope);
             if (detail is null || !detail.Item.Enabled ||
                 !string.Equals(detail.Item.Vendor.Trim(), "H3C", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(detail.Item.DeviceType.Trim(), "FIT_AP", StringComparison.OrdinalIgnoreCase) ||
+                !IsSupportedDeviceType(detail.Item.DeviceType) ||
                 detail.TerminalProfile is not { Enabled: true } || string.IsNullOrWhiteSpace(detail.TerminalProfileId))
                 throw new WirelessTaskException("WIRELESS_TASK_TARGET_UNSUPPORTED", "无线任务仅支持已关联有效连接档案的 H3C AC。", 409);
             profiles.Add(detail.TerminalProfileId);
-            expected[detail.TerminalProfileId] = detail.Item.Id;
+            if (!expected.TryAdd(detail.TerminalProfileId, detail.Item.Id))
+                throw new WirelessTaskException("WIRELESS_TASK_PROFILE_CONFLICT", "多个 AC 关联同一个连接档案。", 409);
         }
 
         var planId = "wireless-plan-" + Guid.NewGuid().ToString("N");
@@ -89,4 +90,7 @@ internal sealed class WirelessTaskService(
             domainIds, members.Select(member => member.DeviceId).ToArray(), commands, plan,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
+
+    internal static bool IsSupportedDeviceType(string deviceType) =>
+        string.Equals(deviceType.Trim(), "AC", StringComparison.OrdinalIgnoreCase);
 }
