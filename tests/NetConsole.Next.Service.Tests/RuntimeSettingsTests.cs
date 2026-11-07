@@ -30,11 +30,24 @@ internal static class RuntimeSettingsTests
         }
 
         Console.WriteLine("PASS: Web binding accepts loopback only and rejects wildcard, LAN and remote opt-in values");
-        foreach (var root in new[] { @"D:\", @"D:\NetConsoleData", @"D:\NetConsoleData-dev", @"d:\netconsoledata\site\new", @"D:\NetConsoleData-dev\new" })
+        foreach (var root in new[] { @"D:\", @"D:\NetConsoleData", @"D:\NetConsoleData-dev", @"d:\netconsoledata\site\new", @"D:\NetConsoleData-dev\new",
+                     @"D:\NetConsoleData.", @"D:\NetConsoleData-dev ", @"D:\NetConsoleData.\site", @"D:\NetConsoleData-dev \site",
+                     @"D:\NetConsoleData... \site", @"D:/NetConsoleData/child", @"D:/NetConsoleData-dev./child",
+                     @"D:\unused\..\NetConsoleData-dev\site", @"\\?\D:\NetConsoleData", @"\\?\D:\NetConsoleData-dev\site",
+                     @"\\.\D:\NetConsoleData", @"\\?\UNC\localhost\D$\NetConsoleData-dev" })
         {
+            // The full entry point must produce exactly the lexical rejection,
+            // never a wrapped ancestor-check/IO failure. No old root is probed.
+            string? lexicalFailure = null;
+            try { RuntimeSettings.NormalizeDataRootName(root); throw new Exception("Forbidden root name accepted: " + root); }
+            catch (InvalidOperationException exception) when (exception.Message.StartsWith("Data root cannot", StringComparison.Ordinal))
+            { lexicalFailure = exception.Message; }
             try { RuntimeSettings.ValidateDataRoot(root); throw new Exception("Forbidden data root accepted: " + root); }
-            catch (InvalidOperationException exception) when (exception.Message.StartsWith("Data root cannot", StringComparison.Ordinal)) { }
+            catch (InvalidOperationException exception) when (exception.Message == lexicalFailure && exception.InnerException is null) { }
         }
+        foreach (var root in new[] { @"D:\NetConsoleData-next", @"D:\NetConsoleData-dev-next\site", @"D:\NetConsoleData2" })
+            Assert(RuntimeSettings.NormalizeDataRootName(root) == root,
+                "a distinct root sharing the legacy prefix must remain valid without filesystem probing");
         var repository = new DirectoryInfo(Environment.CurrentDirectory);
         while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
             repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");

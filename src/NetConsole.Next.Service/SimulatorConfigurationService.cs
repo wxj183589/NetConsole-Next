@@ -79,6 +79,8 @@ internal sealed partial class SimulatorConfigurationService
     private readonly TaskSiteScopeAuthorizer _scopes;
     private readonly ISimulatorConfigurationSessionFactory _sessions;
     private readonly string _root;
+    private readonly RuntimeSettings _settings;
+    private readonly object _storageGate = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly Regex InterfacePattern = new(@"\A(GigabitEthernet|Ten-GigabitEthernet|Bridge-Aggregation)[0-9]+(/[0-9]+){0,3}\z", RegexOptions.CultureInvariant);
@@ -91,6 +93,7 @@ internal sealed partial class SimulatorConfigurationService
         _scopes = new(catalog, new P2B5SiteScopeStore(settings));
         _sessions = sessions ?? new NetmikoConfigurationSessionFactory(catalog);
         _root = Path.Combine(settings.DataRoot, "backup", "config-complete");
+        _settings = settings;
     }
 
     public Task<CompleteConfigurationBackup> CaptureAsync(string profileId, WebUserIdentity actor,
@@ -116,6 +119,7 @@ internal sealed partial class SimulatorConfigurationService
         try
         {
             Require(execution, "CONNECT");
+            lock (_storageGate) RequireStorageCapacity(target.Id, 1);
             await using var session = await _sessions.OpenAsync(target, cancellationToken).ConfigureAwait(false);
             var backup = await Capture(session, target, execution, cancellationToken).ConfigureAwait(false);
             Audit(actor, "CONFIG_COMPLETE_BACKUP", backup.Id, target.Id, "SUCCEEDED");
@@ -273,13 +277,18 @@ internal sealed partial class SimulatorConfigurationService
         var frozen = execution.CreationScope;
         var directory = DirectoryFor(target.Id, true);
         var nextVersion = checked(Directory.EnumerateFiles(directory, "*.json")
-            .Select(path => Read(Path.GetFileNameWithoutExtension(path), target.Id)?.Version ?? 0).DefaultIfEmpty(0).Max() + 1);
+            .Select(path => ReadManifest(Path.GetFileNameWithoutExtension(path), target.Id)?.Version ?? 0).DefaultIfEmpty(0).Max() + 1);
         var backup = new CompleteConfigurationBackup(id, target.Id, frozen.DeviceId, frozen.SiteId, Now(), execution.DefinitionId,
             Hash(raw), raw.LongLength, model, software, "COMPLETE_HASH_VERIFIED", true, "SUCCEEDED", target.Host,
             target.Port, target.TerminalProtocol, Hash(redacted), redacted.LongLength, nextVersion);
-        Write(Path.Combine(directory, id + ".cfg"), raw);
-        Write(Path.Combine(directory, id + ".view.cfg"), redacted);
-        Write(Path.Combine(directory, id + ".json"), JsonSerializer.SerializeToUtf8Bytes(backup, Json));
+        var manifest = JsonSerializer.SerializeToUtf8Bytes(backup, Json);
+        lock (_storageGate)
+        {
+            RequireStorageCapacity(target.Id, raw.LongLength + redacted.LongLength + manifest.LongLength);
+            Write(Path.Combine(directory, id + ".cfg"), raw);
+            Write(Path.Combine(directory, id + ".view.cfg"), redacted);
+            Write(Path.Combine(directory, id + ".json"), manifest);
+        }
         return backup;
     }
 
@@ -322,7 +331,9 @@ internal sealed partial class SimulatorConfigurationService
         backup.ProfileId == target.Id && backup.DeviceId == device.Id && backup.SiteId == device.SiteId &&
         backup.Host == target.Host && backup.Port == target.Port && backup.Protocol == target.TerminalProtocol;
 
-    private CompleteConfigurationBackup? Read(string id, string profileId)
+    // A damaged body must never make the next capture reuse its version number.
+    // Structural metadata is used only for allocation, never as integrity proof.
+    private CompleteConfigurationBackup? ReadManifest(string id, string profileId)
     {
         if (!Safe(id) || !Safe(profileId)) return null;
         try
@@ -332,16 +343,58 @@ internal sealed partial class SimulatorConfigurationService
             var item = JsonSerializer.Deserialize<CompleteConfigurationBackup>(File.ReadAllText(path), Json);
             if (item is null || item.Id != id || item.ProfileId != profileId || item.FormatVersion != 1 || item.Version <= 0 ||
                 item.State != "SUCCEEDED" || item.Integrity != "COMPLETE_HASH_VERIFIED" ||
+                item.RawByteCount is <= 0 or > H3cRawOutput.MaximumBytes || item.RedactedByteCount is <= 0 or > H3cRawOutput.MaximumBytes ||
+                !ValidHash(item.RawSha256) || !ValidHash(item.RedactedSha256) ||
                 string.IsNullOrWhiteSpace(item.Model) || string.IsNullOrWhiteSpace(item.SoftwareVersion)) return null;
-            _ = Normalize(Encoding.UTF8.GetString(VerifiedBytes(item, false)));
+            return item;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ConfigRestoreException) { return null; }
+    }
+
+    private CompleteConfigurationBackup? Read(string id, string profileId)
+    {
+        try
+        {
+            var item = ReadManifest(id, profileId);
+            if (item is null) return null;
+            var original = Encoding.UTF8.GetString(VerifiedBytes(item, false));
+            _ = Normalize(original);
             var publicBytes = VerifiedBytes(item, true);
-            var sanitized = ConfigBackupSanitizer.Sanitize(H3cCommandPolicy.DisplayCurrentConfiguration,
-                Encoding.UTF8.GetString(VerifiedBytes(item, false)));
+            var sanitized = ConfigBackupSanitizer.Sanitize(H3cCommandPolicy.DisplayCurrentConfiguration, original);
             if (Encoding.UTF8.GetString(publicBytes) != sanitized) return null;
             return item with { Restorable = true };
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ConfigRestoreException) { return null; }
     }
+
+    private void RequireStorageCapacity(string profileId, long additionalBytes)
+    {
+        // Call under the publication gate. Count damaged/orphaned files too;
+        // quotas never delete history or restrict reading existing backups.
+        var profile = DirectoryFor(profileId, false);
+        if (Directory.Exists(profile) && Directory.EnumerateFiles(profile, "*.json").Take(_settings.CompleteConfigMaxBackupsPerProfile).Count() >=
+            _settings.CompleteConfigMaxBackupsPerProfile)
+            throw Failure("CONFIG_COMPLETE_HISTORY_LIMIT", "此设备完整备份数量已达上限，已阻止新增采集；历史备份仍可读取，请联系管理员调整容量。", 507);
+        long stored = 0;
+        var pending = new Stack<string>();
+        if (Directory.Exists(_root)) pending.Push(_root);
+        while (pending.TryPop(out var directory))
+        {
+            CheckPath(directory);
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                CheckPath(entry);
+                if (Directory.Exists(entry)) { pending.Push(entry); continue; }
+                var size = new FileInfo(entry).Length;
+                if (size > _settings.CompleteConfigMaxStoredBytes - stored) throw StorageFull();
+                stored += size;
+            }
+        }
+        if (additionalBytes > _settings.CompleteConfigMaxStoredBytes - stored) throw StorageFull();
+    }
+
+    private static ConfigRestoreException StorageFull() => Failure("CONFIG_COMPLETE_STORAGE_LIMIT",
+        "完整配置存储容量已达上限，已阻止新增采集；历史备份仍可读取，请联系管理员调整容量。", 507);
 
     private CompleteConfigurationBackup? Find(string id)
     {
@@ -468,5 +521,6 @@ internal sealed partial class SimulatorConfigurationService
     private static bool Safe(string? id) => id is { Length: > 0 and <= 128 } && id.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_');
     private static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static bool ValidHash(string? value) => value is { Length: 64 } && value.All(ch => ch is >= '0' and <= '9' or >= 'a' and <= 'f');
     private static ConfigRestoreException Failure(string code, string message, int status = 409) => new(code, message, status);
 }

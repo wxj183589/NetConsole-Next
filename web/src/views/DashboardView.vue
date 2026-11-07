@@ -19,6 +19,8 @@ const wirelessResources = ref<WirelessPage<WirelessApResource> | null>(null)
 const wirelessError = ref('')
 const loading = ref(true)
 const statusChartHost = ref<HTMLElement | null>(null)
+const faultCenterHost = ref<HTMLElement | null>(null)
+function focusFaultCenter() { faultCenterHost.value?.focus({ preventScroll: true }); faultCenterHost.value?.scrollIntoView({ block: 'start' }) }
 let statusChart: echarts.ECharts | undefined
 let generation = 0
 let active = true
@@ -132,7 +134,7 @@ onBeforeUnmount(() => { active = false; generation++; window.removeEventListener
     <div class="dashboard-grid">
       <section class="card dashboard-card"><div class="card__header"><h2>设备状态分布</h2><span class="state-pill info">{{ summary.totalRecords }} 条记录</span></div><div v-if="summary.totalRecords" ref="statusChartHost" class="chart" /><div v-else class="chart-empty"><div><el-icon><Monitor /></el-icon><strong>暂无设备状态数据</strong><small>状态统计只读取服务端 Catalog 与实际终端会话，不生成示例设备。</small></div></div></section>
       <section class="card dashboard-card dashboard-alert-table"><div class="card__header"><h2>最近诊断</h2><span class="state-pill">真实 health 快照</span></div><div v-if="diagnosticAlerts.length" class="table-wrap"><table class="data-table"><thead><tr><th>时间</th><th>级别</th><th>内容</th></tr></thead><tbody><tr v-for="alert in diagnosticAlerts" :key="`${alert.level}-${alert.content}`"><td>{{ alert.time }}</td><td><span :class="['state-pill', statusClass(alert.level)]">{{ alert.level }}</span></td><td>{{ alert.content }}</td></tr></tbody></table></div><div v-else class="chart-empty"><div><el-icon><CircleCheck /></el-icon><strong>当前实例没有告警</strong><small>设备故障、无线状态与补采操作见下方设备健康工作台。</small></div></div></section>
-      <section class="card dashboard-card"><div class="card__header"><h2>常用操作</h2><span class="state-pill">运维入口</span></div><nav class="card__body dashboard-shortcuts" aria-label="运维快捷操作"><RouterLink to="/devices">设备管理与连接</RouterLink><RouterLink to="/wireless">AC / AP 运行状态</RouterLink><RouterLink to="/config-backups">配置备份与比较</RouterLink><RouterLink to="/tools">Quick Ping 与路径探测</RouterLink><RouterLink to="/tasks">任务历史与证据</RouterLink></nav></section>
+      <section class="card dashboard-card"><div class="card__header"><h2>常用操作</h2><span class="state-pill">运维入口</span></div><nav class="card__body dashboard-shortcuts" aria-label="运维快捷操作"><RouterLink to="/devices">设备管理与连接</RouterLink><RouterLink to="/wireless">AC / AP 运行状态</RouterLink><RouterLink to="/config-backups">配置备份与比较</RouterLink><RouterLink to="/tools">Quick Ping 与路径探测</RouterLink><RouterLink to="/tasks">任务历史与证据</RouterLink><RouterLink to="/tools">Syslog 查询与导出</RouterLink><RouterLink to="/topology">拓扑与资产关系</RouterLink><a href="#dashboard-fault-center" @click.prevent="focusFaultCenter">故障历史与恢复证据</a></nav></section>
     </div>
 
     <div class="dashboard-grid dashboard-grid--wide">
@@ -141,7 +143,7 @@ onBeforeUnmount(() => { active = false; generation++; window.removeEventListener
     </div>
 
     <OperationalHealth :can-recover="auth.user?.role === 'SUPERADMIN'" />
-    <FaultCenter :can-recover="auth.user?.role === 'SUPERADMIN'" />
+    <div id="dashboard-fault-center" ref="faultCenterHost" tabindex="-1"><FaultCenter :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" :can-recover="auth.user?.role === 'SUPERADMIN'" /></div>
 
     <div class="section-label">运行边界</div>
     <div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>Raw 写入：{{ health?.rawWriteAvailable ? '可用' : '不可用' }}</span><span><el-icon><CircleCheck /></el-icon>Syslog：{{ health?.syslogEnabled ? '已启用' : '未启用' }}</span><span><el-icon><CircleCheck /></el-icon>H3C：{{ health?.h3cCollectionEnabled ? '已启用' : '未启用' }}</span><span><el-icon><Warning /></el-icon>在线状态必须由真实会话或采集结果确认</span></div></div>

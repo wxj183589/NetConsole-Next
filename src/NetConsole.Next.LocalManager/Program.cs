@@ -194,7 +194,13 @@ static int OpenManagedDirectory(string command, string? requestedRoot)
         return 2;
     }
 
-    var fullRoot = Path.GetFullPath(root);
+    string fullRoot;
+    try { fullRoot = ManagedDataRootPath.ResolveExistingDirectory(root); }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine("Directory is not a permitted NetConsole Next data root.");
+        return 2;
+    }
     var relative = command switch
     {
         "open-data" => null,
@@ -204,9 +210,10 @@ static int OpenManagedDirectory(string command, string? requestedRoot)
         _ => throw new InvalidOperationException("Unknown directory command.")
     };
     var target = relative is null ? fullRoot : Path.Combine(fullRoot, relative);
-    if (!Directory.Exists(target))
+    try { target = ManagedDataRootPath.ResolveExistingDirectory(target); }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
     {
-        Console.Error.WriteLine($"Directory does not exist: {target}");
+        Console.Error.WriteLine("Directory does not exist or traverses a reparse point.");
         return 1;
     }
 
@@ -238,7 +245,7 @@ static int ManageApiToken(string command, string? requestedRoot)
             : LocalApiTokenStore.Rotate(root));
         return 0;
     }
-    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException)
     {
         Console.Error.WriteLine($"Local API token operation failed: {ex.GetType().Name}.");
         return 1;
@@ -282,7 +289,7 @@ static int ManageCredential(string[] arguments)
         Console.WriteLine("Credential stored or updated.");
         return 0;
     }
-    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException or PlatformNotSupportedException)
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or ArgumentException or PlatformNotSupportedException)
     {
         Console.Error.WriteLine($"Credential operation failed: {ex.GetType().Name}.");
         return 1;
@@ -357,9 +364,7 @@ static string ResolveManagedRoot(string? requestedRoot)
     if (string.IsNullOrWhiteSpace(root) && OperatingSystem.IsWindows())
         root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NetConsoleNext", "data");
     if (string.IsNullOrWhiteSpace(root)) throw new InvalidOperationException("Provide a data root or set NETCONSOLE_NEXT_DATA_ROOT.");
-    var full = Path.GetFullPath(root);
-    if (!Directory.Exists(full) || (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
-        throw new InvalidOperationException("Data root must exist and cannot be a symbolic link or reparse point.");
+    var full = ManagedDataRootPath.ResolveExistingDirectory(root);
     var marker = Path.Combine(full, ".netconsole-next-root");
     if (!File.Exists(marker) || (File.GetAttributes(marker) & FileAttributes.ReparsePoint) != 0 ||
         File.ReadAllText(marker).Trim() != "NETCONSOLE_NEXT_V1")

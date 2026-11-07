@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { getHealth, request, type HealthSnapshot } from '../api/client'
-interface Entry { receivedMs: number; senderIp: string; senderPort: number; facility: number | null; severity: number | null; message: string; rawReference: string; line: number }
+interface Entry { receivedMs: number; senderIp: string; senderPort: number; facility: number | null; severity: number | null; message: string; rawReference: string; line: number; eventFamily?: string; eventType?: string }
 interface Result { items: Entry[]; scannedSegments: number; scannedRecords: number; unavailableSegments: number; partial: boolean; sourceState: string }
 const props = defineProps<{ identityKey?: string }>()
 const senderIp = ref(''), text = ref(''), maximumSeverity = ref(''), hours = ref('24')
+const eventType = ref('')
+const eventTypes = ['IFNET_PHY_UPDOWN', 'CFGMAN_CFGCHANGED', 'MESH_LINKUP', 'MESH_LINKDOWN', 'MESH_ACTIVELINK_SWITCH', 'UNKNOWN']
 const result = ref<Result | null>(null), loading = ref(false), error = ref('')
 const health = ref<HealthSnapshot | null>(null), healthError = ref(''), healthLoading = ref(false)
 let generation = 0
@@ -31,6 +33,7 @@ async function query(): Promise<void> {
     const response = await request<Result>('/api/system/syslog/query', { method: 'POST', body: JSON.stringify({
       fromMs: toMs - Number(hours.value) * 3600000, toMs, senderIp: senderIp.value.trim() || null,
       text: text.value.trim() || null, maximumSeverity: maximumSeverity.value === '' ? null : Number(maximumSeverity.value), limit: 200,
+      eventType: eventType.value || null,
     }) })
     if (current === generation) result.value = response
   } catch (e) { if (current === generation) error.value = e instanceof Error ? e.message : 'Syslog 查询失败' }
@@ -43,8 +46,8 @@ function exportCsv(): void {
     const safe = /^[\s]*[=+@-]/.test(original) ? `'${original}` : original
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const rows = [['接收时间', '来源 IP', '端口', 'Facility', 'Severity', '消息', 'Raw', '行'],
-    ...result.value.items.map(item => [new Date(item.receivedMs).toISOString(), item.senderIp, item.senderPort, item.facility, item.severity, item.message, item.rawReference, item.line])]
+  const rows = [['接收时间', '来源 IP', '端口', 'Facility', 'Severity', '事件族', '事件类型', '消息', 'Raw', '行'],
+    ...result.value.items.map(item => [new Date(item.receivedMs).toISOString(), item.senderIp, item.senderPort, item.facility, item.severity, item.eventFamily ?? 'UNKNOWN', item.eventType ?? 'UNKNOWN', item.message, item.rawReference, item.line])]
   const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'syslog-query.csv'; anchor.click(); URL.revokeObjectURL(url)
 }
@@ -59,6 +62,7 @@ onBeforeUnmount(() => { active = false; clearEvidence() })
     <div class="card__header"><h2>Syslog 查询</h2><el-button :disabled="!result?.items.length" @click="exportCsv">导出当前结果</el-button></div>
     <div class="card__body">
       <p>查询本机接收源已封存的日志，包含原始消息及来源引用。接收日志最长约 5 秒后封存可查；UDP 接收默认关闭。</p>
+      <p>事件类型仅按 H3C 消息标识分类；未知或多标识消息保留 UNKNOWN，不代表设备身份、站点或业务恢复。</p>
       <div class="receiver-state" aria-label="Syslog 接收状态">
         <el-button :loading="healthLoading" @click="refreshReceiver">刷新接收状态</el-button>
         <p v-if="healthError" role="alert">接收状态读取失败：{{ healthError }}</p>
@@ -71,6 +75,7 @@ onBeforeUnmount(() => { active = false; clearEvidence() })
         <label>时间范围<select v-model="hours" aria-label="Syslog 时间范围"><option value="1">最近 1 小时</option><option value="24">最近 24 小时</option><option value="168">最近 7 天</option></select></label>
         <label>来源 IP<input v-model="senderIp" maxlength="64" aria-label="Syslog 来源 IP" placeholder="完整 IP，留空为全部" /></label>
         <label>最高级别<select v-model="maximumSeverity" aria-label="Syslog 最高级别"><option value="">全部 / 未知</option><option v-for="n in 8" :key="n" :value="String(n - 1)">{{ n - 1 }} 及以上紧急程度</option></select></label>
+        <label>事件类型<select v-model="eventType" aria-label="Syslog 事件类型"><option value="">全部</option><option v-for="type in eventTypes" :key="type" :value="type">{{ type }}</option></select></label>
         <label>消息内容<input v-model="text" maxlength="256" aria-label="Syslog 消息内容" /></label>
         <el-button native-type="submit" :loading="loading">查询日志</el-button>
       </form>
@@ -79,8 +84,8 @@ onBeforeUnmount(() => { active = false; clearEvidence() })
         <p role="status">{{ result.items.length }} 条结果 · 扫描 {{ result.scannedSegments }} 个分段 / {{ result.scannedRecords }} 条记录</p>
         <p v-if="result.partial" role="alert">结果不完整：达到查询上限或部分日志不可读。请缩短时间范围；不可用项 {{ result.unavailableSegments }}。</p>
         <p v-if="!result.items.length">当前条件没有已封存日志。请检查接收设置、来源和时间范围。</p>
-        <div v-else class="syslog-table"><table><thead><tr><th>接收时间</th><th>来源 / 端口</th><th>Facility / Severity</th><th>消息 / Raw 引用</th></tr></thead>
-          <tbody><tr v-for="entry in result.items" :key="`${entry.rawReference}:${entry.line}`"><td>{{ new Date(entry.receivedMs).toLocaleString() }}</td><td>{{ entry.senderIp }}:{{ entry.senderPort }}</td><td>{{ entry.facility ?? '未知' }} / {{ entry.severity ?? '未知' }}</td><td><pre>{{ entry.message }}</pre><small>{{ entry.rawReference }}:{{ entry.line }}</small></td></tr></tbody></table></div>
+        <div v-else class="syslog-table"><table><thead><tr><th>接收时间</th><th>来源 / 端口</th><th>Facility / Severity</th><th>事件族 / 类型</th><th>消息 / Raw 引用</th></tr></thead>
+          <tbody><tr v-for="entry in result.items" :key="`${entry.rawReference}:${entry.line}`"><td>{{ new Date(entry.receivedMs).toLocaleString() }}</td><td>{{ entry.senderIp }}:{{ entry.senderPort }}</td><td>{{ entry.facility ?? '未知' }} / {{ entry.severity ?? '未知' }}</td><td>{{ entry.eventFamily ?? 'UNKNOWN' }} / {{ entry.eventType ?? 'UNKNOWN' }}</td><td><pre>{{ entry.message }}</pre><small>{{ entry.rawReference }}:{{ entry.line }}</small></td></tr></tbody></table></div>
       </template>
     </div>
   </section>

@@ -54,4 +54,33 @@ describe('Syslog workspace', () => {
     expect(wrapper.text()).not.toContain('当前条件没有已封存日志')
     wrapper.unmount()
   })
+  it('sends exact event filters and displays server classification with unchanged message and Raw evidence', async () => {
+    const message = '<189>%%10WMESH/5/MESH_LINKUP: peer <img src=x> is up'
+    vi.mocked(request).mockResolvedValueOnce({ items: [{ receivedMs: 1000, senderIp: '192.0.2.1', senderPort: 514,
+      facility: 23, severity: 5, eventFamily: 'WMESH', eventType: 'MESH_LINKUP', message, rawReference: 'raw/syslog/classified.ndjson', line: 3 }],
+    scannedSegments: 1, scannedRecords: 1, unavailableSegments: 0, partial: false })
+    const wrapper = mount(SyslogWorkspace, options)
+    await wrapper.get('[aria-label="Syslog 事件类型"]').setValue('MESH_LINKUP')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(JSON.parse(vi.mocked(request).mock.calls.at(-1)![1]!.body as string)).toMatchObject({ eventType: 'MESH_LINKUP' })
+    expect(wrapper.get('tbody').text()).toContain('WMESH / MESH_LINKUP')
+    expect(wrapper.get('pre').text()).toBe(message)
+    expect(wrapper.get('tbody').text()).toContain('raw/syslog/classified.ndjson:3')
+    expect(wrapper.find('img').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('retains UNKNOWN classification and clears event evidence when identity changes', async () => {
+    vi.mocked(request).mockResolvedValueOnce({ items: [{ receivedMs: 1000, senderIp: '192.0.2.1', senderPort: 514,
+      facility: null, severity: null, eventFamily: 'UNKNOWN', eventType: 'UNKNOWN', message: 'unclassified private message', rawReference: 'raw/syslog/unknown.ndjson', line: 1 }],
+    scannedSegments: 1, scannedRecords: 1, unavailableSegments: 0, partial: false })
+    const wrapper = mount(SyslogWorkspace, { ...options, props: { identityKey: 'first:SUPERADMIN' } })
+    await wrapper.get('[aria-label="Syslog 事件类型"]').setValue('UNKNOWN')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(JSON.parse(vi.mocked(request).mock.calls.at(-1)![1]!.body as string).eventType).toBe('UNKNOWN')
+    expect(wrapper.get('tbody').text()).toContain('UNKNOWN / UNKNOWN')
+    await wrapper.setProps({ identityKey: 'second:ADMIN' })
+    expect(wrapper.find('tbody').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('unclassified private message')
+    wrapper.unmount()
+  })
 })

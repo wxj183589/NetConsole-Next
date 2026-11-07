@@ -24,7 +24,7 @@ describe('dashboard wireless summary', () => {
 
   it('shows real AC/AP totals and failed task count', async () => {
     const wrapper = mount(DashboardView, { global: { stubs: {
-      OperationalHealth: true, RouterLink: { template: '<a><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
+      OperationalHealth: true, FaultCenter: true, RouterLink: { props: ['to'], template: '<a :href="to"><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
       'el-button': { template: '<button><slot/></button>' }, 'el-icon': { template: '<span />' },
     }, directives: { loading: () => {} } } })
     await flushPromises()
@@ -41,13 +41,30 @@ describe('dashboard wireless summary', () => {
     api.getWirelessAcDomains.mockRejectedValue(new Error('offline'))
     api.getWirelessApResources.mockRejectedValue(new Error('offline'))
     const wrapper = mount(DashboardView, { global: { stubs: {
-      OperationalHealth: true, RouterLink: { template: '<a><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
+      OperationalHealth: true, FaultCenter: true, RouterLink: { props: ['to'], template: '<a :href="to"><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
       'el-button': { template: '<button><slot/></button>' }, 'el-icon': { template: '<span />' },
     }, directives: { loading: () => {} } } })
     await flushPromises()
     expect(wrapper.text()).toContain('登记设备')
     expect(wrapper.text()).toContain('无线 AC 数据暂不可用，AP 数据暂不可用')
     expect(wrapper.text()).toContain('无线 AP')
+    wrapper.unmount()
+  })
+  it('opens existing Syslog/topology routes and focuses local fault history without new requests', async () => {
+    const wrapper = mount(DashboardView, { attachTo: document.body, global: { stubs: {
+      OperationalHealth: true, FaultCenter: true, RouterLink: { props: ['to'], template: '<a :href="to"><slot/></a>' }, NcLayout: { template: '<main><slot/></main>' },
+      'el-button': true, 'el-icon': true,
+    }, directives: { loading: () => {} } } })
+    await flushPromises()
+    const nav = wrapper.get('[aria-label="运维快捷操作"]')
+    expect(nav.findAll('a').find(a => a.text() === 'Syslog 查询与导出')?.attributes('href')).toBe('/tools')
+    expect(nav.findAll('a').find(a => a.text() === '拓扑与资产关系')?.attributes('href')).toBe('/topology')
+    const host = wrapper.get('#dashboard-fault-center').element as HTMLElement
+    host.scrollIntoView = vi.fn()
+    await nav.get('a[href="#dashboard-fault-center"]').trigger('click')
+    expect(document.activeElement).toBe(host)
+    expect(host.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    expect(api.getHealth).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 })

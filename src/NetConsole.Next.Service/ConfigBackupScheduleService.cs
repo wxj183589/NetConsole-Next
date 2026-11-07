@@ -150,19 +150,7 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
         lock (_gate)
         {
             if (_storeUnavailable) return;
-            foreach (var (id, running) in _running.ToArray())
-            {
-                // Keep observing the real batch even when current profile scope
-                // hides its public view. Never free a slot while it is executing.
-                var batch = _backups.GetScheduledBatchStatus(running.BatchId, running.OwnerUserId);
-                if (batch is null || batch.State == "RUNNING") continue;
-                if (_schedules.TryGetValue(id, out var item))
-                    Commit(item with { LastState = batch.State, LastCompletedMs = batch.CompletedMs ?? nowMs,
-                        LastBatchId = running.BatchId,
-                        LastError = batch.Failed == 0 ? null : SafeError(batch.Items.FirstOrDefault(value => value.Error is not null)?.Error) });
-                _backups.AcknowledgeScheduledBatch(running.BatchId, running.OwnerUserId);
-                _running.Remove(id);
-            }
+            ObserveCompleted(nowMs);
 
             if (!_catalog.IsModuleEnabled("config-backups")) return;
 
@@ -171,36 +159,80 @@ internal sealed class ConfigBackupScheduleService : BackgroundService
             {
                 if (_running.Count >= MaximumActiveSchedules) break;
                 if (_running.ContainsKey(item.Id)) continue;
-                // Advance from this actual admission attempt, not the old due
-                // time: a week offline causes at most one run, never a catch-up loop.
-                var attempted = item with { NextRunMs = NextDue(nowMs, item.IntervalMinutes), LastRunMs = nowMs,
-                    LastCompletedMs = null, LastState = "RUNNING", LastError = null, LastBatchId = null };
-                Commit(attempted); // Durably claim the period before starting a batch.
-                ConfigBackupBatch batch;
-                try
-                {
-                    var actor = CurrentOwner(item.OwnerUserId);
-                    var scope = _scopes.Resolve(actor);
-                    RequireTargets(item.ProfileIds, actor, scope, item.ConfigurationKind);
-                    // Start captures a new endpoint/scope now; its scheduler
-                    // resolves the profile's current credential for this run.
-                    batch = _backups.Start(item.ProfileIds, actor, scope, item.ConfigurationKind, retainUntilObserved: true);
-                }
-                catch (Exception ex) when (ex is ConfigBackupException or TaskScopeRevokedException or SqliteException or IOException or UnauthorizedAccessException)
-                {
-                    var error = ex switch
-                    {
-                        ConfigBackupException backup => backup.Code,
-                        TaskScopeRevokedException revoked => revoked.Reason,
-                        _ => "CONFIG_BACKUP_SCHEDULE_AUTHORITY_UNAVAILABLE"
-                    };
-                    Commit(attempted with { LastState = "BLOCKED", LastCompletedMs = nowMs, LastError = SafeError(error) });
-                    continue;
-                }
-                _running[item.Id] = new(item.OwnerUserId, batch.Id);
-                Commit(attempted with { LastBatchId = batch.Id });
+                Admit(item, nowMs, advanceDue: true);
             }
         }
+    }
+
+    // Manual execution uses the same durable claim and current-authority path as
+    // the timer, while preserving the plan's enabled state and normal cadence.
+    public ConfigBackupScheduleSnapshot? RunNow(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    {
+        var current = RequireActor(actor, scope, requireModule: true);
+        var currentScope = _scopes.Resolve(current);
+        lock (_gate)
+        {
+            if (!_schedules.TryGetValue(id, out var item) || !IsVisible(item, current, scope) ||
+                !IsVisible(item, current, currentScope)) return null;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            ObserveCompleted(now);
+            item = _schedules[id];
+            if (_running.ContainsKey(id))
+                throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_ALREADY_RUNNING", "此计划正在执行，请等待当前批次完成。", 409);
+            if (_running.Count >= MaximumActiveSchedules)
+                throw new ConfigBackupException("CONFIG_BACKUP_SCHEDULE_ACTIVE_LIMIT", "定时备份并发已满，请稍后重试。", 409);
+            RequireTargets(item.ProfileIds, current, currentScope, item.ConfigurationKind);
+            Admit(item, now, advanceDue: false);
+            return Copy(_schedules[id]);
+        }
+    }
+
+    private void ObserveCompleted(long nowMs)
+    {
+        foreach (var (id, running) in _running.ToArray())
+        {
+            // Keep observing the real batch even when current profile scope
+            // hides its public view. Never free a slot while it is executing.
+            var batch = _backups.GetScheduledBatchStatus(running.BatchId, running.OwnerUserId);
+            if (batch is null || batch.State == "RUNNING") continue;
+            if (_schedules.TryGetValue(id, out var item))
+                Commit(item with { LastState = batch.State, LastCompletedMs = batch.CompletedMs ?? nowMs,
+                    LastBatchId = running.BatchId,
+                    LastError = batch.Failed == 0 ? null : SafeError(batch.Items.FirstOrDefault(value => value.Error is not null)?.Error) });
+            _backups.AcknowledgeScheduledBatch(running.BatchId, running.OwnerUserId);
+            _running.Remove(id);
+        }
+    }
+
+    private void Admit(ConfigBackupScheduleSnapshot item, long nowMs, bool advanceDue)
+    {
+        // Automatic attempts advance from admission time, so missed periods never replay.
+        var attempted = item with { NextRunMs = advanceDue ? NextDue(nowMs, item.IntervalMinutes) : item.NextRunMs, LastRunMs = nowMs,
+            LastCompletedMs = null, LastState = "RUNNING", LastError = null, LastBatchId = null };
+        Commit(attempted); // Durably claim the attempt before starting a batch.
+        ConfigBackupBatch batch;
+        try
+        {
+            var actor = CurrentOwner(item.OwnerUserId);
+            var scope = _scopes.Resolve(actor);
+            RequireTargets(item.ProfileIds, actor, scope, item.ConfigurationKind);
+            // Start captures a new endpoint/scope now; its scheduler
+            // resolves the profile's current credential for this run.
+            batch = _backups.Start(item.ProfileIds, actor, scope, item.ConfigurationKind, retainUntilObserved: true);
+        }
+        catch (Exception ex) when (ex is ConfigBackupException or TaskScopeRevokedException or SqliteException or IOException or UnauthorizedAccessException)
+        {
+            var error = ex switch
+            {
+                ConfigBackupException backup => backup.Code,
+                TaskScopeRevokedException revoked => revoked.Reason,
+                _ => "CONFIG_BACKUP_SCHEDULE_AUTHORITY_UNAVAILABLE"
+            };
+            Commit(attempted with { LastState = "BLOCKED", LastCompletedMs = nowMs, LastError = SafeError(error) });
+            return;
+        }
+        _running[item.Id] = new(item.OwnerUserId, batch.Id);
+        Commit(attempted with { LastBatchId = batch.Id });
     }
 
     private WebUserIdentity RequireActor(WebUserIdentity actor, P2B5SiteScopeDecision scope, bool requireModule = false)

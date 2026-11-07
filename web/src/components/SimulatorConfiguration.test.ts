@@ -9,6 +9,18 @@ const comparison = { before: backup, after: { ...backup, id: 'complete-b' }, ori
 function render() { return mount(SimulatorConfiguration, { props: { profileId: 'a' }, global: { stubs: { 'el-button': { template: '<button><slot /></button>' } } } }) }
 function button(wrapper: ReturnType<typeof render>, name: string) { return wrapper.findAll('button').find(item => item.text() === name)! }
 describe('simulator configuration changes', () => {
+  it('shows storage admission failure and keeps existing history available', async () => {
+    const wrapper = render()
+    await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
+    api.captureCompleteConfiguration.mockRejectedValueOnce(new Error('CONFIG_COMPLETE_STORAGE_LIMIT: 完整配置存储容量已达上限，已阻止新增采集；历史备份仍可读取'))
+    await button(wrapper, '采集完整配置').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('CONFIG_COMPLETE_STORAGE_LIMIT')
+    expect(wrapper.get('[role="alert"]').text()).toContain('历史备份仍可读取')
+    expect(wrapper.get('select[aria-label="完整配置基线"]').findAll('option')).toHaveLength(2)
+    expect(button(wrapper, '查看脱敏完整配置').attributes('disabled')).toBeUndefined()
+    expect(api.captureCompleteConfiguration).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
   beforeEach(() => { vi.resetAllMocks(); api.getCompleteConfigurations.mockResolvedValue([backup]); api.getSimulatorConfigurationChanges.mockResolvedValue([]); api.getNativeCheckpointOperations.mockResolvedValue([]); api.changeSimulatorDescription.mockResolvedValue({ state: 'VERIFIED' }) })
   it('requires a verified baseline and explicit confirmation before writing', async () => {
     const wrapper = render()

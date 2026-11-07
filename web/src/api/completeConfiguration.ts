@@ -25,3 +25,7 @@ export async function getCompleteConfigurationSchedules(): Promise<CompleteConfi
 export function createCompleteConfigurationSchedule(profileIds: string[], intervalMinutes: number): Promise<CompleteConfigurationSchedule> {
   return request('/api/system/config-backup-schedules', { method: 'POST', body: JSON.stringify({ profileIds, configurationKind: 'COMPLETE_RUNNING', intervalMinutes }) })
 }
+
+export function runCompleteConfigurationSchedule(id: string): Promise<CompleteConfigurationSchedule> {
+  return request('/api/system/config-backup-schedules/' + encodeURIComponent(id) + '/run', { method: 'POST' })
+}

@@ -17,6 +17,7 @@ internal static class ConfigBackupScheduleTests
         await RunsAllThreeReadOnlyKinds();
         await DoesNotOverlapOrReplayMissedIntervals();
         await RemovedProfilesStillReleaseCompletedBatchSlots();
+        await DeletedRunningPlansReleaseSlotsAndRetentionPins();
         await CompletedMetadataBoundPreservesUnobservedScheduledRuns();
         RevalidatesRoleAndDisabledOwner();
         RevalidatesTargetAndSiteAssociation();
@@ -25,7 +26,10 @@ internal static class ConfigBackupScheduleTests
         RestoresFutureDueAndClassifiesInterruptedRun();
         DisabledModulePreventsAutomaticAdmission();
         StorageFailureDoesNotClaimSuccess();
-        Console.WriteLine("CONFIG_BACKUP_SCHEDULE_TESTS=15/15 PASS");
+        await ManualRunPreservesCadenceAndPausedState();
+        await ManualRunSharesOverlapAndCapacityLimits();
+        ManualRunRevalidatesAuthorityBeforeAdmission();
+        Console.WriteLine("CONFIG_BACKUP_SCHEDULE_TESTS=19/19 PASS");
     }
 
     private static void PersistsOwnerTargetsAndDueTime()
@@ -236,6 +240,35 @@ internal static class ConfigBackupScheduleTests
             "a global owner may clean up its own orphaned plans while Site-limited views stay hidden");
     }
 
+    private static async Task DeletedRunningPlansReleaseSlotsAndRetentionPins()
+    {
+        using var f = new Fixture();
+        f.Factory.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var removed = Enumerable.Range(0, 4).Select(_ => f.Create()).ToArray();
+        var waiting = f.Create(61);
+        var due = waiting.NextRunMs!.Value;
+        f.Service.RunDueSchedules(due);
+        await WaitUntil(() => f.Factory.Commands.Count == 1);
+        var batches = f.Service.List(f.Actor, f.Scope).Where(item => item.LastState == "RUNNING")
+            .Select(item => item.LastBatchId!).ToArray();
+        foreach (var item in removed) Assert(f.Service.Delete(item.Id, f.Actor, f.Scope), "running plans must remain deletable");
+        f.Service.RunDueSchedules(due);
+        Assert(f.Service.List(f.Actor, f.Scope).Single().LastState == "NEVER_RUN" && f.Factory.Connections.Count == 1,
+            "deleting a running plan must not free an executing device slot early");
+        f.Factory.Hold.TrySetResult(true);
+        Assert((await f.Finish(waiting.Id, due)).LastState == "SUCCEEDED" && f.TaskCount == 5,
+            "deleted plans must release all slots after their actual batches finish");
+        var metadata = SeedCompletedMetadata(f.Backups, 256);
+        var pins = (HashSet<string>)typeof(ConfigBackupService).GetField("_scheduledPins", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(f.Backups)!;
+        f.Service.RunDueSchedules(due);
+        Assert(batches.All(id => !pins.Contains(id)) && f.Restart().List(f.Actor, f.Scope).Single().Id == waiting.Id,
+            "deleted plans must release retention pins without resurrecting durable plans");
+        var prune = typeof(ConfigBackupService).GetMethod("PruneCompletedBatches", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        prune.Invoke(f.Backups, null);
+        Assert(metadata.Values.Count(item => item.CompletedMs is not null) == ConfigBackupService.MaximumCompletedBatchMetadata &&
+            batches.All(id => !metadata.ContainsKey(id)), "released deleted-plan batches must be prunable under metadata pressure");
+    }
+
     private static async Task ReadsCurrentEndpointAndCredentialEachRun()
     {
         using var f = new Fixture();
@@ -398,6 +431,82 @@ internal static class ConfigBackupScheduleTests
             f.Factory.Connections.Count == 0, "disabling the module must prevent background and direct-service admission");
         Assert(f.Service.SetEnabled(item.Id, false, f.Actor, f.Scope) is { Enabled: false },
             "an existing plan may still be disabled while the module is off");
+    }
+
+    private static async Task ManualRunPreservesCadenceAndPausedState()
+    {
+        using var f = new Fixture();
+        var plan = f.Create();
+        var admitted = f.Service.RunNow(plan.Id, f.Actor, f.Scope)!;
+        Assert(admitted is { LastState: "RUNNING", LastBatchId: not null } && admitted.NextRunMs == plan.NextRunMs &&
+            admitted.Enabled && f.Restart().List(f.Actor, f.Scope).Single().LastState == "INTERRUPTED",
+            "manual admission must persist a real batch and preserve cadence, including restart classification");
+        var done = await f.Finish(plan.Id, plan.CreatedMs);
+        Assert(done is { LastState: "SUCCEEDED", LastCompletedMs: not null } && done.NextRunMs == plan.NextRunMs &&
+            done.LastBatchId == admitted.LastBatchId && f.Backups.GetBatch(done.LastBatchId!, f.Actor, f.Scope) is not null,
+            "manual completion must retain a browsable real batch using normal scheduled observation");
+        f.Service.SetEnabled(plan.Id, false, f.Actor, f.Scope);
+        admitted = f.Service.RunNow(plan.Id, f.Actor, f.Scope)!;
+        Assert(!admitted.Enabled && admitted.NextRunMs is null && admitted.LastBatchId != done.LastBatchId,
+            "a paused plan may run explicitly once without becoming enabled");
+        done = await f.Finish(plan.Id, plan.CreatedMs);
+        Assert(done is { Enabled: false, NextRunMs: null, LastState: "SUCCEEDED" } && f.Factory.Connections.Count == 2,
+            "manual completion must not schedule another capture or enable a paused plan");
+    }
+
+    private static async Task ManualRunSharesOverlapAndCapacityLimits()
+    {
+        using var f = new Fixture();
+        f.Factory.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var plans = Enumerable.Range(0, 5).Select(_ => f.Create()).ToArray();
+        f.Service.RunNow(plans[0].Id, f.Actor, f.Scope);
+        Expect("CONFIG_BACKUP_SCHEDULE_ALREADY_RUNNING", () => f.Service.RunNow(plans[0].Id, f.Actor, f.Scope));
+        f.Service.RunDueSchedules(plans[0].NextRunMs!.Value);
+        Expect("CONFIG_BACKUP_SCHEDULE_ALREADY_RUNNING", () => f.Service.RunNow(plans[0].Id, f.Actor, f.Scope));
+        // The due tick and manual path share four slots, regardless of which wins admission.
+        foreach (var plan in plans.Skip(1))
+        {
+            var current = f.Service.List(f.Actor, f.Scope).Single(item => item.Id == plan.Id);
+            if (current.LastState == "NEVER_RUN")
+            {
+                if (f.Service.List(f.Actor, f.Scope).Count(item => item.LastState == "RUNNING") < 4)
+                    f.Service.RunNow(plan.Id, f.Actor, f.Scope);
+                else
+                    Expect("CONFIG_BACKUP_SCHEDULE_ACTIVE_LIMIT", () => f.Service.RunNow(plan.Id, f.Actor, f.Scope));
+            }
+        }
+        Assert(f.Service.List(f.Actor, f.Scope).Count(item => item.LastState == "RUNNING") == 4,
+            "automatic and manual admission must share both same-plan overlap and global capacity limits");
+        f.Factory.Hold.TrySetResult(true);
+        foreach (var plan in f.Service.List(f.Actor, f.Scope).Where(item => item.LastState == "RUNNING"))
+            await f.Finish(plan.Id, plans[0].CreatedMs);
+        Assert(f.TaskCount == 4, "exactly the four admitted batches must execute after the per-profile gate releases");
+    }
+
+    private static void ManualRunRevalidatesAuthorityBeforeAdmission()
+    {
+        using var f = new Fixture();
+        var plan = f.Create();
+        var other = new WebUserIdentity("local-api-token", "local-api-token", "SUPERADMIN", "local-api-token");
+        Assert(f.Service.RunNow(plan.Id, other, f.Scope) is null && f.Service.RunNow("missing", f.Actor, f.Scope) is null,
+            "manual execution must not expose or assume another owner's plan");
+        Expect("CONFIG_BACKUP_PERMISSION_DENIED", () => f.Service.RunNow(plan.Id, f.Actor with { Role = "ADMIN" }, f.Scope));
+        Expect("CONFIG_BACKUP_SCOPE_DENIED", () => f.Service.RunNow(plan.Id, f.Actor, P2B5SiteScopeDecision.Denied("fixture")));
+        f.Catalog.SetModuleEnabled("config-backups", false, "fixture");
+        Expect("CONFIG_BACKUP_MODULE_DISABLED", () => f.Service.RunNow(plan.Id, f.Actor, f.Scope));
+        f.Catalog.SetModuleEnabled("config-backups", true, "fixture");
+        f.Execute("UPDATE h3c_device_profiles SET enabled=0 WHERE id=$id", f.Profile);
+        Expect("CONFIG_BACKUP_TARGET_NOT_VISIBLE", () => f.Service.RunNow(plan.Id, f.Actor, f.Scope));
+        f.Execute("UPDATE h3c_device_profiles SET enabled=1 WHERE id=$id", f.Profile);
+        var part = f.StorePath + ".part";
+        Directory.CreateDirectory(part);
+        try { Expect("CONFIG_BACKUP_SCHEDULE_STORE_UNAVAILABLE", () => f.Service.RunNow(plan.Id, f.Actor, f.Scope)); }
+        finally { Directory.Delete(part); }
+        f.Execute("UPDATE web_users SET disabled=1 WHERE id=$id", f.Actor.UserId);
+        Expect("CONFIG_BACKUP_SCHEDULE_OWNER_REVOKED", () => f.Service.RunNow(plan.Id, f.Actor, f.Scope));
+        Assert(f.TaskCount == 0 && f.Factory.Connections.Count == 0 &&
+            !File.ReadAllText(f.StorePath).Contains("lastState\":\"RUNNING", StringComparison.Ordinal),
+            "invalid authority, target or durable storage must block manual execution before any task or connection");
     }
 
     private sealed class Fixture : IDisposable

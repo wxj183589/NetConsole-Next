@@ -16,6 +16,8 @@ internal sealed class RuntimeSettings
     public int TerminalIdleTimeoutSeconds { get; init; } = 900;
     public bool TerminalDevelopmentSimulationEnabled { get; init; }
     public bool H3cDevelopmentEnvironmentCredentialsEnabled { get; init; }
+    public long CompleteConfigMaxStoredBytes { get; init; } = 1024L * 1024 * 1024;
+    public int CompleteConfigMaxBackupsPerProfile { get; init; } = 1_000;
 
     // Archive jobs are deliberately bounded so file packaging cannot compete
     // with the long-running collection paths on an industrial host.
@@ -70,6 +72,8 @@ internal sealed class RuntimeSettings
             TerminalDevelopmentSimulationEnabled = IsDevelopmentEnvironment() &&
                 Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_DEV_SIMULATION") == "1",
             H3cDevelopmentEnvironmentCredentialsEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS") == "1",
+            CompleteConfigMaxStoredBytes = ParseBoundedLong("NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_STORED_BYTES", 1024L * 1024 * 1024, 1024L * 1024, 100L * 1024 * 1024 * 1024),
+            CompleteConfigMaxBackupsPerProfile = ParseBoundedInt("NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_BACKUPS_PER_PROFILE", 1_000, 1, 100_000),
             ArchiveMaxRunningJobs = ParseBoundedInt("NETCONSOLE_NEXT_ARCHIVE_MAX_RUNNING_JOBS", 1, 1, 4),
             ArchiveMaxQueuedJobs = ParseBoundedInt("NETCONSOLE_NEXT_ARCHIVE_MAX_QUEUED_JOBS", 8, 1, 64),
             ArchiveMaxActiveJobsPerUser = ParseBoundedInt("NETCONSOLE_NEXT_ARCHIVE_MAX_ACTIVE_JOBS_PER_USER", 2, 1, 16),
@@ -95,20 +99,32 @@ internal sealed class RuntimeSettings
 
     internal static string ValidateDataRoot(string root)
     {
-        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        if (string.Equals(full, Path.TrimEndingDirectorySeparator(Path.GetPathRoot(full)!), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Data root cannot be a filesystem root.");
-        // Reject legacy roots by name before inspecting the filesystem. Next must
-        // never initialize, migrate or probe an original NetConsole data tree.
-        foreach (var legacy in new[] { @"D:\NetConsoleData", @"D:\NetConsoleData-dev" })
-            if (string.Equals(full, legacy, StringComparison.OrdinalIgnoreCase) ||
-                full.StartsWith(legacy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Data root cannot use an original NetConsole data directory.");
+        var full = NormalizeDataRootName(root);
         try { P2B2MigrationPathSecurity.ValidateNoReparsePoints(full); }
         catch (InvalidOperationException exception)
         {
             throw new InvalidOperationException("Data root ancestors must be accessible directories without symlinks, junctions or reparse points.", exception);
         }
+        return full;
+    }
+
+    // Keep name validation free of filesystem access. Windows resolves trailing
+    // dots/spaces to existing names; those aliases cannot bypass the legacy ban.
+    internal static string NormalizeDataRootName(string root)
+    {
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        if (full.StartsWith(@"\\?\", StringComparison.Ordinal) || full.StartsWith(@"\\.\", StringComparison.Ordinal))
+            throw new InvalidOperationException("Data root cannot use a device namespace path.");
+        if (string.Equals(full, Path.TrimEndingDirectorySeparator(Path.GetPathRoot(full)!), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Data root cannot be a filesystem root.");
+        // Reject legacy roots by name before inspecting the filesystem. Next must
+        // never initialize, migrate or probe an original NetConsole data tree.
+        var comparison = string.Join('\\', full.Replace('/', '\\').Split('\\')
+            .Select(part => part.TrimEnd(' ', '.'))).TrimEnd('\\');
+        foreach (var legacy in new[] { @"D:\NetConsoleData", @"D:\NetConsoleData-dev" })
+            if (string.Equals(comparison, legacy, StringComparison.OrdinalIgnoreCase) ||
+                comparison.StartsWith(legacy + "\\", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Data root cannot use an original NetConsole data directory.");
         return full;
     }
 

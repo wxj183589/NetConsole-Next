@@ -5,9 +5,9 @@ using System.Text.Json;
 namespace NetConsole.Next.Service;
 
 internal sealed record SyslogQuery(long? FromMs = null, long? ToMs = null, string? SenderIp = null,
-    int? MaximumSeverity = null, string? Text = null, int Limit = 200);
+    int? MaximumSeverity = null, string? Text = null, int Limit = 200, string? EventType = null);
 internal sealed record SyslogEntry(long ReceivedMs, string SenderIp, int SenderPort, int? Facility,
-    int? Severity, string Message, string RawReference, int Line);
+    int? Severity, string Message, string RawReference, int Line, string EventFamily = "UNKNOWN", string EventType = "UNKNOWN");
 internal sealed record SyslogQueryResult(IReadOnlyList<SyslogEntry> Items, int ScannedSegments, int ScannedRecords,
     int UnavailableSegments, bool Partial, long FromMs, long ToMs, string SourceState);
 
@@ -22,7 +22,8 @@ internal sealed partial class Catalog
         var to = query.ToMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var from = query.FromMs ?? to - 86_400_000;
         if (from < 0 || to < from || to - from > 31L * 86_400_000 || query.Limit is < 1 or > 500 ||
-            query.MaximumSeverity is < 0 or > 7 || query.Text?.Length > 256 || query.SenderIp?.Length > 64)
+            query.MaximumSeverity is < 0 or > 7 || query.Text?.Length > 256 || query.SenderIp?.Length > 64 ||
+            !H3cSyslogEventClassifier.IsSupportedFilter(query.EventType))
             throw new ArgumentException("SYSLOG_QUERY_INVALID");
         using var db = Open();
         using var command = db.CreateCommand();
@@ -81,8 +82,10 @@ internal sealed partial class Catalog
                         { severity = pri % 8; facility = pri / 8; }
                         if (query.MaximumSeverity.HasValue && (!severity.HasValue || severity > query.MaximumSeverity)) continue;
                         if (!string.IsNullOrWhiteSpace(query.Text) && !message.Contains(query.Text.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                        var classification = H3cSyslogEventClassifier.Classify(message);
+                        if (query.EventType is not null && classification.Type != query.EventType) continue;
                         entries.Add(new(received, sender, root.GetProperty("sender_port").GetInt32(), facility, severity,
-                            message, segment.Path, lineNumber));
+                            message, segment.Path, lineNumber, classification.Family, classification.Type));
                         // Keep the newest bounded page even when records are not ordered in a segment.
                         if (entries.Count > query.Limit * 2)
                         { entries = entries.OrderByDescending(x => x.ReceivedMs).ThenBy(x => x.RawReference, StringComparer.Ordinal).ThenByDescending(x => x.Line).Take(query.Limit).ToList(); partial = true; }

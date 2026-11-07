@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import CompleteConfigurationBulk from './CompleteConfigurationBulk.vue'
 
-const api = vi.hoisted(() => ({ createCompleteConfigurationBatch: vi.fn(), createCompleteConfigurationSchedule: vi.fn(), getCompleteConfigurationBatch: vi.fn(), getCompleteConfigurationSchedules: vi.fn(), resolveCompleteConfigurationTargets: vi.fn() }))
+const api = vi.hoisted(() => ({ createCompleteConfigurationBatch: vi.fn(), createCompleteConfigurationSchedule: vi.fn(), getCompleteConfigurationBatch: vi.fn(), getCompleteConfigurationSchedules: vi.fn(), resolveCompleteConfigurationTargets: vi.fn(), runCompleteConfigurationSchedule: vi.fn() }))
 const shared = vi.hoisted(() => ({ getDeviceSites: vi.fn(), getWirelessAcDomains: vi.fn(), setConfigBackupScheduleEnabled: vi.fn(), deleteConfigBackupSchedule: vi.fn() }))
 vi.mock('../api/completeConfiguration', () => api)
 vi.mock('../api/client', () => shared)
@@ -25,6 +25,19 @@ describe('complete configuration bulk workflow', () => {
     api.createCompleteConfigurationBatch.mockResolvedValue(partial)
     api.getCompleteConfigurationBatch.mockResolvedValue(partial)
     api.createCompleteConfigurationSchedule.mockResolvedValue(plan)
+  })
+
+  it('explains full storage and per-device history limits without discarding successful results', async () => {
+    api.getCompleteConfigurationSchedules.mockResolvedValue([{ ...plan, lastState: 'PARTIAL', lastError: 'CONFIG_COMPLETE_HISTORY_LIMIT', lastBatchId: 'scheduled-batch' }])
+    api.getCompleteConfigurationBatch.mockResolvedValue({ ...partial, items: [partial.items[0], { profileId: 'p2', state: 'FAILED', error: 'CONFIG_COMPLETE_STORAGE_LIMIT' }] })
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.text()).toContain('此设备完整备份数量已满')
+    await button(wrapper, '查看最近执行').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('完整备份存储容量已满')
+    expect(wrapper.text()).toContain('历史仍可读取')
+    expect(button(wrapper, '查看完整历史')).toBeDefined()
+    expect(api.createCompleteConfigurationBatch).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('requires an explicit target preview before starting private backups', async () => {
@@ -122,6 +135,35 @@ describe('complete configuration bulk workflow', () => {
     expect(wrapper.get('[aria-label="完整配置批量进度"]').text()).toContain('计划 plan1 最近执行')
     await button(wrapper, '仅重试失败设备').trigger('click'); await flushPromises()
     expect(api.createCompleteConfigurationBatch).toHaveBeenCalledWith(['p2'])
+    wrapper.unmount()
+  })
+
+  it('runs a paused plan once and opens its real latest batch without changing enabled state', async () => {
+    api.getCompleteConfigurationSchedules.mockResolvedValue([{ ...plan, enabled: false, nextRunMs: null }])
+    api.runCompleteConfigurationSchedule.mockResolvedValue({ ...plan, enabled: false, lastState: 'RUNNING', lastBatchId: 'manual-plan-batch' })
+    const wrapper = render(); await flushPromises()
+    await button(wrapper, '立即执行').trigger('click'); await flushPromises()
+    expect(api.runCompleteConfigurationSchedule).toHaveBeenCalledWith('plan1')
+    expect(api.getCompleteConfigurationBatch).toHaveBeenCalledWith('manual-plan-batch')
+    expect(shared.setConfigBackupScheduleEnabled).not.toHaveBeenCalled()
+    expect(api.createCompleteConfigurationBatch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('计划 plan1 最近执行')
+    expect(wrapper.text()).toContain('已暂停')
+    wrapper.unmount()
+  })
+
+  it('shows a safe manual-run error and blocks an already running plan', async () => {
+    api.getCompleteConfigurationSchedules.mockResolvedValue([plan])
+    api.runCompleteConfigurationSchedule.mockRejectedValue(new Error('PRIVATE_SERVER_DATA'))
+    const wrapper = render(); await flushPromises()
+    await button(wrapper, '立即执行').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('计划未能立即执行')
+    expect(wrapper.text()).not.toContain('PRIVATE_SERVER_DATA')
+    api.getCompleteConfigurationSchedules.mockResolvedValue([{ ...plan, lastState: 'RUNNING' }])
+    await button(wrapper, '刷新完整配置计划').trigger('click'); await flushPromises()
+    expect(button(wrapper, '立即执行').attributes('disabled')).toBeDefined()
+    await button(wrapper, '立即执行').trigger('click'); await flushPromises()
+    expect(api.runCompleteConfigurationSchedule).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

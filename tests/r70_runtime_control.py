@@ -20,9 +20,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["start", "stop", "signal"])
     parser.add_argument("--pid", type=int)
+    parser.add_argument("--report-prefix", default="r70", choices=["r70", "r71"])
+    parser.add_argument("--web-port", type=int, default=18771)
+    parser.add_argument("--syslog-port", type=int, default=0)
+    parser.add_argument("--data-root", default=str(workspace_path("test-data", "simulator-live-20261105")))
     parser.add_argument("--expected-dll", default=str(workspace_path("build", "r70-service", "NetConsole.Next.Service.dll")))
     args = parser.parse_args()
-    evidence = workspace_path("reports", "r70-console-control.json")
+    evidence = workspace_path("reports", f"{args.report_prefix}-console-control.json")
+    data_root = Path(args.data_root).resolve()
+    data_root.relative_to(workspace_path("test-data").resolve())
+    if not 1 <= args.web_port <= 65535 or not 0 <= args.syslog_port <= 65535:
+        parser.error("Invalid port")
     if args.action == "signal":
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.FreeConsole()
@@ -51,7 +59,7 @@ def main():
         process = json.loads(command)
         if process["Name"] != "dotnet.exe" or str(dll).lower() not in process["CommandLine"].lower():
             raise RuntimeError("Target PID does not own the expected Next service DLL")
-        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "signal", "--pid", str(args.pid)],
+        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "signal", "--pid", str(args.pid), "--report-prefix", args.report_prefix],
             creationflags=subprocess.DETACHED_PROCESS, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if child.wait(timeout=15) != 0:
             raise RuntimeError("Isolated-console signal refused; inspect r70-console-control.json")
@@ -75,29 +83,29 @@ def main():
     if not dll.is_file():
         raise FileNotFoundError(dll)
     try:
-        urllib.request.urlopen("http://127.0.0.1:18771/api/system/health", timeout=2)
+        urllib.request.urlopen(f"http://127.0.0.1:{args.web_port}/api/system/health", timeout=2)
     except OSError:
         pass
     else:
         raise RuntimeError("Service port already has an owner; refusing duplicate start")
-    env = {**os.environ, "NETCONSOLE_NEXT_DATA_ROOT": str(workspace_path("test-data", "simulator-live-20261105")),
-        "NETCONSOLE_NEXT_WEB_PORT": "18771", "NETCONSOLE_NEXT_SYSLOG_PORT": "0", "NETCONSOLE_NEXT_H3C_ENABLED": "1",
+    env = {**os.environ, "NETCONSOLE_NEXT_DATA_ROOT": str(data_root),
+        "NETCONSOLE_NEXT_WEB_PORT": str(args.web_port), "NETCONSOLE_NEXT_SYSLOG_PORT": str(args.syslog_port), "NETCONSOLE_NEXT_H3C_ENABLED": "1",
         "NETCONSOLE_NEXT_NETMIKO_WORKER": str(REPO / "tools" / "netmiko_worker.py")}
     info = subprocess.STARTUPINFO()
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 0
-    with workspace_path("reports", "r70-service.log").open("ab") as out, workspace_path("reports", "r70-service.err.log").open("ab") as err:
+    with workspace_path("reports", f"{args.report_prefix}-service.log").open("ab") as out, workspace_path("reports", f"{args.report_prefix}-service.err.log").open("ab") as err:
         proc = subprocess.Popen(["dotnet", str(dll)], cwd=REPO / "src" / "NetConsole.Next.Service", env=env,
             stdin=subprocess.DEVNULL, stdout=out, stderr=err, creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=info)
     for _ in range(60):
         if proc.poll() is not None:
             raise RuntimeError(f"Service exited with {proc.returncode}")
         try:
-            with urllib.request.urlopen("http://127.0.0.1:18771/api/system/health", timeout=2) as response:
+            with urllib.request.urlopen(f"http://127.0.0.1:{args.web_port}/api/system/health", timeout=2) as response:
                 health = json.load(response)
             if health["processId"] != proc.pid:
                 raise RuntimeError("Health belongs to another process")
-            workspace_path("reports", "r70-start-health.json").write_text(json.dumps(health, indent=2), encoding="utf-8")
+            workspace_path("reports", f"{args.report_prefix}-start-health.json").write_text(json.dumps(health, indent=2), encoding="utf-8")
             print(json.dumps({"pid": proc.pid, "healthState": health["healthState"], "dll": str(dll)}))
             return 0
         except OSError:

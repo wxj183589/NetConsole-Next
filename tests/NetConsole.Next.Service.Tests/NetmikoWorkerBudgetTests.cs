@@ -7,16 +7,34 @@ namespace NetConsole.Next.Service.Tests;
 internal static class NetmikoWorkerBudgetTests
 {
     private const string WorkerMode = "NETCONSOLE_NEXT_TEST_BUDGET_WORKER";
+    private const string CommandStarted = "NETCONSOLE_NEXT_TEST_BUDGET_COMMAND_STARTED";
     private const string Key = "SHA256:ERERERERERERERERERERERERERERERERERERERERERE";
 
     internal static bool IsWorker => Environment.GetEnvironmentVariable(WorkerMode) == "1";
 
     internal static async Task RunWorkerAsync()
     {
+        string? host = null;
         while (await Console.In.ReadLineAsync() is { } line)
         {
             using var request = JsonDocument.Parse(line);
-            var host = request.RootElement.GetProperty("host").GetString();
+            var operation = request.RootElement.GetProperty("op").GetString();
+            if (operation == "execute")
+            {
+                var command = request.RootElement.GetProperty("command").GetString();
+                if (command == H3cCommandPolicy.DisplayVersion)
+                    Console.WriteLine(JsonSerializer.Serialize(new { ok = true, result = new { output = Environment.ProcessId.ToString() } }));
+                else
+                {
+                    File.WriteAllText(Environment.GetEnvironmentVariable(CommandStarted)!, Environment.ProcessId.ToString());
+                    if (host == "command-silent") { await Task.Delay(Timeout.Infinite); return; }
+                    if (host == "command-exit") return;
+                    Console.WriteLine("{\"ok\":false,\"error\":\"ReadTimeout\",\"failure_kind\":\"COMMAND_TIMEOUT\"}");
+                }
+                await Console.Out.FlushAsync();
+                continue;
+            }
+            host = request.RootElement.GetProperty("host").GetString();
             if (host == "silent") { await Task.Delay(Timeout.Infinite); return; }
             if (host == "exit") return;
             if (host == "fail")
@@ -31,7 +49,7 @@ internal static class NetmikoWorkerBudgetTests
 
     public static async Task RunAsync()
     {
-        var names = new[] { WorkerMode, "NETCONSOLE_NEXT_NETMIKO_PYTHON", "NETCONSOLE_NEXT_NETMIKO_WORKER" };
+        var names = new[] { WorkerMode, CommandStarted, "NETCONSOLE_NEXT_NETMIKO_PYTHON", "NETCONSOLE_NEXT_NETMIKO_WORKER" };
         var before = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
         try
         {
@@ -50,7 +68,10 @@ internal static class NetmikoWorkerBudgetTests
             await StartupFailuresReturnSlots(executable);
             await ConnectionFailureAndCancellationReturnSlots();
             await ProbeCompletionAndFailureReturnSlots();
-            Console.WriteLine("NETMIKO_WORKER_BUDGET_TESTS=PASS (6 groups, shared limit 16)");
+            await IdleDisposeWaitsForOwnedWorkerExit();
+            await PendingCommandCleanupTerminatesOwnedWorker();
+            await SchedulerShutdownReleasesOwnedWorker();
+            Console.WriteLine("NETMIKO_WORKER_BUDGET_TESTS=PASS (9 groups, shared limit 16, owned-process exit verified)");
         }
         finally
         {
@@ -204,6 +225,102 @@ internal static class NetmikoWorkerBudgetTests
         try { await task.WaitAsync(TimeSpan.FromSeconds(10)); }
         catch (OperationCanceledException) { return; }
         throw new InvalidOperationException("The cancelled worker request must stop.");
+    }
+
+    private static async Task IdleDisposeWaitsForOwnedWorkerExit()
+    {
+        using var transport = new NetmikoWorkerH3cSshTransport(Profile(), "synthetic");
+        await transport.ConnectAsync((_, _) => true, CancellationToken.None);
+        var pid = int.Parse(await transport.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None));
+        using var worker = Process.GetProcessById(pid);
+        Assert(!worker.HasExited && NetmikoWorkerBudget.AvailableSlots == NetmikoWorkerBudget.Limit - 1,
+            "the idle synthetic worker must be alive and retain its process slot");
+        transport.Dispose();
+        await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await ExpectAllSlots();
+        Assert(!transport.IsConnected, "normal session disposal must terminate its owned child process");
+    }
+
+    private static async Task PendingCommandCleanupTerminatesOwnedWorker()
+    {
+        var workspace = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
+            (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace"));
+        var root = Path.Combine(workspace, "test-data", "worker-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            foreach (var mode in new[] { "CANCEL", "ABORT", "DISPOSE", "TIMEOUT", "EXIT" })
+            {
+                var marker = Path.Combine(root, mode + ".txt");
+                Environment.SetEnvironmentVariable(CommandStarted, marker);
+                var host = mode == "TIMEOUT" ? "command-timeout" : mode == "EXIT" ? "command-exit" : "command-silent";
+                using var transport = new NetmikoWorkerH3cSshTransport(Profile(host), "synthetic");
+                await transport.ConnectAsync((_, _) => true, CancellationToken.None);
+                var pid = int.Parse(await transport.ExecuteAsync(H3cCommandPolicy.DisplayVersion, CancellationToken.None));
+                using var worker = Process.GetProcessById(pid);
+                using var cancellation = new CancellationTokenSource();
+                var executing = transport.ExecuteAsync(H3cCommandPolicy.DisplayInterfaceBrief, cancellation.Token);
+                var timer = Stopwatch.StartNew();
+                while (!File.Exists(marker) && timer.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+                Assert(File.Exists(marker), "the owned worker must have received the command before shutdown/cancellation");
+                if (mode == "CANCEL") cancellation.Cancel();
+                if (mode == "ABORT") transport.Abort();
+                if (mode == "DISPOSE") transport.Dispose();
+                var rejected = false;
+                try { await executing.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (OperationCanceledException) when (mode is "CANCEL" or "ABORT" or "DISPOSE") { rejected = true; }
+                catch (ObjectDisposedException) when (mode == "DISPOSE") { rejected = true; }
+                catch (H3cCommandTimeoutException) when (mode == "TIMEOUT") { rejected = true; }
+                catch (H3cCommandInterruptedException) when (mode == "EXIT") { rejected = true; }
+                Assert(rejected && !transport.IsConnected, "interrupted command must fail without leaving a connected session");
+                await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                await ExpectAllSlots();
+                Console.WriteLine($"NETMIKO_OWNED_WORKER_{mode}=PASS (PID {pid} exited; all slots returned)");
+            }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static async Task SchedulerShutdownReleasesOwnedWorker()
+    {
+        var workspace = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
+            (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace"));
+        var root = Path.Combine(workspace, "test-data", "scheduler-worker-exit-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var marker = Path.Combine(root, "command-started.txt");
+            Environment.SetEnvironmentVariable(CommandStarted, marker);
+            await using var scheduler = new BoundedCollectionScheduler(new LifecycleSessionFactory(), 1, 1);
+            Assert(scheduler.TrySchedule(new("command-silent", H3cCommandPolicy.DisplayInterfaceBrief, TimeSpan.FromSeconds(30)), out var run),
+                "synthetic shutdown task must be admitted");
+            var timer = Stopwatch.StartNew();
+            while (!File.Exists(marker) && timer.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+            Assert(File.Exists(marker), "the task's owned worker must reach an in-flight command before shutdown");
+            var pid = int.Parse(File.ReadAllText(marker));
+            using var worker = Process.GetProcessById(pid);
+            await scheduler.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await ExpectAllSlots();
+            Assert(scheduler.Get(run)?.State == "CANCELLED", "service scheduler shutdown must cancel the task and release its real child");
+            Console.WriteLine($"NETMIKO_SCHEDULER_SHUTDOWN=PASS (PID {pid} exited; task CANCELLED; all slots returned)");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private sealed class LifecycleSessionFactory : IDeviceSessionFactory
+    {
+        public IDeviceSession Create(string target) => new H3cSshDeviceSession(Profile(target), new SyntheticCredentials(), new LifecycleTransportFactory());
+    }
+
+    private sealed class SyntheticCredentials : IH3cCredentialProvider
+    {
+        public string? GetPassword(string reference) => "synthetic";
+    }
+
+    private sealed class LifecycleTransportFactory : IH3cSshTransportFactory
+    {
+        public IH3cSshTransport Create(H3cDeviceProfileSnapshot profile, string password) => new NetmikoWorkerH3cSshTransport(profile, password);
     }
 
     private static async Task ExpectAllSlots()

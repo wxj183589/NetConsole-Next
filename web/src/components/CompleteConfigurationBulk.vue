@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { deleteConfigBackupSchedule, getDeviceSites, getWirelessAcDomains, setConfigBackupScheduleEnabled, type DeviceSite } from '../api/client'
-import { createCompleteConfigurationBatch, createCompleteConfigurationSchedule, getCompleteConfigurationBatch, getCompleteConfigurationSchedules, resolveCompleteConfigurationTargets, type CompleteConfigurationBatch, type CompleteConfigurationSchedule, type CompleteConfigurationTargetPreview } from '../api/completeConfiguration'
+import { createCompleteConfigurationBatch, createCompleteConfigurationSchedule, getCompleteConfigurationBatch, getCompleteConfigurationSchedules, resolveCompleteConfigurationTargets, runCompleteConfigurationSchedule, type CompleteConfigurationBatch, type CompleteConfigurationSchedule, type CompleteConfigurationTargetPreview } from '../api/completeConfiguration'
 
 const props = defineProps<{ selectedProfileIds: string[] }>()
 const emit = defineEmits<{ completed: []; inspect: [profileId: string] }>()
@@ -19,6 +19,11 @@ const running = computed(() => !!batch.value && !batch.value.completedMs)
 const canSubmit = computed(() => !busy.value && !running.value && !!preview.value?.profileIds.length)
 function time(value?: number | null): string { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function state(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', FAILED: '失败', PARTIAL: '部分完成', NEVER_RUN: '尚未执行', BLOCKED: '无法执行', INTERRUPTED: '服务重启中断' } as Record<string, string>)[value] ?? value }
+function failure(value?: string | null): string {
+  if (value === 'CONFIG_COMPLETE_STORAGE_LIMIT') return '完整备份存储容量已满，已停止新增采集；历史仍可读取，请联系管理员调整容量。'
+  if (value === 'CONFIG_COMPLETE_HISTORY_LIMIT') return '此设备完整备份数量已满，已停止新增采集；历史仍可读取，请联系管理员调整容量。'
+  return value || ''
+}
 function resetPreview(): void { ++sequence; preview.value = null; error.value = ''; busy.value = false }
 watch([selection, siteId, domainId, () => props.selectedProfileIds.join('\0')], resetPreview)
 async function resolve(): Promise<void> {
@@ -55,7 +60,7 @@ async function readProgress(id: string, current: number): Promise<void> {
     const next = await getCompleteConfigurationBatch(id)
     if (!active || disposed || current !== pollSequence || batch.value?.id !== id) return
     batch.value = next
-    if (next.completedMs) { emit('completed'); return }
+    if (next.completedMs) { emit('completed'); void refreshPlans().catch(() => {}); return }
     timer = setTimeout(() => { void readProgress(id, current) }, 1000)
   } catch { if (active && !disposed && current === pollSequence && batch.value?.id === id) error.value = '无法读取批量进度，请刷新进度或检查当前权限。' }
 }
@@ -76,6 +81,23 @@ async function schedule(): Promise<void> {
   const targets = [...preview.value!.profileIds]; busy.value = true; error.value = ''
   try { await createCompleteConfigurationSchedule(targets, interval.value); await refreshPlans() }
   catch { if (!disposed) error.value = '定时计划未能创建，请检查目标权限后重试。' }
+  finally { if (!disposed) busy.value = false }
+}
+async function runPlan(plan: CompleteConfigurationSchedule): Promise<void> {
+  if (busy.value || running.value || plan.lastState === 'RUNNING') return
+  busy.value = true; error.value = ''
+  try {
+    const next = await runCompleteConfigurationSchedule(plan.id)
+    await refreshPlans()
+    if (disposed) return
+    if (next.lastBatchId) {
+      const nextBatch = await getCompleteConfigurationBatch(next.lastBatchId)
+      if (disposed) return
+      batch.value = nextBatch; viewingPlanId.value = plan.id
+      if (!nextBatch.completedMs) void poll(next.lastBatchId)
+      else emit('completed')
+    }
+  } catch { if (!disposed) error.value = '计划未能立即执行。请检查当前权限、模块和设备状态，或等待已有批次完成。' }
   finally { if (!disposed) busy.value = false }
 }
 async function changePlan(operation: () => Promise<unknown>): Promise<void> {
@@ -120,12 +142,12 @@ onBeforeUnmount(() => { disposed = true; active = false; ++sequence; ++pollSeque
         <p v-if="viewingPlanId" class="muted">计划 {{ viewingPlanId }} 最近执行 · 批次 {{ batch.id }}</p>
         <p>{{ state(batch.state) }} · {{ batch.completed }}/{{ batch.total }} · 成功 {{ batch.succeeded }} · 失败 {{ batch.failed }}</p>
         <el-button :disabled="busy || running || !failedProfiles.length" @click="start(true)">仅重试失败设备</el-button><el-button :disabled="busy" @click="poll(batch.id)">刷新完整备份进度</el-button>
-        <div class="table-wrap"><table class="data-table"><thead><tr><th>设备档案</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody><tr v-for="item in batch.items" :key="item.profileId"><td>{{ preview?.items.find(target => target.profileId === item.profileId)?.name || item.profileId }}</td><td>{{ state(item.state) }}</td><td>{{ item.error || item.snapshotId || '—' }}</td><td><el-button v-if="item.snapshotId" text @click="emit('inspect', item.profileId)">查看完整历史</el-button></td></tr></tbody></table></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>设备档案</th><th>状态</th><th>结果</th><th>操作</th></tr></thead><tbody><tr v-for="item in batch.items" :key="item.profileId"><td>{{ preview?.items.find(target => target.profileId === item.profileId)?.name || item.profileId }}</td><td>{{ state(item.state) }}</td><td>{{ failure(item.error) || item.snapshotId || '—' }}</td><td><el-button v-if="item.snapshotId" text @click="emit('inspect', item.profileId)">查看完整历史</el-button></td></tr></tbody></table></div>
       </div>
       <h3>完整配置计划</h3>
-      <p class="muted">创建后经过一个周期开始执行；每次检查当前权限和凭据，同一计划不重叠、不补跑停机周期。</p>
+      <p class="muted">创建后经过一个周期自动执行；也可立即执行一次（已暂停计划亦可），不改变启停状态和下次自动执行时间。每次检查当前权限和凭据，同一计划不重叠、不补跑停机周期。</p>
       <el-button :disabled="busy" @click="changePlan(refreshPlans)">刷新完整配置计划</el-button>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>固定设备范围</th><th>周期</th><th>状态</th><th>下次执行</th><th>最近结果</th><th>操作</th></tr></thead><tbody><tr v-for="plan in schedules" :key="plan.id"><td><details><summary>{{ plan.profileIds.length }} 台 · 查看档案</summary><ul><li v-for="profile in plan.profileIds" :key="profile"><span>{{ profile }}</span> <el-button text @click="emit('inspect', profile)">查看完整历史</el-button></li></ul></details></td><td>{{ plan.intervalMinutes / 60 }} 小时</td><td>{{ plan.enabled ? '已启用' : '已暂停' }}</td><td>{{ time(plan.nextRunMs) }}</td><td>{{ state(plan.lastState || 'NEVER_RUN') }} {{ plan.lastError || '' }}<span v-if="plan.lastRunMs"> · 开始 {{ time(plan.lastRunMs) }}</span><span v-if="plan.lastCompletedMs"> · 完成 {{ time(plan.lastCompletedMs) }}</span></td><td><el-button v-if="plan.lastBatchId" text :disabled="busy || running" @click="inspectPlan(plan)">查看最近执行</el-button><el-button text :disabled="busy" @click="changePlan(() => setConfigBackupScheduleEnabled(plan.id, !plan.enabled))">{{ plan.enabled ? '暂停' : '启用' }}</el-button><el-button text :disabled="busy" @click="changePlan(() => deleteConfigBackupSchedule(plan.id))">删除</el-button></td></tr><tr v-if="!schedules.length"><td colspan="6" class="muted">暂无完整配置计划</td></tr></tbody></table></div>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>固定设备范围</th><th>周期</th><th>状态</th><th>下次执行</th><th>最近结果</th><th>操作</th></tr></thead><tbody><tr v-for="plan in schedules" :key="plan.id"><td><details><summary>{{ plan.profileIds.length }} 台 · 查看档案</summary><ul><li v-for="profile in plan.profileIds" :key="profile"><span>{{ profile }}</span> <el-button text @click="emit('inspect', profile)">查看完整历史</el-button></li></ul></details></td><td>{{ plan.intervalMinutes / 60 }} 小时</td><td>{{ plan.enabled ? '已启用' : '已暂停' }}</td><td>{{ time(plan.nextRunMs) }}</td><td>{{ state(plan.lastState || 'NEVER_RUN') }} {{ failure(plan.lastError) }}<span v-if="plan.lastRunMs"> · 开始 {{ time(plan.lastRunMs) }}</span><span v-if="plan.lastCompletedMs"> · 完成 {{ time(plan.lastCompletedMs) }}</span></td><td><el-button text :disabled="busy || running || plan.lastState === 'RUNNING'" @click="runPlan(plan)">立即执行</el-button><el-button v-if="plan.lastBatchId" text :disabled="busy || running" @click="inspectPlan(plan)">查看最近执行</el-button><el-button text :disabled="busy" @click="changePlan(() => setConfigBackupScheduleEnabled(plan.id, !plan.enabled))">{{ plan.enabled ? '暂停' : '启用' }}</el-button><el-button text :disabled="busy" @click="changePlan(() => deleteConfigBackupSchedule(plan.id))">删除</el-button></td></tr><tr v-if="!schedules.length"><td colspan="6" class="muted">暂无完整配置计划</td></tr></tbody></table></div>
     </div>
   </section>
 </template>

@@ -14,15 +14,16 @@ internal static class LocalDeploymentDoctor
         Func<CancellationToken, Task<bool>>? workerProbe = null)
     {
         if (port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
-        var root = Path.GetFullPath(dataRoot);
+        var root = ManagedDataRootPath.Normalize(dataRoot);
         var checks = new List<DeploymentCheck>();
         DeploymentDiagnosis Finish(int? pid = null) => new(
             checks.Any(c => c.State == "FAIL") ? "FAILED" : checks.Any(c => c.State == "UNKNOWN") ? "PARTIAL" : "PASS",
             root, port, pid, checks);
-        if (!Directory.Exists(root) || HasReparseAncestor(root))
+        try { root = ManagedDataRootPath.ResolveExistingDirectory(root); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            checks.Add(new("DATA_ROOT", "FAIL", "Data root is missing or traverses a reparse point.",
-                "Choose the existing NetConsole Next managed data root."));
+            checks.Add(new("DATA_ROOT", "FAIL", "Data root is missing, inaccessible or traverses a reparse point.",
+                "Choose the existing NetConsole Next managed data root and check directory permissions."));
             return Finish();
         }
         string? instance = null;
@@ -108,13 +109,6 @@ internal static class LocalDeploymentDoctor
     }
 
     private static bool SafeFile(string path) => File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
-
-    private static bool HasReparseAncestor(string path)
-    {
-        for (var directory = new DirectoryInfo(path); directory is not null; directory = directory.Parent)
-            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) return true;
-        return false;
-    }
 
     private static async Task<bool> ProbeWorkerAsync(CancellationToken token)
     {

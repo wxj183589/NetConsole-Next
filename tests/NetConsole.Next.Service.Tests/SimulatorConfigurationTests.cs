@@ -13,6 +13,10 @@ internal static class SimulatorConfigurationTests
         await CaptureAndRedact();
         await RejectIncomplete();
         await RejectTampering();
+        await DamagedHistoryDoesNotReuseVersions();
+        await StorageAdmissionPreservesExistingHistory();
+        await ConcurrentProfilesShareStorageQuota();
+        StorageEnvironmentIsBounded();
         await VerifyChange();
         await VerifyUndo();
         await VerifyRollback();
@@ -25,7 +29,7 @@ internal static class SimulatorConfigurationTests
         await VerifyReconnectFailureRecovery();
         await RejectChangedReadbackVersion();
         await RejectChangedRollbackVersion();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=15/15 PASS");
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=19/19 PASS");
     }
 
     private static async Task CaptureAndRedact()
@@ -72,6 +76,106 @@ internal static class SimulatorConfigurationTests
         var publicPath = fixture.Raw(backup).Replace(".cfg", ".view.cfg");
         File.WriteAllText(publicPath, File.ReadAllText(publicPath).Replace("original", "tampered"));
         Assert(fixture.Service.View(backup.Id, Actor, P2B5SiteScopeDecision.Global) is null, "same-length public tamper must also fail integrity");
+    }
+
+    private static async Task DamagedHistoryDoesNotReuseVersions()
+    {
+        using var fixture = new Fixture();
+        var first = await fixture.Capture();
+        var second = await fixture.Capture();
+        File.WriteAllText(fixture.Raw(second), Original.Replace("original", "tampered"));
+        var third = await fixture.Capture();
+        Assert(third.Version == 3 && fixture.Service.View(second.Id, Actor, P2B5SiteScopeDecision.Global) is null,
+            "a damaged highest-version body must remain unreadable without causing version reuse");
+        var invalid = System.Text.Json.JsonSerializer.Serialize(third with { Version = 999, FormatVersion = 99 },
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        File.WriteAllText(Path.ChangeExtension(fixture.Raw(third), ".json"), invalid);
+        Assert((await fixture.Capture()).Version == 3, "structurally invalid manifests must never supply a version");
+        Assert(fixture.Service.View(first.Id, Actor, P2B5SiteScopeDecision.Global) is not null,
+            "valid older history must remain readable");
+    }
+
+    private static async Task StorageAdmissionPreservesExistingHistory()
+    {
+        using var fixture = new Fixture();
+        var first = await fixture.Capture();
+        var files = Directory.GetFiles(Path.GetDirectoryName(fixture.Raw(first))!);
+        var bytes = files.Sum(path => new FileInfo(path).Length);
+        var capped = fixture.WithCapacity(bytes, 1_000);
+        var opens = fixture.Factory.Opens;
+        await Reject(() => capped.CaptureAsync(fixture.Profile, Actor, P2B5SiteScopeDecision.Global, default), "CONFIG_COMPLETE_STORAGE_LIMIT");
+        Assert(fixture.Factory.Opens == opens, "full storage must reject before opening a device connection");
+        capped = fixture.WithCapacity(bytes + 1, 1_000);
+        await Reject(() => capped.CaptureAsync(fixture.Profile, Actor, P2B5SiteScopeDecision.Global, default), "CONFIG_COMPLETE_STORAGE_LIMIT");
+        Assert(Directory.GetFiles(Path.GetDirectoryName(fixture.Raw(first))!).Length == files.Length,
+            "actual publication bytes must be checked before publishing any new file");
+        capped = fixture.WithCapacity(long.MaxValue, 1);
+        opens = fixture.Factory.Opens;
+        await Reject(() => capped.CaptureAsync(fixture.Profile, Actor, P2B5SiteScopeDecision.Global, default), "CONFIG_COMPLETE_HISTORY_LIMIT");
+        Assert(fixture.Factory.Opens == opens && capped.View(first.Id, Actor, P2B5SiteScopeDecision.Global) is not null &&
+            capped.List(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Single().Id == first.Id,
+            "history count admission must preserve existing reads without connecting or deleting backups");
+        var orphan = Path.Combine(Path.GetDirectoryName(fixture.Raw(first))!, "orphan.cfg");
+        File.WriteAllBytes(orphan, new byte[32]);
+        capped = fixture.WithCapacity(bytes + 32, 1_000);
+        opens = fixture.Factory.Opens;
+        await Reject(() => capped.CaptureAsync(fixture.Profile, Actor, P2B5SiteScopeDecision.Global, default), "CONFIG_COMPLETE_STORAGE_LIMIT");
+        Assert(fixture.Factory.Opens == opens && File.Exists(orphan), "orphan files must count toward quota and remain untouched");
+    }
+
+    private static async Task ConcurrentProfilesShareStorageQuota()
+    {
+        using var fixture = new Fixture();
+        var first = await fixture.Capture();
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(fixture.Raw(first)))!;
+        var bytes = Directory.GetFiles(root, "*", SearchOption.AllDirectories).Sum(path => new FileInfo(path).Length);
+        var other = Guid.NewGuid().ToString("N");
+        fixture.Catalog.CreateH3cDeviceProfile(new(other, "192.168.56.2", 22, "fixture", "SECOND_REFERENCE", "", true, 0, 0, TerminalProtocol: "SSH"));
+        var limit = bytes * 2 + 128;
+        var capped = fixture.WithCapacity(limit, 1_000);
+        fixture.Factory.DelayReads = true;
+        async Task<string> Capture(string profile)
+        {
+            try { await capped.CaptureAsync(profile, Actor, P2B5SiteScopeDecision.Global, default); return "SUCCEEDED"; }
+            catch (ConfigRestoreException ex) { return ex.Code; }
+        }
+        var states = await Task.WhenAll(Capture(fixture.Profile), Capture(other));
+        Assert(states.Count(state => state == "SUCCEEDED") == 1 && states.Count(state => state == "CONFIG_COMPLETE_STORAGE_LIMIT") == 1 &&
+            Directory.GetFiles(root, "*", SearchOption.AllDirectories).Sum(path => new FileInfo(path).Length) <= limit,
+            "concurrent different-profile publication must share one global storage budget");
+    }
+
+    private static void StorageEnvironmentIsBounded()
+    {
+        using var fixture = new Fixture();
+        const string bytesKey = "NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_STORED_BYTES";
+        const string countKey = "NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_BACKUPS_PER_PROFILE";
+        const string rootKey = "NETCONSOLE_NEXT_DATA_ROOT";
+        var previous = new[] { bytesKey, countKey, rootKey }.ToDictionary(key => key, Environment.GetEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(rootKey, fixture.Root);
+            Environment.SetEnvironmentVariable(bytesKey, null); Environment.SetEnvironmentVariable(countKey, null);
+            var settings = RuntimeSettings.FromEnvironment();
+            Assert(settings.CompleteConfigMaxStoredBytes == 1024L * 1024 * 1024 && settings.CompleteConfigMaxBackupsPerProfile == 1_000,
+                "backup admission must have explicit default storage and per-profile count limits");
+            Environment.SetEnvironmentVariable(bytesKey, "1048576"); Environment.SetEnvironmentVariable(countKey, "1");
+            settings = RuntimeSettings.FromEnvironment();
+            Assert(settings.CompleteConfigMaxStoredBytes == 1048576 && settings.CompleteConfigMaxBackupsPerProfile == 1,
+                "valid environment overrides must reach storage admission settings");
+            foreach (var (key, values) in new[] { (bytesKey, new[] { "1048575", "107374182401", "invalid" }),
+                         (countKey, new[] { "0", "100001", "invalid" }) })
+            {
+                foreach (var value in values)
+                {
+                    Environment.SetEnvironmentVariable(key, value);
+                    try { RuntimeSettings.FromEnvironment(); throw new Exception("Invalid storage quota accepted"); }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains(key, StringComparison.Ordinal)) { }
+                }
+                Environment.SetEnvironmentVariable(key, key == bytesKey ? "1048576" : "1");
+            }
+        }
+        finally { foreach (var (key, value) in previous) Environment.SetEnvironmentVariable(key, value); }
     }
 
     private static async Task VerifyChange()
@@ -254,6 +358,10 @@ internal static class SimulatorConfigurationTests
             Service = new(Catalog, settings, Factory);
         }
         public Task<CompleteConfigurationBackup> Capture() => Service.CaptureAsync(Profile, Actor, P2B5SiteScopeDecision.Global, default);
+        public SimulatorConfigurationService WithCapacity(long bytes, int count) => new(Catalog,
+            new RuntimeSettings { DataRoot = Root, WebPort = 18771, SyslogPort = 0, SyslogBind = IPAddress.Loopback,
+                SyslogReceiveBufferBytes = 4 * 1024 * 1024, CompleteConfigMaxStoredBytes = bytes,
+                CompleteConfigMaxBackupsPerProfile = count }, Factory);
         public Task<SimulatorConfigurationChange> Change(CompleteConfigurationBackup backup, string? description) =>
             Service.ChangeDescriptionAsync(new(Profile, backup.Id, Interface, description), Actor, P2B5SiteScopeDecision.Global, default);
         public string Raw(CompleteConfigurationBackup backup) => Path.Combine(Root, "backup", "config-complete", Profile, backup.Id + ".cfg");

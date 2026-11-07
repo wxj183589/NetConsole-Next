@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/NetConsole.Next.Credentials/NetConsole.Next.Credentials.csproj" />
     <Compile Include="../../src/NetConsole.Next.LocalManager/LocalDeploymentDoctor.cs" Link="LocalDeploymentDoctor.cs" />
+    <Compile Include="../../src/NetConsole.Next.LocalManager/ManagedDataRootPath.cs" Link="ManagedDataRootPath.cs" />
   </ItemGroup>
 </Project>

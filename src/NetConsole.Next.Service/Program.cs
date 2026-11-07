@@ -992,6 +992,7 @@ app.MapPost("/api/system/simulator-config/checkpoints/verify", async (HttpContex
     catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
 });
 app.MapFaultCenter();
+app.MapConfigBackupScheduleActions();
 app.MapPost("/api/system/complete-configuration/targets", (HttpContext context, CompleteConfigurationTargetRequest request, CompleteConfigurationTargets targets) =>
 {
     if (!IsSuperAdmin(context)) return Results.StatusCode(403);
