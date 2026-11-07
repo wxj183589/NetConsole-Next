@@ -16,7 +16,8 @@ internal static class DeviceConnectionTests
         await ExactInventoryIdentityAndCredentialBoundary();
         await ExistingPlanCancellation();
         await ExistingPlanCurrentAuthority();
-        Console.WriteLine("DEVICE_CONNECTION_TESTS=8/8 PASS");
+        await WirelessHistoryCurrentAuthority();
+        Console.WriteLine("DEVICE_CONNECTION_TESTS=9/9 PASS");
     }
 
     private static void RejectInvalidRequests()
@@ -159,6 +160,25 @@ internal static class DeviceConnectionTests
         f.Execute("UPDATE device_inventory SET enabled=0 WHERE id=$id", f.Device);
         try { _ = f.Plans.GetVisible(plan.Id, f.Actor.UserId); throw new Exception("current target denial expected"); }
         catch (TaskScopeRevokedException) { }
+    }
+
+    private static async Task WirelessHistoryCurrentAuthority()
+    {
+        using var f = new Fixture();
+        var id = "wireless-plan-" + Guid.NewGuid().ToString("N");
+        f.Plans.CreateAndSchedule(new(id, [f.Profile], "display version", 30_000), f.Actor.UserId);
+        await f.Terminal(id);
+        var wireless = new WirelessTaskService(new WirelessReadModelService(f.Catalog), f.Catalog, f.Plans);
+        Assert(wireless.List(f.Actor.UserId).Single().Id == id, "authorized wireless history is visible");
+        Assert(wireless.GetReport(id, f.Actor.UserId).Items.Single().DeviceId == f.Device, "report uses stable inventory identity");
+        Assert(wireless.Export(id, f.Actor.UserId).Length > 0, "authorized export is available");
+        f.Execute("UPDATE device_inventory SET enabled=0 WHERE id=$id", f.Device);
+        Assert(wireless.List(f.Actor.UserId).Count == 0, "revoked plan must be absent from history");
+        foreach (var action in new Action[] { () => wireless.GetReport(id, f.Actor.UserId), () => wireless.Export(id, f.Actor.UserId) })
+        {
+            try { action(); throw new Exception("wireless current authority denial expected"); }
+            catch (TaskScopeRevokedException) { }
+        }
     }
 
     private sealed class Fixture : IDisposable

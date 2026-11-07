@@ -3,7 +3,8 @@ namespace NetConsole.Next.Service;
 internal sealed record WirelessTaskCreateRequest(
     IReadOnlyList<string>? DomainIds,
     IReadOnlyList<string>? Commands,
-    long TimeoutMs = 60_000);
+    long TimeoutMs = 60_000,
+    IReadOnlyList<string>? AcDeviceIds = null);
 
 internal sealed record WirelessTaskPlanSnapshot(
     string Id,
@@ -56,6 +57,14 @@ internal sealed class WirelessTaskService(
         var members = domains.SelectMany(domain => domain.Members)
             .GroupBy(member => member.DeviceId, StringComparer.Ordinal)
             .Select(group => group.First()).ToArray();
+        if (request.AcDeviceIds is { Count: > 0 })
+        {
+            var requested = request.AcDeviceIds.Select(id => id?.Trim() ?? "").ToArray();
+            if (requested.Any(string.IsNullOrWhiteSpace) || requested.Distinct(StringComparer.Ordinal).Count() != requested.Length ||
+                requested.Any(id => !members.Any(member => member.DeviceId == id)))
+                throw new WirelessTaskException("WIRELESS_TASK_INVALID_AC_TARGETS", "所选 AC 不属于可见的目标 Domain。", 400);
+            members = members.Where(member => requested.Contains(member.DeviceId, StringComparer.Ordinal)).ToArray();
+        }
         if (members.Length is < 1 or > 64)
             throw new WirelessTaskException("WIRELESS_TASK_TARGET_LIMIT", "无线采集任务最多包含 64 台 AC。", 413);
 
@@ -93,4 +102,28 @@ internal sealed class WirelessTaskService(
 
     internal static bool IsSupportedDeviceType(string deviceType) =>
         string.Equals(deviceType.Trim(), "AC", StringComparison.OrdinalIgnoreCase);
+
+    public IReadOnlyList<WirelessTaskSummary> List(string actorUserId, int limit = 50)
+    {
+        var results = new List<WirelessTaskSummary>();
+        foreach (var id in catalog.GetWirelessTaskPlanIds(actorUserId, limit))
+        {
+            if (!WirelessTaskReportBuilder.IsWirelessId(id)) continue;
+            try { results.Add(GetReport(id, actorUserId).Summary); }
+            catch (TaskScopeRevokedException) { }
+            catch (KeyNotFoundException) { }
+        }
+        return results;
+    }
+
+    public WirelessTaskReport GetReport(string id, string actorUserId)
+    {
+        if (!WirelessTaskReportBuilder.IsWirelessId(id)) throw new KeyNotFoundException();
+        var report = plans.GetReport(id, actorUserId);
+        var devices = report.Plan.Items.ToDictionary(item => item.Ordinal,
+            item => catalog.GetTaskDefinition(item.DefinitionId)?.ScopeSnapshot?.DeviceId ?? "", EqualityComparer<int>.Default);
+        return WirelessTaskReportBuilder.Build(report, devices);
+    }
+
+    public byte[] Export(string id, string actorUserId) => WirelessTaskReportBuilder.Export(GetReport(id, actorUserId));
 }
