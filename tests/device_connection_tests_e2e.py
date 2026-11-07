@@ -89,6 +89,19 @@ def run():
                 service, base = start_service(REPO, dll, root, free_port(), False)
                 owner = Client(base)
                 owner.login("superadmin", "superadmin")
+                with closing(sqlite3.connect(root / "catalog.db")) as db:
+                    before_profiles = db.execute("SELECT COUNT(*) FROM h3c_device_profiles").fetchone()[0]
+                    before_devices = db.execute("SELECT COUNT(*) FROM device_inventory").fetchone()[0]
+                for password in (None, ""):
+                    request = {"host": "192.0.2.31", "siteId": "local", "protocol": "SSH", "username": "operator"}
+                    if password is not None:
+                        request["password"] = password
+                    rejected = expect(owner, "/api/system/h3c/profiles/onboard", "POST", request, 400)
+                    assert rejected["error"] == "设备密码不能为空。", rejected
+                with closing(sqlite3.connect(root / "catalog.db")) as db:
+                    check(db.execute("SELECT COUNT(*) FROM h3c_device_profiles").fetchone()[0] == before_profiles
+                          and db.execute("SELECT COUNT(*) FROM device_inventory").fetchone()[0] == before_devices,
+                          "ONBOARD_REJECTS_MISSING_PASSWORD_BEFORE_PROFILE")
                 profile = onboard(owner, first, "local")
                 other = onboard(owner, second, "connection-second")
                 unsupported = onboard(owner, first, "connection-huawei", "Huawei")

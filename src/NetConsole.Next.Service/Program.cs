@@ -1262,7 +1262,9 @@ if (settings.H3cEnabled)
         var siteId = string.IsNullOrWhiteSpace(request.SiteId) ? "local" : request.SiteId.Trim();
         if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
         if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username))
-            return Results.BadRequest(new { error = "host and username are required." });
+            return Results.BadRequest(new { error = "设备地址和用户名不能为空。" });
+        if (string.IsNullOrWhiteSpace(request.Password))
+            return Results.BadRequest(new { error = "设备密码不能为空。" });
         var protocol = request.Protocol?.Trim().ToUpperInvariant() switch
         {
             "SSH" => "SSH",
@@ -1270,9 +1272,9 @@ if (settings.H3cEnabled)
             "AUTO" or null or "" => "AUTO",
             _ => null
         };
-        if (protocol is null) return Results.BadRequest(new { error = "protocol must be SSH, TELNET or AUTO." });
+        if (protocol is null) return Results.BadRequest(new { error = "连接协议必须是 SSH、TELNET 或 AUTO。" });
         var port = request.Port ?? (protocol == "TELNET" ? 23 : 22);
-        if (port is < 1 or > 65535) return Results.BadRequest(new { error = "port must be between 1 and 65535." });
+        if (port is < 1 or > 65535) return Results.BadRequest(new { error = "端口必须在 1 到 65535 之间。" });
         var id = Guid.NewGuid().ToString("N");
         try
         {
