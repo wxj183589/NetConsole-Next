@@ -205,8 +205,10 @@ internal static partial class H3cComwareParser
         foreach (var line in transcript.Output.Split('\n'))
         {
             var parts = line.Trim().Split((char[]?)null, 6, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 6 || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
-            rows.Add(new(parts[0], id, parts[2], parts[3], parts[4], parts[5].Split(' ', 2)[0], parts[5].Contains(' ') ? parts[5][(parts[5].IndexOf(' ') + 1)..] : null));
+            if (parts.Length < 5 || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
+            var groupAndTime = parts.Length > 5 ? parts[5] : null;
+            rows.Add(new(parts[0], id, parts[2], parts[3], parts[4], groupAndTime?.Split(' ', 2)[0],
+                groupAndTime?.Contains(' ') == true ? groupAndTime[(groupAndTime.IndexOf(' ') + 1)..] : null));
         }
         return rows;
     }

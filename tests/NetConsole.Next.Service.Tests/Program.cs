@@ -19,6 +19,10 @@ else if (args.Length > 0 && args[0] == "--netmiko-worker-budget-tests")
     await NetmikoWorkerBudgetTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--sqlite-probe")
     SqliteSecurityTests.Run();
+else if (args.Length > 0 && args[0] == "--r67-live-parser")
+    R67LiveParser.Run(args[1]);
+else if (args.Length > 0 && args[0] == "--r67-ap-parser-tests")
+    R67LiveParser.Test();
 else if (args.Length > 0 && args[0] == "--p2b2-migrate")
     await P2B2MigrationChild.RunAsync(args[1..]);
 else if (args.Length > 0 && args[0] == "--p2b4-migrate")
