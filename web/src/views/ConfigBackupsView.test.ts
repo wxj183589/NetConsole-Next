@@ -133,6 +133,15 @@ describe('device configuration backup context', () => {
     expect(ElMessage.success).not.toHaveBeenCalledWith('配置恢复完成，请重新采集验证')
   })
 
+  it('does not collapse a restore conflict into the disabled-writer message', async () => {
+    api.executeConfigRestore.mockRejectedValue(new ApiRequestError(409, 'CONFIG_RESTORE_CURRENT_CHANGED: 目标当前配置已变化'))
+    const { wrapper } = await render()
+    await wrapper.findAll('button').find(item => item.text() === '恢复预览')!.trigger('click'); await flushPromises()
+    await button(wrapper, '执行恢复').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('CONFIG_RESTORE_CURRENT_CHANGED')
+    expect(wrapper.text()).not.toContain('写入适配器未启用')
+  })
+
   it('filters mixed category history and only compares distinct versions of the selected category', async () => {
     api.getConfigBackups.mockResolvedValue([
       ...kindSnapshots('profile-b', 'RUNNING'),

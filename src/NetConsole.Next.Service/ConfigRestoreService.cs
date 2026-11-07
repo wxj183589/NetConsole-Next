@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -26,6 +25,19 @@ internal sealed record ConfigRestoreExecutionResult(
     string State,
     string? Detail,
     long CompletedMs);
+
+internal sealed record ConfigRestoreStatus(
+    string Id,
+    string SourceSnapshotId,
+    string TargetProfileId,
+    string TargetDeviceId,
+    string TargetSiteId,
+    string State,
+    string? AttemptId,
+    string? Detail,
+    long ExpiresMs,
+    long CreatedMs,
+    long UpdatedMs);
 
 internal sealed record ConfigRestoreWriteResult(string State, string? Detail = null);
 
@@ -55,7 +67,6 @@ internal sealed class ConfigRestoreService(
     IConfigRestoreWriter writer)
 {
     private static readonly TimeSpan PreviewLifetime = TimeSpan.FromMinutes(5);
-    private readonly ConcurrentDictionary<string, RestorePlan> _plans = new(StringComparer.Ordinal);
 
     public ConfigRestorePreview Preview(ConfigRestorePreviewRequest request, WebUserIdentity actor,
         P2B5SiteScopeDecision scope)
@@ -91,11 +102,8 @@ internal sealed class ConfigRestoreService(
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
         var expires = DateTimeOffset.UtcNow.Add(PreviewLifetime).ToUnixTimeMilliseconds();
-        var plan = new RestorePlan(id, actor.UserId, source.Id, target.Id, source.Sha256!, current?.Id,
-            token, expires, sourceText, target);
-        _plans[id] = plan;
-        catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE_PREVIEW", "SUCCEEDED", target.Id,
-            id, Array.Empty<string>(), $"snapshot={source.Id};kind={source.ConfigurationKind};compatibility=PROFILE_EXACT_H3C");
+        catalog.CreateConfigRestoreOperation(id, actor.UserId, source.Id, target.Id, source.DeviceId,
+            source.SiteId, source.Sha256!, current?.Id, token, expires);
         return new(id, source.Id, target.Id, source.DeviceId, source.SiteId, source.ConfigurationKind,
             source.Sha256!, current?.Id, diff.Added, diff.Removed, diff.Changed, "PROFILE_EXACT_H3C",
             token, expires);
@@ -109,46 +117,93 @@ internal sealed class ConfigRestoreService(
         if (request is null || string.IsNullOrWhiteSpace(request.PreviewId) ||
             string.IsNullOrWhiteSpace(request.ConfirmationToken))
             throw new ConfigRestoreException("CONFIG_RESTORE_CONFIRMATION_REQUIRED", "恢复必须使用有效的预览确认 token。", 400);
-        if (!_plans.TryGetValue(request.PreviewId, out var plan) || plan.ActorUserId != actor.UserId)
+        var operation = catalog.GetConfigRestoreOperation(request.PreviewId);
+        if (operation is null || operation.ActorUserId != actor.UserId)
             throw new ConfigRestoreException("CONFIG_RESTORE_PREVIEW_NOT_FOUND", "预览不存在、已过期或不属于当前账户。", 404);
-        if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > plan.ExpiresMs)
+        if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > operation.ExpiresMs && operation.State == "PREVIEWED")
         {
-            _plans.TryRemove(plan.Id, out _);
             throw new ConfigRestoreException("CONFIG_RESTORE_PREVIEW_EXPIRED", "恢复预览已过期，请重新预览。", 409);
         }
-        if (!CryptographicEquals(plan.Token, request.ConfirmationToken))
-            throw new ConfigRestoreException("CONFIG_RESTORE_CONFIRMATION_INVALID", "恢复确认 token 无效。", 409);
-        if (!catalog.H3cProfileIsInScope(plan.TargetProfileId, scope))
+        if (operation.State != "PREVIEWED")
+            throw new ConfigRestoreException("CONFIG_RESTORE_PREVIEW_NOT_FOUND", "预览不存在、已过期或已用于提交。", 404);
+        if (!catalog.H3cProfileIsInScope(operation.TargetProfileId, scope))
             throw new ConfigRestoreException("CONFIG_RESTORE_TARGET_NOT_VISIBLE", "目标设备已不在当前 Site 范围内。", 404);
-        var current = backups.List(plan.TargetProfileId, scope, ConfigBackupKinds.Running).FirstOrDefault();
-        if (!string.Equals(current?.Id, plan.ExpectedCurrentSnapshotId, StringComparison.Ordinal))
+        var source = backups.Get(operation.SourceSnapshotId, scope)
+            ?? throw new ConfigRestoreException("CONFIG_RESTORE_SOURCE_NOT_FOUND", "备份不存在或当前 Site 不可见。", 404);
+        var current = backups.List(operation.TargetProfileId, scope, ConfigBackupKinds.Running).FirstOrDefault();
+        if (!string.Equals(current?.Id, operation.ExpectedCurrentSnapshotId, StringComparison.Ordinal))
             throw new ConfigRestoreException("CONFIG_RESTORE_CURRENT_CHANGED", "目标当前配置已变化，请重新预览。", 409);
+        if (!catalog.ValidateConfigRestoreToken(operation, actor.UserId, request.ConfirmationToken, out var tokenFailure))
+            throw new ConfigRestoreException(tokenFailure, "恢复确认 token 无效或预览已不可用。", 409);
         if (!request.Apply)
         {
-            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", "DRY_RUN", plan.TargetProfileId,
-                plan.Id, Array.Empty<string>(), "no_device_write");
-            return new(plan.Id, "DRY_RUN", "已完成恢复预览，未向设备发送写命令。", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", "DRY_RUN", operation.TargetProfileId,
+                operation.Id, Array.Empty<string>(), "no_device_write");
+            return new(operation.Id, "DRY_RUN", "已完成恢复预览，未向设备发送写命令。", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
-        // A restore write may have reached the device even when its response is
-        // lost. Consume the confirmation before invoking the writer so concurrent
-        // requests cannot submit the same configuration twice.
-        if (!_plans.TryRemove(plan.Id, out var claimed) || !ReferenceEquals(claimed, plan))
-            throw new ConfigRestoreException("CONFIG_RESTORE_PREVIEW_ALREADY_USED", "该恢复预览已用于提交，请重新生成预览。", 409);
+        var claimed = catalog.TryClaimConfigRestoreOperation(operation.Id, actor.UserId,
+            request.ConfirmationToken, out var claimFailure);
+        if (claimed is null)
+            throw new ConfigRestoreException(claimFailure ?? "CONFIG_RESTORE_PREVIEW_ALREADY_USED", "该恢复预览不可提交，请重新生成预览。", 409);
 
+        var writerInvoked = false;
         try
         {
-            var result = await writer.ApplyAsync(plan.Target, plan.Configuration, cancellationToken).ConfigureAwait(false);
-            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", result.State, plan.TargetProfileId,
-                plan.Id, Array.Empty<string>(), result.Detail ?? "write_adapter_result");
-            return new(plan.Id, result.State, result.Detail, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            catalog.SetConfigRestoreOperationState(claimed.Id, "EXECUTING", null);
+            var target = catalog.GetH3cDeviceProfile(claimed.TargetProfileId)
+                ?? throw new ConfigRestoreException("CONFIG_RESTORE_TARGET_NOT_VISIBLE", "目标设备不存在或已停用。", 404);
+            var configuration = ReadSnapshot(source.Id, scope);
+            writerInvoked = true;
+            var result = await writer.ApplyAsync(target, configuration, cancellationToken).ConfigureAwait(false);
+            catalog.SetConfigRestoreOperationState(claimed.Id, result.State is "APPLIED" or "SUCCEEDED" ? "SUCCEEDED" : "FAILED", result.Detail);
+            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", result.State, claimed.TargetProfileId,
+                claimed.Id, Array.Empty<string>(), result.Detail ?? "write_adapter_result");
+            return new(claimed.Id, result.State, result.Detail, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
         catch (ConfigRestoreException ex)
         {
-            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", "BLOCKED", plan.TargetProfileId,
-                plan.Id, Array.Empty<string>(), ex.Code);
+            var state = writerInvoked ? "REQUIRES_REVIEW" : "FAILED";
+            var detail = writerInvoked ? $"{ex.Code};设备侧结果未知，禁止自动重试。" : ex.Code;
+            catalog.SetConfigRestoreOperationState(claimed.Id, state, detail);
+            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", state, claimed.TargetProfileId,
+                claimed.Id, Array.Empty<string>(), detail);
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            var state = writerInvoked ? "REQUIRES_REVIEW" : "FAILED";
+            var detail = writerInvoked ? "恢复执行被取消；设备侧结果未知，禁止自动重试。" :
+                "恢复在调用写入适配器前被取消；未向设备发送写命令。";
+            catalog.SetConfigRestoreOperationState(claimed.Id, state, detail);
+            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", state, claimed.TargetProfileId,
+                claimed.Id, Array.Empty<string>(), detail);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var state = writerInvoked ? "REQUIRES_REVIEW" : "FAILED";
+            var detail = writerInvoked ? $"{ex.GetType().Name};设备侧结果未知，禁止自动重试。" :
+                $"{ex.GetType().Name};写入适配器未调用，未向设备发送写命令。";
+            catalog.SetConfigRestoreOperationState(claimed.Id, state, detail);
+            catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", state, claimed.TargetProfileId,
+                claimed.Id, Array.Empty<string>(), detail);
+            throw;
+        }
+    }
+
+    public ConfigRestoreStatus? GetStatus(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    {
+        RequireSuperAdmin(actor);
+        if (!scope.IsAuthorized) throw new ConfigRestoreException("CONFIG_RESTORE_SCOPE_DENIED", scope.Detail, 403);
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var operation = catalog.GetConfigRestoreOperation(id.Trim());
+        if (operation is null || operation.ActorUserId != actor.UserId ||
+            !catalog.H3cProfileIsInScope(operation.TargetProfileId, scope))
+            return null;
+        return new(operation.Id, operation.SourceSnapshotId, operation.TargetProfileId,
+            operation.TargetDeviceId, operation.TargetSiteId, operation.State, operation.AttemptId,
+            operation.Detail, operation.ExpiresMs, operation.CreatedMs, operation.UpdatedMs);
     }
 
     private string ReadSnapshot(string id, P2B5SiteScopeDecision scope)
@@ -178,13 +233,4 @@ internal sealed class ConfigRestoreService(
             throw new ConfigRestoreException("CONFIG_RESTORE_PERMISSION_DENIED", "只有 SUPERADMIN 可以执行配置恢复。", 403);
     }
 
-    private static bool CryptographicEquals(string left, string right)
-    {
-        var a = Encoding.UTF8.GetBytes(left); var b = Encoding.UTF8.GetBytes(right);
-        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
-    }
-
-    private sealed record RestorePlan(string Id, string ActorUserId, string SourceSnapshotId,
-        string TargetProfileId, string SourceSha256, string? ExpectedCurrentSnapshotId, string Token,
-        long ExpiresMs, string Configuration, H3cDeviceProfileSnapshot Target);
 }

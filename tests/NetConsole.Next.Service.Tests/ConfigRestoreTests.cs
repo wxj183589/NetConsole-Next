@@ -1,7 +1,6 @@
 using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
 using System.Net;
-using System.Reflection;
 
 internal static class ConfigRestoreTests
 {
@@ -36,6 +35,10 @@ internal static class ConfigRestoreTests
 
         var preview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
             P2B5SiteScopeDecision.Global);
+        var persistedPreview = fixture.Catalog.GetConfigRestoreOperation(preview.Id);
+        Assert(persistedPreview is { State: "PREVIEWED" } &&
+            (persistedPreview.Detail is null || !persistedPreview.Detail.Contains(preview.ConfirmationToken, StringComparison.Ordinal)),
+            "restore preview must persist durable intent without the confirmation token");
         Assert(preview.Compatibility == "PROFILE_EXACT_H3C" && preview.ExpiresMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() &&
             preview.AddedLines >= 0 && preview.RemovedLines >= 0 && preview.ChangedLines >= 0,
             "restore preview must return an exact-profile compatibility result and bounded diff summary");
@@ -54,6 +57,12 @@ internal static class ConfigRestoreTests
             fixture.Writer.Configuration is not null &&
             !fixture.Writer.Configuration.Contains("super-secret", StringComparison.Ordinal),
             "an enabled writer must receive only the sanitized snapshot configuration");
+        Assert(fixture.Catalog.GetConfigRestoreOperation(applyPreview.Id)?.State == "SUCCEEDED",
+            "a completed writer result must be reflected in the durable restore state");
+        var status = fixture.Restore.GetStatus(applyPreview.Id, actor, P2B5SiteScopeDecision.Global);
+        Assert(status is { State: "SUCCEEDED", AttemptId: not null } &&
+            status.SourceSnapshotId == applyPreview.SnapshotId && status.Detail == "fixture writer",
+            "restore status must expose the durable outcome without exposing confirmation material");
         await ExpectCodeAsync(() => fixture.Restore.ExecuteAsync(
             new(applyPreview.Id, applyPreview.ConfirmationToken, Apply: true), actor,
             P2B5SiteScopeDecision.Global, CancellationToken.None),
@@ -88,11 +97,22 @@ internal static class ConfigRestoreTests
 
         var expiredPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
             P2B5SiteScopeDecision.Global);
-        ExpirePlan(fixture.Restore, expiredPreview.Id);
+        ExpirePlan(fixture.Catalog, expiredPreview.Id);
         await ExpectCodeAsync(() => fixture.Restore.ExecuteAsync(
             new(expiredPreview.Id, expiredPreview.ConfirmationToken, Apply: false), actor,
             P2B5SiteScopeDecision.Global, CancellationToken.None),
             "CONFIG_RESTORE_PREVIEW_EXPIRED");
+
+        var restartPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
+            P2B5SiteScopeDecision.Global);
+        var claimed = fixture.Catalog.TryClaimConfigRestoreOperation(restartPreview.Id, actor.UserId,
+            restartPreview.ConfirmationToken, out var claimFailure);
+        Assert(claimed is { State: "CLAIMED" } && claimFailure is null,
+            "restore claim must be durable before any writer call");
+        var restartedCatalog = new Catalog(fixture.Settings);
+        restartedCatalog.Initialize();
+        Assert(restartedCatalog.GetConfigRestoreOperation(restartPreview.Id)?.State == "REQUIRES_REVIEW",
+            "service restart after claim must require review instead of replaying a remote write");
 
         fixture.Factory.Output = "<H3C>sysname changed-after-preview\ninterface GigabitEthernet1/0/1\n description changed\n</H3C>\n";
         var changedPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
@@ -132,18 +152,39 @@ internal static class ConfigRestoreTests
             new(disabledPreview.Id, disabledPreview.ConfirmationToken, Apply: true), actor,
             P2B5SiteScopeDecision.Global, CancellationToken.None),
             "CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE");
+        Assert(disabled.Catalog.GetConfigRestoreOperation(disabledPreview.Id)?.State == "REQUIRES_REVIEW",
+            "an exception raised after entering the writer boundary must require review instead of automatic retry");
 
-        Console.WriteLine("CONFIG_RESTORE_TESTS=12/12 PASS");
+        using var uncertain = new Fixture(new UncertainWriter());
+        var uncertainFirst = await uncertain.Backup(actor);
+        var uncertainSnapshot = uncertain.Backups.Get(uncertainFirst.Items.Single().SnapshotId!,
+            P2B5SiteScopeDecision.Global)!;
+        var uncertainPreview = uncertain.Restore.Preview(new(uncertainSnapshot.Id, uncertain.Profile), actor,
+            P2B5SiteScopeDecision.Global);
+        await ExpectCodeAsync(() => uncertain.Restore.ExecuteAsync(
+            new(uncertainPreview.Id, uncertainPreview.ConfirmationToken, Apply: true), actor,
+            P2B5SiteScopeDecision.Global, CancellationToken.None),
+            "FIXTURE_REMOTE_OUTCOME_UNKNOWN");
+        var uncertainStatus = uncertain.Catalog.GetConfigRestoreOperation(uncertainPreview.Id);
+        Assert(uncertainStatus is { State: "REQUIRES_REVIEW" } &&
+            uncertainStatus.Detail?.Contains("设备侧结果未知", StringComparison.Ordinal) == true,
+            "a writer exception must persist an unknown remote outcome and forbid replay");
+
+        Console.WriteLine("CONFIG_RESTORE_TESTS=16/16 PASS");
     }
 
-    private static void ExpirePlan(ConfigRestoreService service, string id)
+    private static void ExpirePlan(Catalog catalog, string id)
     {
-        var plans = (System.Collections.IDictionary)typeof(ConfigRestoreService)
-            .GetField("_plans", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(service)!;
-        var plan = plans[id]!;
-        plan.GetType().GetField("<ExpiresMs>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(plan, DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds());
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(catalog.DataRoot, "catalog.db"), Pooling = false
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE config_restore_operations SET expires_ms=$expires WHERE id=$id";
+        command.Parameters.AddWithValue("$expires", DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
     }
 
     private static void ExpectCode(Action action, string code)
@@ -243,6 +284,14 @@ internal static class ConfigRestoreTests
             await Release.Task.WaitAsync(cancellationToken);
             return new ConfigRestoreWriteResult("APPLIED", "isolated concurrent-writer fixture");
         }
+    }
+
+    private sealed class UncertainWriter : IConfigRestoreWriter
+    {
+        public Task<ConfigRestoreWriteResult> ApplyAsync(H3cDeviceProfileSnapshot target, string configuration,
+            CancellationToken cancellationToken) =>
+            throw new ConfigRestoreException("FIXTURE_REMOTE_OUTCOME_UNKNOWN",
+                "fixture writer lost the device response", 504);
     }
 
     private sealed class Factory : IDeviceSessionFactory

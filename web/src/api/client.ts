@@ -1199,6 +1199,22 @@ export function previewConfigRestore(payload: { snapshotId: string; targetProfil
 export function executeConfigRestore(payload: { previewId: string; confirmationToken: string; apply: boolean }): Promise<ConfigRestoreExecutionResult> {
   return request('/api/system/config-backups/restore/execute', { method: 'POST', body: JSON.stringify(payload) })
 }
+export interface ConfigRestoreStatus {
+  id: string
+  sourceSnapshotId: string
+  targetProfileId: string
+  targetDeviceId: string
+  targetSiteId: string
+  state: string
+  attemptId?: string | null
+  detail?: string | null
+  expiresMs: number
+  createdMs: number
+  updatedMs: number
+}
+export function getConfigRestoreStatus(id: string): Promise<ConfigRestoreStatus> {
+  return request('/api/system/config-backups/restore/operations/' + encodeURIComponent(id))
+}
 export function getConfigBackupSchedules(profileId?: string): Promise<ConfigBackupSchedule[]> {
   return request('/api/system/config-backup-schedules' + (profileId ? '?profileId=' + encodeURIComponent(profileId) : ''))
 }

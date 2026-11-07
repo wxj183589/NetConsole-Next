@@ -929,6 +929,18 @@ app.MapPost("/api/system/config-backups/restore/execute", async (HttpContext con
     try { return Results.Ok(await restores.ExecuteAsync(request, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
     catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
+app.MapGet("/api/system/config-backups/restore/operations/{id}", (HttpContext context, string id,
+    ConfigRestoreService restores) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        var status = restores.GetStatus(id, CurrentIdentity(context), CurrentSiteScope(context));
+        return status is null ? Results.NotFound() : Results.Ok(status);
+    }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
 app.MapPost("/api/system/config-backups/{id}/restore", (HttpContext context, string id,
     ConfigBackupService backups) =>
 {

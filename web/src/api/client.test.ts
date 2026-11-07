@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { executeConfigRestore, getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, previewConfigRestore, setCsrfToken } from './client'
+import { executeConfigRestore, getConfigRestoreStatus, getDeviceInventory, getHealth, getTask, getWirelessApGroup, getWirelessApGroups, previewConfigRestore, setCsrfToken } from './client'
 
 describe('Next API client', () => {
   it('uses same-origin credentials and never places credentials in a URL', async () => {
@@ -56,6 +56,14 @@ describe('Next API client', () => {
       expect(String(fetchMock.mock.calls[0][0])).not.toContain('snapshot')
       expect(String(fetchMock.mock.calls[1][0])).not.toContain('token')
       expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ previewId: 'preview/1', confirmationToken: 'token-fixture', apply: false })
+    } finally { fetchMock.mockRestore() }
+  })
+
+  it('reads restore status through an encoded, read-only operation endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'restore/1', state: 'REQUIRES_REVIEW' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    try {
+      await getConfigRestoreStatus('restore/1')
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/system/config-backups/restore/operations/restore%2F1')
     } finally { fetchMock.mockRestore() }
   })
 })

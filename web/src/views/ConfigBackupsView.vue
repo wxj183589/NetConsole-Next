@@ -179,7 +179,9 @@ async function runRestore(apply: boolean): Promise<void> {
     else if (restoreResult.value.state === 'SUCCEEDED') ElMessage.success('配置恢复完成，请重新采集验证')
     else ElMessage.warning(restoreResult.value.detail || '配置恢复未完成')
   } catch (cause) {
-    const message = cause instanceof ApiRequestError && cause.status === 409 ? '当前恢复写入适配器未启用，设备未被修改' : (cause instanceof Error ? cause.message : '配置恢复未完成')
+    const message = cause instanceof ApiRequestError && cause.message.includes('CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE')
+      ? '当前恢复写入适配器未启用，设备未被修改'
+      : (cause instanceof Error ? cause.message : '配置恢复未完成')
     restoreResult.value = { previewId: preview.id, state: 'BLOCKED', detail: message, completedMs: Date.now() }
     ElMessage.error(message)
   } finally { restoring.value = false }
