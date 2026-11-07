@@ -15,6 +15,8 @@ const profileId = ref('')
 const configurationKind = ref<ConfigBackupKind>('RUNNING')
 const history = ref<ConfigBackupSnapshot[]>([])
 const batch = ref<ConfigBackupBatch | null>(null)
+const content = ref<{ id: string; version: number; text: string } | null>(null)
+const contentLoading = ref(false)
 const diff = ref<ConfigBackupDiff | null>(null)
 const loading = ref(false)
 const comparing = ref(false)
@@ -39,7 +41,7 @@ const batchFailure = computed(() => {
   return failed.error === 'CONFIG_BACKUP_SAVED_UNAVAILABLE' ? '设备没有可读取的保存配置，未生成备份。' :
     failed.error === 'CONFIG_BACKUP_OUTPUT_INCOMPLETE' ? '配置命令未返回完整有效内容，未生成备份。' : '部分设备未完成备份，请在任务中心查看原因。'
 })
-let contextSequence = 0; let historySequence = 0; let diffSequence = 0; let backupSequence = 0
+let contextSequence = 0; let historySequence = 0; let diffSequence = 0; let backupSequence = 0; let contentSequence = 0
 let active = true
 
 function time(value?: number | null): string { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
@@ -48,7 +50,8 @@ function kindOf(snapshot: ConfigBackupSnapshot): ConfigBackupKind { return snaps
 function kindLabel(kind: ConfigBackupKind): string { return { RUNNING: '运行配置', SAVED: '保存配置', STARTUP_INFO: '启动配置指向', STARTUP_BODY: '启动配置正文' }[kind] }
 function saveBlob(blob: Blob, name: string): void { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(link.href) }
 function clearHistory(): void {
-  ++historySequence; ++diffSequence
+  ++historySequence; ++diffSequence; ++contentSequence
+  content.value = null; contentLoading.value = false
   history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false; restorePreview.value = null; restoreResult.value = null
 }
 function clearTarget(): void {
@@ -119,12 +122,12 @@ async function refresh(): Promise<void> {
     unavailable.value = accessMessage(cause, cause instanceof Error ? cause.message : '设备连接资料读取失败，请刷新重试')
   } finally { if (context === contextSequence) loading.value = false }
 }
-async function startBackup(): Promise<void> {
-  if (loading.value || !moduleAvailable.value || !selected.value.length || !isSuperAdmin.value || selected.value.some(id => !profiles.value.some(item => item.id === id))) return
+async function startBackup(targets: string[] = selected.value): Promise<void> {
+  if (loading.value || !moduleAvailable.value || !targets.length || !isSuperAdmin.value || targets.some(id => !profiles.value.some(item => item.id === id))) return
   const context = contextSequence; const sequence = ++backupSequence
   loading.value = true; batch.value = null
   try {
-    let next = await createConfigBackup([...selected.value], configurationKind.value)
+    let next = await createConfigBackup([...targets], configurationKind.value)
     if (context !== contextSequence || sequence !== backupSequence) return
     batch.value = next
     for (let index = 0; index < 1200 && next.state === 'RUNNING'; index++) {
@@ -141,6 +144,24 @@ async function startBackup(): Promise<void> {
     }
   } catch (cause) { if (context === contextSequence && sequence === backupSequence) reportOperationError(cause, '配置备份失败，请刷新重试') }
   finally { if (context === contextSequence && sequence === backupSequence) loading.value = false }
+}
+function retryFailed(): void {
+  const targets = batch.value?.items?.filter(item => item.state === 'FAILED').map(item => item.profileId) || []
+  void startBackup(targets)
+}
+async function viewContent(snapshot: ConfigBackupSnapshot): Promise<void> {
+  if (!moduleAvailable.value || !history.value.some(item => item.id === snapshot.id)) return
+  const sequence = ++contentSequence; const context = contextSequence; const historyVersion = historySequence
+  content.value = null; contentLoading.value = true
+  try {
+    const blob = await downloadConfigBackup(snapshot.id)
+    const text = await blob.text()
+    if (sequence === contentSequence && context === contextSequence && historyVersion === historySequence)
+      content.value = { id: snapshot.id, version: snapshot.version, text }
+  } catch (cause) {
+    if (sequence === contentSequence && context === contextSequence && historyVersion === historySequence)
+      reportOperationError(cause, '配置内容读取失败')
+  } finally { if (sequence === contentSequence) contentLoading.value = false }
 }
 async function download(snapshot: ConfigBackupSnapshot): Promise<void> {
   const context = contextSequence; const sequence = historySequence
@@ -205,8 +226,9 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
         <div class="form-grid"><label v-for="profile in profiles" :key="profile.id" class="check-row"><input v-model="selected" type="checkbox" :value="profile.id" :disabled="!isSuperAdmin || loading" />{{ device ? deviceLabel : profile.host + ' · ' + profile.username }}</label></div>
         <div class="toolbar" style="margin-top:12px">
           <label class="form-field"><span>配置类别</span><select v-model="configurationKind" aria-label="配置类别" :disabled="loading" @change="changeKind"><option value="RUNNING">运行配置</option><option value="SAVED">保存配置</option><option value="STARTUP_INFO">启动配置指向</option><option value="STARTUP_BODY">启动配置正文</option></select></label>
-          <el-button type="primary" :disabled="!selected.length || !isSuperAdmin || loading" :loading="loading" @click="startBackup">开始配置备份</el-button>
+          <el-button type="primary" :disabled="!selected.length || !isSuperAdmin || loading" :loading="loading" @click="startBackup()">开始配置备份</el-button>
           <span v-if="batch" class="muted">{{ kindLabel(batch.configurationKind || 'RUNNING') }} · 批次 {{ batch.succeeded }}/{{ batch.total }} · {{ batch.state }}</span>
+          <el-button v-if="batch?.state !== 'RUNNING' && batch?.items?.some(item => item.state === 'FAILED')" size="small" :disabled="loading || !isSuperAdmin" @click="retryFailed">重试失败设备</el-button>
         </div>
         <p class="muted">仅查询设备配置；版本历史和差异限同一类别。</p>
         <p v-if="configurationKind === 'STARTUP_INFO'" class="data-quality-note">启动配置指向仅记录设备报告的启动文件信息，不包含文件正文，也不表示可以恢复配置。</p>
@@ -218,8 +240,12 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">
-        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
+        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" :loading="contentLoading" @click="viewContent(snapshot)">查看</el-button><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
       </div>
+    </section>
+    <section v-if="content" class="card" aria-label="配置内容">
+      <div class="card__header"><h2>配置内容 · v{{ content.version }}</h2><el-button size="small" @click="content = null">关闭</el-button></div>
+      <div class="card__body"><pre style="overflow:auto;max-height:480px;white-space:pre-wrap;overflow-wrap:anywhere">{{ content.text }}</pre></div>
     </section>
     <section v-if="restorePreview" class="card" aria-label="配置恢复预览">
       <div class="card__header"><div><h2>配置恢复预览</h2><small>仅当前设备、当前 Site 和当前账户可确认；预览不会修改设备</small></div><span class="state-pill warn">{{ restorePreview.compatibility }}</span></div>

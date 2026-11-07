@@ -87,6 +87,26 @@ describe('device configuration backup context', () => {
     expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'RUNNING')
   })
 
+  it('views an authorized snapshot and clears its contents when the device changes', async () => {
+    api.downloadConfigBackup.mockResolvedValue({ text: async () => 'sysname example\npassword <REDACTED>' })
+    const { wrapper } = await render({})
+    await wrapper.findAll('button').find(item => item.text() === '查看')!.trigger('click'); await flushPromises()
+    expect(api.downloadConfigBackup).toHaveBeenCalledWith('profile-a-v2')
+    expect(wrapper.get('[aria-label="配置内容"]').text()).toContain('password <REDACTED>')
+    await wrapper.get('select[aria-label=备份设备]').setValue('profile-b'); await flushPromises()
+    expect(wrapper.find('[aria-label="配置内容"]').exists()).toBe(false)
+  })
+
+  it('retries only failed profiles from a completed backup batch', async () => {
+    api.createConfigBackup.mockResolvedValueOnce({ id: 'batch-one', state: 'PARTIAL', succeeded: 1, total: 2,
+      items: [{ profileId: 'profile-a', state: 'SUCCEEDED' }, { profileId: 'profile-b', state: 'FAILED', error: 'FAILED' }] })
+    const { wrapper } = await render({})
+    for (const input of wrapper.findAll('input[type=checkbox]')) await input.setValue(true)
+    await button(wrapper, '开始配置备份').trigger('click'); await flushPromises()
+    await button(wrapper, '重试失败设备').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenLastCalledWith(['profile-b'], 'RUNNING')
+  })
+
   it('reads and starts the selected configuration category while retaining the exact device association', async () => {
     api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') => Promise.resolve(kindSnapshots(id, kind)))
     api.createConfigBackup.mockResolvedValue({ id: 'saved-batch', configurationKind: 'SAVED', state: 'SUCCEEDED', succeeded: 1, total: 1 })
