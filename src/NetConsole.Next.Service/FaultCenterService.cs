@@ -12,8 +12,9 @@ internal sealed record FaultPolicy(string DeviceId, string FaultId, TaskScopeSna
     int IntervalMinutes, int MaximumAttempts, int Attempts, long? NextRunMs, string State, string? PlanId,
     string? RecoveryId, string? LastError);
 internal sealed record FaultDocument(int Version, IReadOnlyList<FaultIncident> Incidents, IReadOnlyList<FaultPolicy> Policies);
+internal sealed record FaultSummary(int Open, int Acknowledged, int Processing, int Resolved, int Reopened, int AffectedDevices);
 internal sealed record FaultQueryResult(int Page, int PageSize, int Total, bool HasMore,
-    IReadOnlyList<FaultIncident> Items, IReadOnlyList<FaultPolicy> Policies, IReadOnlyList<string> Limitations);
+    IReadOnlyList<FaultIncident> Items, IReadOnlyList<FaultPolicy> Policies, IReadOnlyList<string> Limitations, FaultSummary? Summary = null);
 internal sealed record FaultPolicyRequest(string FaultId, string ExpectedProfileId, bool Enabled,
     int IntervalMinutes = 5, int MaximumAttempts = 3);
 internal sealed record FaultVerification(string State, string Detail, FaultIncident Incident);
@@ -81,7 +82,7 @@ internal sealed class FaultCenterStore
             value.Policies.Select(p => p.DeviceId).Distinct().Count() != value.Policies.Count ||
             value.Incidents.Any(i => i is null || string.IsNullOrWhiteSpace(i.Id) || i.Id.Length > 128 ||
                 string.IsNullOrWhiteSpace(i.DeviceId) || string.IsNullOrWhiteSpace(i.SiteId) ||
-                i.State is not ("OPEN" or "ACKNOWLEDGED" or "RESOLVED") || i.History is null || i.History.Count is < 1 or > 50 ||
+                i.State is not ("OPEN" or "ACKNOWLEDGED" or "PROCESSING" or "RESOLVED" or "REOPENED") || i.History is null || i.History.Count is < 1 or > 50 ||
                 i.FirstSeenMs <= 0 || i.LastSeenMs < i.FirstSeenMs || i.Occurrences < 1 ||
                 i.History.Any(h => h is null) || i.State == "RESOLVED" && !i.History.Any(h => h.Action == "RECOVERY_VERIFIED")) ||
             value.Policies.Any(p => p is null || p.Target is null || p.DeviceId != p.Target.DeviceId ||
@@ -102,6 +103,10 @@ internal sealed class FaultCenterStore
 
 internal static class FaultLifecycle
 {
+    internal static bool CanRetryRecollection(TaskPlanSnapshot? plan) => plan is { State: "FAILED" or "PARTIAL_FAILED", Items.Count: > 0 } &&
+        plan.Items.Where(i => i.State != "SUCCEEDED").Any() &&
+        plan.Items.Where(i => i.State != "SUCCEEDED").All(i => i.State is "FAILED" or "TIMED_OUT" && i.Error is
+            nameof(H3cConnectionTimeoutException) or nameof(H3cCommandTimeoutException) or nameof(H3cConnectionLostException));
     public static string Fingerprint(OperationalFaultEvent item, string? profileId = null) => Convert.ToHexString(SHA256.HashData(
         Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[] { item.SiteId, item.DeviceId, profileId, item.Kind, item.ResourceKey ?? item.DeviceId })))).ToLowerInvariant();
 
@@ -115,7 +120,7 @@ internal static class FaultLifecycle
             prior.State == "RESOLVED" && item.AtMs <= prior.History.Last(h => h.Action == "RECOVERY_VERIFIED").AtMs) return prior;
         var reopened = prior.State == "RESOLVED";
         return prior with { LastSeenMs = item.AtMs, EvidenceId = item.EvidenceId, EvidenceType = item.EvidenceType,
-            Detail = item.Detail, Occurrences = prior.Occurrences + 1, State = reopened ? "OPEN" : prior.State,
+            Detail = item.Detail, Occurrences = prior.Occurrences + 1, State = reopened ? "REOPENED" : prior.State,
             History = Append(prior, new(now, reopened ? "REOPENED" : "OBSERVED", actor, item.EvidenceId, item.Detail)) };
     }
     public static IReadOnlyList<FaultTransition> Append(FaultIncident item, FaultTransition transition) =>
@@ -148,6 +153,8 @@ internal sealed class FaultCenterService : BackgroundService
     private readonly FaultCenterStore _store;
     private readonly object _gate = new();
     private int _scanPage = 1;
+    private readonly Dictionary<string, long> _verificationOrder = new(StringComparer.Ordinal);
+    private long _verificationSequence;
 
     public FaultCenterService(Catalog catalog, OperationalHealthService health, OperationalRecoveryService recovery,
         WirelessReadModelService wireless, P2B5SiteScopeStore scopes, TaskSiteScopeAuthorizer authorizer,
@@ -175,7 +182,8 @@ internal sealed class FaultCenterService : BackgroundService
                     (actor.Role == "SUPERADMIN" || p.Target.ActorUserId == actor.UserId)).ToArray(),
                 ["最多保留 1000 个资源故障、每项最近 50 次有效转换和 8 MiB 文件；数量满仅淘汰已恢复事件，未恢复事件不会自动删除。",
                  "健康检测每 15 秒轮巡一页（25 台）；单次手动同步也只检测一页，不把页面缺项视为恢复。",
-                 "只读自动补采默认关闭，显式策略每轮最多 3 次，间隔至少 5 分钟；连接成功、补采成功不直接表示业务恢复。"]);
+                 "只读自动补采默认关闭，显式策略每轮最多 3 次，间隔至少 5 分钟；连接成功、补采成功不直接表示业务恢复。"],
+                Summarize(all));
         }
     }
 
@@ -220,14 +228,56 @@ internal sealed class FaultCenterService : BackgroundService
         lock (_gate)
         {
             var item = Find(id, scope);
-            if (item.State != "OPEN") return item;
+            if (item.State is not ("OPEN" or "REOPENED")) return item;
             var updated = item with { State = "ACKNOWLEDGED", History = FaultLifecycle.Append(item,
                 new(Now(), "ACKNOWLEDGED", actor.UserId, item.EvidenceId, "已人工确认，尚未证明恢复。")) };
             Save(updated); return updated;
         }
     }
 
-    public FaultVerification Verify(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    public FaultIncident StartProcessing(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    {
+        RequireActor(actor, scope, true);
+        lock (_gate)
+        {
+            var item = Find(id, scope);
+            if (item.State is "PROCESSING" or "RESOLVED") return item;
+            var updated = item with { State = "PROCESSING", History = FaultLifecycle.Append(item,
+                new(Now(), "PROCESSING", actor.UserId, item.EvidenceId, "已开始处理，尚未证明恢复。")) };
+            Save(updated); return updated;
+        }
+    }
+
+    internal static FaultSummary Summarize(IReadOnlyList<FaultIncident> incidents) => new(
+        incidents.Count(i => i.State == "OPEN"), incidents.Count(i => i.State == "ACKNOWLEDGED"),
+        incidents.Count(i => i.State == "PROCESSING"), incidents.Count(i => i.State == "RESOLVED"),
+        incidents.Count(i => i.State == "REOPENED"), incidents.Select(i => i.DeviceId).Distinct(StringComparer.Ordinal).Count());
+
+    // Reuse the exact manual evidence rules; background checks do not append
+    // repeated blocked transitions or admit any network operation.
+    internal void VerifyObservedDevices(WebUserIdentity actor, P2B5SiteScopeDecision scope, IReadOnlyList<string> devices)
+    {
+        string[] ids;
+        lock (_gate)
+        {
+            Available();
+            var retained = _store.Current.Incidents.Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var old in _verificationOrder.Keys.Where(id => !retained.Contains(id)).ToArray())
+                _verificationOrder.Remove(old);
+            ids = _store.Current.Incidents.Where(i => i.State != "RESOLVED" && Visible(i, scope) &&
+                devices.Contains(i.DeviceId, StringComparer.Ordinal))
+                .OrderBy(i => _verificationOrder.GetValueOrDefault(i.Id)).ThenBy(i => i.LastSeenMs)
+                .ThenBy(i => i.Id, StringComparer.Ordinal).Take(25).Select(i => i.Id).ToArray();
+            foreach (var id in ids) _verificationOrder[id] = ++_verificationSequence;
+        }
+        foreach (var id in ids)
+        {
+            try { Verify(id, actor, scope, recordBlocked: false); }
+            catch (TaskScopeRevokedException) { /* Changed device is no longer this incident's resource. */ }
+        }
+    }
+
+    public FaultVerification Verify(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope, bool recordBlocked = true)
     {
         RequireActor(actor, scope, true);
         lock (_gate)
@@ -270,7 +320,8 @@ internal sealed class FaultCenterService : BackgroundService
             {
                 var blocked = item with { History = FaultLifecycle.Append(item, new(now, "VERIFICATION_BLOCKED", actor.UserId,
                     item.EvidenceId, "缺少同资源、更新且有效的恢复证据；状态保持。")) };
-                Save(blocked); return new("RECOVERY_NOT_VERIFIED", "缺少更新且有效的恢复证据。", blocked);
+                if (recordBlocked) Save(blocked);
+                return new("RECOVERY_NOT_VERIFIED", "缺少更新且有效的恢复证据。", recordBlocked ? blocked : item);
             }
             var updated = item with { State = "RESOLVED", History = FaultLifecycle.Append(item,
                 new(now, "RECOVERY_VERIFIED", actor.UserId, evidence, "已核验更新的同资源恢复证据。")) };
@@ -322,6 +373,7 @@ internal sealed class FaultCenterService : BackgroundService
                     {
                         var snapshot = _health.Get(scope, _scanPage, admin.UserId);
                         Observe(snapshot, admin.UserId);
+                        VerifyObservedDevices(admin, scope, snapshot.Devices.Select(d => d.DeviceId).ToArray());
                         _scanPage = snapshot.HasMore ? _scanPage + 1 : 1;
                     }
                 }
@@ -353,9 +405,10 @@ internal sealed class FaultCenterService : BackgroundService
                     if (plan?.State is "QUEUED" or "RUNNING" or "PARTIAL_RUNNING") return;
                     var verified = plan?.State == "SUCCEEDED" &&
                         Verify(policy.FaultId, actor, _scopes.Resolve(actor)).State is "RECOVERY_VERIFIED" or "ALREADY_RESOLVED";
-                    SavePolicy(policy with { Enabled = false, NextRunMs = null,
-                        State = verified ? "RECOVERY_VERIFIED" : plan?.State == "SUCCEEDED" ? "RECOLLECTED_NEEDS_VERIFY" : "RECOLLECTION_FAILED",
-                        LastError = plan?.State == "SUCCEEDED" ? null : "TASK_PLAN_REVIEW_REQUIRED" });
+                    var retry = !verified && policy.Enabled && policy.Attempts < policy.MaximumAttempts && FaultLifecycle.CanRetryRecollection(plan);
+                    SavePolicy(policy with { Enabled = retry, NextRunMs = retry ? Now() + policy.IntervalMinutes * 60000L : null,
+                        State = verified ? "RECOVERY_VERIFIED" : retry ? "RETRY_WAIT" : plan?.State == "SUCCEEDED" ? "RECOLLECTED_NEEDS_VERIFY" : "RECOLLECTION_FAILED",
+                        LastError = plan?.State == "SUCCEEDED" ? null : retry ? "TRANSIENT_RECOLLECTION_FAILURE" : "TASK_PLAN_REVIEW_REQUIRED" });
                 }
                 catch (TaskScopeRevokedException ex)
                 { SavePolicy(policy with { Enabled = false, NextRunMs = null, State = "BLOCKED", LastError = ex.Reason }); }

@@ -19,11 +19,15 @@ internal static class FaultCenterTests
         InterruptedAdmissionIsNotReplayed();
         FailedCommitDoesNotAdvanceAuthority();
         ScopedLifecycleAndPolicyConsent();
+        ProcessingAndReopenedPersistWithRoleGuards();
+        SummaryUsesFilteredScopeBeforePagination();
+        await BackgroundRecoveryIsFairAndDoesNotWriteBlockedHistory();
+        RecollectionRetriesOnlyKnownTransientFailures();
         await FutureDisabledAndExhaustedPoliciesDoNotConnect();
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=14/14 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=18/18 PASS");
     }
     private static OperationalFaultEvent Event(string evidence = "fact-a", long at = Now, string resource = "GE1/0/1") =>
         new(evidence, "device-a", "site-a", "INTERFACE_DOWN", "WARNING", "OBSERVED", at, "FACT", evidence, "DOWN", resource);
@@ -47,7 +51,7 @@ internal static class FaultCenterTests
         Assert(ReferenceEquals(resolved, FaultLifecycle.Observe(resolved, Event("old", Now + 50), "profile-a", "actor", Now + 200)),
             "late history from before verified recovery cannot reopen a fault");
         var reopened = FaultLifecycle.Observe(resolved, Event("new", Now + 200), "profile-a", "actor", Now + 201);
-        Assert(reopened.State == "OPEN" && reopened.History.Last().Action == "REOPENED", "new resource failure must reopen resolved incident");
+        Assert(reopened.State == "REOPENED" && reopened.History.Last().Action == "REOPENED", "new resource failure must reopen resolved incident");
     }
     private static void RecoveryRequiresExactFreshVerifiedResource()
     {
@@ -143,6 +147,72 @@ internal static class FaultCenterTests
         try { service.Acknowledge(item.Id, f.Actor, P2B5SiteScopeDecision.Global); throw new Exception("revoked role accepted"); }
         catch (TaskScopeRevokedException) { }
     }
+    private static void ProcessingAndReopenedPersistWithRoleGuards()
+    {
+        using var f = new BusinessFixture();
+        var reopened = f.Item with { State = "REOPENED" };
+        f.SeedIncidents([reopened]);
+        using (var service = f.Service())
+        {
+            var hidden = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "hidden" }, "test");
+            try { service.StartProcessing(reopened.Id, f.Actor, hidden); throw new Exception("hidden processing accepted"); }
+            catch (KeyNotFoundException) { }
+            Assert(service.Acknowledge(reopened.Id, f.Actor, P2B5SiteScopeDecision.Global).State == "ACKNOWLEDGED", "reopened incidents can be acknowledged");
+            var processing = service.StartProcessing(reopened.Id, f.Actor, P2B5SiteScopeDecision.Global);
+            Assert(processing.State == "PROCESSING" && processing.History.Last().Action == "PROCESSING", "processing is a durable lifecycle transition");
+            Assert(service.StartProcessing(reopened.Id, f.Actor, P2B5SiteScopeDecision.Global).History.Count == processing.History.Count,
+                "repeated process action cannot add refresh history");
+        }
+        using var restarted = f.Service();
+        Assert(restarted.Query(f.Actor, P2B5SiteScopeDecision.Global).Items.Single().State == "PROCESSING", "processing survives Service reconstruction");
+        f.Execute("UPDATE web_users SET role='ADMIN' WHERE id=$id", f.Actor.UserId);
+        try { restarted.StartProcessing(reopened.Id, f.Actor, P2B5SiteScopeDecision.Global); throw new Exception("reader processing accepted"); }
+        catch (TaskScopeRevokedException) { }
+        Assert(f.Factory.Calls == 0, "lifecycle transitions never connect to a device");
+    }
+    private static void SummaryUsesFilteredScopeBeforePagination()
+    {
+        using var f = new BusinessFixture();
+        var items = Enumerable.Range(0, 31).Select(n => f.Item with { Id = "fault-" + n, State = n < 28 ? "PROCESSING" : "REOPENED" }).ToArray();
+        f.SeedIncidents(items.Append(f.Item with { Id = "hidden", SiteId = "other-site" }).ToArray());
+        using var service = f.Service();
+        var scope = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { f.Item.SiteId }, "test");
+        var page = service.Query(f.Actor, scope, state: "PROCESSING");
+        Assert(page.Total == 28 && page.Items.Count == 25 && page.Summary is { Processing: 28, Reopened: 0, AffectedDevices: 1 },
+            "summary uses all filtered authorized incidents before page slicing");
+        var empty = service.Query(f.Actor, scope, deviceId: "unknown");
+        Assert(empty.Total == 0 && empty.Summary is { Open: 0, Processing: 0, Reopened: 0, AffectedDevices: 0 }, "empty filtered scope has zero summary");
+    }
+    private static async Task BackgroundRecoveryIsFairAndDoesNotWriteBlockedHistory()
+    {
+        using var f = new BusinessFixture();
+        var blocked = Enumerable.Range(0, 30).Select(n => f.Item with { Id = "interface-" + n, ResourceKey = "GE1/0/" + (n + 1) }).ToArray();
+        var collection = f.Item with { Id = "zz-collection", Kind = "COLLECTION_FAILURE" };
+        f.SeedIncidents(blocked.Append(collection).ToArray());
+        await f.CompleteCollection();
+        using var service = f.Service();
+        service.VerifyObservedDevices(f.Actor, P2B5SiteScopeDecision.Global, [f.Item.DeviceId]);
+        var first = service.Query(f.Actor, P2B5SiteScopeDecision.Global);
+        Assert(first.Summary!.Resolved == 0, "a bounded first sweep does not inspect more than 25 resources");
+        service.VerifyObservedDevices(f.Actor, P2B5SiteScopeDecision.Global, [f.Item.DeviceId]);
+        var second = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "COLLECTION_FAILURE").Items.Single();
+        Assert(second.State == "RESOLVED" && second.History.Last().Action == "RECOVERY_VERIFIED", "later resources cannot starve behind blocked interfaces");
+        var interfaces = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "INTERFACE_DOWN");
+        Assert(interfaces.Summary!.Open == 30 && interfaces.Items.All(i => i.History.Count == 1),
+            "collection success cannot recover interface faults or append repetitive blocked history");
+        Assert(f.Factory.Calls == 0, "automatic verification only inspects local evidence");
+    }
+    private static void RecollectionRetriesOnlyKnownTransientFailures()
+    {
+        TaskPlanSnapshot Plan(string error, string state = "FAILED") => new("plan", "H3C_SSH_READONLY", state,
+            "actor", [H3cCommandPolicy.DisplayVersion], "GLOBAL", Now, Now,
+            [new(0, "profile", "definition", "run", "FAILED", error)]);
+        foreach (var error in new[] { nameof(H3cConnectionTimeoutException), nameof(H3cCommandTimeoutException), nameof(H3cConnectionLostException) })
+            Assert(FaultLifecycle.CanRetryRecollection(Plan(error)), "only explicitly known transient collection failures permit another policy round");
+        foreach (var error in new[] { nameof(H3cAuthenticationFailedException), nameof(H3cCredentialUnavailableException), "CANCELLED", "TASK_SCOPE_DENIED", "IOException", "" })
+            Assert(!FaultLifecycle.CanRetryRecollection(Plan(error)), "authentication, cancellation, scope and unknown failure must require review");
+        Assert(!FaultLifecycle.CanRetryRecollection(null) && !FaultLifecycle.CanRetryRecollection(Plan(nameof(H3cConnectionLostException), "CANCELLED")), "missing and cancelled plans cannot retry");
+    }
     private static async Task FutureDisabledAndExhaustedPoliciesDoNotConnect()
     {
         foreach (var mode in new[] { "future", "disabled", "exhausted" })
@@ -217,6 +287,22 @@ internal static class FaultCenterTests
             _diagnostics = new(_catalog); Seed(null);
         }
         public void Seed(FaultPolicy? policy) => new FaultCenterStore(_files.Root).Commit(new(1, [Item], policy is null ? [] : [policy]));
+        public void SeedIncidents(IReadOnlyList<FaultIncident> incidents) => new FaultCenterStore(_files.Root).Commit(new(1, incidents, []));
+        public async Task CompleteCollection()
+        {
+            var definition = "verified-collection";
+            _catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", Item.ProfileId, H3cCommandPolicy.DisplayVersion,
+                TimeSpan.FromSeconds(30), scopeSnapshot: Policy.Target);
+            var run = _catalog.CreateTaskRun(definition);
+            // Sealed fixture Raw exercises the normal completion contract; it is
+            // lifecycle evidence selection, not real device interoperability.
+            _catalog.TransitionTaskRun(run, "CONNECTING");
+            _catalog.TransitionTaskRun(run, "RUNNING");
+            var manifest = await new H3cTaskRawResultSink(_catalog).PersistCommandAsync(run,
+                _catalog.GetTaskDefinition(definition)!, H3cCommandPolicy.DisplayVersion,
+                "H3C Comware Software, Version 7.1.070, Release 3506\r\nH3C S5130 uptime is 1 day", "COMPLETE", 0);
+            _catalog.CompleteTaskRunWithRawOutput(run, manifest, "SUCCEEDED", null);
+        }
         public FaultPolicy StoredPolicy() => new FaultCenterStore(_files.Root).Current.Policies.Single();
         public FaultCenterService Service()
         {

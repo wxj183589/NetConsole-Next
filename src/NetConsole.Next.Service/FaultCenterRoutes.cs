@@ -28,6 +28,8 @@ internal static class FaultCenterRoutes
             Results.Ok(faults.Sync(Identity(ctx), Scope(ctx), page ?? 1)));
         routes.MapPost("/{id}/ack", (string id, HttpContext ctx, FaultCenterService faults) =>
             Results.Ok(faults.Acknowledge(id, Identity(ctx), Scope(ctx))));
+        routes.MapPost("/{id}/process", (string id, HttpContext ctx, FaultCenterService faults) =>
+            Results.Ok(faults.StartProcessing(id, Identity(ctx), Scope(ctx))));
         routes.MapPost("/{id}/verify", (string id, HttpContext ctx, FaultCenterService faults) =>
             Results.Ok(faults.Verify(id, Identity(ctx), Scope(ctx))));
         routes.MapPut("/policies/{deviceId}", (string deviceId, FaultPolicyRequest request, HttpContext ctx, FaultCenterService faults) =>

@@ -4,7 +4,7 @@ import { h, KeepAlive, nextTick, ref } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FaultCenter from './FaultCenter.vue'
 
-const api = vi.hoisted(() => ({ getFaults: vi.fn(), acknowledgeFault: vi.fn(), verifyFault: vi.fn(), setFaultPolicy: vi.fn(), syncFaults: vi.fn() }))
+const api = vi.hoisted(() => ({ getFaults: vi.fn(), acknowledgeFault: vi.fn(), processFault: vi.fn(), verifyFault: vi.fn(), setFaultPolicy: vi.fn(), syncFaults: vi.fn() }))
 vi.mock('../api/faults', () => api)
 const incident = { id: 'fault-a', deviceId: 'device-a', profileId: 'profile-a', siteId: 'site-a', kind: 'INTERFACE_DOWN', resourceKey: 'GigabitEthernet1/0/1', severity: 'WARNING', state: 'OPEN', firstSeenMs: 1000, lastSeenMs: 2000, evidenceType: 'FACT', evidenceId: 'fact-a', detail: 'observed DOWN', occurrences: 2, history: [{ atMs: 2000, action: 'DETECTED', actorUserId: 'actor', evidenceId: 'fact-a', detail: 'Raw verified' }] }
 const result = { page: 1, pageSize: 25, total: 1, hasMore: false, items: [incident], policies: [], limitations: ['1000 incidents / 50 transitions'] }
@@ -41,9 +41,26 @@ describe('FaultCenter', () => {
     expect(button(wrapper, '启用有限只读补采').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
+  it('shows full filtered statistics and starts processing reopened incidents without claiming recovery', async () => {
+    api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, state: 'REOPENED' }], summary: { open: 2, acknowledged: 3, processing: 28, resolved: 4, reopened: 1, affectedDevices: 7 } })
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.get('[aria-label="筛选范围故障统计"]').text()).toContain('处理中 28')
+    expect(wrapper.get('[aria-label="筛选范围故障统计"]').text()).toContain('涉及设备 7')
+    expect(button(wrapper, '确认故障').attributes('disabled')).toBeUndefined()
+    await button(wrapper, '开始处理').trigger('click'); await flushPromises()
+    expect(api.processFault).toHaveBeenCalledWith('fault-a')
+    expect(wrapper.text()).toContain('仍等待同资源恢复证据')
+    api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, state: 'PROCESSING' }] })
+    await button(wrapper, '刷新故障历史').trigger('click'); await flushPromises()
+    expect(button(wrapper, '开始处理').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '确认故障').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '核验恢复').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('hides mutation controls from readers and keeps history query usable', async () => {
     const wrapper = render(false); await flushPromises()
     expect(wrapper.text()).not.toContain('确认故障'); expect(wrapper.text()).not.toContain('同步当前证据')
+    expect(wrapper.text()).not.toContain('开始处理')
     await wrapper.findAll('select')[0]!.setValue('RESOLVED')
     await wrapper.find('form').trigger('submit'); await flushPromises()
     expect(api.getFaults).toHaveBeenLastCalledWith(1, expect.objectContaining({ state: 'RESOLVED' }))

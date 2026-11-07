@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { acknowledgeFault, getFaults, setFaultPolicy, syncFaults, verifyFault, type FaultFilters, type FaultIncident, type FaultResult } from '../api/faults'
+import { acknowledgeFault, processFault, getFaults, setFaultPolicy, syncFaults, verifyFault, type FaultFilters, type FaultIncident, type FaultResult } from '../api/faults'
 
 const props = withDefaults(defineProps<{ canRecover?: boolean; identityKey?: string }>(), { canRecover: false, identityKey: '' })
 const result = ref<FaultResult | null>(null)
@@ -40,6 +40,7 @@ async function action(run: () => Promise<string>) {
   finally { if (current === generation) busy.value = false }
 }
 const acknowledge = (item: FaultIncident) => action(async () => { await acknowledgeFault(item.id); return '已确认故障，仍等待恢复证据。' })
+const process = (item: FaultIncident) => action(async () => { await processFault(item.id); return '已开始处理，仍等待同资源恢复证据。' })
 const verify = (item: FaultIncident) => action(async () => { const report = await verifyFault(item.id); return `${report.state} · ${report.detail}` })
 const synchronize = () => action(async () => { await syncFaults(); return '已同步第 1 页授权设备证据；其他页由后台轮巡。' })
 const configure = (item: FaultIncident, enabled: boolean) => action(async () => {
@@ -109,7 +110,7 @@ onBeforeUnmount(() => { generation++ })
     <div class="card__body">
       <p>事件按设备、Site、故障类型与资源聚合。确认表示已知悉；恢复必须通过更新的有效证据核验。</p>
       <form class="fault-center__filters" @submit.prevent="load()">
-        <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>RESOLVED</option></select></label>
+        <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>
         <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
         <label>起始时间 <input v-model="from" aria-label="起始时间" type="datetime-local"></label><label>截止时间 <input v-model="to" aria-label="截止时间" type="datetime-local"></label>
@@ -117,6 +118,7 @@ onBeforeUnmount(() => { generation++ })
       </form>
       <p v-if="busy" role="status">正在处理故障记录…</p><p v-if="error" role="alert">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
       <template v-if="result">
+        <p v-if="result.summary" aria-label="筛选范围故障统计">待处理 {{ result.summary.open }} · 已确认 {{ result.summary.acknowledged }} · 处理中 {{ result.summary.processing }} · 已恢复 {{ result.summary.resolved }} · 复发 {{ result.summary.reopened }} · 涉及设备 {{ result.summary.affectedDevices }}（当前筛选全部匹配记录）</p>
         <p>历史 {{ result.total }} 项 · 第 {{ result.page }} 页 · 自动补采默认关闭</p>
         <p>CSV 仅含本次已加载页和已应用筛选，含该页事件的保留历史；编辑筛选后请先查询。自由文本按凭据模式脱敏，分享前请复核。</p>
         <p v-if="!result.items.length">当前筛选没有故障记录。</p>
@@ -126,7 +128,7 @@ onBeforeUnmount(() => { generation++ })
             <td>{{ item.deviceId }}<small>{{ item.siteId }}</small><button :disabled="busy" @click="filterDevice(item)">仅看此设备故障</button><RouterLink v-if="item.deviceId && item.profileId" :to="{ path: '/config-backups', query: { deviceId: item.deviceId } }">查看此设备配置历史</RouterLink></td><td>{{ item.state }}<small>{{ item.occurrences }} 次有效观测</small></td>
             <td>{{ time(item.firstSeenMs) }}<small>{{ time(item.lastSeenMs) }}</small></td>
             <td><small>{{ item.evidenceType }}: {{ item.evidenceId }}</small><a v-if="sourceEvidence(item)" :href="sourceEvidence(item)!.href" target="_blank" rel="noopener">{{ sourceEvidence(item)!.label }}</a><button :disabled="busy" @click="expanded = expanded === item.id ? '' : item.id">查看处理历史</button>
-              <template v-if="props.canRecover && item.state !== 'RESOLVED'"><button :disabled="busy || item.state !== 'OPEN'" @click="acknowledge(item)">确认故障</button><button :disabled="busy" @click="verify(item)">核验恢复</button></template></td>
+              <template v-if="props.canRecover && item.state !== 'RESOLVED'"><button :disabled="busy || !['OPEN', 'REOPENED'].includes(item.state)" @click="acknowledge(item)">确认故障</button><button :disabled="busy || item.state === 'PROCESSING'" @click="process(item)">开始处理</button><button :disabled="busy" @click="verify(item)">核验恢复</button></template></td>
           </tr><tr v-if="expanded === item.id"><td colspan="5">
             <ol><li v-for="(entry, index) in item.history" :key="index">{{ time(entry.atMs) }} · {{ entry.action }} · {{ entry.actorUserId }}<small>{{ entry.detail }} · 证据 {{ entry.evidenceId }}</small></li></ol>
             <p v-if="policy(item)">补采策略 {{ policy(item)?.state }} · {{ policy(item)?.attempts }}/{{ policy(item)?.maximumAttempts }} 轮 · 下次 {{ time(policy(item)?.nextRunMs ?? null) }}<small v-if="policy(item)?.lastError">{{ policy(item)?.lastError }}</small><a v-if="policy(item)?.planId" :href="`/api/system/h3c/task-plans/${encodeURIComponent(policy(item)?.planId ?? '')}/report`" target="_blank" rel="noopener">查看真实补采计划</a></p>
