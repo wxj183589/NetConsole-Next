@@ -130,12 +130,17 @@ internal sealed class ConfigRestoreService(
             return new(plan.Id, "DRY_RUN", "已完成恢复预览，未向设备发送写命令。", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
 
+        // A restore write may have reached the device even when its response is
+        // lost. Consume the confirmation before invoking the writer so concurrent
+        // requests cannot submit the same configuration twice.
+        if (!_plans.TryRemove(plan.Id, out var claimed) || !ReferenceEquals(claimed, plan))
+            throw new ConfigRestoreException("CONFIG_RESTORE_PREVIEW_ALREADY_USED", "该恢复预览已用于提交，请重新生成预览。", 409);
+
         try
         {
             var result = await writer.ApplyAsync(plan.Target, plan.Configuration, cancellationToken).ConfigureAwait(false);
             catalog.TryRecordDeviceAuditEvent(actor.UserId, "CONFIG_RESTORE", result.State, plan.TargetProfileId,
                 plan.Id, Array.Empty<string>(), result.Detail ?? "write_adapter_result");
-            _plans.TryRemove(plan.Id, out _);
             return new(plan.Id, result.State, result.Detail, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
         catch (ConfigRestoreException ex)

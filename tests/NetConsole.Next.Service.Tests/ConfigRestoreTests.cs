@@ -54,6 +54,30 @@ internal static class ConfigRestoreTests
             fixture.Writer.Configuration is not null &&
             !fixture.Writer.Configuration.Contains("super-secret", StringComparison.Ordinal),
             "an enabled writer must receive only the sanitized snapshot configuration");
+        await ExpectCodeAsync(() => fixture.Restore.ExecuteAsync(
+            new(applyPreview.Id, applyPreview.ConfirmationToken, Apply: true), actor,
+            P2B5SiteScopeDecision.Global, CancellationToken.None),
+            "CONFIG_RESTORE_PREVIEW_NOT_FOUND");
+
+        var concurrentWriter = new BlockingWriter();
+        using var concurrent = new Fixture(concurrentWriter);
+        var concurrentBatch = await concurrent.Backup(actor);
+        var concurrentSource = concurrent.Backups.Get(concurrentBatch.Items.Single().SnapshotId!,
+            P2B5SiteScopeDecision.Global)!;
+        var concurrentPreview = concurrent.Restore.Preview(new(concurrentSource.Id, concurrent.Profile), actor,
+            P2B5SiteScopeDecision.Global);
+        var firstApply = concurrent.Restore.ExecuteAsync(
+            new(concurrentPreview.Id, concurrentPreview.ConfirmationToken, Apply: true), actor,
+            P2B5SiteScopeDecision.Global, CancellationToken.None);
+        await concurrentWriter.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await ExpectCodeAsync(() => concurrent.Restore.ExecuteAsync(
+            new(concurrentPreview.Id, concurrentPreview.ConfirmationToken, Apply: true), actor,
+            P2B5SiteScopeDecision.Global, CancellationToken.None),
+            "CONFIG_RESTORE_PREVIEW_NOT_FOUND");
+        concurrentWriter.Release.TrySetResult();
+        var concurrentResult = await firstApply;
+        Assert(concurrentResult.State == "APPLIED" && concurrentWriter.Calls == 1,
+            "a restore confirmation must be consumed before writer execution to prevent concurrent duplicate writes");
 
         var invalidPreview = fixture.Restore.Preview(new(source.Id, fixture.Profile), actor,
             P2B5SiteScopeDecision.Global);
@@ -109,7 +133,7 @@ internal static class ConfigRestoreTests
             P2B5SiteScopeDecision.Global, CancellationToken.None),
             "CONFIG_RESTORE_WRITE_ADAPTER_UNAVAILABLE");
 
-        Console.WriteLine("CONFIG_RESTORE_TESTS=11/11 PASS");
+        Console.WriteLine("CONFIG_RESTORE_TESTS=12/12 PASS");
     }
 
     private static void ExpirePlan(ConfigRestoreService service, string id)
@@ -202,6 +226,22 @@ internal static class ConfigRestoreTests
             Calls++;
             Configuration = configuration;
             return Task.FromResult(new ConfigRestoreWriteResult("APPLIED", "fixture writer"));
+        }
+    }
+
+    private sealed class BlockingWriter : IConfigRestoreWriter
+    {
+        public int Calls { get; private set; }
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ConfigRestoreWriteResult> ApplyAsync(H3cDeviceProfileSnapshot target, string configuration,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new ConfigRestoreWriteResult("APPLIED", "isolated concurrent-writer fixture");
         }
     }
 
