@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DashboardView from './DashboardView.vue'
+import { createPinia, setActivePinia } from 'pinia'
 
 const api = vi.hoisted(() => ({
   getHealth: vi.fn(), getTasks: vi.fn(), getDeviceInventory: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
 describe('dashboard wireless summary', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    setActivePinia(createPinia())
     api.getHealth.mockResolvedValue({ healthState: 'HEALTHY', resources: {}, unresolvedIntegrityIssues: 0 })
     api.getTasks.mockResolvedValue([{ id: 'failed-1', taskType: 'H3C', state: 'FAILED' }])
     api.getDeviceInventory.mockResolvedValue({ summary: { totalRecords: 1, validDevices: 1, invalidRecords: 0, onlineDevices: 1, offlineDevices: 0, unknownStatus: 0 } })
@@ -22,7 +24,7 @@ describe('dashboard wireless summary', () => {
 
   it('shows real AC/AP totals and failed task count', async () => {
     const wrapper = mount(DashboardView, { global: { stubs: {
-      NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
+      OperationalHealth: true, RouterLink: { template: '<a><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
       'el-button': { template: '<button><slot/></button>' }, 'el-icon': { template: '<span />' },
     }, directives: { loading: () => {} } } })
     await flushPromises()
@@ -39,7 +41,7 @@ describe('dashboard wireless summary', () => {
     api.getWirelessAcDomains.mockRejectedValue(new Error('offline'))
     api.getWirelessApResources.mockRejectedValue(new Error('offline'))
     const wrapper = mount(DashboardView, { global: { stubs: {
-      NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
+      OperationalHealth: true, RouterLink: { template: '<a><slot/></a>' }, NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
       'el-button': { template: '<button><slot/></button>' }, 'el-icon': { template: '<span />' },
     }, directives: { loading: () => {} } } })
     await flushPromises()

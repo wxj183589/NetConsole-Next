@@ -43,6 +43,7 @@ function render(component: Component = WirelessView) {
   return mount(component, { global: {
     directives: { loading: () => undefined },
     stubs: {
+      WirelessOperationalCapabilities: true,
       NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
       'el-button': { template: '<button><slot/></button>' },
       'el-alert': { props: ['title'], template: '<div role="alert">{{ title }}</div>' },

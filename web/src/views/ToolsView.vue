@@ -20,8 +20,11 @@ const diagnosticHistory = ref<NetworkDiagnosticRunSummary[]>([])
 const selectedDiagnosticRun = ref('')
 const diagnosticHistoryLoading = ref(false)
 const diagnosticHistoryError = ref('')
-const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'TCP', 'DNS', 'TRACEROUTE', 'LLDP']
+const diagnosticKindOptions: NetworkDiagnosticKind[] = ['PING', 'QUICK_PING', 'TCP', 'DNS', 'TRACEROUTE', 'LLDP']
 const diagnosticTimeoutMs = ref(2000)
+const quickPingSamples = ref(10)
+const quickPingInterval = ref(250)
+const quickPingProtocol = ref<'ICMP' | 'TCP'>('ICMP')
 const diagnosticStarting = ref(false)
 const diagnosticCancelling = ref(false)
 const diagnosticReading = ref(false)
@@ -117,19 +120,27 @@ async function pollDiagnostics(id: string, generation = diagnosticGeneration): P
   }
 }
 function selectDiagnosticKind(): void {
-  if (diagnosticKinds.value.includes('TRACEROUTE') && diagnosticTimeoutMs.value < 10000) diagnosticTimeoutMs.value = 30000
+  if (diagnosticKinds.value.includes('QUICK_PING') && diagnosticTimeoutMs.value > 5000) diagnosticTimeoutMs.value = 2000
+  if (!diagnosticKinds.value.includes('QUICK_PING') && diagnosticKinds.value.includes('TRACEROUTE') && diagnosticTimeoutMs.value < 10000) diagnosticTimeoutMs.value = 30000
 }
 async function startDiagnostics(): Promise<void> {
   if (diagnosticStarting.value || diagnosticActive.value) return
   if (!isSuperAdmin()) { ElMessage.warning('仅 SUPERADMIN 可启动诊断任务'); return }
   if (!selectedDiagnosticDevices.value.length) { ElMessage.warning('请选择至少一台设备'); return }
   if (!diagnosticKinds.value.length) { ElMessage.warning('请选择至少一种诊断类型'); return }
+  if (diagnosticKinds.value.includes('QUICK_PING') &&
+    (!Number.isInteger(quickPingSamples.value) || quickPingSamples.value < 2 || quickPingSamples.value > 60 ||
+     !Number.isInteger(quickPingInterval.value) || quickPingInterval.value < 100 || quickPingInterval.value > 5000 ||
+     diagnosticTimeoutMs.value > 5000 ||
+     quickPingSamples.value * diagnosticTimeoutMs.value + (quickPingSamples.value - 1) * quickPingInterval.value > 120000)) {
+    ElMessage.warning('Quick Ping 需 2–60 次采样、100–5000 ms 间隔和不超过 5000 ms 的单次超时，总预算不超过 120 秒'); return
+  }
   stopDiagnosticPolling()
   const generation = ++diagnosticGeneration
   diagnosticStarting.value = true
   diagnosticError.value = ''
   try {
-    const run = await startNetworkDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value })
+    const run = await startNetworkDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value, ...(diagnosticKinds.value.includes('QUICK_PING') ? { sampleCount: quickPingSamples.value, intervalMs: quickPingInterval.value, quickPingProtocol: quickPingProtocol.value } : {}) })
     if (!pageActive || generation !== diagnosticGeneration) return
     selectedDiagnosticRun.value = run.id
     diagnosticRun.value = run
@@ -152,7 +163,7 @@ async function cancelDiagnostics(): Promise<void> {
 }
 function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
 function diagnosticHistoryLabel(item: NetworkDiagnosticRunSummary): string { return `${new Date(item.createdMs).toLocaleString('zh-CN', { hour12: false })} · ${diagnosticStateLabel(item.state)} · ${item.totalDevices} 台设备 · ${item.kinds.map(diagnosticKindLabel).join('、')}` }
-function diagnosticKindLabel(value: string): string { return ({ PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
+function diagnosticKindLabel(value: string): string { return ({ QUICK_PING: 'Quick Ping 连续采样', PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
 function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
 function diagnosticOutcomeLabel(value?: string | null): string { return ({ OK: '检查成功', TRACEROUTE_MAX_HOPS: '达到跳数上限，尚未到达目标', TRACEROUTE_UNREACHABLE: '目标不可达', TIMEOUT: '检查总超时', CANCELLED: '已取消', DIAGNOSTIC_SCOPE_REVOKED: '设备访问权限已变化' } as Record<string, string>)[value || ''] || value || '—' }
 function hopStatusLabel(value: string): string { return ({ REACHED: '已到达目标', TTL_EXPIRED: '中间节点', TIMED_OUT: '该跳超时', UNREACHABLE: '不可达', OTHER: '其他响应' } as Record<string, string>)[value] || '未知响应' }
@@ -195,6 +206,12 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
           <label class="form-field diagnostic-devices"><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" aria-label="诊断设备" multiple size="4" :disabled="diagnosticStarting || diagnosticActive"><option v-for="device in inventory" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
           <div class="form-field"><span>检查类型</span><label v-for="kind in diagnosticKindOptions" :key="kind" class="check-row"><input v-model="diagnosticKinds" type="checkbox" :value="kind" :disabled="diagnosticStarting || diagnosticActive" @change="selectDiagnosticKind" />{{ diagnosticKindLabel(kind) }}</label></div>
           <label class="form-field"><span>每项检查总超时</span><select v-model.number="diagnosticTimeoutMs" aria-label="每项检查总超时" :disabled="diagnosticStarting || diagnosticActive"><option :value="2000">2 秒</option><option :value="5000">5 秒</option><option :value="10000">10 秒</option><option :value="30000">30 秒</option></select><small class="muted">Traceroute 最多 30 跳，建议 30 秒。</small></label>
+          <fieldset v-if="diagnosticKinds.includes('QUICK_PING')" class="quick-ping-options" :disabled="diagnosticStarting || diagnosticActive"><legend>Quick Ping</legend>
+            <label class="form-field"><span>探测方式</span><select v-model="quickPingProtocol" aria-label="Quick Ping 协议"><option>ICMP</option><option>TCP</option></select></label>
+            <label class="form-field"><span>采样次数</span><input v-model.number="quickPingSamples" aria-label="Quick Ping 采样次数" type="number" min="2" max="60" /></label>
+            <label class="form-field"><span>采样间隔 (ms)</span><input v-model.number="quickPingInterval" aria-label="Quick Ping 采样间隔" type="number" min="100" max="5000" step="50" /></label>
+            <small class="muted">最多 8 台设备，单次超时 ≤5 秒，每台总预算 ≤120 秒；TCP 使用设备登记端口。</small>
+          </fieldset>
           <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
         <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="selectedDiagnosticRun && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(selectedDiagnosticRun)">{{ diagnosticActive ? '重新读取进度' : '重新读取结果' }}</el-button></div>
@@ -203,6 +220,11 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
           <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
             <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}</td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
+            <tr v-if="item.kind === 'QUICK_PING'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + ' Quick Ping 结果'">
+              <template v-if="item.quickPing"><div class="trace-heading"><strong>{{ item.quickPing.protocol }} · {{ item.quickPing.destinationAddress }}{{ item.quickPing.port ? ':' + item.quickPing.port : '' }}</strong><span>采样 {{ item.quickPing.sent }}/{{ item.quickPing.requestedSamples }}</span><span :class="['state-pill', item.quickPing.lost ? 'warn' : 'good']">丢失率 {{ item.quickPing.lossPercent ?? 'UNKNOWN' }}%</span><span>最小 / 平均 / 最大 {{ item.quickPing.minMs ?? '—' }} / {{ item.quickPing.averageMs ?? '—' }} / {{ item.quickPing.maxMs ?? '—' }} ms</span></div>
+              <div class="quick-ping-samples" aria-label="采样时间线"><span v-for="sample in item.quickPing.samples" :key="sample.sequence" :class="['quick-ping-sample', sample.status === 'REPLIED' ? 'good' : 'lost']" :title="'#' + sample.sequence + ' · ' + new Date(sample.capturedMs).toLocaleTimeString() + ' · ' + sample.status">{{ sample.latencyMs == null ? '×' : sample.latencyMs + 'ms' }}</span></div>
+              <small class="muted">丢失率按已完成采样计算；取消后未执行的采样不计为丢失。TCP 结果代表端口连通性。</small></template><p v-else class="muted">等待采样结果。</p>
+            </section></td></tr>
             <tr v-if="item.kind === 'TRACEROUTE'" class="trace-row"><td colspan="6"><section :aria-label="item.deviceName + ' Traceroute 路径'" class="trace-route">
               <div class="trace-heading"><strong>逐跳路径</strong><span v-if="item.traceRoute" class="mono">目标 {{ item.traceRoute.destinationAddress }}</span><span :class="['state-pill', item.traceRoute?.destinationReached ? 'good' : 'warn']">{{ item.traceRoute?.destinationReached ? '已到达目标' : item.state === 'QUEUED' ? '等待探测' : item.state === 'RUNNING' ? '正在探测路径' : '未到达目标' }}</span><span v-if="item.traceRoute" class="muted">已记录 {{ item.traceRoute.hops.length }} / {{ item.traceRoute.maxHops }} 跳</span></div>
               <table v-if="item.traceRoute?.hops.length" class="trace-table"><thead><tr><th>跳数</th><th>响应节点</th><th>状态</th><th>响应耗时</th></tr></thead><tbody><tr v-for="hop in item.traceRoute.hops" :key="hop.ttl"><td>{{ hop.ttl }}</td><td class="mono">{{ hop.address || '—' }}</td><td><span :class="hop.status === 'REACHED' ? 'trace-hop--good' : hop.status === 'TIMED_OUT' || hop.status === 'UNREACHABLE' ? 'trace-hop--warn' : ''">{{ hopStatusLabel(hop.status) }}</span></td><td>{{ hop.latencyMs == null ? '—' : hop.latencyMs + ' ms' }}</td></tr></tbody></table>
@@ -228,6 +250,11 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
 </template>
 
 <style scoped>
+.quick-ping-options { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--nc-border); max-width: 540px; }
+.quick-ping-options .form-field { width: 135px; }
+.quick-ping-samples { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+.quick-ping-sample { padding: 4px 7px; border-radius: 3px; background: var(--nc-surface); border: 1px solid var(--nc-success); font-size: 12px; }
+.quick-ping-sample.lost { border-color: var(--nc-danger); color: var(--nc-danger); }
 .diagnostic-controls { align-items: flex-start; gap: 18px; flex-wrap: wrap; }
 .diagnostic-history { gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 18px; }
 .diagnostic-history .form-field { flex: 1 1 440px; min-width: 0; max-width: 760px; }

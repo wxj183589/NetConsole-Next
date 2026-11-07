@@ -62,6 +62,39 @@ describe('network diagnostic tools and traceroute', () => {
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
 
+  it('submits continuous TCP sampling and renders real loss and unavailable latency', async () => {
+    api.startNetworkDiagnostics.mockResolvedValue(run({ state: 'FAILED', items: [item({ kind: 'QUICK_PING', state: 'FAILED', traceRoute: null,
+      quickPing: { protocol: 'TCP', destinationAddress: '192.0.2.10', port: 22, requestedSamples: 3, sent: 3, received: 0, lost: 3,
+        lossPercent: 100, minMs: null, maxMs: null, averageMs: null, samples: [
+          { sequence: 1, capturedMs: 1000, status: 'TIMED_OUT', latencyMs: null },
+          { sequence: 2, capturedMs: 1100, status: 'ERROR', latencyMs: null },
+          { sequence: 3, capturedMs: 1200, status: 'TIMED_OUT', latencyMs: null },
+        ] } })] }))
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断设备"]').setValue(['device-one'])
+    for (const kind of ['PING', 'TCP', 'DNS']) await wrapper.get(`input[value="${kind}"]`).setValue(false)
+    await wrapper.get('input[value="QUICK_PING"]').setValue(true)
+    await wrapper.get('select[aria-label="Quick Ping 协议"]').setValue('TCP')
+    await wrapper.get('input[aria-label="Quick Ping 采样次数"]').setValue(3)
+    await wrapper.get('input[aria-label="Quick Ping 采样间隔"]').setValue(100)
+    await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).toHaveBeenCalledWith({ deviceIds: ['device-one'], kinds: ['QUICK_PING'], timeoutMs: 2000, sampleCount: 3, intervalMs: 100, quickPingProtocol: 'TCP' })
+    const result = wrapper.get('section[aria-label="交换机甲 Quick Ping 结果"]')
+    expect(result.text()).toContain('丢失率 100%'); expect(result.text()).toContain('— / — / — ms')
+    expect(result.findAll('.quick-ping-sample')).toHaveLength(3)
+  })
+
+  it('uses a compatible timeout with traceroute and rejects over-budget Quick Ping sampling', async () => {
+    const wrapper = await render(); await selectTrace(wrapper)
+    await wrapper.get('input[value="QUICK_PING"]').setValue(true)
+    expect((wrapper.get('select[aria-label="每项检查总超时"]').element as HTMLSelectElement).value).toBe('2000')
+    await wrapper.get('input[aria-label="Quick Ping 采样次数"]').setValue(60)
+    await wrapper.get('input[aria-label="Quick Ping 采样间隔"]').setValue(5000)
+    await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+    expect(ElMessage.warning).toHaveBeenCalledWith(expect.stringContaining('总预算不超过 120 秒'))
+  })
+
   it('opens without running probes and offers optional traceroute only for valid inventory devices', async () => {
     const wrapper = await render()
     expect((wrapper.get('input[value="TRACEROUTE"]').element as HTMLInputElement).checked).toBe(false)

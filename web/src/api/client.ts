@@ -530,12 +530,18 @@ export interface H3cTaskPlanReport {
   items: Array<{ item: H3cTaskPlanItem; run?: TaskRun | null; commands: TaskCommand[] }>
 }
 
-export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE'
+export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE' | 'QUICK_PING'
 export interface NetworkTraceRoute {
   destinationAddress: string
   destinationReached: boolean
   maxHops: number
   hops: Array<{ ttl: number; address: string | null; status: string; latencyMs: number | null }>
+}
+export interface QuickPingSnapshot {
+  protocol: 'ICMP' | 'TCP'; destinationAddress: string; port: number | null
+  requestedSamples: number; sent: number; received: number; lost: number; lossPercent: number | null
+  minMs: number | null; maxMs: number | null; averageMs: number | null
+  samples: Array<{ sequence: number; capturedMs: number; status: string; latencyMs: number | null }>
 }
 export interface NetworkDiagnosticItem {
   id: string
@@ -552,6 +558,7 @@ export interface NetworkDiagnosticItem {
   evidenceCount: number
   evidenceSources: string[]
   traceRoute?: NetworkTraceRoute | null
+  quickPing?: QuickPingSnapshot | null
 }
 export interface NetworkDiagnosticRun {
   id: string
@@ -1199,6 +1206,7 @@ export interface CompleteConfigurationBackup {
   id: string; profileId: string; deviceId: string; siteId: string; capturedMs: number
   taskId: string; rawSha256: string; rawByteCount: number; model: string; softwareVersion: string
   integrity: string; restorable: boolean; state: string
+  host: string; port: number; protocol: string; redactedSha256: string; redactedByteCount: number; version: number; formatVersion: number
 }
 export interface SimulatorConfigurationChange {
   id: string; profileId: string; deviceId: string; siteId: string; interfaceName: string; state: string
@@ -1470,7 +1478,7 @@ export function retryTask(runId: string): Promise<{ runId: string; previousRunId
 export function resumeTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/resume`, { method: 'POST' })
 }
-export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string }): Promise<NetworkDiagnosticRun> {
+export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string; sampleCount?: number; intervalMs?: number; quickPingProtocol?: 'ICMP' | 'TCP' }): Promise<NetworkDiagnosticRun> {
   return request('/api/system/diagnostics/runs', { method: 'POST', body: JSON.stringify(payload) })
 }
 export function getNetworkDiagnostics(id: string): Promise<NetworkDiagnosticRun> {
@@ -1591,3 +1599,85 @@ export async function downloadExport(sessionId: string, format: string): Promise
   return response.blob()
 }
 
+
+export interface CompleteConfigurationComparison {
+  before: CompleteConfigurationBackup; after: CompleteConfigurationBackup
+  originalConfigurationChanged: boolean; sensitiveValuesChanged: boolean
+  addedLines: number; removedLines: number; truncated: boolean
+  contexts: Array<{ context: string; categories: string[]; addedLines: number; removedLines: number
+    sensitiveValuesChanged: boolean; truncated: boolean; lines: Array<{ kind: 'CONTEXT' | 'ADDED' | 'REMOVED'; text: string }> }>
+}
+export interface CompleteConfigurationRestorePreview {
+  backupId: string; currentBackupId: string; compatible: boolean; writeAllowed: false
+  blockers: string[]; comparison: CompleteConfigurationComparison
+}
+export function compareCompleteConfigurations(beforeId: string, afterId: string): Promise<CompleteConfigurationComparison> {
+  return request(`/api/system/simulator-config/compare?beforeId=${encodeURIComponent(beforeId)}&afterId=${encodeURIComponent(afterId)}`)
+}
+export function previewCompleteConfigurationRestore(backupId: string): Promise<CompleteConfigurationRestorePreview> {
+  return request(`/api/system/simulator-config/backups/${encodeURIComponent(backupId)}/restore-preview`, { method: 'POST' })
+}
+export interface OperationalMetric { state: string; value: number | null; unit: string; capturedMs: number | null; evidenceIds: string[] }
+export interface OperationalDeviceHealth {
+  deviceId: string; name: string; siteId: string; profileId: string | null; state: string
+  reachability: OperationalMetric; cpuPercent: OperationalMetric; memoryPercent: OperationalMetric
+  interfaceDown: OperationalMetric; lldpNeighbors: OperationalMetric; pingDelayMs?: OperationalMetric | null; packetLossPercent?: OperationalMetric | null; warnings: string[]
+}
+export interface OperationalFaultEvent {
+  id: string; deviceId: string; siteId: string; kind: string; severity: string; state: string
+  atMs: number; evidenceType: string; evidenceId: string; detail: string
+}
+export interface OperationalHealthSnapshot {
+  asOfMs: number; freshnessWindowMs: number; page: number; totalDevices: number; hasMore: boolean
+  devices: OperationalDeviceHealth[]; events: OperationalFaultEvent[]; limitations: string[]
+}
+export interface OperationalRecoveryReport {
+  id: string; deviceId: string; profileId: string; siteId: string; actorUserId: string
+  startedMs: number; completedMs: number; state: string
+  attempts: Array<{ ordinal: number; status: string; atMs: number }>; planId: string | null; recollectionState: string | null
+}
+export function getOperationalHealth(page = 1): Promise<OperationalHealthSnapshot> { return request(`/api/system/operations/health?page=${page}`) }
+export function recoverOperationalDevice(payload: { deviceId: string; expectedProfileId: string }): Promise<OperationalRecoveryReport> {
+  return request('/api/system/operations/recover', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export interface WirelessRoleEvidence {
+  acDeviceId: string; observationId: string; rawState: string; normalizedState: string
+  capturedMs: number; rawManifestRef: string; sourceRevision: string
+}
+export interface WirelessOperationalCapabilityView {
+  asOf: number; sourceRevision: string
+  domains: Array<{ domainId: string; domainKind: string; topologyEvidence: string; deviceRoleEvidence: string
+    haVerification: string; reason: string; topologyEvidenceRefs: string[]; observations: WirelessRoleEvidence[] }>
+  fitAps: Array<{ resourceId: string; displayName: string; identityStatus: string; acManagedState: string
+    directAccessState: string; acDeviceIds: string[]; apGroups: string[]; observations: WirelessRoleEvidence[]
+    identityConflict: string | null; stateConflict: string | null }>
+}
+export function getWirelessOperationalCapabilities(): Promise<WirelessOperationalCapabilityView> {
+  return request('/api/system/wireless/operational-capabilities')
+}
+export interface H3cCheckpointRestoreOperation {
+  id: string; profileId: string; deviceId: string; siteId: string; interfaceName: string; state: string
+  checkpointId: string | null; configWriteSucceeded: boolean; configReadbackVerified: boolean
+  serviceVerified: boolean; rollbackVerified: boolean; serviceVerificationScope: string
+  beforeBackupId: string | null; changedBackupId: string | null; restoredBackupId: string | null
+  rollbackBackupId: string | null; error: string | null; createdMs: number; completedMs: number | null; actorUserId: string
+}
+export function verifyNativeCheckpointRestore(payload: { profileId: string; expectedBackupId: string; interfaceName: string; description: string }): Promise<H3cCheckpointRestoreOperation> {
+  return request('/api/system/simulator-config/checkpoints/verify', { method: 'POST', body: JSON.stringify(payload) })
+}
+export function getNativeCheckpointOperations(profileId: string): Promise<H3cCheckpointRestoreOperation[]> {
+  return request(`/api/system/simulator-config/checkpoints?profileId=${encodeURIComponent(profileId)}`)
+}
+
+export interface H3cOperationalCapability {
+  key: string; state: string; reason: string; evidenceIds: string[]; capturedMs: number | null
+  source: string; freshness: string
+}
+export interface H3cOperationalCapabilityView {
+  profileId: string; model: string | null; version: string | null; release: string | null; asOf: number
+  capabilities: H3cOperationalCapability[]
+}
+export function getH3cOperationalCapabilities(profileId: string): Promise<H3cOperationalCapabilityView> {
+  return request(`/api/system/h3c/profiles/${encodeURIComponent(profileId)}/operational-capabilities`)
+}

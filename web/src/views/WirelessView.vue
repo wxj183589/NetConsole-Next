@@ -2,6 +2,7 @@
 import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
+import WirelessOperationalCapabilities from '../components/WirelessOperationalCapabilities.vue'
 import {
   createWirelessTask,
   getWirelessTasks,
@@ -556,6 +557,7 @@ onActivated(() => {
         <div v-else class="card empty-state"><div><strong>{{ partialError ? '无线业务部分可用' : '暂无无线业务数据' }}</strong><small>{{ partialError || 'AC Domain API 返回空集合。' }}</small></div></div>
       </main>
     </div>
+    <WirelessOperationalCapabilities :domain-id="selectedDomainId" :resource-id="selectedResource?.id || ''" />
   </NcLayout>
 </template>
 

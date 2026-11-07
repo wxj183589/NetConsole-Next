@@ -10,7 +10,8 @@ internal sealed record NetworkDiagnosticBatchRequest(
     IReadOnlyList<string>? DeviceIds,
     IReadOnlyList<string>? Kinds,
     int TimeoutMs = 2_000,
-    string? SiteId = null);
+    string? SiteId = null,
+    int SampleCount = 10, int IntervalMs = 250, string QuickPingProtocol = "ICMP");
 
 internal sealed record NetworkDiagnosticItemSnapshot(
     string Id,
@@ -26,7 +27,8 @@ internal sealed record NetworkDiagnosticItemSnapshot(
     long? LatencyMs,
     int EvidenceCount,
     IReadOnlyList<string> EvidenceSources,
-    NetworkTracerouteSnapshot? TraceRoute = null);
+    NetworkTracerouteSnapshot? TraceRoute = null,
+    QuickPingSnapshot? QuickPing = null);
 
 internal sealed record NetworkDiagnosticRunSnapshot(
     string Id,
@@ -58,7 +60,7 @@ internal sealed record NetworkDiagnosticRunSummary(
 internal sealed class NetworkDiagnosticsService : IDisposable
 {
     private static readonly HashSet<string> SupportedKinds = new(StringComparer.OrdinalIgnoreCase)
-        { "PING", "TCP", "DNS", "LLDP", "TRACEROUTE" };
+        { "PING", "TCP", "DNS", "LLDP", "TRACEROUTE", "QUICK_PING" };
     private const int MaximumDevices = 128;
     private const int MaximumChecks = 512;
     private const int MaximumRuns = 128;
@@ -66,6 +68,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
     private const int MaximumHistoryBytes = 4 * 1024 * 1024;
     private readonly Catalog _catalog;
     private readonly INetworkTracerouteProbe _tracerouteProbe;
+    private readonly IQuickPingProbe _quickPingProbe;
     private readonly string _historyRoot;
     private readonly object _gate = new();
     private readonly Dictionary<string, DiagnosticRun> _runs = new(StringComparer.Ordinal);
@@ -74,10 +77,11 @@ internal sealed class NetworkDiagnosticsService : IDisposable
 
     public NetworkDiagnosticsService(Catalog catalog) : this(catalog, new IcmpNetworkTracerouteProbe()) { }
 
-    internal NetworkDiagnosticsService(Catalog catalog, INetworkTracerouteProbe tracerouteProbe)
+    internal NetworkDiagnosticsService(Catalog catalog, INetworkTracerouteProbe tracerouteProbe, IQuickPingProbe? quickPingProbe = null)
     {
         _catalog = catalog;
         _tracerouteProbe = tracerouteProbe;
+        _quickPingProbe = quickPingProbe ?? new QuickPingProbe();
         _historyRoot = Path.Combine(catalog.DataRoot, "diagnostics");
         LoadHistory();
     }
@@ -94,9 +98,9 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var requestedKinds = request.Kinds?.Select(value => value?.Trim().ToUpperInvariant() ?? string.Empty).ToArray()
             ?? Array.Empty<string>();
         if (requestedKinds.Any(kind => !SupportedKinds.Contains(kind)))
-            throw new ArgumentException("Diagnostic kinds must be PING, TCP, DNS, LLDP or TRACEROUTE.", nameof(request));
+            throw new ArgumentException("Diagnostic kinds must be PING, TCP, DNS, LLDP, TRACEROUTE or QUICK_PING.", nameof(request));
         var kinds = NormalizeKinds(requestedKinds);
-        if (kinds.Count is < 1 or > 5)
+        if (kinds.Count is < 1 or > 6)
             throw new ArgumentException("At least one supported diagnostic kind is required.", nameof(request));
         if (request.TimeoutMs is < 100 or > 30_000)
             throw new ArgumentException("timeoutMs must be between 100 and 30000.", nameof(request));
@@ -121,9 +125,11 @@ internal sealed class NetworkDiagnosticsService : IDisposable
 
         if (targets.Count * kinds.Count > MaximumChecks)
             throw new ArgumentException($"A diagnostic batch cannot contain more than {MaximumChecks} checks.", nameof(request));
-        if (kinds.Contains("TRACEROUTE"))
+        if (kinds.Contains("QUICK_PING"))
+            NetworkQuickPing.Validate(request.SampleCount, request.IntervalMs, request.TimeoutMs, request.QuickPingProtocol, targets.Count);
+        if (kinds.Contains("TRACEROUTE") || kinds.Contains("QUICK_PING"))
             foreach (var target in targets) RequireCurrentTraceTarget(actor, scope, target);
-        var run = new DiagnosticRun(Guid.NewGuid().ToString("N"), actor, siteId, request.TimeoutMs, targets, kinds, scope);
+        var run = new DiagnosticRun(Guid.NewGuid().ToString("N"), actor, siteId, request.TimeoutMs, targets, kinds, scope, request.SampleCount, request.IntervalMs, request.QuickPingProtocol);
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -253,7 +259,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         item.StartedMs = UtcNowMs();
         var started = Stopwatch.GetTimestamp();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(run.TimeoutMs);
+        timeout.CancelAfter(item.Kind == "QUICK_PING" ? 125_000 : run.TimeoutMs);
         try
         {
             switch (item.Kind)
@@ -269,6 +275,17 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                         trace.DestinationReached ? $"已通过 {trace.Hops.Count} 跳到达目标" :
                             unreachable ? "路径返回不可达；保留已观察到的跳点" : "已达到 30 跳上限；未确认到达目标",
                         ElapsedMs(started), 0, Array.Empty<string>());
+                    break;
+                }
+                case "QUICK_PING":
+                {
+                    var sample = await NetworkQuickPing.RunAsync(item.Target.Host, item.Target.Port, run.QuickPingProtocol,
+                        run.SampleCount, run.IntervalMs, run.TimeoutMs, _quickPingProbe,
+                        () => RequireCurrentTraceTarget(run.Actor, run.Scope, item.Target),
+                        snapshot => { lock (item.Gate) item.QuickPing = snapshot; }, timeout.Token);
+                    Complete(item, sample.Lost == 0 ? "SUCCEEDED" : "FAILED", sample.Lost == 0 ? "OK" : "QUICK_PING_LOSS",
+                        $"{sample.Protocol} 响应 {sample.Received}/{sample.Sent}，丢失 {sample.LossPercent}%", ElapsedMs(started),
+                        sample.Sent, new[] { "SERVICE_HOST_" + sample.Protocol });
                     break;
                 }
                 case "PING":
@@ -435,7 +452,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                 var snapshot = JsonSerializer.Deserialize<NetworkDiagnosticRunSnapshot>(File.ReadAllText(path));
                 if (snapshot is { Id: not null, Items: not null } && IsSafeId(snapshot.Id) && IsTerminalRun(snapshot.State) &&
                     snapshot.Items.Count <= MaximumChecks && snapshot.TotalChecks == snapshot.Items.Count &&
-                    snapshot.Items.All(item => item is not null && (item.TraceRoute is null ||
+                    snapshot.Items.All(item => item is not null && (item.QuickPing is null || item.QuickPing.Samples is { Count: <= 60 }) && (item.TraceRoute is null ||
                         item.TraceRoute is { MaxHops: NetworkTraceroute.MaximumHops } trace &&
                         trace.Hops is { Count: <= NetworkTraceroute.MaximumHops })))
                     _history[snapshot.Id] = snapshot;
@@ -540,19 +557,22 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public int EvidenceCount { get; set; }
         public IReadOnlyList<string> EvidenceSources { get; set; } = Array.Empty<string>();
         public NetworkTracerouteSnapshot? TraceRoute { get; set; }
+        public QuickPingSnapshot? QuickPing { get; set; }
 
         public NetworkDiagnosticItemSnapshot ToSnapshot()
         {
             lock (Gate) return new(Id, Target.DeviceId, Target.Name, Target.SiteId, Kind,
-                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute);
+                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute, QuickPing);
         }
     }
 
     private sealed class DiagnosticRun
     {
         public DiagnosticRun(string id, string actor, string? siteId, int timeoutMs,
-            IReadOnlyList<DiagnosticTarget> targets, IReadOnlyList<string> kinds, P2B5SiteScopeDecision scope)
+            IReadOnlyList<DiagnosticTarget> targets, IReadOnlyList<string> kinds, P2B5SiteScopeDecision scope,
+            int sampleCount, int intervalMs, string quickPingProtocol)
         {
+            SampleCount = sampleCount; IntervalMs = intervalMs; QuickPingProtocol = quickPingProtocol;
             Id = id; Actor = actor; SiteId = siteId; TimeoutMs = timeoutMs; Targets = targets; Scope = scope;
             Items = targets.SelectMany(target => kinds.Select(kind =>
                 new DiagnosticItem($"{id}:{target.DeviceId}:{kind}", target, kind))).ToArray();
@@ -562,6 +582,9 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public string Actor { get; }
         public string? SiteId { get; }
         public int TimeoutMs { get; }
+        public int SampleCount { get; }
+        public int IntervalMs { get; }
+        public string QuickPingProtocol { get; }
         public IReadOnlyList<DiagnosticTarget> Targets { get; }
         public P2B5SiteScopeDecision Scope { get; }
         public IReadOnlyList<DiagnosticItem> Items { get; }

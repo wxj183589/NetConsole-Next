@@ -85,6 +85,8 @@ builder.Services.AddSingleton<SimulatorConfigurationService>();
 builder.Services.AddSingleton<ConfigBackupScheduleService>();
 builder.Services.AddSingleton<SmartConfigurationService>();
 builder.Services.AddSingleton<NetworkDiagnosticsService>();
+builder.Services.AddSingleton<OperationalHealthService>();
+builder.Services.AddSingleton<OperationalRecoveryService>();
 builder.Services.AddSingleton<IngressStats>();
 builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
@@ -949,6 +951,57 @@ app.MapGet("/api/system/simulator-config/backups/{id}/view", (HttpContext contex
     try { return configurations.View(id, CurrentIdentity(context), CurrentSiteScope(context)) is { } view ? Results.Ok(view) : Results.NotFound(); }
     catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
+app.MapGet("/api/system/simulator-config/compare", (HttpContext context, string beforeId, string afterId, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(configurations.Compare(beforeId, afterId, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/simulator-config/backups/{id}/restore-preview", async (HttpContext context, string id,
+    SimulatorConfigurationService configurations, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(await configurations.PreviewRestoreAsync(id, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+});
+app.MapGet("/api/system/simulator-config/checkpoints", (HttpContext context, string profileId, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(configurations.CheckpointOperations(profileId, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
+app.MapPost("/api/system/simulator-config/checkpoints/verify", async (HttpContext context, H3cCheckpointRestoreRequest request,
+    SimulatorConfigurationService configurations, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(await configurations.VerifyNativeCheckpointRestoreAsync(request, CurrentIdentity(context), CurrentSiteScope(context), cancellationToken)); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+});
+app.MapGet("/api/system/operations/health", (HttpContext context, int? page, OperationalHealthService health) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(health.Get(CurrentSiteScope(context), page ?? 1, CurrentIdentity(context).UserId)); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+});
+app.MapPost("/api/system/operations/recover", async (HttpContext context, OperationalRecoveryRequest request,
+    OperationalRecoveryService recovery, CancellationToken cancellationToken) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try { return Results.Ok(await recovery.RecoverAsync(request, CurrentIdentity(context).UserId, cancellationToken)); }
+    catch (TaskScopeRevokedException ex) { return Results.Json(new { error = ex.Reason }, statusCode: 403); }
+    catch (InvalidOperationException) { return Results.Conflict(new { error = "OPERATIONAL_RECOVERY_BUSY" }); }
+});
 app.MapGet("/api/system/simulator-config/changes", (HttpContext context, string profileId, SimulatorConfigurationService configurations) =>
 {
     if (!IsSuperAdmin(context)) return Results.StatusCode(403);
@@ -1727,6 +1780,23 @@ app.MapPost("/api/system/raw-integrity-audits/{auditId}/quarantine",
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
     });
 
+app.MapGet("/api/system/h3c/profiles/{id}/operational-capabilities", (HttpContext context, string id, Catalog catalog) =>
+{
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    var scope = CurrentSiteScope(context);
+    if (!catalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(H3cOperationalCapabilities.Project(id, catalog.QueryH3cFacts(id, limit: 1000, scope: scope,
+        requireCapturedScope: true), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+});
+app.MapGet("/api/system/wireless/operational-capabilities", (HttpContext context, WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(H3cOperationalCapabilities.ProjectWireless(wireless.GetSnapshot(CurrentSiteScope(context)))); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
 app.MapGet("/api/system/wireless/ac-domains", (HttpContext context, HttpRequest request,
     WirelessReadModelService wireless, P2B5SiteScopeStore scopes) =>
 {

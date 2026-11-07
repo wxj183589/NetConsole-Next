@@ -103,6 +103,16 @@ else if (args.Length > 0 && args[0] == "--config-backup-tests")
     await ConfigBackupTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--config-restore-tests")
     await ConfigRestoreTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--complete-config-diff-tests")
+    await CompleteConfigurationComparisonTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--operational-health-tests")
+    await OperationalHealthTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--h3c-operational-capability-tests")
+    H3cOperationalCapabilityTests.Run();
+else if (args.Length > 0 && args[0] == "--checkpoint-restore-tests")
+    await H3cCheckpointRestoreTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--quick-ping-tests")
+    await NetworkQuickPingTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--simulator-config-tests")
     await SimulatorConfigurationTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--config-backup-schedule-tests")
@@ -145,6 +155,11 @@ internal static class SchedulerTests
     public static async Task RunAsync()
     {
         WirelessTaskTests.Run();
+        await CompleteConfigurationComparisonTests.RunAsync();
+        await OperationalHealthTests.RunAsync();
+        await NetworkQuickPingTests.RunAsync();
+        await H3cCheckpointRestoreTests.RunAsync();
+        H3cOperationalCapabilityTests.Run();
         await EnforcesQueueAndConcurrencyLimits();
         await CancelsQueuedAndRunningRequests();
         await TimesOutAndDisposesSession();

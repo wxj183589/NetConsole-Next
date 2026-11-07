@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref } from 'vue'
 import * as echarts from 'echarts'
 import { Bell, CircleCheck, DataLine, List, Monitor, TrendCharts, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
+import OperationalHealth from '../components/OperationalHealth.vue'
+import { useAuthStore } from '../stores/auth'
+
+const auth = useAuthStore()
 import { getDeviceInventory, getHealth, getTasks, getWirelessAcDomains, getWirelessApResources, type DeviceInventoryPage, type HealthSnapshot, type TaskRun, type WirelessPage, type WirelessAcDomain, type WirelessApResource } from '../api/client'
 
 const health = ref<HealthSnapshot | null>(null)
@@ -15,13 +19,16 @@ const wirelessError = ref('')
 const loading = ref(true)
 const statusChartHost = ref<HTMLElement | null>(null)
 let statusChart: echarts.ECharts | undefined
+let generation = 0
+let active = true
+const pageErrors = ref<string[]>([])
 
 const summary = computed(() => inventory.value?.summary || {
   totalRecords: 0, validDevices: 0, invalidRecords: 0, enabledDevices: 0, disabledDevices: 0,
   onlineDevices: 0, offlineDevices: 0, unknownStatus: 0,
 })
 const runningTasks = computed(() => tasks.value.filter(task => ['QUEUED', 'CONNECTING', 'RUNNING'].includes(task.state)).length)
-const failedTasks = computed(() => tasks.value.filter(task => ['FAILED', 'PARTIAL_FAILED', 'FAULTED'].includes(task.state)).length)
+const failedTasks = computed(() => tasks.value.filter(task => ['FAILED', 'PARTIAL', 'PARTIAL_FAILED', 'FAULTED', 'TIMED_OUT', 'INTERRUPTED'].includes(task.state)).length)
 const wirelessAcCount = computed(() => wirelessDomains.value?.total ?? null)
 const wirelessApCount = computed(() => wirelessResources.value?.total ?? null)
 const wirelessRuntimeStates = computed(() => {
@@ -71,7 +78,12 @@ function renderStatusChart(): void {
   })
 }
 async function refresh(): Promise<void> {
+  const current = ++generation
   loading.value = true
+  pageErrors.value = []
+  health.value = null
+  inventory.value = null
+  tasks.value = []
   try {
     wirelessError.value = ''
     wirelessDomains.value = null
@@ -80,6 +92,9 @@ async function refresh(): Promise<void> {
       getHealth(), getTasks(), getDeviceInventory({ page: 1, pageSize: 1 }),
       getWirelessAcDomains({ page: 1, pageSize: 100 }), getWirelessApResources({ page: 1, pageSize: 1 }),
     ])
+    if (!active || current !== generation) return
+    const labels = ['实例健康', '近期任务', '设备库存', 'AC Domain', 'AP 资源']
+    pageErrors.value = result.flatMap((item, index) => item.status === 'rejected' ? [labels[index] + '读取失败'] : [])
     if (result[0].status === 'fulfilled') health.value = result[0].value
     if (result[1].status === 'fulfilled') tasks.value = result[1].value
     if (result[2].status === 'fulfilled') inventory.value = result[2].value
@@ -89,21 +104,24 @@ async function refresh(): Promise<void> {
     else wirelessError.value = wirelessError.value ? `${wirelessError.value}，AP 数据暂不可用` : '无线 AP 数据暂不可用'
     await nextTick(); renderStatusChart()
   } catch { ElMessage.error('无法读取运行状态，请检查服务是否仍在运行') }
-  finally { loading.value = false }
+  finally { if (current === generation) loading.value = false }
 }
 function handleResize(): void { statusChart?.resize() }
 onMounted(() => { void refresh(); window.addEventListener('resize', handleResize) })
-onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); statusChart?.dispose() })
+onActivated(() => { if (!active) { active = true; void refresh() } })
+onDeactivated(() => { active = false; generation++ })
+onBeforeUnmount(() => { active = false; generation++; window.removeEventListener('resize', handleResize); statusChart?.dispose() })
 </script>
 
 <template>
   <NcLayout title="运行总览" description="面向设备采集、终端会话与原始数据可靠性的统一工作台">
     <template #actions><el-button size="small" :loading="loading" @click="refresh">刷新数据</el-button></template>
 
+    <p v-if="pageErrors.length" role="alert" class="bad-text">{{ pageErrors.join(' · ') }}。请刷新重试。</p>
     <div v-loading="loading" class="stats-grid">
       <article class="card stat-card"><span class="stat-card__icon"><el-icon><Monitor /></el-icon></span><div class="stat-card__label">登记设备</div><div class="stat-card__value">{{ summary.totalRecords }}</div><div class="stat-card__meta">有效 {{ summary.validDevices }} · 无效 {{ summary.invalidRecords }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--green"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">采集任务</div><div class="stat-card__value">{{ tasks.length }}</div><div class="stat-card__meta">运行中 {{ runningTasks }} · 来源于真实 Task API</div></article>
-      <article class="card stat-card"><span class="stat-card__icon stat-card__icon--green"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">无线 AP</div><div class="stat-card__value">{{ wirelessApCount === null ? '—' : wirelessApCount }}</div><div class="stat-card__meta">来自 AC 采集资源 API · {{ wirelessError ? '部分不可用' : `运行 ${wirelessRuntimeStates.running}` }}</div></article>
+      <article class="card stat-card"><span class="stat-card__icon stat-card__icon--green"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">无线 AP</div><div class="stat-card__value">{{ wirelessApCount === null ? '—' : wirelessApCount }}</div><div class="stat-card__meta">来自 AC 采集资源 API · {{ wirelessError ? '部分不可用' : '状态详情见无线工作台' }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--amber"><el-icon><Monitor /></el-icon></span><div class="stat-card__label">AC Domain</div><div class="stat-card__value">{{ wirelessAcCount === null ? '—' : wirelessAcCount }}</div><div class="stat-card__meta">当前页运行 {{ wirelessRuntimeStates.running }} · 未知 {{ wirelessRuntimeStates.unknown }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--red"><el-icon><Bell /></el-icon></span><div class="stat-card__label">服务告警</div><div class="stat-card__value">{{ diagnosticAlerts.length || '—' }}</div><div class="stat-card__meta" :class="diagnosticAlerts.length ? 'bad-text' : 'good-text'">{{ diagnosticAlerts.length ? '需要关注诊断信息' : '暂无可用告警记录' }}</div></article>
       <article class="card stat-card"><span class="stat-card__icon stat-card__icon--violet"><el-icon><DataLine /></el-icon></span><div class="stat-card__label">系统资源</div><div class="stat-card__value">{{ cpuPercent === null ? '—' : `${cpuPercent.toFixed(0)}%` }}</div><div class="stat-card__meta">进程 CPU · 工作集 {{ workingSet }}</div></article>
@@ -112,8 +130,8 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); stat
 
     <div class="dashboard-grid">
       <section class="card dashboard-card"><div class="card__header"><h2>设备状态分布</h2><span class="state-pill info">{{ summary.totalRecords }} 条记录</span></div><div v-if="summary.totalRecords" ref="statusChartHost" class="chart" /><div v-else class="chart-empty"><div><el-icon><Monitor /></el-icon><strong>暂无设备状态数据</strong><small>状态统计只读取服务端 Catalog 与实际终端会话，不生成示例设备。</small></div></div></section>
-      <section class="card dashboard-card dashboard-alert-table"><div class="card__header"><h2>最近诊断</h2><span class="state-pill">真实 health 快照</span></div><div v-if="diagnosticAlerts.length" class="table-wrap"><table class="data-table"><thead><tr><th>时间</th><th>级别</th><th>内容</th></tr></thead><tbody><tr v-for="alert in diagnosticAlerts" :key="`${alert.level}-${alert.content}`"><td>{{ alert.time }}</td><td><span :class="['state-pill', statusClass(alert.level)]">{{ alert.level }}</span></td><td>{{ alert.content }}</td></tr></tbody></table></div><div v-else class="chart-empty"><div><el-icon><CircleCheck /></el-icon><strong>暂无可用告警 API 数据</strong><small>当前服务没有提供独立告警事件源，因此不伪造告警表格。</small></div></div></section>
-      <section class="card dashboard-card"><div class="card__header"><h2>实时趋势</h2><span class="state-pill">RSSI / 吞吐</span></div><div class="chart-empty"><div><el-icon><TrendCharts /></el-icon><strong>暂无可用趋势数据</strong><small>需要真实采集源提供带时间序列的 RSSI 或吞吐数据；页面不会绘制模拟曲线。</small></div></div></section>
+      <section class="card dashboard-card dashboard-alert-table"><div class="card__header"><h2>最近诊断</h2><span class="state-pill">真实 health 快照</span></div><div v-if="diagnosticAlerts.length" class="table-wrap"><table class="data-table"><thead><tr><th>时间</th><th>级别</th><th>内容</th></tr></thead><tbody><tr v-for="alert in diagnosticAlerts" :key="`${alert.level}-${alert.content}`"><td>{{ alert.time }}</td><td><span :class="['state-pill', statusClass(alert.level)]">{{ alert.level }}</span></td><td>{{ alert.content }}</td></tr></tbody></table></div><div v-else class="chart-empty"><div><el-icon><CircleCheck /></el-icon><strong>当前实例没有告警</strong><small>设备故障、无线状态与补采操作见下方设备健康工作台。</small></div></div></section>
+      <section class="card dashboard-card"><div class="card__header"><h2>常用操作</h2><span class="state-pill">运维入口</span></div><nav class="card__body dashboard-shortcuts" aria-label="运维快捷操作"><RouterLink to="/devices">设备管理与连接</RouterLink><RouterLink to="/wireless">AC / AP 运行状态</RouterLink><RouterLink to="/config-backups">配置备份与比较</RouterLink><RouterLink to="/tools">Quick Ping 与路径探测</RouterLink><RouterLink to="/tasks">任务历史与证据</RouterLink></nav></section>
     </div>
 
     <div class="dashboard-grid dashboard-grid--wide">
@@ -121,7 +139,14 @@ onBeforeUnmount(() => { window.removeEventListener('resize', handleResize); stat
       <section class="card"><div class="card__header"><h2>系统资源</h2><span class="state-pill">进程采样</span></div><div class="card__body resource-list"><div class="resource-row"><span>CPU</span><div class="resource-track"><span :style="{ width: `${Math.min(100, cpuPercent || 0)}%` }" /></div><b>{{ cpuPercent === null ? '—' : `${cpuPercent.toFixed(0)}%` }}</b></div><div class="resource-row"><span>内存</span><div class="resource-track"><span class="resource-track--green" :style="{ width: health?.resources?.workingSetBytes ? '100%' : '0%' }" /></div><b>{{ workingSet }}</b></div><div class="resource-row"><span>磁盘</span><div class="resource-track"><span class="resource-track--violet" :style="{ width: freeDisk === '—' ? '0%' : '100%' }" /></div><b>{{ freeDisk }}</b></div><div class="overview-footer"><span><el-icon><CircleCheck /></el-icon>线程 {{ health?.resources?.threadCount ?? '—' }}</span><span><el-icon><Warning /></el-icon>未解决 Raw {{ health?.unresolvedIntegrityIssues ?? 0 }}</span></div></div></section>
     </div>
 
+    <OperationalHealth :can-recover="auth.user?.role === 'SUPERADMIN'" />
+
     <div class="section-label">运行边界</div>
     <div class="card card--flat"><div class="card__body overview-footer"><span><el-icon><CircleCheck /></el-icon>Raw 写入：{{ health?.rawWriteAvailable ? '可用' : '不可用' }}</span><span><el-icon><CircleCheck /></el-icon>Syslog：{{ health?.syslogEnabled ? '已启用' : '未启用' }}</span><span><el-icon><CircleCheck /></el-icon>H3C：{{ health?.h3cCollectionEnabled ? '已启用' : '未启用' }}</span><span><el-icon><Warning /></el-icon>在线状态必须由真实会话或采集结果确认</span></div></div>
   </NcLayout>
 </template>
+
+<style scoped>
+.dashboard-shortcuts { display: grid; gap: 16px; }
+.dashboard-shortcuts a { padding: 10px 12px; border: 1px solid var(--nc-border); border-radius: 5px; color: var(--nc-primary); }
+</style>

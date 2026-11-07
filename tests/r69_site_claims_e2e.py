@@ -308,9 +308,27 @@ def run(dll):
                 return view
             return eventually(poll, seconds=65)
 
+        def projected(task_id, minimum_observations):
+            # Raw completion commits SUCCEEDED before the separate fact publication.
+            # Require the same projection contract, with its own bounded wait.
+            latest = {}
+            def poll():
+                view = expect(owner, TASKS + "/" + task_id)
+                latest.clear()
+                latest.update(view)
+                if view["observationStatus"] == "PUBLISHED" and len(view["observations"]) >= minimum_observations:
+                    return view
+                return None
+            try:
+                return eventually(poll, seconds=15)
+            except AssertionError as error:
+                evidence["projectionFailure"] = latest
+                raise AssertionError("Verified task facts were not projected within 15 seconds") from error
+
         success_id = create(["site-a", "site-c"])
         success = completed(success_id)
         check(success["summary"]["succeeded"] == 2, "GLOBAL_MULTI_SITE_TASK_SUCCEEDED")
+        success = projected(success_id, 2)
         check(success["observationStatus"] == "PUBLISHED" and len(success["observations"]) >= 2,
               "GLOBAL_TASK_AP_ADDRESS_PROJECTION")
         expect(owner, TASKS + "/" + success_id + "/retry", "POST", {"ordinal": 0}, 409)
@@ -331,6 +349,7 @@ def run(dll):
               "RETRY_APPENDS_SUCCESS_PRESERVES_ORIGINAL_FAILURE")
         check(retried["retries"][0]["originalRunId"] == original[0]["runId"] and
               retried["retries"][0]["retryRunId"] != original[0]["runId"], "RETRY_DISTINCT_RUN_LINKAGE")
+        retried = projected(failed_id, 1)
         check(retried["observationStatus"] == "PUBLISHED" and len(retried["observations"]) > 0,
               "RETRY_AP_ADDRESS_PROJECTION")
         for payload in ({"ordinal": 0}, {"ordinal": 0, "commandIndexes": retried["retries"][0]["commandIndexes"]}):

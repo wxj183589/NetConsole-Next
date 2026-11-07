@@ -7,7 +7,7 @@ import DevicesView from './DevicesView.vue'
 
 const api = vi.hoisted(() => ({
   getDeviceSites: vi.fn(), getDeviceGroups: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(),
-  getDeviceInventoryDetail: vi.fn(), getModuleStates: vi.fn(),
+  getDeviceInventoryDetail: vi.fn(), getModuleStates: vi.fn(), getH3cOperationalCapabilities: vi.fn(),
 }))
 vi.mock('../api/client', async original => ({ ...await original<object>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
@@ -15,6 +15,11 @@ vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: vi.fn()
 const profile = { id: 'connection-b', host: '192.0.2.10' }
 const item = { id: 'inventory-b', name: '交换机乙', managementIp: profile.host, vendor: 'H3C', deviceType: 'SWITCH', terminalProfileId: profile.id, siteId: 'local', isValid: true, qualityIssues: [] }
 const detail = () => ({ item: { ...item }, terminalProfileId: profile.id, terminalProfile: { ...profile }, recentSessions: [], auditEvents: [] })
+const capabilities = () => ({ profileId: profile.id, model: 'S9850-HCL', version: '7.1.070', release: 'R6555', asOf: Date.now(), capabilities: [
+  { key: 'INTERFACE_READ', state: 'VERIFIED', reason: 'COLLECTED_RAW_VERIFIED', evidenceIds: ['raw-interface-1'], capturedMs: Date.now(), source: 'NETMIKO_SSH', freshness: 'RECENT' },
+  { key: 'LLDP_READ', state: 'STALE', reason: 'EVIDENCE_EXPIRED', evidenceIds: ['raw-lldp-1'], capturedMs: Date.now() - 600000, source: 'NETMIKO_SSH', freshness: 'STALE' },
+  { key: 'HA_SWITCH', state: 'UNKNOWN', reason: 'NOT_VERIFIED', evidenceIds: [], capturedMs: null, source: 'NONE', freshness: 'UNKNOWN' },
+] })
 const wrappers: VueWrapper[] = []
 async function render() {
   const pinia = createPinia(); setActivePinia(pinia)
@@ -44,6 +49,7 @@ describe('device detail configuration backup entry', () => {
     api.getDeviceInventory.mockResolvedValue({ items: [item], total: 1, summary: { totalRecords: 1 } })
     api.getDeviceInventoryDetail.mockResolvedValue(detail())
     api.getModuleStates.mockResolvedValue([{ key: 'config-backups', enabled: true }])
+    api.getH3cOperationalCapabilities.mockResolvedValue(capabilities())
   })
   afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
@@ -85,5 +91,64 @@ describe('device detail configuration backup entry', () => {
     const { wrapper } = await render()
     expect(wrapper.text()).toContain('该设备尚未关联可用的连接资料')
     expect(button(wrapper, '查看配置备份').attributes('disabled')).toBeDefined()
+    expect(api.getH3cOperationalCapabilities).not.toHaveBeenCalled()
+  })
+
+  it('shows scoped model, version and read capability evidence without claiming unknown writes are verified', async () => {
+    const { wrapper } = await render()
+    expect(api.getH3cOperationalCapabilities).toHaveBeenCalledWith(profile.id)
+    const evidence = wrapper.get('[data-testid="device-operational-capabilities"]')
+    for (const text of ['S9850-HCL', '7.1.070', 'R6555', 'VERIFIED', 'STALE', 'UNKNOWN', 'NETMIKO_SSH', 'raw-interface-1', 'raw-lldp-1']) expect(evidence.text()).toContain(text)
+    expect(wrapper.text()).not.toContain('当前版本没有对应设备详情 API')
+  })
+
+  it('shows loading, failure and retry states without retaining earlier successful evidence', async () => {
+    const { wrapper } = await render()
+    let reject!: (reason: Error) => void
+    api.getH3cOperationalCapabilities.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail }))
+    await button(wrapper, '刷新能力证据').trigger('click')
+    expect(wrapper.get('[role=status]').text()).toContain('正在读取')
+    expect(wrapper.text()).not.toContain('raw-interface-1')
+    reject(new Error('offline')); await flushPromises()
+    expect(wrapper.get('[role=alert]').text()).toContain('读取失败')
+    await button(wrapper, '刷新能力证据').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('raw-interface-1')
+  })
+
+  it('keeps an empty response explicitly unknown', async () => {
+    api.getH3cOperationalCapabilities.mockResolvedValue({ ...capabilities(), model: null, version: null, release: null, capabilities: [] })
+    const { wrapper } = await render()
+    expect(wrapper.text()).toContain('暂无设备能力证据，状态 UNKNOWN')
+  })
+
+  it('rejects capability data for a different profile', async () => {
+    api.getH3cOperationalCapabilities.mockResolvedValue({ ...capabilities(), profileId: 'unrelated' })
+    const { wrapper } = await render()
+    expect(wrapper.get('[role=alert]').text()).toContain('读取失败')
+    expect(wrapper.text()).not.toContain('raw-interface-1')
+  })
+
+  it('discards a late capability response after selecting another device', async () => {
+    let resolve!: (value: ReturnType<typeof capabilities>) => void
+    api.getH3cOperationalCapabilities.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const { wrapper } = await render()
+    const other = detail(); other.item.name = '另一设备'; other.item.terminalProfileId = 'other-profile'; other.terminalProfileId = 'other-profile'; other.terminalProfile.id = 'other-profile'
+    api.getDeviceInventoryDetail.mockResolvedValue(other)
+    api.getH3cOperationalCapabilities.mockResolvedValue({ ...capabilities(), profileId: 'other-profile', model: 'other-model', capabilities: [] })
+    await button(wrapper, '详情').trigger('click'); await flushPromises()
+    resolve(capabilities()); await flushPromises()
+    expect(wrapper.text()).toContain('other-model')
+    expect(wrapper.text()).not.toContain('raw-interface-1')
+  })
+
+  it.each(['site', 'permission'])('discards pending capability evidence when %s changes', async kind => {
+    let resolve!: (value: ReturnType<typeof capabilities>) => void
+    api.getH3cOperationalCapabilities.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const { wrapper } = await render()
+    if (kind === 'site') await wrapper.get('.scope-site-select select').setValue('')
+    else useAuthStore().user = { username: 'other-reader', role: 'ADMIN' }
+    await flushPromises(); resolve(capabilities()); await flushPromises()
+    expect(wrapper.find('[data-testid="device-operational-capabilities"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('raw-interface-1')
   })
 })
