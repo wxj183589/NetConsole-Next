@@ -147,6 +147,14 @@ internal static class FaultLifecycle
     public static IReadOnlyList<FaultTransition> Append(FaultIncident item, FaultTransition transition) =>
         item.History.Append(transition).TakeLast(50).ToArray();
 
+    internal static string? FreshProbeRecoveryEvidence(FaultIncident item, OperationalProbeWindow? window, long now) =>
+        item.Kind == "PROBE_PACKET_LOSS" && window?.ResourceKey == item.ResourceKey &&
+        window.RecoveryStartedMs is { } started && window.RecoveryConfirmedMs is { } ended &&
+        started > item.LastSeenMs && ended >= started && ended <= now &&
+        now - started <= OperationalHealthProjection.FreshnessWindowMs &&
+        (window.LastConfirmedLossMs is null || window.LastConfirmedLossMs < started)
+            ? window.EvidenceIds.FirstOrDefault() : null;
+
     public static H3cFactSnapshot? FreshRecoveryFact(FaultIncident item, IReadOnlyList<H3cFactSnapshot> facts, long now) =>
         facts.Where(f => item.SourceAuthority is not null && item.CapturedScopeKey is not (null or "UNSCOPED") &&
             f.SourceAuthority == item.SourceAuthority && f.CapturedScopeKey == item.CapturedScopeKey &&
@@ -323,7 +331,9 @@ internal sealed class FaultCenterService : BackgroundService
                 {
                     var snapshot = _health.Get(scope, page, actor.UserId);
                     var health = snapshot.Devices.FirstOrDefault(d => d.DeviceId == item.DeviceId);
-                    var metric = item.Kind == "TRACEROUTE_ANOMALY" ? health?.RouteReachability : health?.PacketLossPercent;
+                    if (item.Kind == "PROBE_PACKET_LOSS")
+                        evidence = FaultLifecycle.FreshProbeRecoveryEvidence(item, health?.ProbeWindow, now);
+                    var metric = item.Kind == "TRACEROUTE_ANOMALY" ? health?.RouteReachability : null;
                     if (metric is { State: "OBSERVED", CapturedMs: { } at } &&
                         metric.Value == (item.Kind == "TRACEROUTE_ANOMALY" ? 1 : 0) && at > item.LastSeenMs && metric.ResourceKey == item.ResourceKey)
                         evidence = metric.EvidenceIds.FirstOrDefault();

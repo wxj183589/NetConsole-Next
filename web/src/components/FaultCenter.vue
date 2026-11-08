@@ -109,6 +109,7 @@ onBeforeUnmount(() => { generation++ })
     <header class="card__header"><h2>故障中心</h2><div><button :disabled="busy || !!error || !result?.items.length" @click="exportCsv">导出当前页故障与历史 CSV</button><button :disabled="busy" @click="load()">刷新故障历史</button></div></header>
     <div class="card__body">
       <p>事件按设备、Site、故障类型与资源聚合。确认表示已知悉；恢复必须通过更新的有效证据核验。</p>
+      <p>Ping 连续 3 次有效丢失形成丢包事件；同目标末尾连续 3 次有效应答且均晚于事件才可恢复。累计丢包率保留，不代表设备离线。</p>
       <form class="fault-center__filters" @submit.prevent="load()">
         <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>

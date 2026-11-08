@@ -4,11 +4,13 @@ namespace NetConsole.Next.Service;
 
 internal sealed record OperationalMetric(string State, double? Value, string Unit, long? CapturedMs,
     IReadOnlyList<string> EvidenceIds, string? ResourceKey = null);
+internal sealed record OperationalProbeWindow(long? LastConfirmedLossMs, long? RecoveryStartedMs,
+    long? RecoveryConfirmedMs, IReadOnlyList<string> EvidenceIds, string? ResourceKey);
 internal sealed record OperationalDeviceHealth(string DeviceId, string Name, string SiteId, string? ProfileId,
     string State, OperationalMetric Reachability, OperationalMetric CpuPercent, OperationalMetric MemoryPercent,
     OperationalMetric InterfaceDown, OperationalMetric LldpNeighbors, IReadOnlyList<string> Warnings,
     OperationalMetric? PingDelayMs = null, OperationalMetric? PacketLossPercent = null,
-    OperationalMetric? RouteReachability = null);
+    OperationalMetric? RouteReachability = null, OperationalProbeWindow? ProbeWindow = null);
 internal sealed record OperationalFaultEvent(string Id, string DeviceId, string SiteId, string Kind,
     string Severity, string State, long AtMs, string EvidenceType, string EvidenceId, string Detail,
     string? ResourceKey = null, string? SourceAuthority = null, string? CapturedScopeKey = null);
@@ -84,6 +86,36 @@ internal static class OperationalHealthProjection
     }
     public static string ProbeResource(string protocol, string address, int? port) =>
         JsonSerializer.Serialize(new object?[] { protocol, address, port });
+    internal static OperationalProbeWindow ProbeWindow(NetworkDiagnosticItemSnapshot item, string runId,
+        DeviceInventoryItem device, long now)
+    {
+        var unknown = new OperationalProbeWindow(null, null, null, [], null);
+        if (item.Kind is not ("QUICK_PING" or "LONG_PING") || item.DeviceId != device.Id || item.SiteId != device.SiteId ||
+            item.StartedMs is not { } started || item.EndedMs is not { } ended || started > ended || ended > now ||
+            now - ended > FreshnessWindowMs || item.QuickPing is not { Sent: > 0, Samples.Count: > 0 and <= 3600 } ping ||
+            ping.DestinationAddress != device.ManagementIp ||
+            !(ping.Protocol == "ICMP" && ping.Port is null || ping.Protocol == "TCP" && ping.Port == device.Port) ||
+            !(item.State == "SUCCEEDED" && item.Outcome is "OK" or "LONG_PING_WINDOW_ENDED" && ping.Lost == 0 ||
+              item.State == "FAILED" && item.Outcome == (item.Kind == "QUICK_PING" ? "QUICK_PING_LOSS" : "LONG_PING_LOSS") && ping.Lost > 0) ||
+            ping.Sent != ping.Samples.Count || ping.RequestedSamples < ping.Sent) return unknown;
+        var losses = 0; var replies = 0; var received = 0; long? lossAt = null; var previousAt = started;
+        for (var index = 0; index < ping.Samples.Count; index++)
+        {
+            var sample = ping.Samples[index];
+            if (sample is null || sample.Sequence != index + 1 || sample.CapturedMs < previousAt || sample.CapturedMs > ended ||
+                !(sample.Status == "REPLIED" && sample.LatencyMs is >= 0 ||
+                  sample.Status is "TIMED_OUT" or "UNREACHABLE" && sample.LatencyMs is null)) return unknown;
+            previousAt = sample.CapturedMs;
+            if (sample.Status == "REPLIED") received++;
+            // Older samples remain cumulative statistics, but cannot confirm a current fault or recovery.
+            if (now - sample.CapturedMs > FreshnessWindowMs) { losses = 0; replies = 0; continue; }
+            if (sample.Status == "REPLIED") { replies++; losses = 0; }
+            else { losses++; replies = 0; if (losses >= 3) lossAt = sample.CapturedMs; }
+        }
+        if (ping.Received != received || ping.Lost != ping.Sent - received) return unknown;
+        return new(lossAt, replies >= 3 ? ping.Samples[^3].CapturedMs : null,
+            replies >= 3 ? ping.Samples[^1].CapturedMs : null, [runId], ProbeResource(ping.Protocol, ping.DestinationAddress, ping.Port));
+    }
     public static OperationalMetric RouteMetric(NetworkDiagnosticItemSnapshot item, string runId,
         DeviceInventoryItem device, long now)
     {
@@ -174,16 +206,18 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             var ping = pingEvidence.Item;
             if (ping?.QuickPing is { Sent: > 0 } sample)
             {
+                var window = OperationalHealthProjection.ProbeWindow(ping, pingEvidence.RunId, device, now);
                 health = health with
                 {
                     PingDelayMs = new(sample.AverageMs is null ? "UNKNOWN" : "OBSERVED", sample.AverageMs, "ms", ping.EndedMs, [pingEvidence.RunId]),
                     PacketLossPercent = new("OBSERVED", sample.LossPercent, "%", ping.EndedMs, [pingEvidence.RunId],
-                        OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port))
+                        OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port)),
+                    ProbeWindow = window
                 };
-                if (sample.LossPercent > 0)
+                if (window.LastConfirmedLossMs is { } lossAt)
                     events.Add(new("loss:" + ping.Id, device.Id, device.SiteId, "PROBE_PACKET_LOSS", "WARNING", "OBSERVED",
-                        ping.EndedMs!.Value, "DIAGNOSTIC", pingEvidence.RunId, $"{sample.Protocol} 探测样本存在丢失；不据此断定设备离线。",
-                        OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port)));
+                        lossAt, "DIAGNOSTIC", pingEvidence.RunId, $"{sample.Protocol} 连续 3 次有效探测丢失；不据此断定设备离线。",
+                        window.ResourceKey));
             }
             var routeEvidence = diagnosticItems.FirstOrDefault(pair => pair.Item.Kind == "TRACEROUTE" &&
                 pair.Item.DeviceId == device.Id && pair.Item.SiteId == device.SiteId &&
@@ -261,6 +295,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             ["仅汇总当前页授权设备；最多读取 100 项近期任务、每设备 1000 条 Current Facts、显示 100 项事件。",
              "CPU、内存和缺少证据的指标为 UNKNOWN；接口和 LLDP 仅代表已观测条目。",
              "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内完成的真实采样；无线故障每次检查本页最多 10 个 AP，并在后续调用间轮转。",
+             "Ping 连续 3 次有效丢失确认丢包事件；末尾连续 3 次有效应答且均晚于事件才可核验恢复，累计丢包率仍保留。",
              "LLDP 消失仅对照同来源与捕获范围的最近 1000 个独立邻居身份的最后观测和完整 Current 表；身份超限会遗漏事件。",
              "连接会话关闭或采集失败不代表设备离线。"]);
     }

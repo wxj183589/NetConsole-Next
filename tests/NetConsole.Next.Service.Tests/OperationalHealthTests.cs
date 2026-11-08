@@ -16,13 +16,118 @@ internal static class OperationalHealthTests
         RouteRequiresHopObservations();
         RouteNonBusinessFailuresStayUnknown();
         RouteExplicitFailuresAreObserved();
+        ProbeLossNeedsConsecutiveActualSamples();
+        ProbeRecoveryUsesTrailingReplyWindow();
+        ProbeRejectsInvalidSampleEvidence();
+        ProbeRequiresCurrentExactTerminalResource();
+        ProbeUsesFreshSamplesNotCompletionTime();
+        ProbeDoesNotCountUnsentSamples();
         LldpLossRequiresCompletePartitionEvidence();
         CompleteEmptyLldpIsObservedZero();
         await TransientFailureRecovers();
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=17/17 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=23/23 PASS");
+    }
+    private static NetworkDiagnosticItemSnapshot Probe(params string[] statuses)
+    {
+        var samples = statuses.Select((status, index) => new QuickPingSample(index + 1,
+            Now - statuses.Length + index, status, status == "REPLIED" ? 2 : null)).ToArray();
+        var received = statuses.Count(status => status == "REPLIED");
+        var lost = statuses.Length - received;
+        return new("ping-item", "device-a", "device a", "site-a", "LONG_PING", lost == 0 ? "SUCCEEDED" : "FAILED",
+            lost == 0 ? "OK" : "LONG_PING_LOSS", null, Now - 100, Now, 100, statuses.Length, ["SERVICE_HOST_ICMP"],
+            QuickPing: new("ICMP", "192.0.2.10", null, statuses.Length, statuses.Length, received, lost,
+                statuses.Length == 0 ? null : 100.0 * lost / statuses.Length, received > 0 ? 2 : null,
+                received > 0 ? 2 : null, received > 0 ? 2 : null, samples));
+    }
+    private static OperationalProbeWindow Window(NetworkDiagnosticItemSnapshot item) =>
+        OperationalHealthProjection.ProbeWindow(item, "ping-run", Device(), Now);
+    private static void ProbeLossNeedsConsecutiveActualSamples()
+    {
+        Assert(Window(Probe("REPLIED", "TIMED_OUT", "REPLIED", "TIMED_OUT", "UNREACHABLE")).LastConfirmedLossMs is null,
+            "isolated losses and two consecutive losses cannot form a confirmed fault");
+        var item = Probe("REPLIED", "TIMED_OUT", "UNREACHABLE", "TIMED_OUT", "TIMED_OUT");
+        var result = Window(item);
+        Assert(result.LastConfirmedLossMs == item.QuickPing!.Samples[^1].CapturedMs && result.LastConfirmedLossMs < item.EndedMs &&
+            result.EvidenceIds.SequenceEqual(["ping-run"]) && result.ResourceKey == "[\"ICMP\",\"192.0.2.10\",null]",
+            "three actual contiguous losses preserve the latest loss time, source run and exact probe resource");
+        Assert(OperationalHealthProjection.Device(Device(), [], Now).State == "UNKNOWN",
+            "packet loss never synthesizes device offline or AP state");
+    }
+    private static void ProbeRecoveryUsesTrailingReplyWindow()
+    {
+        var item = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED", "REPLIED");
+        var result = Window(item);
+        Assert(result.LastConfirmedLossMs == item.QuickPing!.Samples[2].CapturedMs &&
+            result.RecoveryStartedMs == item.QuickPing.Samples[^3].CapturedMs &&
+            result.RecoveryConfirmedMs == item.QuickPing.Samples[^1].CapturedMs && item.QuickPing.LossPercent > 0,
+            "a recovered trailing window is distinct from the preserved cumulative loss percentage within one run");
+        Assert(Window(Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED")).RecoveryConfirmedMs is null &&
+            Window(Probe("REPLIED", "REPLIED", "REPLIED", "TIMED_OUT")).RecoveryConfirmedMs is null,
+            "two replies and a later loss cannot prove current recovery");
+    }
+    private static void ProbeRejectsInvalidSampleEvidence()
+    {
+        var item = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED");
+        var ping = item.QuickPing!;
+        foreach (var bad in new[]
+        {
+            ping with { Sent = ping.Sent + 1 }, ping with { Received = 0 }, ping with { Lost = 0 },
+            ping with { RequestedSamples = 1 }, ping with { Samples = [] },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 1 ? s with { Sequence = 3 } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 1 ? s with { CapturedMs = Now - 99 } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 1 ? s with { CapturedMs = Now + 1 } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 1 ? s with { Status = "UNKNOWN" } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 1 ? s with { LatencyMs = 2 } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 5 ? s with { LatencyMs = -1 } : s).ToArray() },
+            ping with { Samples = ping.Samples.Select((s, i) => i == 5 ? s with { LatencyMs = null } : s).ToArray() }
+        })
+        {
+            var result = Window(item with { QuickPing = bad });
+            Assert(result.LastConfirmedLossMs is null && result.RecoveryConfirmedMs is null && result.ResourceKey is null,
+                "gaps, counter mismatch, malformed status, invalid latency and out-of-order/future samples remain unknown");
+        }
+    }
+    private static void ProbeRequiresCurrentExactTerminalResource()
+    {
+        var item = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED");
+        foreach (var bad in new[]
+        {
+            item with { DeviceId = "other" }, item with { SiteId = "other" }, item with { Kind = "PING" },
+            item with { State = "RUNNING" }, item with { State = "CANCELLED" }, item with { Outcome = "PING_FAILED" },
+            item with { EndedMs = Now + 1 }, item with { EndedMs = Now - 300001 }, item with { StartedMs = null },
+            item with { QuickPing = item.QuickPing! with { DestinationAddress = "192.0.2.11" } },
+            item with { QuickPing = item.QuickPing! with { Protocol = "TCP", Port = 23 } },
+            item with { QuickPing = item.QuickPing! with { Port = 22 } },
+            item with { QuickPing = item.QuickPing! with { Protocol = "UDP" } }
+        }) Assert(Window(bad).ResourceKey is null, "only fresh completed business evidence for the exact device/Site/endpoint can confirm probe windows");
+        Assert(Window(item with { QuickPing = item.QuickPing! with { Protocol = "TCP", Port = 22 } }).ResourceKey ==
+            "[\"TCP\",\"192.0.2.10\",22]", "TCP keeps its exact port separate from ICMP and other services");
+        Assert(Window(item with { Kind = "QUICK_PING", Outcome = "QUICK_PING_LOSS" }).LastConfirmedLossMs is not null,
+            "Quick Ping uses the same actual sample confirmation policy");
+    }
+    private static void ProbeUsesFreshSamplesNotCompletionTime()
+    {
+        var item = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED");
+        var old = item with { StartedMs = Now - 400000, QuickPing = item.QuickPing! with
+            { Samples = item.QuickPing.Samples.Select(s => s with { CapturedMs = s.CapturedMs - 300001 }).ToArray() } };
+        Assert(Window(old).LastConfirmedLossMs is null && Window(old).RecoveryConfirmedMs is null,
+            "fresh run completion cannot revive old loss or reply samples after a long pause");
+        var partial = old with { QuickPing = old.QuickPing! with { Samples = old.QuickPing.Samples.Select((s, i) =>
+            i >= 4 ? s with { CapturedMs = Now - 6 + i } : s).ToArray() } };
+        Assert(Window(partial).RecoveryConfirmedMs is null,
+            "two new replies cannot borrow an old reply across the freshness boundary");
+    }
+    private static void ProbeDoesNotCountUnsentSamples()
+    {
+        var item = Probe("REPLIED", "REPLIED", "REPLIED");
+        var bounded = item with { Outcome = "LONG_PING_WINDOW_ENDED", QuickPing = item.QuickPing! with { RequestedSamples = 100 } };
+        Assert(Window(bounded).LastConfirmedLossMs is null && Window(bounded).RecoveryConfirmedMs is not null,
+            "unsent requested samples do not count as lost when the duration window ends");
+        Assert(Window(Probe()).RecoveryConfirmedMs is null && Window(Probe()).LastConfirmedLossMs is null,
+            "zero sent samples provide neither failure nor recovery evidence");
     }
     private static void CancelledTaskIsNotFault()
     {
