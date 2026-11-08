@@ -14,7 +14,7 @@ vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), 
 function item(overrides: Partial<NetworkDiagnosticItem> = {}): NetworkDiagnosticItem {
   return { id: 'trace-one', deviceId: 'device-one', deviceName: '交换机甲', siteId: 'site-one', kind: 'TRACEROUTE',
     state: 'SUCCEEDED', outcome: 'OK', detail: null, latencyMs: 12, evidenceCount: 0, evidenceSources: [],
-    traceRoute: { destinationAddress: '192.0.2.10', destinationReached: true, maxHops: 30, hops: [
+    traceRoute: { destinationAddress: '192.0.2.10', destinationReached: true, maxHops: 30, probeKind: 'WINDOWS_SYSTEM_ICMP_TRACERT', hops: [
       { ttl: 1, address: '192.0.2.1', status: 'TTL_EXPIRED', latencyMs: 2 },
       { ttl: 2, address: null, status: 'TIMED_OUT', latencyMs: null },
       { ttl: 3, address: '192.0.2.10', status: 'REACHED', latencyMs: 3 },
@@ -82,6 +82,7 @@ describe('network diagnostic tools and traceroute', () => {
     expect(api.startNetworkDiagnostics).toHaveBeenCalledWith({ deviceIds: ['device-one'], kinds: ['QUICK_PING'], timeoutMs: 2000, sampleCount: 3, intervalMs: 100, quickPingProtocol: 'TCP' })
     const result = wrapper.get('section[aria-label="交换机甲 Quick Ping 结果"]')
     expect(result.text()).toContain('丢失率 100%'); expect(result.text()).toContain('— / — / — ms')
+    expect(result.text()).toContain('P95 UNKNOWN ms')
     expect(result.findAll('.quick-ping-sample')).toHaveLength(3)
   })
 
@@ -141,6 +142,7 @@ describe('network diagnostic tools and traceroute', () => {
     const wrapper = await render(); await selectTrace(wrapper); await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
     const route = wrapper.get('section[aria-label="交换机甲 Traceroute 路径"]')
     expect(route.text()).toContain('目标 192.0.2.10'); expect(route.text()).toContain('已记录 3 / 30 跳')
+    expect(route.text()).toContain('Windows 系统 ICMP')
     expect(route.findAll('tbody tr').map(row => row.findAll('td').map(cell => cell.text()))).toEqual([
       ['1', '192.0.2.1', '中间节点', '2 ms'], ['2', '—', '该跳超时', '—'], ['3', '192.0.2.10', '已到达目标', '3 ms'],
     ])

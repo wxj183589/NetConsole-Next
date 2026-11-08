@@ -538,6 +538,7 @@ export interface H3cTaskPlanReport {
 
 export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE' | 'QUICK_PING' | 'LONG_PING'
 export interface NetworkTraceRoute {
+  probeKind?: 'DOTNET_ICMP' | 'WINDOWS_SYSTEM_ICMP_TRACERT'
   destinationAddress: string
   destinationReached: boolean
   maxHops: number

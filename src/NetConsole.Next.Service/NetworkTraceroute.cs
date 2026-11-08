@@ -8,7 +8,7 @@ namespace NetConsole.Next.Service;
 internal sealed record NetworkDiagnosticHopSnapshot(int Ttl, string? Address, string Status, long? LatencyMs);
 
 internal sealed record NetworkTracerouteSnapshot(string DestinationAddress, bool DestinationReached, int MaxHops,
-    IReadOnlyList<NetworkDiagnosticHopSnapshot> Hops);
+    IReadOnlyList<NetworkDiagnosticHopSnapshot> Hops, string ProbeKind = "DOTNET_ICMP");
 
 internal sealed record NetworkTracerouteProbeReply(IPStatus Status, IPAddress? Address, long? LatencyMs);
 
@@ -60,9 +60,16 @@ internal static class NetworkTraceroute
             ?? addresses.FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetworkV6)
             ?? throw new SocketException((int)SocketError.HostNotFound);
         var hops = new List<NetworkDiagnosticHopSnapshot>(MaximumHops);
+        var systemTrace = OperatingSystem.IsWindows() && probe is IcmpNetworkTracerouteProbe;
         NetworkTracerouteSnapshot Snapshot(bool reached = false) => new(destination.ToString(), reached,
-            MaximumHops, hops.ToArray());
+            MaximumHops, hops.ToArray(), systemTrace ? "WINDOWS_SYSTEM_ICMP_TRACERT" : "DOTNET_ICMP");
         progress(Snapshot());
+        if (systemTrace)
+        {
+            var remaining = timeoutMs - (int)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (remaining <= 0) throw new OperationCanceledException(cancellationToken);
+            return await WindowsSystemTraceroute.RunAsync(destination, remaining, requireCurrentTarget, progress, cancellationToken);
+        }
         for (var ttl = 1; ttl <= MaximumHops; ttl++)
         {
             cancellationToken.ThrowIfCancellationRequested();

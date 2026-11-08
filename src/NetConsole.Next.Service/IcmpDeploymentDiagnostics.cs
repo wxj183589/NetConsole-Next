@@ -18,9 +18,19 @@ internal static class IcmpDeploymentDiagnostics
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var reply = await (probe ?? new IcmpNetworkTracerouteProbe()).SendAsync(IPAddress.Loopback, 1, 2000, deadline.Token);
-            status = reply.Status.ToString();
-            state = reply.Status == IPStatus.Success && IPAddress.Loopback.Equals(reply.Address) ? "PASS" : "FAILED";
+            if (probe is null)
+            {
+                var trace = await NetworkTraceroute.RunAsync("127.0.0.1", 2000, new IcmpNetworkTracerouteProbe(),
+                    () => { }, _ => { }, deadline.Token);
+                status = trace.DestinationReached ? IPStatus.Success.ToString() : trace.Hops.LastOrDefault()?.Status;
+                state = trace.DestinationReached ? "PASS" : "FAILED";
+            }
+            else
+            {
+                var reply = await probe.SendAsync(IPAddress.Loopback, 1, 2000, deadline.Token);
+                status = reply.Status.ToString();
+                state = reply.Status == IPStatus.Success && IPAddress.Loopback.Equals(reply.Address) ? "PASS" : "FAILED";
+            }
         }
         catch (Exception exception) when (exception is PingException or System.Net.Sockets.SocketException or
             UnauthorizedAccessException or OperationCanceledException or Win32Exception)
@@ -31,7 +41,9 @@ internal static class IcmpDeploymentDiagnostics
                     nativeErrorCode = current is Win32Exception native ? (int?)native.NativeErrorCode : null });
         }
         await output.WriteLineAsync(JsonSerializer.Serialize(new {
-            state, target = "127.0.0.1", ttl = 1, status, executable = Environment.ProcessPath,
+            state, target = "127.0.0.1", ttl = 1, status,
+            probeKind = probe is not null ? "INJECTED_ICMP" : OperatingSystem.IsWindows() ? "WINDOWS_SYSTEM_ICMP_TRACERT" : "DOTNET_ICMP",
+            executable = Environment.ProcessPath,
             processId = Environment.ProcessId, runtime = RuntimeInformation.FrameworkDescription,
             architecture = RuntimeInformation.ProcessArchitecture.ToString(), errors,
             dataRootAccessed = false, hostStarted = false

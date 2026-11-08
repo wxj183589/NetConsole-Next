@@ -10,6 +10,7 @@ internal static class NetworkTracerouteTests
 {
     public static async Task RunAsync(bool includeLiveLoopback = true)
     {
+        await WindowsSystemTracerouteTests.RunAsync();
         await HopsResolveOnceAndRequireTheActualDestination();
         await StopsAtThirtyHops();
         await StopsOnUnreachable();
@@ -102,7 +103,7 @@ internal static class NetworkTracerouteTests
             var item = completed.Items.Single();
             Assert(item.State == "SUCCEEDED" && item.TraceRoute is { DestinationReached: true } trace &&
                 trace.Hops.Count == 1 && trace.Hops[0] is { Ttl: 1, Status: "REACHED", Address: "127.0.0.1" },
-                "real .NET ICMP loopback must reach its destination at TTL1");
+                "production ICMP loopback must reach its destination at TTL1");
         }
         // Simulate an older on-disk item without the optional traceRoute property.
         var legacyId = Guid.NewGuid().ToString("N");
