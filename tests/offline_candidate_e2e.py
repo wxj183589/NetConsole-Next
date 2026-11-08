@@ -71,6 +71,19 @@ def candidate_directory(value: Path) -> Path:
     return candidate
 
 
+def launch_command(candidate: Path, dotnet_host: Path | None = None) -> list[str]:
+    # Apphost remains the required default. The explicit alternate gate tests
+    # the existing DLL launch contract separately; it never retries a failed EXE.
+    if dotnet_host is None:
+        return [str(candidate / "NetConsole.Next.Service.exe")]
+    if not dotnet_host.is_absolute() or not dotnet_host.is_file() or dotnet_host.name.lower() != "dotnet.exe":
+        raise ValueError("--dotnet-host must name an existing absolute dotnet.exe")
+    dll = candidate / "NetConsole.Next.Service.dll"
+    if not dll.is_file():
+        raise ValueError("Candidate DLL is missing")
+    return [str(dotnet_host), str(dll)]
+
+
 def isolated_environment(root: Path, temporary: Path, port: int) -> dict[str, str]:
     # Never inherit a real data root, source worker override, development-only
     # credential provider, COM simulator, or a caller's feature/test switches.
@@ -258,7 +271,7 @@ def verify_full_diagnostic(client: Client, target: DiagnosticTarget, profile: st
     print("OFFLINE_FULL_DIAGNOSTIC=PASS (direct/confirmed output above 256KiB, display-only n, redacted sealed TXT/ZIP; 12 checks)")
 
 
-def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
+def verify_scheduled_backups(candidate: Path, temporary: Path, dotnet_host: Path | None = None) -> None:
     # The published EXE owns every startup and run. Only this stopped synthetic
     # fixture's due time is advanced; no source DLL, test clock or worker override.
     target, service = ConfigurationTarget(), None
@@ -275,7 +288,7 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
             assert service is None, "Stop this candidate before restarting its fixture"
             port = free_port()
             service = subprocess.Popen(
-                [str(candidate / "NetConsole.Next.Service.exe")], cwd=candidate,
+                launch_command(candidate, dotnet_host), cwd=candidate,
                 env=isolated_environment(root, temporary, port), stdout=log, stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
             )
@@ -477,7 +490,7 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
                 eventually(lambda: target.active == 0)
 
 
-def verify_feature(candidate: Path, temporary: Path, feature: str, target_type, verify, device_type="SWITCH") -> None:
+def verify_feature(candidate: Path, temporary: Path, feature: str, target_type, verify, device_type="SWITCH", dotnet_host: Path | None = None) -> None:
     # Each feature uses a fresh isolated service/catalog. This preserves the
     # production one-management-IP-per-Site invariant for loopback fixtures.
     target, service = target_type(), None
@@ -488,7 +501,7 @@ def verify_feature(candidate: Path, temporary: Path, feature: str, target_type, 
         with log_path.open("w", encoding="utf-8") as log:
             try:
                 service = subprocess.Popen(
-                    [str(candidate / "NetConsole.Next.Service.exe")], cwd=candidate, env=env,
+                    launch_command(candidate, dotnet_host), cwd=candidate, env=env,
                     stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                 )
                 base = f"http://127.0.0.1:{port}"
@@ -516,10 +529,12 @@ def verify_feature(candidate: Path, temporary: Path, feature: str, target_type, 
         eventually(lambda: target.active == 0)
 
 
-def run(candidate: Path) -> None:
+def run(candidate: Path, dotnet_host: Path | None = None) -> None:
     if os.name != "nt":
         raise RuntimeError("This acceptance gate requires Windows")
     candidate = candidate_directory(candidate)
+    command = launch_command(candidate, dotnet_host)
+    print("OFFLINE_LAUNCH_MODE=" + ("APPHOST" if dotnet_host is None else "DOTNET_DLL_EXPLICIT") + "; executable=" + command[0], flush=True)
     test_parent = workspace_path("test-data")
     test_parent.mkdir(parents=True, exist_ok=True)
     network, linux = ReconnectTarget(), LinuxSimulator()
@@ -534,7 +549,7 @@ def run(candidate: Path) -> None:
             log_path = temporary / "service.log"
             with log_path.open("w", encoding="utf-8") as log:
                 service = subprocess.Popen(
-                    [str(candidate / "NetConsole.Next.Service.exe")], cwd=candidate, env=env,
+                    command, cwd=candidate, env=env,
                     stdout=log, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                 )
                 try:
@@ -582,10 +597,10 @@ def run(candidate: Path) -> None:
                     raise
                 finally:
                     stop_service(service)
-            verify_feature(candidate, temporary, "ac-resources", AcTarget, verify_ac_resources, "AC")
-            verify_feature(candidate, temporary, "configuration-kinds", ConfigurationTarget, verify_configuration_kinds)
-            verify_feature(candidate, temporary, "full-diagnostic", DiagnosticTarget, verify_full_diagnostic)
-            verify_scheduled_backups(candidate, temporary)
+            verify_feature(candidate, temporary, "ac-resources", AcTarget, verify_ac_resources, "AC", dotnet_host)
+            verify_feature(candidate, temporary, "configuration-kinds", ConfigurationTarget, verify_configuration_kinds, dotnet_host=dotnet_host)
+            verify_feature(candidate, temporary, "full-diagnostic", DiagnosticTarget, verify_full_diagnostic, dotnet_host=dotnet_host)
+            verify_scheduled_backups(candidate, temporary, dotnet_host)
         print("OFFLINE_CANDIDATE=PASS (including persisted schedules and Windows loopback Traceroute; synthetic targets only; REAL_DEVICE_PENDING)")
     finally:
         network.close()
@@ -595,4 +610,6 @@ def run(candidate: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path, help="published Windows Service directory under Workspace build/ or release/")
-    run(parser.parse_args().candidate)
+    parser.add_argument("--dotnet-host", type=Path, help="explicit alternate DLL gate; absolute dotnet.exe; default remains candidate EXE")
+    arguments = parser.parse_args()
+    run(arguments.candidate, arguments.dotnet_host)
