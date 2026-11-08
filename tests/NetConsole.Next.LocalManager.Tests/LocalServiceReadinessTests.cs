@@ -20,7 +20,17 @@ internal static class LocalServiceReadinessTests
         using var invalidClient = new HttpClient(new FixedHandler(new string('x', 65_537)));
         var oversized = await CaptureFailure(() => LocalServiceReadiness.WaitForHealthyAsync(invalidClient, 18773, TimeSpan.FromSeconds(1)));
         Check(oversized is InvalidDataException, "oversized health response must fail closed");
-        Console.WriteLine("LOCAL_SERVICE_READINESS_TESTS=3/3 PASS: startup retry, degraded health timeout, bounded health payload");
+        foreach (var processId in new[] { "\"42\"", "true", "null", "[]", "{}", "2147483648", "1.5", "0", "-1" })
+        {
+            using var invalidPidClient = new HttpClient(new FixedHandler(
+                "{\"serviceState\":\"running\",\"healthState\":\"HEALTHY\",\"processId\":" + processId + "}"));
+            var invalidPid = await CaptureFailure(() => LocalServiceReadiness.WaitForHealthyAsync(
+                invalidPidClient, 18774, TimeSpan.FromMilliseconds(30)));
+            Check(invalidPid.Message.Contains("SERVICE_NOT_READY", StringComparison.Ordinal) &&
+                invalidPid.Message.Contains("processId=missing", StringComparison.Ordinal),
+                "invalid process IDs must produce the bounded readiness diagnosis instead of a JSON type exception");
+        }
+        Console.WriteLine("LOCAL_SERVICE_READINESS_TESTS=4/4 PASS: startup retry, degraded health timeout, bounded health payload, invalid process ID diagnosis");
     }
 
     private static async Task<Exception> CaptureFailure(Func<Task> action)

@@ -42,7 +42,8 @@ internal static class LocalServiceReadiness
                         ? healthState.GetString() : null;
                     var service = value.TryGetProperty("serviceState", out var serviceState) && serviceState.ValueKind == JsonValueKind.String
                         ? serviceState.GetString() : null;
-                    var hasProcess = value.TryGetProperty("processId", out var processId) && processId.TryGetInt32(out var pid) && pid > 0;
+                    var hasProcess = value.TryGetProperty("processId", out var processId) &&
+                        processId.ValueKind == JsonValueKind.Number && processId.TryGetInt32(out var pid) && pid > 0;
                     if (state == "HEALTHY" && service == "running" && hasProcess) return;
                     lastState = $"serviceState={service ?? "UNKNOWN"}, healthState={state ?? "UNKNOWN"}, processId={(hasProcess ? "present" : "missing")}";
                 }
