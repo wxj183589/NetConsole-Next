@@ -19,6 +19,8 @@ const attempts = ref(3)
 const loadedScope = ref<{ filters: FaultFilters; at: string } | null>(null)
 let generation = 0
 let active = true
+const stateLabels: Record<string, string> = { OPEN: '待处理', ACKNOWLEDGED: '已确认', PROCESSING: '处理中', RESOLVED: '已恢复', REOPENED: '故障复发' }
+const kindLabels: Record<string, string> = { INTERFACE_DOWN: '接口中断', LLDP_NEIGHBOR_LOST: 'LLDP 邻居丢失', COLLECTION_FAILURE: '采集失败', EVIDENCE_STALE: '采集证据过期', PROBE_PACKET_LOSS: '探测丢包', TRACEROUTE_ANOMALY: '路由追踪异常', AP_OFFLINE: 'AP 离线', AP_CONFLICT: 'AP 状态冲突', CONFIGURATION_CHANGED: '配置变化' }
 const time = (at: number | null) => at ? new Date(at).toLocaleString() : '—'
 async function load(page = 1) {
   const current = ++generation
@@ -114,9 +116,9 @@ onBeforeUnmount(() => { generation++ })
       <p>运行中的 Long Ping 按真实样本同步故障、恢复与复发，无须等待任务结束。暂停和取消不提供恢复证据；ICMP 与 TCP 端口分别核验。</p>
       <p>配置变化来自连续完整备份；后续备份一致表示配置已稳定，不表示已回滚到变化前配置。备份缺失或损坏不能确认恢复。</p>
       <form class="fault-center__filters" @submit.prevent="load()">
-        <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
+        <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option v-for="(label, value) in stateLabels" :key="value" :value="value">{{ label }}</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>
-        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>LLDP_NEIGHBOR_LOST</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option><option value="CONFIGURATION_CHANGED">配置变化</option></select></label>
+        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option v-for="(label, value) in kindLabels" :key="value" :value="value">{{ label }}</option></select></label>
         <label>起始时间 <input v-model="from" aria-label="起始时间" type="datetime-local"></label><label>截止时间 <input v-model="to" aria-label="截止时间" type="datetime-local"></label>
         <button :disabled="busy" type="submit">查询故障</button><button :disabled="busy" type="button" @click="resetFilters">重置故障筛选</button><button v-if="props.canRecover" :disabled="busy" type="button" @click="synchronize">同步当前证据</button>
       </form>
@@ -128,8 +130,8 @@ onBeforeUnmount(() => { generation++ })
         <p v-if="!result.items.length">当前筛选没有故障记录。</p>
         <div v-else class="fault-center__table"><table><thead><tr><th>故障 / 资源</th><th>设备 / Site</th><th>生命周期</th><th>首次 / 最近观测</th><th>证据 / 操作</th></tr></thead>
           <tbody><template v-for="item in result.items" :key="item.id"><tr>
-            <td><strong>{{ item.kind === 'CONFIGURATION_CHANGED' ? '配置变化' : item.kind }}</strong><small v-if="item.kind === 'CONFIGURATION_CHANGED'">{{ item.kind }}</small><small>{{ item.resourceKey }}</small><small>{{ item.detail }}</small></td>
-            <td>{{ item.deviceId }}<small>{{ item.siteId }}</small><button :disabled="busy" @click="filterDevice(item)">仅看此设备故障</button><RouterLink v-if="item.deviceId && item.profileId" :to="{ path: '/config-backups', query: { deviceId: item.deviceId } }">查看此设备配置历史</RouterLink></td><td>{{ item.state }}<small>{{ item.occurrences }} 次有效观测</small></td>
+            <td><strong>{{ kindLabels[item.kind] || item.kind }}</strong><small v-if="kindLabels[item.kind]">{{ item.kind }}</small><small>{{ item.resourceKey }}</small><small>{{ item.detail }}</small></td>
+            <td><RouterLink v-if="item.deviceId" :to="{ path: '/devices', query: { deviceId: item.deviceId } }">查看故障设备详情</RouterLink><small>{{ item.deviceId }}</small><small>{{ item.siteId }}</small><button :disabled="busy" @click="filterDevice(item)">仅看此设备故障</button><RouterLink v-if="item.deviceId && item.profileId" :to="{ path: '/config-backups', query: { deviceId: item.deviceId } }">查看此设备配置历史</RouterLink></td><td>{{ stateLabels[item.state] || item.state }}<small v-if="stateLabels[item.state]">{{ item.state }}</small><small>{{ item.occurrences }} 次有效观测</small></td>
             <td>{{ time(item.firstSeenMs) }}<small>{{ time(item.lastSeenMs) }}</small></td>
             <td><small>{{ item.evidenceType }}: {{ item.evidenceId }}</small><a v-if="sourceEvidence(item)" :href="sourceEvidence(item)!.href" target="_blank" rel="noopener">{{ sourceEvidence(item)!.label }}</a><button :disabled="busy" @click="expanded = expanded === item.id ? '' : item.id">查看处理历史</button>
               <template v-if="props.canRecover && item.state !== 'RESOLVED'"><button :disabled="busy || !['OPEN', 'REOPENED'].includes(item.state)" @click="acknowledge(item)">确认故障</button><button :disabled="busy || item.state === 'PROCESSING'" @click="process(item)">开始处理</button><button :disabled="busy" @click="verify(item)">核验恢复</button></template></td>

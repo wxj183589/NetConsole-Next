@@ -14,6 +14,33 @@ const button = (wrapper: ReturnType<typeof render>, text: string) => wrapper.fin
 
 describe('FaultCenter', () => {
   beforeEach(() => { vi.resetAllMocks(); api.getFaults.mockResolvedValue(structuredClone(result)); api.setFaultPolicy.mockResolvedValue({ state: 'SCHEDULED' }); api.verifyFault.mockResolvedValue({ state: 'RECOVERY_NOT_VERIFIED', detail: '缺少恢复证据' }) })
+  it('uses readable labels while preserving API codes and exact device identity for readers', async () => {
+    const id = 'device/a ?同名'
+    api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, deviceId: id, profileId: '', state: 'REOPENED' }] })
+    const wrapper = render(false); await flushPromises()
+    expect(wrapper.get('tbody strong').text()).toBe('接口中断')
+    expect(wrapper.get('tbody').text()).toContain('故障复发')
+    expect(wrapper.get('tbody').text()).toContain('REOPENED')
+    const link = wrapper.findAll('a').find(item => item.text() === '查看故障设备详情')!
+    const url = new URL(link.attributes('href')!, 'http://localhost')
+    expect(url.pathname).toBe('/devices'); expect(url.searchParams.get('deviceId')).toBe(id)
+    expect(url.searchParams.has('q')).toBe(false)
+    expect(wrapper.find('a[href*="config-backups"]').exists()).toBe(false)
+    await wrapper.get('[aria-label="故障状态"]').setValue('REOPENED')
+    await wrapper.get('[aria-label="故障类型"]').setValue('INTERFACE_DOWN')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.getFaults).toHaveBeenLastCalledWith(1, expect.objectContaining({ state: 'REOPENED', kind: 'INTERFACE_DOWN' }))
+    expect(api.syncFaults).not.toHaveBeenCalled(); expect(api.verifyFault).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('retains unrecognized fault codes without implying recovery or a known classification', async () => {
+    api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, deviceId: '', kind: 'FUTURE_KIND', state: 'FUTURE_STATE' }] })
+    const wrapper = render(false); await flushPromises()
+    expect(wrapper.get('tbody strong').text()).toBe('FUTURE_KIND')
+    expect(wrapper.get('tbody').text()).toContain('FUTURE_STATE')
+    expect(wrapper.find('a[href*="/devices?"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('explains live Long Ping evidence and separates pause and protocol recovery boundaries', async () => {
     const wrapper = render(false); await flushPromises()
     expect(wrapper.text()).toContain('运行中的 Long Ping 按真实样本同步故障、恢复与复发')
