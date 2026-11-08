@@ -109,6 +109,46 @@ describe('AP group source identity', () => {
     wrapper.unmount()
   })
 
+  it('exports loaded effective history and blocks export after its refresh fails', async () => {
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('history-ref')]))
+    api.getWirelessRuntimeState.mockResolvedValue({
+      resourceId: 'physical-ap', normalizedState: 'STALE', sources: [],
+      scope: { status: 'PARTIAL', claimsRevision: 'claims' }, asOf: domain.asOf,
+      sourceRevision: 'history-revision', freshnessWindowMs: 300_000, warnings: [],
+      current: null, previousEffective: null, recent10: [],
+    })
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:history')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      const wrapper = render(); await flushPromises()
+      const exportButton = () => wrapper.findAll('button').find(item => item.text() === '导出 AP 状态历史 CSV')!
+      expect(exportButton().attributes('disabled')).toBeUndefined()
+      await exportButton().trigger('click')
+      expect(create).toHaveBeenCalledOnce(); expect(click).toHaveBeenCalledOnce()
+      expect(revoke).toHaveBeenCalledWith('blob:history')
+      api.getWirelessRuntimeState.mockRejectedValue(new Error('history claims changed'))
+      await wrapper.get('.wireless-tree__member').trigger('click'); await flushPromises()
+      expect(exportButton().attributes('disabled')).toBeDefined()
+      await exportButton().trigger('click')
+      expect(create).toHaveBeenCalledOnce()
+      expect(wrapper.text()).toContain('状态历史读取失败')
+    } finally { create.mockRestore(); revoke.mockRestore(); click.mockRestore() }
+  })
+
+  it('keeps history export disabled for a late response belonging to a different AP', async () => {
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('history-ref')]))
+    api.getWirelessRuntimeState.mockResolvedValue({
+      resourceId: 'other-ap', normalizedState: 'RUNNING_MASTER', sources: [],
+      scope: { status: 'FULL', claimsRevision: 'claims' }, asOf: domain.asOf,
+      sourceRevision: 'old-history', freshnessWindowMs: 300_000, warnings: [],
+      current: null, previousEffective: null, recent10: [],
+    })
+    const wrapper = render(); await flushPromises()
+    const button = wrapper.findAll('button').find(item => item.text() === '导出 AP 状态历史 CSV')!
+    expect(button.attributes('disabled')).toBeDefined()
+  })
+
   it('clears prior observations when a refreshed resource query fails', async () => {
     api.getWirelessApResources.mockResolvedValue(page([observedResource('old-claim-ref')]))
     const wrapper = render()

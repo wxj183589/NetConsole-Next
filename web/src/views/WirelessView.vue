@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import WirelessOperationalCapabilities from '../components/WirelessOperationalCapabilities.vue'
 import { wirelessObservationsCsv } from '../api/wirelessExport'
+import { wirelessHistoryCsv } from '../api/wirelessHistoryExport'
 import {
   createWirelessTask,
   getWirelessTasks,
@@ -142,6 +143,16 @@ function exportObservations(): void {
   link.download = 'wireless-observations.csv'
   link.click()
   URL.revokeObjectURL(url)
+}
+function exportRuntimeHistory(): void {
+  if (runtimeLoading.value || runtimeError.value || !runtimeState.value || !selectedResource.value ||
+      runtimeState.value.resourceId !== selectedResource.value.id) return
+  const csv = wirelessHistoryCsv(selectedResource.value, runtimeState.value, {
+    domainId: selectedDomain.value?.id || '', acDeviceId: selectedAcId.value, exportedMs: Date.now(),
+  })
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url; link.download = 'wireless-ap-state-history.csv'; link.click(); URL.revokeObjectURL(url)
 }
 watch([search, stateFilter, selectedDomainId, selectedAcId], () => { page.value = 1; selectedResourceId.value = '' })
 watch([selectedDomainId, selectedAcId], () => {
@@ -549,10 +560,10 @@ onActivated(() => {
             <section class="card"><div class="card__header"><h2>AP 来源状态</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><article v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>最近采集 {{ formatTime(observation.capturedMs) }}</small><details class="wireless-observation__evidence"><summary>采集证据</summary><dl><dt>来源站点</dt><dd>{{ observation.sourceSiteId }}</dd><dt>设备原始状态</dt><dd>{{ observation.rawState }}</dd><dt>状态关联</dt><dd>{{ observation.relationStatus }}</dd><dt>解析版本</dt><dd>{{ observation.parserRevision }}</dd><dt>事实引用</dt><dd><code>{{ observation.rawManifestRef }}</code></dd></dl></details></article></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看每台 AC 独立采集到的运行状态。</small></div></div></section>
           </div>
           <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
-            <div class="card__header"><h2>状态与最近变化</h2><span class="state-pill" :class="stateClass(runtimeState?.normalizedState || 'UNKNOWN')">{{ stateText(runtimeState?.normalizedState || 'UNKNOWN') }}</span></div>
+            <div class="card__header"><h2>状态与最近变化</h2><div class="wireless-toolbar"><span class="state-pill" :class="stateClass(runtimeState?.normalizedState || 'UNKNOWN')">{{ stateText(runtimeState?.normalizedState || 'UNKNOWN') }}</span><el-button size="small" :disabled="runtimeLoading || !!runtimeError || !runtimeState || runtimeState.resourceId !== selectedResource.id" @click="exportRuntimeHistory">导出 AP 状态历史 CSV</el-button></div></div>
             <el-alert v-if="runtimeError" :title="'状态历史读取失败：' + runtimeError" type="error" :closable="false" show-icon />
             <template v-else-if="runtimeState">
-              <p class="wireless-runtime-note">仅显示当前可见 AC 的有效状态变化；无变化采集不增加记录。时效窗口：{{ runtimeState.freshnessWindowMs / 1000 }} 秒。</p>
+              <p class="wireless-runtime-note">仅显示当前可见 AC 的有效状态变化；无变化采集不增加记录。时效窗口：{{ runtimeState.freshnessWindowMs / 1000 }} 秒。导出仅含已加载的当前、上一有效状态及最近十次变化，不代表完整历史或 HA 切换。</p>
               <el-alert v-if="runtimeState.warnings.includes('OFFLINE_FIXTURE_EVIDENCE')" title="以下为离线状态历史，不能证明设备当前在线" type="warning" :closable="false" />
               <div class="wireless-state-values wireless-ap-state-values">
                 <div><small>AP 最近有效状态</small><strong>{{ runtimeState.current ? stateText(runtimeState.current.normalizedState) : '暂无有效证据' }}</strong><span>{{ formatTime(runtimeState.current?.capturedMs) }}</span></div>
