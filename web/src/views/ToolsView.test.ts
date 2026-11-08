@@ -64,6 +64,41 @@ describe('network diagnostic tools and traceroute', () => {
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
 
+  it('shows actual DNS addresses and distinguishes literal IP evidence when reading saved history', async () => {
+    const saved = run({ items: [item({ kind: 'DNS', traceRoute: null, dns: {
+      query: 'switch.example.test', resolutionMode: 'SYSTEM_RESOLVER',
+      addresses: ['192.0.2.40', '2001:db8::40'], capturedMs: 1000,
+    } })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(saved)])
+    api.getNetworkDiagnostics.mockResolvedValue(saved)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(saved.id); await flushPromises()
+    const result = wrapper.get('section[aria-label="交换机甲 DNS 结果"]')
+    expect(result.text()).toContain('switch.example.test'); expect(result.text()).toContain('系统 DNS 解析')
+    expect(result.findAll('li').map(row => row.text())).toEqual(['192.0.2.40', '2001:db8::40'])
+    expect(result.text()).not.toContain('未查询 DNS')
+    api.getNetworkDiagnostics.mockResolvedValue(run({ id: 'literal', items: [item({ kind: 'DNS', traceRoute: null,
+      dns: { query: '192.0.2.40', resolutionMode: 'IP_LITERAL', addresses: ['192.0.2.40'], capturedMs: 2000 } })] }))
+    api.listNetworkDiagnostics.mockResolvedValue([summary(saved), summary(run({ id: 'literal' }))])
+    await button(wrapper, '刷新历史').trigger('click'); await flushPromises()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('literal'); await flushPromises()
+    const literal = wrapper.get('section[aria-label="交换机甲 DNS 结果"]')
+    expect(literal.text()).toContain('直接 IP 地址，未查询 DNS')
+    expect(literal.text()).not.toContain('系统 DNS 解析')
+  })
+
+  it('does not invent DNS addresses for old diagnostic records', async () => {
+    const old = run({ items: [item({ kind: 'DNS', traceRoute: null, dns: null, detail: '旧版摘要' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(old)])
+    api.getNetworkDiagnostics.mockResolvedValue(old)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(old.id); await flushPromises()
+    const result = wrapper.get('section[aria-label="交换机甲 DNS 结果"]')
+    expect(result.text()).toContain('没有结构化解析地址')
+    expect(result.findAll('li')).toHaveLength(0)
+    expect(result.text()).not.toContain('系统 DNS 解析')
+  })
+
   it('pauses and resumes Long Ping while keeping cancellation available and showing window semantics', async () => {
     const active = run({ state: 'RUNNING', completedChecks: 0, progressPercent: 0, items: [item({ kind: 'LONG_PING', state: 'RUNNING', traceRoute: null })] })
     api.startNetworkDiagnostics.mockResolvedValue(active)

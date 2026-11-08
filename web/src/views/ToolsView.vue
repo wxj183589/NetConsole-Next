@@ -255,6 +255,12 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
           <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
             <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}</td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
+            <tr v-if="item.kind === 'DNS'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + ' DNS 结果'">
+              <template v-if="item.dns"><div class="trace-heading"><strong class="mono">查询 {{ item.dns.query }}</strong><span>{{ item.dns.resolutionMode === 'IP_LITERAL' ? '直接 IP 地址，未查询 DNS' : '系统 DNS 解析' }}</span><span class="muted">{{ new Date(item.dns.capturedMs).toLocaleString() }}</span></div>
+              <ul v-if="item.dns.addresses.length" class="dns-addresses" aria-label="解析地址"><li v-for="address in item.dns.addresses" :key="address" class="mono">{{ address }}</li></ul><p v-else class="muted">没有取得解析地址。</p>
+              <small v-if="item.dns.resolutionMode === 'SYSTEM_RESOLVER'" class="muted">仅显示本次系统解析返回的地址；不代表所有 DNS 服务器或设备业务正常。</small></template>
+              <p v-else class="muted">{{ item.state === 'QUEUED' || item.state === 'RUNNING' ? '等待解析结果。' : '本条记录没有结构化解析地址，请查看上方结果说明。' }}</p>
+            </section></td></tr>
             <tr v-if="item.kind === 'QUICK_PING' || item.kind === 'LONG_PING'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + (item.kind === 'LONG_PING' ? ' 长期 Ping 结果' : ' Quick Ping 结果')">
               <template v-if="item.quickPing"><div class="trace-heading"><strong>{{ item.quickPing.protocol }} · {{ item.quickPing.destinationAddress }}{{ item.quickPing.port ? ':' + item.quickPing.port : '' }}</strong><span>采样 {{ item.quickPing.sent }}/{{ item.quickPing.requestedSamples }}</span><span :class="['state-pill', item.quickPing.lost ? 'warn' : 'good']">丢失率 {{ item.quickPing.lossPercent ?? 'UNKNOWN' }}%</span><span>最小 / 平均 / 最大 {{ item.quickPing.minMs ?? '—' }} / {{ item.quickPing.averageMs ?? '—' }} / {{ item.quickPing.maxMs ?? '—' }} ms</span><span>P95 {{ item.quickPing.p95Ms ?? 'UNKNOWN' }} ms</span></div>
               <div class="quick-ping-samples" aria-label="采样时间线"><span v-for="sample in item.quickPing.samples" :key="sample.sequence" :class="['quick-ping-sample', sample.status === 'REPLIED' ? 'good' : 'lost']" :title="'#' + sample.sequence + ' · ' + new Date(sample.capturedMs).toLocaleTimeString() + ' · ' + sample.status">{{ sample.latencyMs == null ? '×' : sample.latencyMs + 'ms' }}</span></div>
@@ -309,6 +315,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
 .trace-route { padding: 14px 18px; background: var(--nc-surface-muted); border: 1px solid var(--nc-border); border-radius: 6px; }
 .trace-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
 .trace-heading .mono, .trace-table .mono { overflow-wrap: anywhere; }
+.dns-addresses { padding-left: 22px; overflow-wrap: anywhere; }
 .trace-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px; }
 .trace-table th, .trace-table td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--nc-border, #dce5f1); }
 .trace-table th { color: var(--nc-text-secondary); font-weight: 500; }
