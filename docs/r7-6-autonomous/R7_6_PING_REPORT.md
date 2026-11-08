@@ -2,7 +2,7 @@
 
 日期：2026-11-08。Agent：codex-A。源码基线：`cef8273`。状态：**PARTIAL / LOCAL_LOOPBACK_SERVICE_E2E_PASS**。
 
-本轮有界 Long Ping 的 HTTP 生命周期已取得真实本机 ICMP 证据，历史趋势已补齐 Quick/Long 类型隔离。没有远端设备、无线空口、车辆移动或长期负载验收。最终集成候选的启动方式和浏览器结果由主任务补录。
+本轮有界 Long Ping 的 HTTP 生命周期已取得最终集成候选的真实本机 ICMP 证据，历史趋势已补齐 Quick/Long 类型隔离。没有远端设备、无线空口、车辆移动或长期负载验收。最终候选完整离线两模式均因必需 Traceroute 失败而 EXIT 1；Long Ping 独立 HTTP 通过与该失败分别记录。
 
 ## 产品行为
 
@@ -16,9 +16,9 @@ Quick Ping 支持 2–60 样本、100–5000ms 间隔/超时、最多 8 目标�
 
 ## 本轮 HTTP 实际证据
 
-原始报告：`D:\study\NetConsole-Next-Workspace\reports\r76-long-ping-http-fc7123eac86d\result.json`，`status=PASS`、`evidenceLevel=SERVICE_E2E`。目标为 `127.0.0.1`、协议 ICMP，使用最小合成库存与独立 Next fixture；真实采样由 Service 发出，不是注入的探测回复。`deviceConnections=0`、`configurationWrites=0`。
+最终候选原始报告：`D:\study\NetConsole-Next-Workspace\reports\r76-long-ping-http-25e00169234f\result.json`，`status=PASS`、`evidenceLevel=SERVICE_E2E`，共 13 项实际核验。目标为 `127.0.0.1`、协议 ICMP，使用最小合成库存与独立 Next fixture；真实采样由 Service 发出，不是注入的探测回复。`deviceConnections=0`、`configurationWrites=0`。
 
-该报告实际使用 `D:\study\NetConsole-Next-Workspace\build\r76-traceroute-artifacts\bin\NetConsole.Next.Service\release\NetConsole.Next.Service.dll`，不能把它改写为下述最终候选的执行证据。
+该报告实际使用 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63\NetConsole.Next.Service.dll`。此前 `r76-long-ping-http-fc7123eac86d` 使用另一构建目录，仅保留历史范围；下列任务 ID 和样本均取自最终候选报告。
 
 | 核验 | 已有结果与范围 |
 | --- | --- |
@@ -30,7 +30,7 @@ Quick Ping 支持 2–60 样本、100–5000ms 间隔/超时、最多 8 目标�
 | P95 nearest-rank | 两任务均 PASS，实际回复延迟均为 0ms，因此 P95 为 0ms |
 | 真实 Service 重启 | 终态历史保留且不重放 Ping；SQLite integrity OK |
 
-取消任务 `ae27f18f87ed4862986e14166b554f70`：CANCELLED，requested=30、sent=3、received=3、lost=0、P95=0ms；未执行 27 次不能算丢包。窗口任务 `9675a43b63fd4cf494d17c1e2c266851`：SUCCEEDED / LONG_PING_WINDOW_ENDED，requested=10、sent=2、received=2、lost=0、P95=0ms，elapsed=10006ms，未执行 8 次不计丢失，来源 `SERVICE_HOST_ICMP`。取消快照的 evidenceCount=0，但保留上述 quickPing 样本；不将其改写为完整成功诊断。
+取消任务 `484a1264fb0c4696ae3b165f090f3f24`：CANCELLED，requested=30、sent=3、received=3、lost=0、P95=0ms；未执行 27 次不能算丢包。窗口任务 `0ef49792b14a40659a287997d38086e0`：SUCCEEDED / LONG_PING_WINDOW_ENDED，requested=10、sent=2、received=2、lost=0、P95=0ms，elapsed=10006ms，未执行 8 次不计丢失，来源 `SERVICE_HOST_ICMP`。取消快照的 evidenceCount=0，但保留上述 quickPing 样本；不将其改写为完整成功诊断。
 
 ## 自动化与候选边界
 
@@ -40,8 +40,8 @@ Quick Ping 支持 2–60 样本、100–5000ms 间隔/超时、最多 8 目标�
 
 | 待验范围 | 结论 |
 | --- | --- |
-| 最终候选 apphost / 显式 dotnet DLL | PENDING_ROOT_FINAL_ACCEPTANCE：补实际启动命令、候选标识、HTTP 结果；不复用较早 DLL 结果冒充 |
-| 最终候选双分辨率浏览器、历史趋势与 CSV | PENDING_ROOT_FINAL_ACCEPTANCE：补实例、截图、下载与类型隔离证据 |
+| 最终候选 apphost / 显式 dotnet DLL | 完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1，必需 Traceroute 为 PARTIAL / ICMP_PERMISSION_DENIED；日志为 reports/r76-offline-apphost.log 与 r76-offline-dotnet.log；独立 Long Ping HTTP 13 项 PASS，限上文实际 DLL 路径 |
+| 最终候选双分辨率浏览器、历史趋势与 CSV | NOT_VERIFIED；1920×1080 / 2560×1440 的最终实例、历史趋势操作、下载和类型隔离尚无实际浏览器完成证据 |
 | 一小时上限、多日监测、规模与保留策略 | NOT_TESTED / PARTIAL；短回环生命周期不能代替长期 soak 或原版车队 fping |
 | 远端实际丢包、AP/Site/车辆时间关联 | NOT_TESTED；不能根据同名、IP或邻近时间补造关联 |
 | AP离线/切换后的无线业务恢复 | NOT_TESTED；ICMP回环和TCP连通均不能代替 |

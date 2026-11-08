@@ -39,15 +39,19 @@ API 复用 `/api/system/operations/faults` 的 query、`/sync`、`/{id}/ack`、`
 
 ## 覆盖与剩余验收
 
-已复核源码回归入口：`OperationalHealthTests.cs` 新增取消误报并保留轮转、UNKNOWN/STALE、严格 LLDP、路由精确目标和认证不重试；`FaultCenterTests.cs` 覆盖指纹/历史、源范围、同命令恢复、AP全来源、持久化/损坏、撤权及策略；`web/src/components/FaultCenter.test.ts` 覆盖 UI 行为。本报告未执行这些测试；源码中的 17/17、23/23 输出常量不作为本轮执行证据。
+已复核源码回归入口：`OperationalHealthTests.cs` 新增取消误报并保留轮转、UNKNOWN/STALE、严格 LLDP、路由精确目标和认证不重试；`FaultCenterTests.cs` 覆盖指纹/历史、源范围、同命令恢复、AP全来源、持久化/损坏、撤权及策略；`web/src/components/FaultCenter.test.ts` 覆盖 UI 行为。只读核对实际全量日志 `reports/r76-service-full-final.log`，基线 `50db848` EXIT 0，健康 17/17、故障中心 23/23 PASS；主集成确认最终 Web 35 files / 370 tests、typecheck PASS。本报告未重跑测试，不以源码常量作为执行证据。
 
 | 验收项 | 当前结论 |
 | --- | --- |
-| 取消任务误报修复 | 已实现并新增回归；等待主集成最终实际测试记录 |
-| 当前主线 Service / Web 故障门禁 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录 commit、命令、实际计数和退出码 |
-| 最终候选故障历史/API/CSV 双分辨率浏览器 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录制品、实例、截图和实际操作结果 |
+| 取消任务误报修复 | 已实现；实际全量 Service 健康 17/17 与故障中心 23/23 PASS |
+| 当前主线 Service / Web 故障门禁 | Service 全量 50db848 EXIT 0；最终 Web 35 files / 370 tests 与 typecheck PASS 为主集成确认；最终候选合成权限 HTTP 40 项 PASS，范围如下 |
+| 最终候选故障历史/API/CSV 双分辨率浏览器 | 合成真实 HTTP 的故障范围、PROCESSING 历史重启持久化、撤权与策略准入通过；1920×1080 / 2560×1440 的浏览器历史操作/CSV 下载、截图和最终运行 PID 尚无完成证据 |
 | 真实 AP/接口/设备业务故障→恢复循环 | NOT_TESTED；未诱发现场事件，也不把旧事件升级为本轮实时证据 |
 | 车辆移动中丢包、AP状态、Site/时间轴关联 | PARTIAL / NOT_TESTED；需精确身份和同步实际观测，不根据同名、IP或邻近时间补造关联 |
 | Mesh/轨交专项根因、全通知与长期规模负载 | PARTIAL；通用故障中心不等于完整 Mesh/MR 分析、消息交付和长期自治运维闭环 |
+
+最终候选 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63` 的 Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。`reports/r72-feature-http-20261108-220844-e695e3.json` 标记 SYNTHETIC_REAL_HTTP_AUTHORIZATION / PASS，共 40 checks、deviceConnections=0、recoverySuccessClaimed=false。其中使用合成故障与一条显式 synthetic Syslog，验证匿名 401、ADMIN 只读角色 403、CSRF、范围缩小/撤销、历史重启持久化、功能开关及损坏批处理存储隔离；未准入设备采集/探测。缺失计划的 run-now 只验证 HTTP admission，不证明执行成功。该结果与真实业务故障恢复明确分开。
+
+完整离线两模式均因必需 Traceroute 的 ICMP_PERMISSION_DENIED 而 EXIT 1，不能借其他 HTTP 子项 PASS 宣称完整候选通过。独立 Long Ping HTTP 的本机 ICMP 成功也不能作为现场故障解除证据。
 
 本报告只新增文档；没有开启 Service、配置策略、设备重连/写入或业务数据复制。相关：[功能对等](R7_6_FEATURE_PARITY_REPORT.md)、[无线](R7_6_WIRELESS_REPORT.md)、[设备互操作](R7_6_DEVICE_INTEROP_REPORT.md)、[R7.4 故障来源边界](../r7-4-autonomous/R7_4_FAULT_CENTER_REPORT.md)。

@@ -48,6 +48,8 @@ wlan ap-execute all exec-console enable
 | 直接认证、原生版本/MAC/序列号/接口 | BLOCKED / NOT_TESTED |
 | 原生 Raw/Facts 与运行状态 | NOT_TESTED；AC Facts 不能冒充原生证据 |
 | HA、无线终端业务、配置保存 | NOT_TESTED |
-| 最终候选 FIT 展示与阻断 UI 浏览器验收 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录候选路径、commit 与浏览器结果；UI 通过也不能消除设备认证阻断 |
+| 最终候选 FIT 展示与阻断 UI 浏览器验收 | NOT_VERIFIED；最终候选在 1920×1080 / 2560×1440 的 FIT 展示及阻断操作尚无完成证据；自动化或 UI 通过均不能消除设备认证阻断 |
+
+最终候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。主集成确认 Web 35 files / 370 tests 与 typecheck PASS；两种启动方式的完整离线门禁均因必需 Traceroute 权限拒绝而 EXIT 1。它们没有提供 FIT 原生凭据、直接登录或当前 exec-console 生效证据。
 
 本报告只读复核既有报告，没有重连设备、重试凭据、写配置或复制业务数据，未访问旧 NetConsole 数据根。相关：[无线报告](R7_6_WIRELESS_REPORT.md)。

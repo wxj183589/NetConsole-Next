@@ -2,7 +2,7 @@
 
 日期：2026-11-08。Agent：codex-A。报告基线：`2520082`。状态：**PARTIAL**。
 
-本轮增加当前 AC 快速只读采集与 AP 有效状态历史 CSV 交接。双 AC 的产品采集和精确 AP 来源保留已有原始证据；最终候选浏览器验收由主集成补录。
+本轮增加当前 AC 快速只读采集与 AP 有效状态历史 CSV 交接。双 AC 的产品采集和精确 AP 来源保留已有原始证据；最终 Web 自动化通过，最终候选无线导出实际浏览器验收尚无完成证据。
 
 ## 产品改动
 
@@ -24,7 +24,7 @@ CSV 保留资源 ID、序列号/MAC、源 AC/站点、原始状态、Raw 引用�
 
 ## 定向回归与实采证据
 
-源码已增加当前 Domain/AC 采集与导出禁用条件回归；独立 `wirelessHistoryExport.test.ts` 包含四项测试，覆盖 scoped 来源、资源错配、转义和公式防护。本报告编写阶段只读复核提交与测试源码，没有重新执行这些测试；最终主线测试结果须由主集成记录，不能从存在测试文件推定执行通过。
+源码已增加当前 Domain/AC 采集与导出禁用条件回归；独立 `wirelessHistoryExport.test.ts` 包含四项测试，覆盖 scoped 来源、资源错配、转义和公式防护。主集成确认最终 Web 为 35 files / 370 tests PASS、typecheck PASS；本报告只读复核提交和证据，没有重跑。自动化与 fixture 通过不能替代最终候选页面的实际采集与下载操作。
 
 双 AC 原始报告为 `D:\study\NetConsole-Next-Workspace\reports\r72-product-dual-ac-20261108-211219\summary.json`。2026-11-08 21:12 本地时间，产品任务分别为 `672a4e028f8c40efbe96a52843ff6675` 与 `64eee15fc8364043bd95d2ec131594be`，各六条只读命令成功，合计 12 个 Raw 校验通过。详见 [设备互操作报告](R7_6_DEVICE_INTEROP_REPORT.md)。
 
@@ -36,8 +36,10 @@ CSV 保留资源 ID、序列号/MAC、源 AC/站点、原始状态、Raw 引用�
 | Scoped AP Current / PreviousEffective / Recent10 CSV | 已实现并补充回归覆盖；不代表全量历史 |
 | 双 AC 六命令产品采集与 Raw | SIMULATOR_PASS_READONLY_OBSERVATION，限原始报告窗口 |
 | AP group 修改、HA 切换/回切、客户端连续性 | NOT_TESTED；本轮没有设备配置写入 |
-| 最终候选无线 API/导出实际浏览器链路 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录候选路径、commit、API/任务与下载证据 |
-| 最终候选双分辨率浏览器验收 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录分辨率、结果和截图位置 |
-| 最终主线 Renderer 测试与构建 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录实际命令、计数和退出码 |
+| 最终候选无线 API/导出实际浏览器链路 | 合成回环离线 AC_RESOURCES 子项 PASS（12 固定只读命令、Raw hashes、scoped Facts）；无线页面实际提交/CSV 下载尚未取得最终浏览器证据 |
+| 最终候选双分辨率浏览器验收 | NOT_VERIFIED；1920×1080 / 2560×1440 的实际操作和截图尚未完成验收 |
+| 最终主线 Renderer 测试与构建 | 主集成确认 Web 35 files / 370 tests、typecheck PASS；候选 STATIC_UI 资产 HTTP 哈希子项 PASS；本报告未独立重跑构建 |
+
+候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。`reports/r76-offline-apphost.log` 与 `reports/r76-offline-dotnet.log` 的完整离线门禁均 EXIT 1，必需 Traceroute 返回 PARTIAL / ICMP_PERMISSION_DENIED；无线相关子项通过不改变整体失败结论。候选目录后缀不能替代制品嵌入版本。
 
 本报告未新建设备会话、未写配置、未运行导出采集，也未复制 Site 或旧 NetConsole 数据根。最终候选证据不能由源码、mock 浏览器或此前版本结果替代。相关：[FIT-AP 报告](R7_6_FIT_AP_REPORT.md)。

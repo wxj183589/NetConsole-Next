@@ -38,16 +38,18 @@
 
 `tests/offline_candidate_e2e.py` 默认启动候选 EXE；`--dotnet-host <绝对 dotnet.exe>` 为显式独立 DLL 门禁，并输出 `OFFLINE_LAUNCH_MODE=DOTNET_DLL_EXPLICIT`。它不在 EXE 失败后自动重试 DLL，所有重启/子门禁沿用指定模式。Traceroute 失败即使先完成独立 schedule 检查，仍最终抛错并返回失败，不能因部分 PASS 标志宣称整体通过。
 
-本工作流此前观察到 EXE/apphost 原生 ICMP transmit code 5，与显式 `dotnet DLL` 成功不同。`ICMP_PERMISSION_DENIED` 应保留为对应启动方式和主机策略证据；DLL 成功不能替代 EXE、Windows 服务账户或独立机器通过。本报告未再次启动服务验证，最终候选及所用启动方式由主集成补录。
+本工作流此前的窄范围部署诊断观察到 EXE/apphost 原生 ICMP transmit code 5 与显式 `dotnet DLL` 成功不同；这是 Host 初始化前的历史对照。最终候选的完整 APPHOST 和 DOTNET_DLL_EXPLICIT 离线门禁均已执行，均因必需回环 Traceroute 的 `state=PARTIAL; outcome=ICMP_PERMISSION_DENIED` 失败并 EXIT 1。历史 DLL 诊断成功不等于最终完整 DLL 门禁通过，也不能推定具体系统策略根因。
+
+原始日志为 `D:\study\NetConsole-Next-Workspace\reports\r76-offline-apphost.log` 与 `r76-offline-dotnet.log`。命令入口为 `tests/offline_candidate_e2e.py --candidate D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`；DLL 门禁额外显式传入 `--dotnet-host "C:\Program Files\dotnet\dotnet.exe"`。实际 Python/runpy 引导命令保留于两份日志的 traceback；本报告只读复核，没有再次启动服务。除 Traceroute 外，两日志的 bundled runtime、静态 UI 资产哈希、回环 Netmiko 连接/重连、诊断 TXT/ZIP、Linux WebSocket、AC Raw/Facts、配置种类、完整诊断、诊断历史及备份计划子项均 PASS。静态资产 HTTP 校验不能代替浏览器操作，回环合成设备不能代替物理设备。
 
 ## 最终验收与未完成项
 
 | 项目 | 结果与待补内容 |
 | --- | --- |
-| 最终 R7.6 Windows x64 候选路径 / commit / manifest | PENDING_ROOT_FINAL_ACCEPTANCE |
-| 最终候选离线 E2E | PENDING_ROOT_FINAL_ACCEPTANCE：分别记录 APPHOST / DOTNET_DLL_EXPLICIT、完整命令和退出码 |
-| 最终候选双分辨率浏览器 | PENDING_ROOT_FINAL_ACCEPTANCE：补录候选身份、1920×1080 / 1366×768、截图及错误统计 |
-| 最终候选单 DB checkpoint / SQLite / Raw 完整性 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录实际 checkpoint、哈希和健康证据 |
+| 最终 R7.6 Windows x64 候选路径 / commit / manifest | `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`；Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`；目录后缀不替代嵌入 commit，完整 manifest 本报告未独立核验 |
+| 最终候选离线 E2E | APPHOST 与 DOTNET_DLL_EXPLICIT 均 EXIT 1；必需 live ICMP Traceroute 为 PARTIAL / ICMP_PERMISSION_DENIED；其他已列子项 PASS，整体 FAILED |
+| 最终候选双分辨率浏览器 | NOT_VERIFIED；1920×1080 / 2560×1440 的最终实际操作、截图和错误统计尚无完成证据 |
+| 最终候选单 DB checkpoint / SQLite / Raw 完整性 | Long Ping 最小 fixture 的重启后 SQLite integrity PASS；离线任务 TXT/ZIP 与 AC Raw 哈希子项 PASS；最终运行实例的单 DB checkpoint、整体 SQLite/Raw 核对尚未完成，不以 fixture 代替 |
 | 真实 SCM 安装 / 启动 / 重启 / 卸载 | NOT_TESTED |
 | SCM 自动启动、虚拟账户、崩溃恢复 | NOT_TESTED；未以离线 plan 代替验证 |
 | 真实升级失败及 binary fallback | NOT_TESTED；数据库 schema 兼容性仍需独立验证 |

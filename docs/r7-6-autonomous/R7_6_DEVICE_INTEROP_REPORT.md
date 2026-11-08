@@ -47,7 +47,9 @@ Facts 来源分别为 `H3C_TASK_RAW:672a4e028f8c40efbe96a52843ff6675` 与 `H3C_T
 | SW 认证、版本、接口、LLDP 和 Raw/Facts | BLOCKED；需要既有有效 profile，不重试失败凭据 |
 | FIT-AP 直接认证与原生身份 | BLOCKED；参见 FIT-AP 报告 |
 | 物理硬件、HA 切换/回切、端到端业务 | NOT_TESTED |
-| 最终 R7.6 候选产品/API/浏览器验收 | PENDING_ROOT_FINAL_ACCEPTANCE：主集成补录候选路径、commit、运行实例和浏览器结果 |
+| 最终 R7.6 候选产品/API/浏览器验收 | 回环合成设备的 Netmiko 连接/重连、AC 12 固定命令及 scoped Facts/Raw 子项两模式均 PASS；完整离线两模式均 EXIT 1（必需 Traceroute 权限拒绝）；最终运行 PID 和实际浏览器尚未完成验收 |
+
+最终候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。证据为 `reports/r76-offline-apphost.log` 与 `reports/r76-offline-dotnet.log`；其中合成 SSH 与上文 21:12 的双 AC 产品采集是不同来源。最终候选权限 HTTP 报告 `reports/r72-feature-http-20261108-220844-e695e3.json` 为 PASS / 40 checks，标记 SYNTHETIC_REAL_HTTP_AUTHORIZATION、deviceConnections=0、recoverySuccessClaimed=false，也不构成新的设备互操作或恢复证据。
 
 SW 本轮范围来自 [R7.6 work pool](R7_6_WORK_POOL.md)，此前认证失败来自 [R7.5 设备报告](../r7-5-autonomous/R7_5_DEVICE_INTEROP_REPORT.md)；不把 FIT 探测 JSON 当作 SW 证据。FIT 本轮报告为 `D:\study\NetConsole-Next-Workspace\reports\r71-device-20261108-211219\summary.json`。
 

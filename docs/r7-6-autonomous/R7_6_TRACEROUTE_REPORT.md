@@ -1,8 +1,8 @@
 # R7.6 Traceroute 实现与启动对照报告
 
-日期：2026-11-08。Agent：codex-A。源码基线：`cef8273`。状态：**PARTIAL / LAUNCH_MODE_DEPENDENT**。
+日期：2026-11-08。Agent：codex-A。源码基线：`cef8273`。状态：**PARTIAL / FINAL_OFFLINE_TRACEROUTE_FAILED_BOTH_MODES**。
 
-本轮 Windows 生产路径复用普通进程令牌下的系统 ICMP tracert，并修复输出编码、原生错误分类和终点跳提前返回时可能吞掉 stderr 超限的问题。已有启动对照中显式 dotnet DLL 成功，apphost 返回原生错误码 5；两项必须分别保留，不能合并为候选全面通过或断言具体系统策略原因。
+本轮 Windows 生产路径复用普通进程令牌下的系统 ICMP tracert，并修复输出编码、原生错误分类和终点跳提前返回时可能吞掉 stderr 超限的问题。历史窄范围启动对照中显式 dotnet DLL 成功、apphost 返回原生错误码 5；最终集成候选的完整 APPHOST 和 DOTNET_DLL_EXPLICIT 门禁均因必需 Traceroute 的 ICMP_PERMISSION_DENIED 失败。不同证据分别保留，不能将历史 DLL 成功升级为最终完整门禁通过或断言具体系统策略原因。
 
 ## 产品实现与本轮修复
 
@@ -35,9 +35,11 @@
 | --- | --- |
 | 既有显式 DLL 固定回环部署诊断 | PASS，限原始对照报告 |
 | 既有 apphost 固定回环部署诊断 | FAILED / nativeErrorCode=5，保持显式记录 |
-| 最终集成候选 APPHOST / DLL 两种启动 | PENDING_ROOT_FINAL_ACCEPTANCE：主任务补实际命令、版本、输出与退出码，不能复用旧路径结果 |
-| 最终候选 HTTP 路径和双分辨率浏览器 | PENDING_ROOT_FINAL_ACCEPTANCE：补生产API的 probeKind、实际 hops/失败、截图与运行实例 |
+| 最终集成候选 APPHOST / DLL 两种启动 | 完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1；两者 OFFLINE_TRACEROUTE=FAIL，state=PARTIAL、outcome=ICMP_PERMISSION_DENIED；必需门禁未被跳过 |
+| 最终候选 HTTP 路径和双分辨率浏览器 | 离线 HTTP 门禁记录上述实际失败；1920×1080 / 2560×1440 的浏览器实际 hops/失败展示、截图和最终运行 PID 尚无完成证据 |
 | 真实远端多跳、跨Site/跳板路径、无线切换 | NOT_TESTED；回环一跳不代表这些网络业务 |
 | 现场路径异常→同资源恢复 | NOT_TESTED；权限拒绝不能冒充链路故障或设备离线 |
+
+最终两模式的日志为 `D:\study\NetConsole-Next-Workspace\reports\r76-offline-apphost.log` 和 `r76-offline-dotnet.log`；入口是 `tests/offline_candidate_e2e.py --candidate <上述候选目录>`，DLL 模式额外传 `--dotnet-host "C:\Program Files\dotnet\dotnet.exe"`。两日志在完成备份计划等其余子项后均抛出 `AssertionError: Required Windows loopback Traceroute gate failed: state=PARTIAL; outcome=ICMP_PERMISSION_DENIED`；其余子项 PASS 不改变最终 EXIT 1。独立 Long Ping 回环 ICMP PASS 也不能替代 Traceroute 路径验证。
 
 本报告只新增文档，未启动 Service、重连设备、变更系统策略或复制数据。相关：[Ping](R7_6_PING_REPORT.md)、[Windows 部署](R7_6_WINDOWS_DEPLOYMENT_REPORT.md)、[故障中心](R7_6_FAULT_CENTER_REPORT.md)。
