@@ -2,7 +2,7 @@
 
 日期：2026-11-08。Agent：codex-A。报告基线：`2520082`。状态：**PARTIAL**。
 
-本轮增加当前 AC 快速只读采集与 AP 有效状态历史 CSV 交接。双 AC 的产品采集和精确 AP 来源保留已有原始证据；最终 Web 自动化通过，最终候选无线导出实际浏览器验收尚无完成证据。
+本轮增加当前 AC 快速只读采集与 AP 有效状态历史 CSV 交接。双 AC 的产品采集和精确 AP 来源保留已有原始证据；最终 Web 自动化和无线观察导出浏览器检查通过，所选 AP 历史导出因无已存有效变化保持 PARTIAL。
 
 ## 产品改动
 
@@ -36,10 +36,12 @@ CSV 保留资源 ID、序列号/MAC、源 AC/站点、原始状态、Raw 引用�
 | Scoped AP Current / PreviousEffective / Recent10 CSV | 已实现并补充回归覆盖；不代表全量历史 |
 | 双 AC 六命令产品采集与 Raw | SIMULATOR_PASS_READONLY_OBSERVATION，限原始报告窗口 |
 | AP group 修改、HA 切换/回切、客户端连续性 | NOT_TESTED；本轮没有设备配置写入 |
-| 最终候选无线 API/导出实际浏览器链路 | 合成回环离线 AC_RESOURCES 子项 PASS（12 固定只读命令、Raw hashes、scoped Facts）；无线页面实际提交/CSV 下载尚未取得最终浏览器证据 |
-| 最终候选双分辨率浏览器验收 | NOT_VERIFIED；1920×1080 / 2560×1440 的实际操作和截图尚未完成验收 |
+| 最终候选无线 API/导出实际浏览器链路 | 合成离线 AC_RESOURCES 子项 PASS；共享页面所选 AC/快速采集按钮检查及观察 CSV 下载 PASS，按钮仅检查未点击，没有新设备采集；所选 AP CSV 导出成功但有效变化内容验收 PARTIAL |
+| 最终候选双分辨率浏览器验收 | 1920×1080 / 2560×1440 的 wirelessCurrentAcAndExport、broad wirelessObservationExport PASS；wirelessSelectedApHistoryCsv 两视口均 PARTIAL / NO_STORED_EFFECTIVE_CHANGES |
 | 最终主线 Renderer 测试与构建 | 主集成确认 Web 35 files / 370 tests、typecheck PASS；候选 STATIC_UI 资产 HTTP 哈希子项 PASS；本报告未独立重跑构建 |
 
 候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。`reports/r76-offline-apphost.log` 与 `reports/r76-offline-dotnet.log` 的完整离线门禁均 EXIT 1，必需 Traceroute 返回 PARTIAL / ICMP_PERMISSION_DENIED；无线相关子项通过不改变整体失败结论。候选目录后缀不能替代制品嵌入版本。
 
-本报告未新建设备会话、未写配置、未运行导出采集，也未复制 Site 或旧 NetConsole 数据根。最终候选证据不能由源码、mock 浏览器或此前版本结果替代。相关：[FIT-AP 报告](R7_6_FIT_AP_REPORT.md)。
+浏览器原件为 `reports/r76-browser-final-20261108/result.json`（整体 PARTIAL）与 `reports/r76-broad-browser-final-20261108/result.json`（四类双视口 PASS）。当前所选 AP `ap-resource:60d0aad0d9f1b381c501aff3` 导出 2628 bytes，independentAcSources=1、aggregateChanges=0、sourceChanges=0；这是当前浏览器加载范围，不覆盖上文历史双 AC 原件，不补造 HA/切换。共享候选 18771 / PID 49344 HEALTHY，Vite 5174 / PID 32812 不动，页面无 pageerrors/横向溢出。
+
+本报告未新建设备会话、未写配置、未运行导出采集，也未复制 Site 或旧 NetConsole 数据根。浏览器只读验收未触发采集，最终候选证据不能由源码、mock 浏览器或此前版本结果替代。相关：[FIT-AP 报告](R7_6_FIT_AP_REPORT.md)。

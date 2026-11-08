@@ -36,10 +36,12 @@
 | 既有显式 DLL 固定回环部署诊断 | PASS，限原始对照报告 |
 | 既有 apphost 固定回环部署诊断 | FAILED / nativeErrorCode=5，保持显式记录 |
 | 最终集成候选 APPHOST / DLL 两种启动 | 完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1；两者 OFFLINE_TRACEROUTE=FAIL，state=PARTIAL、outcome=ICMP_PERMISSION_DENIED；必需门禁未被跳过 |
-| 最终候选 HTTP 路径和双分辨率浏览器 | 离线 HTTP 门禁记录上述实际失败；1920×1080 / 2560×1440 的浏览器实际 hops/失败展示、截图和最终运行 PID 尚无完成证据 |
+| 最终候选 HTTP 路径和双分辨率浏览器 | 离线 HTTP 门禁记录上述实际失败；共享候选 18771 / PID 49344 HEALTHY，但 Traceroute 实际 UI/hops 专项仍 NOT_TESTED，通用页面或 Long Ping 双视口通过不能代替 |
 | 真实远端多跳、跨Site/跳板路径、无线切换 | NOT_TESTED；回环一跳不代表这些网络业务 |
 | 现场路径异常→同资源恢复 | NOT_TESTED；权限拒绝不能冒充链路故障或设备离线 |
 
 最终两模式的日志为 `D:\study\NetConsole-Next-Workspace\reports\r76-offline-apphost.log` 和 `r76-offline-dotnet.log`；入口是 `tests/offline_candidate_e2e.py --candidate <上述候选目录>`，DLL 模式额外传 `--dotnet-host "C:\Program Files\dotnet\dotnet.exe"`。两日志在完成备份计划等其余子项后均抛出 `AssertionError: Required Windows loopback Traceroute gate failed: state=PARTIAL; outcome=ICMP_PERMISSION_DENIED`；其余子项 PASS 不改变最终 EXIT 1。独立 Long Ping 回环 ICMP PASS 也不能替代 Traceroute 路径验证。
+
+主集成另完成 18 次独立环境对照：诊断 APPHOST 原生 code 5，而显式 DLL 诊断/直接 tracert PASS；完整 Host 两模式仍失败。这与历史窄范围对照一致，但不是完整候选通过，也不证明具体系统策略根因；独立 ICMP 环境报告已于主线 cdf9e30 集成。共享实例 Vite 5174 / PID 32812 保持不动；本轮不通过改变主机策略、提权或弱化必需门禁处理拒绝。
 
 本报告只新增文档，未启动 Service、重连设备、变更系统策略或复制数据。相关：[Ping](R7_6_PING_REPORT.md)、[Windows 部署](R7_6_WINDOWS_DEPLOYMENT_REPORT.md)、[故障中心](R7_6_FAULT_CENTER_REPORT.md)。

@@ -44,9 +44,11 @@ Long Ping 暂停请求先进入 PAUSING，当前 probe 排空后才为 PAUSED；
 | --- | --- |
 | 当前主线 Service / Web / typecheck / build | Service 全量 50db848 EXIT 0；主集成确认最终 Web 35 files / 370 tests 与 typecheck PASS；候选静态 UI 的 HTTP 资产哈希子项 PASS，本报告未独立重跑构建 |
 | 最终候选离线与 Long Ping HTTP 验收 | 完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1，必需 Traceroute 为 PARTIAL / ICMP_PERMISSION_DENIED；独立 Long Ping HTTP 13 项 PASS，为实际 127.0.0.1 ICMP 与最小合成库存 |
-| 最终候选双分辨率浏览器 | NOT_VERIFIED；1920×1080 / 2560×1440 的最终运行实例、截图、下载与实际操作尚无完成证据 |
+| 最终候选双分辨率浏览器 | 1920×1080 / 2560×1440：共享只读 fault/无线观察/Ping Quick 历史/配置历史 PASS，AP 有效变化历史因无已存变化 PARTIAL；broad 四类页面 PASS；隔离实际回环 Long Ping 操作及 Quick/Long CSV/P95 对照 PASS，详见下文范围 |
 | 完整 25 项原版语义与独立实机验收 | PARTIAL；本报告不宣称全部完成 |
 
 最终候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`；目录名、制品嵌入 commit 与报告 HEAD 分别记录。原始证据为 `reports/r76-offline-apphost.log`、`reports/r76-offline-dotnet.log`、`reports/r76-long-ping-http-25e00169234f/result.json`。候选功能 HTTP 报告 `reports/r72-feature-http-20261108-220844-e695e3.json` 的 40 项为 SYNTHETIC_REAL_HTTP_AUTHORIZATION / PASS，deviceConnections=0、recoverySuccessClaimed=false；它验证权限/范围/持久化，不证明现场故障恢复或完整 25 项对等。
+
+共享候选 18771 / PID 49344 HEALTHY，Vite 5174 / PID 32812 不动。`reports/r76-post-upgrade-integrity.json` 记录 SQLite ok、140 个 Raw 长度/SHA256 校验、incomplete/missing=0、recovery issues=0、checkpoint 和 19 个受保护资产不变。`reports/r76-browser-final-20261108/result.json` 整体 PARTIAL，仅 wirelessSelectedApHistoryCsv 因 NO_STORED_EFFECTIVE_CHANGES 保持双视口 PARTIAL，CSV 已成功，不能制造 HA；共享 Ping 只有 Quick 历史。`reports/r76-broad-browser-final-20261108/result.json` 的 dashboard/fault/config/wireless 双视口 PASS。`reports/r76-long-ping-browser-2026-11-08T14-09-52-034Z/result.json` 为隔离候选真实回环操作 PASS，pause/resume/cancel/history 及 Quick/Long CSV/P95 与 HTTP 样本逐项一致，fixture 已停止。均无 pageerrors/横向溢出/设备写入；FIT 直接认证和 Traceroute 实际 UI/hops 仍未完成专项验收，整体对等保持 PARTIAL。
 
 仅新增事实文档，没有修改共享源码、启动服务、设备写入或复制 Site/数据库。相关：[设备互操作](R7_6_DEVICE_INTEROP_REPORT.md)、[无线](R7_6_WIRELESS_REPORT.md)、[FIT-AP](R7_6_FIT_AP_REPORT.md)、[配置恢复](R7_6_CONFIG_RESTORE_REPORT.md)、[Windows 部署](R7_6_WINDOWS_DEPLOYMENT_REPORT.md)、[故障中心](R7_6_FAULT_CENTER_REPORT.md)。

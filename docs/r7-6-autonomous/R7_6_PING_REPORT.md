@@ -41,9 +41,11 @@ Quick Ping 支持 2–60 样本、100–5000ms 间隔/超时、最多 8 目标�
 | 待验范围 | 结论 |
 | --- | --- |
 | 最终候选 apphost / 显式 dotnet DLL | 完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1，必需 Traceroute 为 PARTIAL / ICMP_PERMISSION_DENIED；日志为 reports/r76-offline-apphost.log 与 r76-offline-dotnet.log；独立 Long Ping HTTP 13 项 PASS，限上文实际 DLL 路径 |
-| 最终候选双分辨率浏览器、历史趋势与 CSV | NOT_VERIFIED；1920×1080 / 2560×1440 的最终实例、历史趋势操作、下载和类型隔离尚无实际浏览器完成证据 |
+| 最终候选双分辨率浏览器、历史趋势与 CSV | 隔离实际回环在 1920×1080 / 2560×1440 的 pause/resume/cancel/history、Quick/Long CSV 与实际 HTTP 样本/P95 逐项对照 PASS；共享实例只读 Quick 历史/CSV PASS，无已存 Long 终态点，不能混写为共享 Long 实采 |
 | 一小时上限、多日监测、规模与保留策略 | NOT_TESTED / PARTIAL；短回环生命周期不能代替长期 soak 或原版车队 fping |
 | 远端实际丢包、AP/Site/车辆时间关联 | NOT_TESTED；不能根据同名、IP或邻近时间补造关联 |
 | AP离线/切换后的无线业务恢复 | NOT_TESTED；ICMP回环和TCP连通均不能代替 |
+
+最终浏览器原件 `reports/r76-long-ping-browser-2026-11-08T14-09-52-034Z/result.json` 为 SERVICE_E2E_BROWSER_LOOPBACK / PASS，实际候选 DLL、127.0.0.1 ICMP，隔离 base 64516 / PID 47792；fixture 已停止，无遗留活动任务。两视口均验证暂停不增加样本/丢失、原任务继续、取消保留样本、重开历史/CSV 不发起探测、Quick/Long 分组隔离及 P95 与 HTTP 实际样本一致，无 pageerrors/横向溢出/设备写入。共享证据 `reports/r76-browser-final-20261108/result.json` 的 pingP95HistoryCsv 双视口 PASS，仅 QUICK_PING，明确 NO_STORED_COMPLETED_LONG_PING_POINTS。共享 18771 / PID 49344 HEALTHY，Vite 5174 / PID 32812 不动；不能将隔离任务写成共享历史。
 
 本报告编写仅只读复核既有证据，未启动 Service、设备会话或配置写入，未复制业务数据。相关：[Traceroute](R7_6_TRACEROUTE_REPORT.md)、[故障中心](R7_6_FAULT_CENTER_REPORT.md)、[功能对等](R7_6_FEATURE_PARITY_REPORT.md)。

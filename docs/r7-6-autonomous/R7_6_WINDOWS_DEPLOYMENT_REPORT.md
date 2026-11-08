@@ -48,8 +48,8 @@
 | --- | --- |
 | 最终 R7.6 Windows x64 候选路径 / commit / manifest | `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`；Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`；目录后缀不替代嵌入 commit，完整 manifest 本报告未独立核验 |
 | 最终候选离线 E2E | APPHOST 与 DOTNET_DLL_EXPLICIT 均 EXIT 1；必需 live ICMP Traceroute 为 PARTIAL / ICMP_PERMISSION_DENIED；其他已列子项 PASS，整体 FAILED |
-| 最终候选双分辨率浏览器 | NOT_VERIFIED；1920×1080 / 2560×1440 的最终实际操作、截图和错误统计尚无完成证据 |
-| 最终候选单 DB checkpoint / SQLite / Raw 完整性 | Long Ping 最小 fixture 的重启后 SQLite integrity PASS；离线任务 TXT/ZIP 与 AC Raw 哈希子项 PASS；最终运行实例的单 DB checkpoint、整体 SQLite/Raw 核对尚未完成，不以 fixture 代替 |
+| 最终候选双分辨率浏览器 | 1920×1080 / 2560×1440：共享只读专项整体 PARTIAL（AP 历史无已存有效变化），broad 的 dashboard/fault/config/wireless 四类 PASS；隔离实际回环 Long Ping 操作与 CSV/P95 对照 PASS；无 pageerrors/横向溢出/设备写入 |
+| 最终候选单 DB checkpoint / SQLite / Raw 完整性 | 共享 PID 49344 HEALTHY；SQLite ok，140 个 FINALIZED Raw 长度/SHA256 验证，incomplete/missing=0、recovery issues=0；单 DB checkpoint hash 和 19 个受保护资产不变 |
 | 真实 SCM 安装 / 启动 / 重启 / 卸载 | NOT_TESTED |
 | SCM 自动启动、虚拟账户、崩溃恢复 | NOT_TESTED；未以离线 plan 代替验证 |
 | 真实升级失败及 binary fallback | NOT_TESTED；数据库 schema 兼容性仍需独立验证 |
@@ -58,6 +58,8 @@
 
 ## 数据与交接
 
-本专项未运行 install/update/uninstall 的真实执行分支，未调用真实 SCM 或写注册表，未停止或启动运行实例，未执行设备命令。没有复制完整真实数据根；未访问旧 NetConsole 的 Production / Dev 数据。源码补丁与报告均仅本地提交，未 push、远端 merge 或正式发布。最终候选、浏览器和 DevStatus 由主集成统一收口。
+最终共享候选监听 `127.0.0.1:18771`，PID 49344 HEALTHY，嵌入 ProductVersion 仍为上述 7099775；Vite `5174` / PID 32812 保持不动。完整性原件为 `reports/r76-post-upgrade-integrity.json`，单 DB checkpoint SHA256=`5fba203ba26a99caa2f9c05229646415f0e9bd1b64b048975f352e180098173f`。浏览器原件为 `reports/r76-browser-final-20261108/result.json`、`reports/r76-broad-browser-final-20261108/result.json` 和 `reports/r76-long-ping-browser-2026-11-08T14-09-52-034Z/result.json`；共享库只有 Quick 历史，Long 操作在隔离 fixture，不能将两实例混写。
+
+本专项未运行 install/update/uninstall 的真实执行分支，未调用真实 SCM 或写注册表，未停止或启动运行实例，未执行设备命令；上述主集成运行/浏览器证据为只读复核。没有复制完整真实数据根；未访问旧 NetConsole 的 Production / Dev 数据。源码补丁与报告均仅本地提交，未 push、远端 merge 或正式发布；DevStatus 由主集成统一收口。
 
 参考：[Windows 安装规范](../WINDOWS_SERVICE_INSTALLATION.md)、[LocalManager 操作规范](../LOCAL_MANAGER_OPERATIONS.md)、[R7.5 部署报告](../r7-5-autonomous/R7_5_DEPLOYMENT_REPORT.md)、[R7.6 配置恢复报告](R7_6_CONFIG_RESTORE_REPORT.md)。

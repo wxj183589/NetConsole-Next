@@ -2,7 +2,7 @@
 
 日期：2026-11-08。Agent：codex-A。报告基线：`39c2827`。状态：**PARTIAL / FULL_RESTORE_BLOCKED**。
 
-本轮完成备份读写路径的祖先重解析点保护，并收紧检查点恢复的 LLDP 业务验证。定向自动化门禁通过；本轮没有执行设备配置写入、整机替换或真实失败回滚。最终候选的配置子门禁通过，但两种启动方式的完整离线门禁均因必需 Traceroute 失败而 EXIT 1；配置 UI 最终浏览器验收尚无完成证据。
+本轮完成备份读写路径的祖先重解析点保护，并收紧检查点恢复的 LLDP 业务验证。定向自动化门禁和最终共享实例的配置历史/存储只读浏览器检查通过；本轮没有执行设备配置写入、整机替换或真实失败回滚。最终候选的配置子门禁通过，但两种启动方式的完整离线门禁均因必需 Traceroute 失败而 EXIT 1。
 
 ## 本轮修复及验证
 
@@ -58,12 +58,12 @@
 | 整机恢复后业务探针 | NOT_TESTED；严格解析器回归为合成证据 |
 | 故意失败与自动整机 rollback | NOT_TESTED；合成回滚状态覆盖已通过 |
 | 最终 R7.6 候选离线配置门禁 | CONFIGURATION_KINDS / BACKUP_SCHEDULES 子项两模式均 PASS；完整离线 APPHOST / DOTNET_DLL_EXPLICIT 均 EXIT 1，阻断为必需 Traceroute 的 ICMP_PERMISSION_DENIED |
-| 最终 R7.6 候选配置 UI 浏览器门禁 | NOT_VERIFIED；尚未取得最终候选在 1920×1080 / 2560×1440 的实际浏览器操作与截图证据 |
+| 最终 R7.6 候选配置 UI 浏览器门禁 | 1920×1080 / 2560×1440 的 configurationHistory 与 configurationStorageAndHistory 只读浏览器检查 PASS；未执行设备写入或整机恢复 |
 
 最终候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion 为 `1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。`reports/r76-offline-apphost.log` 与 `reports/r76-offline-dotnet.log` 记录 running/saved/startup、独立版本、脱敏下载、缺失 saved 失败、计划 CRUD/角色/输入、持久重启、逾期只执行一次、SAVED 和损坏存储隔离子项通过。这些使用回环 SSH 合成设备，不能替代真实设备恢复。全量 Service 日志 `reports/r76-service-full-final.log` 为基线 `50db848` EXIT 0，包含 Backup 12/12、Schedule 19/19、Checkpoint 18/18、Readiness 16/16、Simulator 22/22 PASS；本报告未重跑。
 
 ## 数据与交接
 
-测试数据只使用 Next Workspace 内最小 fixture；未复制完整 Site 或真实数据根。未访问旧 NetConsole 的 `D:\NetConsoleData` / `D:\NetConsoleData-dev`，未将配置原件、数据库或大型日志写入本报告。运行实例 PID、浏览器和实际 DB checkpoint 的最终验收尚未提供完成证据。
+测试数据只使用 Next Workspace 内最小 fixture；未复制完整 Site 或真实数据根。未访问旧 NetConsole 的 `D:\NetConsoleData` / `D:\NetConsoleData-dev`，未将配置原件、数据库或大型日志写入本报告。最终共享候选 `127.0.0.1:18771` / PID 49344 为 HEALTHY；Vite 5174 / PID 32812 保持不动。`reports/r76-post-upgrade-integrity.json` 记录 SQLite ok、140 个 FINALIZED Raw 的长度/SHA256 校验通过、incomplete/missing=0、recovery issues=0，19 个受保护资产不变；单 DB checkpoint SHA256 `5fba203ba26a99caa2f9c05229646415f0e9bd1b64b048975f352e180098173f` 不变。浏览器证据为 `reports/r76-browser-final-20261108/result.json` 与 `reports/r76-broad-browser-final-20261108/result.json`；这是共享实例只读验收，不是设备恢复验收。
 
 参考：[R7.0 配置状态机与受控设备证据](../r7-autonomous/R7_CONFIG_MANAGEMENT_REPORT.md)、[R7.2 恢复前检查](../r7-2-autonomous/R7_2_CONFIG_RESTORE_REPORT.md)、[R6.9 Writer 报告](../r6-autonomous/R6.9_CONFIG_RESTORE_WRITER_REPORT.md)。

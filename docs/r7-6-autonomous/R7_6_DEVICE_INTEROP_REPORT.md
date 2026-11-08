@@ -47,10 +47,12 @@ Facts 来源分别为 `H3C_TASK_RAW:672a4e028f8c40efbe96a52843ff6675` 与 `H3C_T
 | SW 认证、版本、接口、LLDP 和 Raw/Facts | BLOCKED；需要既有有效 profile，不重试失败凭据 |
 | FIT-AP 直接认证与原生身份 | BLOCKED；参见 FIT-AP 报告 |
 | 物理硬件、HA 切换/回切、端到端业务 | NOT_TESTED |
-| 最终 R7.6 候选产品/API/浏览器验收 | 回环合成设备的 Netmiko 连接/重连、AC 12 固定命令及 scoped Facts/Raw 子项两模式均 PASS；完整离线两模式均 EXIT 1（必需 Traceroute 权限拒绝）；最终运行 PID 和实际浏览器尚未完成验收 |
+| 最终 R7.6 候选产品/API/浏览器验收 | 回环合成设备的 Netmiko 连接/重连、AC 12 固定命令及 scoped Facts/Raw 子项两模式均 PASS；完整离线两模式均 EXIT 1（必需 Traceroute 权限拒绝）；共享 18771 / PID 49344 HEALTHY，双分辨率只读浏览器已验收，范围如下 |
 
 最终候选为 `D:\study\NetConsole-Next-Workspace\build\r76-candidate-integrated-91d0a63`，Service.exe ProductVersion=`1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297`。证据为 `reports/r76-offline-apphost.log` 与 `reports/r76-offline-dotnet.log`；其中合成 SSH 与上文 21:12 的双 AC 产品采集是不同来源。最终候选权限 HTTP 报告 `reports/r72-feature-http-20261108-220844-e695e3.json` 为 PASS / 40 checks，标记 SYNTHETIC_REAL_HTTP_AUTHORIZATION、deviceConnections=0、recoverySuccessClaimed=false，也不构成新的设备互操作或恢复证据。
 
 SW 本轮范围来自 [R7.6 work pool](R7_6_WORK_POOL.md)，此前认证失败来自 [R7.5 设备报告](../r7-5-autonomous/R7_5_DEVICE_INTEROP_REPORT.md)；不把 FIT 探测 JSON 当作 SW 证据。FIT 本轮报告为 `D:\study\NetConsole-Next-Workspace\reports\r71-device-20261108-211219\summary.json`。
+
+`reports/r76-browser-final-20261108/result.json` 的共享只读浏览器在 1920×1080 / 2560×1440 对 faultFilters、wirelessCurrentAcAndExport、pingP95HistoryCsv、configurationHistory 均 PASS；wirelessSelectedApHistoryCsv 为 PARTIAL / NO_STORED_EFFECTIVE_CHANGES，导出成功但没有有效变化，不证明 HA。`reports/r76-broad-browser-final-20261108/result.json` 的四类页面双视口 PASS；均未发起设备连接/写入。`reports/r76-post-upgrade-integrity.json` 记录共享 SQLite ok、140 个 Raw 长度/SHA256 验证、incomplete/missing=0、recovery issues=0、checkpoint/19 资产不变；Vite 5174 / PID 32812 不动。这些产品读验收不消除 SW/FIT 认证和物理硬件阻断。
 
 本报告编写阶段只读复核既有证据，没有再次建立设备会话、写配置或复制数据。未访问旧 NetConsole 数据根。相关：[无线报告](R7_6_WIRELESS_REPORT.md)、[FIT-AP 报告](R7_6_FIT_AP_REPORT.md)。
