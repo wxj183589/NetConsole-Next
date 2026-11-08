@@ -11,7 +11,7 @@ const result = { base, evidenceLevel: 'SERVICE_E2E_BROWSER_READONLY', startedUtc
   deviceConnections: 0, configurationWrites: 0, checks: [], layouts: [], apiResponses: [], blockedMutations: [], errors: [] }
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
 const save = () => writeFileSync(path.join(output, 'result.json'), JSON.stringify(result, null, 2))
-const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || 'C:\Program Files\Google\Chrome\Application\chrome.exe' })
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe' })
 const context = await browser.newContext({ acceptDownloads: true })
 await context.route('**/api/**', async route => {
   const request = route.request(), pathname = new URL(request.url()).pathname
