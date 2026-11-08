@@ -137,7 +137,10 @@ internal static class FaultLifecycle
             return new(Fingerprint(item, profileId), item.DeviceId, profileId, item.SiteId, item.Kind, item.ResourceKey ?? item.DeviceId,
                 item.Severity, "OPEN", item.AtMs, item.AtMs, item.EvidenceType, item.EvidenceId, item.Detail, 1,
                 [new(now, "DETECTED", actor, item.EvidenceId, item.Detail)], item.SourceAuthority, item.CapturedScopeKey);
-        if (item.AtMs <= prior.LastSeenMs || item.EvidenceId == prior.EvidenceId ||
+        // A live Long Ping run publishes later immutable sample windows under the same source ID.
+        // Other evidence remains one observation per source; repeated windows remain idempotent by time.
+        var advancingProbe = item.Kind == "PROBE_PACKET_LOSS" && item.EvidenceType == "DIAGNOSTIC";
+        if (item.AtMs <= prior.LastSeenMs || item.EvidenceId == prior.EvidenceId && !advancingProbe ||
             prior.State == "RESOLVED" && item.AtMs <= prior.History.Last(h => h.Action == "RECOVERY_VERIFIED").AtMs) return prior;
         var reopened = prior.State == "RESOLVED";
         return prior with { LastSeenMs = item.AtMs, EvidenceId = item.EvidenceId, EvidenceType = item.EvidenceType,
@@ -326,13 +329,14 @@ internal sealed class FaultCenterService : BackgroundService
             evidence = FaultLifecycle.FreshRecoveryFact(item, facts, now)?.Id;
             if (item.Kind is "PROBE_PACKET_LOSS" or "TRACEROUTE_ANOMALY")
             {
-                // The health projection already enforces current endpoint and finished, fresh diagnostic samples.
+                // The health projection enforces current endpoint, authorized state and fresh actual samples.
                 for (var page = 1; page <= 40; page++)
                 {
                     var snapshot = _health.Get(scope, page, actor.UserId);
                     var health = snapshot.Devices.FirstOrDefault(d => d.DeviceId == item.DeviceId);
                     if (item.Kind == "PROBE_PACKET_LOSS")
-                        evidence = FaultLifecycle.FreshProbeRecoveryEvidence(item, health?.ProbeWindow, now);
+                        evidence = (health?.ProbeWindows ?? (health?.ProbeWindow is { } single ? [single] : []))
+                            .Select(window => FaultLifecycle.FreshProbeRecoveryEvidence(item, window, now)).FirstOrDefault(id => id is not null);
                     var metric = item.Kind == "TRACEROUTE_ANOMALY" ? health?.RouteReachability : null;
                     if (metric is { State: "OBSERVED", CapturedMs: { } at } &&
                         metric.Value == (item.Kind == "TRACEROUTE_ANOMALY" ? 1 : 0) && at > item.LastSeenMs && metric.ResourceKey == item.ResourceKey)

@@ -15,8 +15,11 @@ internal static class FaultCenterTests
         RecoveryAndAggregationKeepSourceScope();
         ProbeRecoveryRequiresAllRepliesAfterFault();
         ProbeRecoveryKeepsExactResourceAndFreshness();
+        SameRunProbeAdvancesAndReopensOnlyNewSamples();
         await PingDiagnosticsDriveConfirmedFaultsOnly();
         await LongPingAutomaticallyRecoversWithinSameRun();
+        await ActiveLongPingDiscoversRecoversAndReopens();
+        await ActiveProtocolsKeepIndependentFaultAndRecoveryWindows();
         LldpRecoveryRequiresExactCompleteNewTable();
         ApRecoveryRequiresLiveRoleAndAllSources();
         HistoryIsBounded();
@@ -36,7 +39,99 @@ internal static class FaultCenterTests
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=27/27 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=30/30 PASS");
+    }
+    private static void SameRunProbeAdvancesAndReopensOnlyNewSamples()
+    {
+        var observed = Event("same-run") with { Kind = "PROBE_PACKET_LOSS", EvidenceType = "DIAGNOSTIC" };
+        var first = FaultLifecycle.Observe(null, observed, "profile-a", "actor", Now);
+        var latest = FaultLifecycle.Observe(first, observed with { AtMs = Now + 1 }, "profile-a", "actor", Now + 1);
+        Assert(latest.LastSeenMs == Now + 1 && latest.Occurrences == 2 &&
+            ReferenceEquals(latest, FaultLifecycle.Observe(latest, observed with { AtMs = Now + 1 }, "profile-a", "actor", Now + 2)),
+            "new valid same-run samples advance the incident while replaying a window stays idempotent");
+        var resolved = latest with { State = "RESOLVED", History = FaultLifecycle.Append(latest,
+            new(Now + 5, "RECOVERY_VERIFIED", "actor", "same-run", "three later replies")) };
+        Assert(ReferenceEquals(resolved, FaultLifecycle.Observe(resolved, observed with { AtMs = Now + 4 }, "profile-a", "actor", Now + 6)),
+            "samples from before verification cannot reopen a resolved incident");
+        var reopened = FaultLifecycle.Observe(resolved, observed with { AtMs = Now + 7 }, "profile-a", "actor", Now + 8);
+        Assert(reopened.State == "REOPENED" && reopened.Occurrences == 3 && reopened.History.Last().Action == "REOPENED" &&
+            reopened.EvidenceId == "same-run", "a newly confirmed loss after verification can recur within the same active run");
+        var fact = Incident();
+        Assert(ReferenceEquals(fact, FaultLifecycle.Observe(fact, Event() with { AtMs = Now + 1 }, "profile-a", "actor", Now + 1)),
+            "the same-evidence exception remains limited to diagnostic packet-loss windows");
+    }
+    private static async Task ActiveLongPingDiscoversRecoversAndReopens()
+    {
+        var probe = new GatedPingProbe();
+        using var f = new BusinessFixture(probe);
+        f.SeedIncidents([]);
+        var run = f.StartLongPing();
+        using var service = f.Service();
+        try
+        {
+            probe.Publish("TIMED_OUT", "UNREACHABLE", "TIMED_OUT");
+            var loss = await f.WaitPingSamples(run.Id, 3);
+            Assert(loss.State == "RUNNING" && loss.Items.Single().EndedMs is null, "the loss source is still running");
+            var health = service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1).Devices.Single(d => d.DeviceId == f.Item.DeviceId);
+            var first = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single();
+            Assert(first.State == "OPEN" && first.EvidenceId == run.Id && first.LastSeenMs == loss.Items.Single().QuickPing!.Samples[2].CapturedMs &&
+                health.PacketLossPercent?.CapturedMs == first.LastSeenMs && health.ProbeWindows?.Count == 1,
+                "active diagnostics drive a durable incident and metrics at the actual latest sample time");
+            service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+            Assert(service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single().Occurrences == 1,
+                "a repeated active window does not add an observation");
+            probe.Publish("REPLIED", "REPLIED", "REPLIED");
+            var replies = await f.WaitPingSamples(run.Id, 6);
+            Assert(replies.State == "RUNNING" && replies.Items.Single().QuickPing!.LossPercent > 0,
+                "active recovery preserves real cumulative packet loss");
+            service.VerifyObservedDevices(f.Actor, P2B5SiteScopeDecision.Global, [f.Item.DeviceId]);
+            var recovered = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single();
+            Assert(recovered.State == "RESOLVED" && recovered.History.Last().EvidenceId == run.Id,
+                "background verification accepts three later actual replies before Long Ping completes");
+            service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+            Assert(service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single().State == "RESOLVED",
+                "the earlier loss window cannot reopen a recovered active incident");
+            probe.Publish("TIMED_OUT", "TIMED_OUT", "UNREACHABLE");
+            var recurrence = await f.WaitPingSamples(run.Id, 9);
+            service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+            var reopened = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single();
+            Assert(recurrence.State == "RUNNING" && reopened.State == "REOPENED" && reopened.Id == first.Id &&
+                reopened.EvidenceId == run.Id && reopened.LastSeenMs > recovered.History.Last().AtMs && reopened.Occurrences == 2,
+                "a later confirmed burst in that same active run reopens the exact persisted resource once");
+            service.VerifyObservedDevices(f.Actor, P2B5SiteScopeDecision.Global, [f.Item.DeviceId]);
+            Assert(service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items.Single().State == "REOPENED",
+                "old replies cannot resolve a later burst");
+        }
+        finally { await f.CancelPing(run.Id); }
+    }
+    private static async Task ActiveProtocolsKeepIndependentFaultAndRecoveryWindows()
+    {
+        var probe = new DualProtocolPingProbe();
+        using var f = new BusinessFixture(probe);
+        f.SeedIncidents([]);
+        var icmp = f.StartLongPing();
+        var tcp = f.StartLongPing("TCP");
+        using var service = f.Service();
+        try
+        {
+            probe.Icmp.Publish("TIMED_OUT", "TIMED_OUT", "TIMED_OUT");
+            probe.Tcp.Publish("UNREACHABLE", "UNREACHABLE", "UNREACHABLE");
+            await f.WaitPingSamples(icmp.Id, 3); await f.WaitPingSamples(tcp.Id, 3);
+            var health = service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1).Devices.Single(d => d.DeviceId == f.Item.DeviceId);
+            var incidents = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items;
+            Assert(incidents.Count == 2 && incidents.Select(i => i.ResourceKey).Distinct().Count() == 2 && health.ProbeWindows?.Count == 2,
+                "simultaneous ICMP and TCP losses persist independent resources instead of hiding all but the latest probe");
+            probe.Icmp.Publish("REPLIED", "REPLIED", "REPLIED");
+            probe.Tcp.Publish("TIMED_OUT", "TIMED_OUT", "TIMED_OUT");
+            await f.WaitPingSamples(icmp.Id, 6); await f.WaitPingSamples(tcp.Id, 6);
+            service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+            service.VerifyObservedDevices(f.Actor, P2B5SiteScopeDecision.Global, [f.Item.DeviceId]);
+            incidents = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "PROBE_PACKET_LOSS").Items;
+            Assert(incidents.Single(i => i.EvidenceId == icmp.Id).State == "RESOLVED" &&
+                incidents.Single(i => i.EvidenceId == tcp.Id).State == "OPEN",
+                "ICMP replies resolve only their exact incident while the newer TCP loss window remains independently open");
+        }
+        finally { await f.CancelPing(icmp.Id); await f.CancelPing(tcp.Id); }
     }
     private static async Task PingDiagnosticsDriveConfirmedFaultsOnly()
     {
@@ -470,6 +565,26 @@ internal static class FaultCenterTests
                 await Task.Delay(10, deadline.Token);
             return result;
         }
+        public NetworkDiagnosticRunSnapshot StartLongPing(string protocol = "ICMP") => _diagnostics.Start(new([Item.DeviceId], ["LONG_PING"],
+            5000, IntervalMs: 1000, QuickPingProtocol: protocol, LongPingDurationSeconds: 30), Actor.UserId, P2B5SiteScopeDecision.Global);
+        public async Task<NetworkDiagnosticRunSnapshot> WaitPingSamples(string id, int count)
+        {
+            using var deadline = new CancellationTokenSource(12000);
+            while (true)
+            {
+                var snapshot = _diagnostics.Get(id, Actor.UserId, P2B5SiteScopeDecision.Global)!;
+                if (snapshot.Items.Single().QuickPing?.Sent >= count) return snapshot;
+                if (snapshot.ProgressPercent == 100) throw new InvalidOperationException("Ping terminated before required active samples.");
+                await Task.Delay(10, deadline.Token);
+            }
+        }
+        public async Task CancelPing(string id)
+        {
+            _diagnostics.Cancel(id, Actor.UserId, Actor.Role, P2B5SiteScopeDecision.Global);
+            using var deadline = new CancellationTokenSource(5000);
+            while (_diagnostics.Get(id, Actor.UserId, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 })
+                await Task.Delay(10, deadline.Token);
+        }
         public void Seed(FaultPolicy? policy) => new FaultCenterStore(_files.Root).Commit(new(1, [Item], policy is null ? [] : [policy]));
         public void SeedIncidents(IReadOnlyList<FaultIncident> incidents) => new FaultCenterStore(_files.Root).Commit(new(1, incidents, []));
         public string FailedCollection(string command = H3cCommandPolicy.DisplayVersion)
@@ -528,6 +643,26 @@ internal static class FaultCenterTests
             var status = index < statuses.Count ? statuses[index] : "REPLIED";
             return Task.FromResult((status, status == "REPLIED" ? (long?)2 : null));
         }
+    }
+    private sealed class GatedPingProbe : IQuickPingProbe
+    {
+        private readonly System.Threading.Channels.Channel<string> _samples = System.Threading.Channels.Channel.CreateUnbounded<string>();
+        public void Publish(params string[] statuses)
+        { foreach (var status in statuses) if (!_samples.Writer.TryWrite(status)) throw new InvalidOperationException("Probe queue closed."); }
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken token) => Task.FromResult(new[] { IPAddress.Parse(host) });
+        public async Task<(string Status, long? LatencyMs)> SendAsync(IPAddress address, int port, string protocol, int timeoutMs, CancellationToken token)
+        {
+            var status = await _samples.Reader.ReadAsync(token);
+            return (status, status == "REPLIED" ? 2 : null);
+        }
+    }
+    private sealed class DualProtocolPingProbe : IQuickPingProbe
+    {
+        public GatedPingProbe Icmp { get; } = new();
+        public GatedPingProbe Tcp { get; } = new();
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken token) => Task.FromResult(new[] { IPAddress.Parse(host) });
+        public Task<(string Status, long? LatencyMs)> SendAsync(IPAddress address, int port, string protocol, int timeoutMs, CancellationToken token) =>
+            (protocol == "ICMP" ? Icmp : Tcp).SendAsync(address, port, protocol, timeoutMs, token);
     }
     private sealed class Fixture : IDisposable
     {

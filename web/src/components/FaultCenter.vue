@@ -110,6 +110,7 @@ onBeforeUnmount(() => { generation++ })
     <div class="card__body">
       <p>事件按设备、Site、故障类型与资源聚合。确认表示已知悉；恢复必须通过更新的有效证据核验。</p>
       <p>Ping 连续 3 次有效丢失形成丢包事件；同目标末尾连续 3 次有效应答且均晚于事件才可恢复。累计丢包率保留，不代表设备离线。</p>
+      <p>运行中的 Long Ping 按真实样本同步故障、恢复与复发，无须等待任务结束。暂停和取消不提供恢复证据；ICMP 与 TCP 端口分别核验。</p>
       <form class="fault-center__filters" @submit.prevent="load()">
         <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>

@@ -14,6 +14,15 @@ const button = (wrapper: ReturnType<typeof render>, text: string) => wrapper.fin
 
 describe('FaultCenter', () => {
   beforeEach(() => { vi.resetAllMocks(); api.getFaults.mockResolvedValue(structuredClone(result)); api.setFaultPolicy.mockResolvedValue({ state: 'SCHEDULED' }); api.verifyFault.mockResolvedValue({ state: 'RECOVERY_NOT_VERIFIED', detail: '缺少恢复证据' }) })
+  it('explains live Long Ping evidence and separates pause and protocol recovery boundaries', async () => {
+    const wrapper = render(false); await flushPromises()
+    expect(wrapper.text()).toContain('运行中的 Long Ping 按真实样本同步故障、恢复与复发')
+    expect(wrapper.text()).toContain('暂停和取消不提供恢复证据')
+    expect(wrapper.text()).toContain('ICMP 与 TCP 端口分别核验')
+    expect(wrapper.text()).toContain('累计丢包率保留')
+    expect(api.syncFaults).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
   it('filters lost LLDP neighbors and exposes the exact evidence partition', async () => {
     api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, kind: 'LLDP_NEIGHBOR_LOST', sourceAuthority: 'H3C_TASK_RAW', capturedScopeKey: '["scope-a"]' }] })
     const wrapper = render(); await flushPromises()

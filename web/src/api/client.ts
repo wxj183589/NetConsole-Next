@@ -567,6 +567,7 @@ export interface NetworkDiagnosticItem {
   evidenceSources: string[]
   traceRoute?: NetworkTraceRoute | null
   quickPing?: QuickPingSnapshot | null
+  confirmationStartSequence?: number
   dns?: { query: string; resolutionMode: 'IP_LITERAL' | 'SYSTEM_RESOLVER'; addresses: string[]; capturedMs: number } | null
 }
 export interface NetworkDiagnosticRun {
@@ -1648,10 +1649,15 @@ export function previewCompleteConfigurationRestore(backupId: string): Promise<C
   return request(`/api/system/simulator-config/backups/${encodeURIComponent(backupId)}/restore-preview`, { method: 'POST' })
 }
 export interface OperationalMetric { state: string; value: number | null; unit: string; capturedMs: number | null; evidenceIds: string[] }
+export interface OperationalProbeWindow {
+  lastConfirmedLossMs: number | null; recoveryStartedMs: number | null; recoveryConfirmedMs: number | null
+  evidenceIds: string[]; resourceKey: string | null
+}
 export interface OperationalDeviceHealth {
   deviceId: string; name: string; siteId: string; profileId: string | null; state: string
   reachability: OperationalMetric; cpuPercent: OperationalMetric; memoryPercent: OperationalMetric
   interfaceDown: OperationalMetric; lldpNeighbors: OperationalMetric; pingDelayMs?: OperationalMetric | null; packetLossPercent?: OperationalMetric | null; warnings: string[]
+  probeWindow?: OperationalProbeWindow | null; probeWindows?: OperationalProbeWindow[] | null
 }
 export interface OperationalFaultEvent {
   id: string; deviceId: string; siteId: string; kind: string; severity: string; state: string

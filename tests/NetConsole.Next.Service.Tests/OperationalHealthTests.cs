@@ -22,13 +22,16 @@ internal static class OperationalHealthTests
         ProbeRequiresCurrentExactTerminalResource();
         ProbeUsesFreshSamplesNotCompletionTime();
         ProbeDoesNotCountUnsentSamples();
+        RunningLongPingUsesActualSampleTime();
+        PausedCancelledAndInvalidActiveProbesStayUnknown();
+        ResumedProbeRequiresNewConfirmationSamples();
         LldpLossRequiresCompletePartitionEvidence();
         CompleteEmptyLldpIsObservedZero();
         await TransientFailureRecovers();
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=23/23 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=26/26 PASS");
     }
     private static NetworkDiagnosticItemSnapshot Probe(params string[] statuses)
     {
@@ -128,6 +131,54 @@ internal static class OperationalHealthTests
             "unsent requested samples do not count as lost when the duration window ends");
         Assert(Window(Probe()).RecoveryConfirmedMs is null && Window(Probe()).LastConfirmedLossMs is null,
             "zero sent samples provide neither failure nor recovery evidence");
+    }
+    private static void RunningLongPingUsesActualSampleTime()
+    {
+        var completed = Probe("TIMED_OUT", "UNREACHABLE", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED");
+        var active = completed with { State = "RUNNING", Outcome = null, EndedMs = null };
+        var result = Window(active);
+        Assert(result.LastConfirmedLossMs == active.QuickPing!.Samples[2].CapturedMs &&
+            result.RecoveryStartedMs == active.QuickPing.Samples[3].CapturedMs &&
+            result.RecoveryConfirmedMs == active.QuickPing.Samples[5].CapturedMs &&
+            result.ResourceKey == Window(completed).ResourceKey &&
+            OperationalHealthProjection.DiagnosticObservationMs(active) == active.QuickPing.Samples[^1].CapturedMs,
+            "running Long Ping confirms loss and trailing recovery using published samples before the run finishes");
+        var onlyLoss = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT") with { State = "RUNNING", Outcome = null, EndedMs = null };
+        Assert(Window(onlyLoss).LastConfirmedLossMs is not null && Window(onlyLoss).RecoveryConfirmedMs is null,
+            "three losses in an active run discover an unresolved fault without a fabricated completion");
+    }
+    private static void PausedCancelledAndInvalidActiveProbesStayUnknown()
+    {
+        var active = Probe("TIMED_OUT", "TIMED_OUT", "TIMED_OUT", "REPLIED", "REPLIED", "REPLIED")
+            with { State = "RUNNING", Outcome = null, EndedMs = null };
+        foreach (var bad in new[]
+        {
+            active with { State = "PAUSED" }, active with { State = "PAUSING" }, active with { State = "CANCELLED" },
+            active with { Kind = "QUICK_PING" }, active with { Outcome = "LONG_PING_LOSS" },
+            active with { EndedMs = Now }, active with { StartedMs = Now + 1 },
+            active with { QuickPing = active.QuickPing! with { Sent = 1 } },
+            active with { StartedMs = Now - 400000, QuickPing = active.QuickPing! with
+                { Samples = active.QuickPing.Samples.Select(sample => sample with { CapturedMs = sample.CapturedMs - 300001 }).ToArray() } }
+        }) Assert(Window(bad).ResourceKey is null,
+            "paused, pausing, cancelled, stale, incomplete and non-Long-Ping active snapshots cannot confirm or recover faults");
+    }
+    private static void ResumedProbeRequiresNewConfirmationSamples()
+    {
+        foreach (var status in new[] { "REPLIED", "TIMED_OUT" })
+        {
+            var item = Probe(Enumerable.Repeat(status, 5).ToArray()) with { ConfirmationStartSequence = 4 };
+            var window = Window(item);
+            Assert(window.LastConfirmedLossMs is null && window.RecoveryConfirmedMs is null,
+                "two post-resume samples cannot borrow pre-pause evidence for loss or recovery");
+            item = Probe(Enumerable.Repeat(status, 6).ToArray()) with { ConfirmationStartSequence = 4 };
+            window = Window(item);
+            Assert(status == "REPLIED" ? window.RecoveryStartedMs == item.QuickPing!.Samples[3].CapturedMs :
+                window.LastConfirmedLossMs == item.QuickPing!.Samples[5].CapturedMs,
+                "three post-resume samples confirm independently while cumulative statistics remain intact");
+            Assert(Window(item with { ConfirmationStartSequence = 7 }).LastConfirmedLossMs is null &&
+                Window(item with { ConfirmationStartSequence = 7 }).RecoveryConfirmedMs is null,
+                "resume without a new sample cannot revive the prior window");
+        }
     }
     private static void CancelledTaskIsNotFault()
     {

@@ -107,6 +107,8 @@ internal static class NetworkQuickPingTests
                 Assert(!service.SetLongPingPaused(longRun.Id, false, actor, "SUPERADMIN", foreign) &&
                     !service.SetLongPingPaused(id, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "foreign scope and terminal non-long tasks cannot be resumed");
                 Assert(service.SetLongPingPaused(longRun.Id, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "current owner can resume exact inventory target");
+                Assert(service.Get(longRun.Id, P2B5SiteScopeDecision.Global)!.Items.Single().ConfirmationStartSequence ==
+                    paused.Items.Single().QuickPing!.Sent + 1, "resume excludes all pre-pause samples from confirmation");
                 while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent <= paused.Items.Single().QuickPing?.Sent)
                     await Task.Delay(10, longDeadline.Token);
                 service.SetLongPingPaused(longRun.Id, true, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global);

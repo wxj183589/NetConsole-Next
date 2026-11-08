@@ -29,7 +29,8 @@ internal sealed record NetworkDiagnosticItemSnapshot(
     IReadOnlyList<string> EvidenceSources,
     NetworkTracerouteSnapshot? TraceRoute = null,
     QuickPingSnapshot? QuickPing = null,
-    NetworkDnsSnapshot? Dns = null);
+    NetworkDnsSnapshot? Dns = null,
+    int ConfirmationStartSequence = 1);
 
 internal sealed record NetworkDnsSnapshot(string Query, string ResolutionMode,
     IReadOnlyList<string> Addresses, long CapturedMs);
@@ -248,6 +249,11 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         lock (item.Gate)
         {
             if (IsTerminal(item.State) || item.State == "QUEUED") return;
+            // A resumed confirmation window must not reuse pre-pause evidence.
+            // PAUSING may still own one in-flight sample: conservatively exclude it.
+            if (state == "PAUSING" || state == "RUNNING" && item.State is "PAUSING" or "PAUSED")
+                item.ConfirmationStartSequence = (item.QuickPing?.Sent ?? 0) +
+                    (state == "PAUSING" || item.State == "PAUSING" ? 2 : 1);
             item.State = state;
             item.Detail = state == "PAUSING" ? "等待在途采样结束后暂停" : state == "PAUSED"
                 ? "已暂停；原持续时长继续计时，不补记丢失采样" : null;
@@ -644,12 +650,13 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public NetworkTracerouteSnapshot? TraceRoute { get; set; }
         public QuickPingSnapshot? QuickPing { get; set; }
         public NetworkDnsSnapshot? Dns { get; set; }
+        public int ConfirmationStartSequence { get; set; } = 1;
         public LongPingControl LongPingControl { get; } = new();
 
         public NetworkDiagnosticItemSnapshot ToSnapshot()
         {
             lock (Gate) return new(Id, Target.DeviceId, Target.Name, Target.SiteId, Kind,
-                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute, QuickPing, Dns);
+                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute, QuickPing, Dns, ConfirmationStartSequence);
         }
     }
 
