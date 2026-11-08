@@ -904,6 +904,50 @@ class ComwareReadCompletionTests(unittest.TestCase):
         target.find_prompt.assert_not_called()
         self.assertNotIn("expect_string", target.send_command.call_args.kwargs)
 
+    def test_official_netmiko_reads_startup_file_past_prompt_embedded_in_configuration(self):
+        # A legitimate description may contain the literal device prompt.
+        # Netmiko's default unanchored prompt match would stop at that line.
+        for driver in ("hp_comware", "hp_comware_telnet"):
+            with self.subTest(driver=driver):
+                target = module.ConnectHandler(device_type=driver, host="192.0.2.71", auto_connect=False)
+                target.is_alive = mock.Mock(return_value=True)
+                target.find_prompt = mock.Mock(return_value="<AP.1(2)>")
+                target.write_channel = mock.Mock()
+                chunks = ["more flash:/startup.cfg\n#\n description recovery prompt <AP.1(2)>\n",
+                          "#\ninterface GigabitEthernet1/0/1\n description retained-tail\n#\nreturn\n",
+                          "<AP.1(2)>"]
+                target.read_channel = mock.Mock(side_effect=chunks)
+                worker = module.Worker()
+                worker.connection, worker.driver = target, driver
+                result = worker.execute({"command": "more flash:/startup.cfg", "read_timeout": 1})
+                self.assertEqual(result["output"], "".join(chunks))
+                self.assertEqual(target.read_channel.call_count, 3)
+                target.write_channel.assert_called_once()
+
+    def test_startup_file_read_requires_complete_prompt_and_does_not_replay(self):
+        for transcript in ("more flash:/startup.cfg\n sysname AP.1(2)",
+                           "more flash:/startup.cfg\n description prompt <AP.1(2)>\nreturn",
+                           "more flash:/startup.cfg\nreturn\n<other>"):
+            with self.subTest(transcript=transcript):
+                worker, target = self.worker_for()
+                target.send_command.return_value = transcript
+                with self.assertRaises(ReadTimeout):
+                    worker.execute({"command": "more flash:/startup.cfg"})
+                target.send_command.assert_called_once()
+                target.disconnect.assert_called_once_with()
+
+    def test_more_read_reuses_prompt_validation_and_remaining_deadline(self):
+        worker, target = self.worker_for()
+        target.send_command.return_value = "return\n<AP.1(2)>"
+        with mock.patch.object(module.time, "monotonic", side_effect=[10, 12]):
+            worker.execute({"command": "more slot1#flash:/startup.cfg", "read_timeout": 30})
+        self.assertEqual(target.send_command.call_args.kwargs["read_timeout"], 28)
+        worker, target = self.worker_for(prompt="AP#")
+        with self.assertRaises(ValueError):
+            worker.execute({"command": "more flash:/startup.cfg"})
+        target.send_command.assert_not_called()
+        target.disconnect.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
