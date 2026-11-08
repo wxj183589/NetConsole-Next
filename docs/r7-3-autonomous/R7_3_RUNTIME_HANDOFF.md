@@ -30,4 +30,4 @@ Agent：`codex-A`
 
 ## Git接续
 
-产品分支保留当前状态。最终验收与运行交接文档、专项证据和剩余问题将在单独本地文档提交；之后DevStatus只新增一个R7.3任务交接文件。所有仓库禁止Push、Remote Merge与Release Publish。本轮未清理19个既有静态资源。
+产品代码与R7.3验收/专项报告均已本地提交。DevStatus只新增了一个R7.3任务交接文件。所有仓库禁止Push、Remote Merge与Release Publish。本轮未清理19个既有静态资源。
