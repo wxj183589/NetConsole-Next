@@ -23,13 +23,18 @@ const partialErrors = ref<string[]>([])
 const failedProfiles = ref<string[]>([])
 const loadedMs = ref(0)
 const filterAuthority = ref('')
+const historyMode = ref(false)
+const assetPage = ref(1)
+const assetLoading = ref(false)
+const assetError = ref('')
+let assetGeneration = 0
 const authorityOptions = computed(() => [...new Set(relations.value.map(row => row.sourceAuthority || row.source))].sort())
 const filterProfile = ref(''); const filterInterface = ref(''); const filterSite = ref<string | null>(null)
 let generation = 0
 const profileOptions = computed(() => [...new Map(relations.value.map(row => [row.profileId, row.profileHost])).entries()].sort((a, b) => a[0].localeCompare(b[0])))
 const interfaceOptions = computed(() => [...new Set(relations.value.filter(row => !filterProfile.value || row.profileId === filterProfile.value).map(row => row.localInterface))].sort())
 const siteOptions = computed(() => [...new Set(relations.value.map(row => row.siteId))].sort())
-const filteredRelations = computed(() => relations.value.filter(row => (!filterAuthority.value || (row.sourceAuthority || row.source) === filterAuthority.value) && (!filterProfile.value || row.profileId === filterProfile.value) && (!filterInterface.value || row.localInterface === filterInterface.value) && (filterSite.value === null || row.siteId === filterSite.value)))
+const filteredRelations = computed(() => relations.value.filter(row => (!historyMode.value || row.changeKind !== 'REPEAT') && (!filterAuthority.value || (row.sourceAuthority || row.source) === filterAuthority.value) && (!filterProfile.value || row.profileId === filterProfile.value) && (!filterInterface.value || row.localInterface === filterInterface.value) && (filterSite.value === null || row.siteId === filterSite.value)).sort((a, b) => b.capturedMs - a.capturedMs || a.factRevision.localeCompare(b.factRevision)))
 const potentiallyTruncatedProfiles = computed(() => claims.value.filter(item => item.relations.length >= 1000).map(item => item.profileId))
 watch(filterProfile, () => { filterInterface.value = '' })
 
@@ -70,6 +75,9 @@ function profileRelations(profile: TerminalDevice, result: PromiseSettledResult<
 }
 async function refresh(): Promise<void> {
   const current = ++generation
+  ++assetGeneration
+  assetPage.value = 1; assetLoading.value = false; assetError.value = ''
+  const readHistory = historyMode.value
   loading.value = true
   errorMessage.value = ''
   partialErrors.value = []
@@ -82,7 +90,7 @@ async function refresh(): Promise<void> {
     const [inventoryResult, profilesResult] = await Promise.all([getDeviceInventory({ page: 1, pageSize: 100 }), getH3cProfiles()])
     if (current !== generation) return
     inventory.value = inventoryResult
-    const relationResults = await Promise.allSettled(profilesResult.map(profile => getH3cLldpClaims(profile.id, { history: false, limit: 1000 })))
+    const relationResults = await Promise.allSettled(profilesResult.map(profile => getH3cLldpClaims(profile.id, { history: readHistory, limit: 1000 })))
     if (current !== generation) return
     relationResults.forEach((result, index) => profileRelations(profilesResult[index], result))
     loadedMs.value = Date.now()
@@ -94,6 +102,21 @@ async function refresh(): Promise<void> {
     if (current === generation) loading.value = false
   }
 }
+async function changeAssetPage(page: number): Promise<void> {
+  if (loading.value || assetLoading.value || page < 1) return
+  const current = ++assetGeneration
+  assetLoading.value = true; assetError.value = ''
+  try {
+    const result = await getDeviceInventory({ page, pageSize: 100 })
+    if (current !== assetGeneration) return
+    inventory.value = result; assetPage.value = page
+  } catch (cause) {
+    if (current === assetGeneration) assetError.value = errorText(cause, '资产分页读取失败，请重试。')
+  } finally {
+    if (current === assetGeneration) assetLoading.value = false
+  }
+}
+watch(historyMode, () => { void refresh() })
 function exportRelations(): void {
   if (loading.value || !loadedMs.value || !filteredRelations.value.length) return
   const text = topologyRelationsCsv(filteredRelations.value, { loadedMs: loadedMs.value, exportedMs: Date.now(), failedProfiles: failedProfiles.value, potentiallyTruncatedProfiles: potentiallyTruncatedProfiles.value })
@@ -103,7 +126,7 @@ function exportRelations(): void {
 }
 
 onMounted(() => { void refresh() })
-onBeforeUnmount(() => { ++generation })
+onBeforeUnmount(() => { ++generation; ++assetGeneration })
 </script>
 
 <template>
@@ -131,11 +154,19 @@ onBeforeUnmount(() => { ++generation })
         </section>
         <section class="card">
           <div class="card__header"><div><h2>资产清单</h2><p>仅展示当前授权范围内服务端库存页，状态未知保持未知。</p></div><span class="state-pill">{{ assets.length }} / {{ inventory?.total || 0 }}</span></div>
+          <div class="card__body toolbar" aria-label="资产分页">
+            <el-button :disabled="loading || assetLoading || assetPage <= 1" @click="changeAssetPage(assetPage - 1)">上一页资产</el-button>
+            <span>第 {{ assetPage }} 页 · 每页 100 台</span>
+            <el-button :disabled="loading || assetLoading || !inventory?.hasMore" @click="changeAssetPage(assetPage + 1)">下一页资产</el-button>
+            <span v-if="assetLoading" role="status">正在读取资产…</span><span v-if="assetError" role="alert">{{ assetError }}</span>
+          </div>
           <div class="card__body table-wrap"><table class="data-table"><thead><tr><th>状态</th><th>设备</th><th>管理地址</th><th>厂商 / 类型</th><th>局点 / 分组</th><th>更新时间</th></tr></thead><tbody><tr v-for="asset in assets" :key="asset.id"><td><span :class="['state-pill', statusClass(asset.connectionStatus)]">{{ statusLabel(asset.connectionStatus) }}</span></td><td><b>{{ asset.name }}</b><small class="device-subline mono">{{ asset.deviceId || asset.id }}</small></td><td class="mono">{{ asset.managementIp || asset.managementAddress }}:{{ asset.port }}</td><td>{{ asset.vendor }}<small class="device-subline">{{ asset.deviceType }} · {{ asset.model || '型号未知' }}</small></td><td>{{ asset.site }}<small class="device-subline">{{ asset.group || '未分组' }}</small></td><td>{{ formatTime(asset.updatedAt || asset.lastSeenMs) }}</td></tr><tr v-if="!assets.length"><td colspan="6"><div class="empty-state"><el-icon><Document /></el-icon><strong>暂无资产</strong><small>当前授权范围没有服务端设备库存记录。</small></div></td></tr></tbody></table></div>
         </section>
         <section class="card">
-          <div class="card__header"><div><h2>LLDP 邻居关系</h2><p>关系来源、捕获时间和 revision 保留在每一行，避免把历史或未知状态当作当前拓扑。</p></div><span class="state-pill info">{{ filteredRelations.length }} / {{ relationCount }} 条</span></div>
+          <div class="card__header"><div><h2>{{ historyMode ? 'LLDP 有效变化历史' : 'LLDP 邻居关系' }}</h2><p>关系来源、捕获时间和 revision 保留在每一行，避免把历史或未知状态当作当前拓扑。</p></div><span class="state-pill info">{{ filteredRelations.length }} / {{ relationCount }} 条</span></div>
           <div class="card__body">
+            <label class="form-field"><span>查看范围</span><select v-model="historyMode" aria-label="LLDP 查看范围" :disabled="loading"><option :value="false">当前关系</option><option :value="true">有效变化历史</option></select></label>
+            <p v-if="historyMode" class="data-quality-note" role="status">按捕获时间倒序显示已保留事实中的首次观测和字段变化，隐藏重复采样；首次观测仅是本次历史窗口的起点，不代表新建链路。缺失观测不表示链路删除，管理地址变化不改变已知机箱身份。历史不代表当前链路健康。</p>
             <div class="toolbar">
               <label class="form-field"><span>证据来源</span><select v-model="filterAuthority" aria-label="LLDP 证据来源" :disabled="loading"><option value="">全部证据来源</option><option v-for="authority in authorityOptions" :key="authority" :value="authority">{{ authority }}</option></select></label>
               <label class="form-field"><span>来源设备（精确档案）</span><select v-model="filterProfile" aria-label="LLDP 来源设备" :disabled="loading"><option value="">全部设备</option><option v-for="[id, host] in profileOptions" :key="id" :value="id">{{ host }} · {{ id }}</option></select></label>

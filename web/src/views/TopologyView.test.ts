@@ -36,6 +36,41 @@ describe('TopologyView', () => {
     expect(wrapper.get('[data-testid="topology-summary"]').text()).toContain('0 台资产')
   })
 
+  it('loads effective history, hides repeats and orders changes without asserting link health', async () => {
+    const wrapper = render(); await flushPromises()
+    api.getH3cLldpClaims.mockResolvedValue({ ...claims, relations: [
+      { ...claims.relations[0], factRevision: 'baseline', changeKind: 'FIRST_SEEN', capturedMs: 1000 },
+      { ...claims.relations[0], factRevision: 'repeat', changeKind: 'REPEAT', capturedMs: 2000 },
+      { ...claims.relations[0], factRevision: 'changed', changeKind: 'CHANGED', neighborPort: 'GE1/0/2', capturedMs: 3000 },
+    ] })
+    const mode = wrapper.get<HTMLSelectElement>('[aria-label="LLDP 查看范围"]')
+    mode.element.selectedIndex = 1; await mode.trigger('change'); await flushPromises()
+    expect(api.getH3cLldpClaims).toHaveBeenLastCalledWith('profile-1', { history: true, limit: 1000 })
+    const rows = wrapper.get('[aria-label="LLDP 关系表"]').findAll('tbody tr')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('changed')
+    expect(rows[1].text()).toContain('baseline')
+    expect(wrapper.text()).toContain('不代表新建链路')
+    expect(wrapper.text()).toContain('历史不代表当前链路健康')
+    mode.element.selectedIndex = 0; await mode.trigger('change'); await flushPromises()
+    expect(api.getH3cLldpClaims).toHaveBeenLastCalledWith('profile-1', { history: false, limit: 1000 })
+  })
+
+  it('pages inventory without refetching LLDP and keeps the previous page on failure', async () => {
+    api.getDeviceInventory.mockResolvedValueOnce({ ...inventory, total: 101, hasMore: true })
+    const wrapper = render(); await flushPromises()
+    api.getDeviceInventory.mockResolvedValueOnce({ ...inventory, page: 2, total: 101, items: [{ ...inventory.items[0], name: '第二页设备' }] })
+    await wrapper.findAll('button').find(item => item.text() === '下一页资产')!.trigger('click'); await flushPromises()
+    expect(api.getDeviceInventory).toHaveBeenLastCalledWith({ page: 2, pageSize: 100 })
+    expect(wrapper.text()).toContain('第二页设备')
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(1)
+    api.getDeviceInventory.mockRejectedValueOnce(new Error('分页暂不可用'))
+    await wrapper.findAll('button').find(item => item.text() === '上一页资产')!.trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('分页暂不可用')
+    expect(wrapper.text()).toContain('第二页设备')
+    expect(wrapper.get('[aria-label="资产分页"]').text()).toContain('第 2 页')
+  })
+
   it('shows service failures as an error state', async () => {
     api.getDeviceInventory.mockRejectedValue(new Error('inventory unavailable'))
     const wrapper = render(); await flushPromises()
