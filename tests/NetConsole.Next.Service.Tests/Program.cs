@@ -103,6 +103,8 @@ else if (args.Length > 0 && args[0] == "--network-diagnostics-tests")
     await NetworkDiagnosticsTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--ping-loss-evidence-tests")
     await PingLossEvidenceTests.RunAsync();
+else if (args.Length == 2 && args[0] == "--ping-loss-http-fixture")
+    await PingLossEvidenceTests.ExportHttpFixtureAsync(args[1]);
 else if (args.Length > 0 && args[0] == "--network-traceroute-tests")
     await NetworkTracerouteTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--network-traceroute-fixture-tests")

@@ -6,6 +6,71 @@ using System.Text.Json;
 internal static class PingLossEvidenceTests
 {
     private static int checks;
+
+    // Synthetic HTTP/browser input only. No diagnostic probe or device connection is started.
+    public static async Task ExportHttpFixtureAsync(string path)
+    {
+        var root = Path.GetFullPath(path);
+        var workspace = Path.GetFullPath(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
+            (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace")));
+        var parent = Path.Combine(workspace, "test-data");
+        if (!string.Equals(Path.GetDirectoryName(root), parent, StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(root).StartsWith("r76-ping-loss-", StringComparison.Ordinal) ||
+            !Directory.Exists(root) || File.Exists(Path.Combine(root, "ping-loss-fixture.json")))
+            throw new InvalidOperationException("Fixture export requires a fresh initialized test-data/r76-ping-loss-* directory.");
+        for (var current = new DirectoryInfo(root); current is not null; current = current.Parent)
+            if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Fixture path must not traverse a reparse point.");
+
+        using var f = new Fixture(root);
+        var priorRun = await f.Seal(H3cCommandPolicy.DisplayVersion,
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "display_version.txt")));
+        var prior = f.Catalog.QueryH3cFacts(f.Profile, "device.identity").Single();
+        var cutoff = long.Parse(f.Scalar($"SELECT ended_ms FROM task_runs WHERE id='{priorRun}'"));
+        await Task.Delay(10);
+        var futureRun = await f.Seal(H3cCommandPolicy.DisplayVersion,
+            "H3C Comware Software, Version 7.1.070, Release 9999\nH3C WA6320");
+        var future = f.Catalog.QueryH3cFacts(f.Profile, "device.identity").Single();
+        var ended = long.Parse(f.Scalar($"SELECT ended_ms FROM task_runs WHERE id='{futureRun}'"));
+        Check(future.Id != prior.Id && future.CapturedMs > cutoff, "export fixture has a later Current revision");
+
+        var runId = Guid.NewGuid().ToString("N");
+        var baseline = f.Run(ended);
+        var ping = baseline.Items[0].QuickPing! with
+        {
+            Sent = 2, Received = 1, Lost = 1, LossPercent = 50, MinMs = 2, MaxMs = 2, AverageMs = 2,
+            Samples = [new(1, cutoff, "TIMED_OUT", null), new(2, ended, "REPLIED", 2)]
+        };
+        var run = baseline with
+        {
+            Id = runId,
+            Items = [baseline.Items[0] with { QuickPing = ping }]
+        };
+        var history = Path.Combine(root, "diagnostics");
+        Directory.CreateDirectory(history);
+        File.WriteAllText(Path.Combine(history, runId + ".json"), JsonSerializer.Serialize(run));
+        var otherRunId = Guid.NewGuid().ToString("N");
+        const string otherItemId = "other-loss";
+        f.Execute("INSERT INTO sites(id,name) VALUES('r76-loss-other','Synthetic foreign Site')");
+        var other = run with
+        {
+            Id = otherRunId, SiteId = "r76-loss-other",
+            Items = [run.Items[0] with { Id = otherItemId, DeviceId = "r76-loss-foreign-device", SiteId = "r76-loss-other" }]
+        };
+        File.WriteAllText(Path.Combine(history, otherRunId + ".json"), JsonSerializer.Serialize(other));
+        var projected = f.Project(run)!;
+        Check(projected.State == "HISTORICAL_CONTEXT" && projected.Facts.Single().Id == prior.Id,
+            "exported loss context excludes later Current");
+        File.WriteAllText(Path.Combine(root, "ping-loss-fixture.json"), JsonSerializer.Serialize(new
+        {
+            runId, itemId = "loss", sequence = 1, repliedSequence = 2, futureSequence = 3,
+            deviceId = f.Device, expectedFactId = prior.Id, futureFactId = future.Id, siteId = "local",
+            otherSiteRunId = otherRunId, otherSiteItemId = otherItemId,
+            evidenceLevel = "SYNTHETIC_SEALED_RAW_NOT_DEVICE_ACCEPTANCE"
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+        Console.WriteLine("PING_LOSS_HTTP_FIXTURE=" + Path.Combine(root, "ping-loss-fixture.json"));
+    }
+
     public static async Task RunAsync()
     {
         using var f = new Fixture();
@@ -120,18 +185,25 @@ internal static class PingLossEvidenceTests
 
     private sealed class Fixture : IDisposable
     {
-        public readonly string Root = Path.Combine(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
-            (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace")),
-            "test-data", "ping-loss-evidence-tests", Guid.NewGuid().ToString("N"));
+        public readonly string Root;
+        private readonly bool preserveRoot;
         public readonly string Profile = Guid.NewGuid().ToString("N");
         public readonly Catalog Catalog;
         public readonly RuntimeSettings Settings;
         public readonly string Device;
         public readonly long Created;
-        public Fixture()
+        public Fixture(string? exportRoot = null)
         {
+            preserveRoot = exportRoot is not null;
+            Root = exportRoot ?? Path.Combine(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
+                (OperatingSystem.IsWindows() ? @"D:\study\NetConsole-Next-Workspace" : Path.Combine(Path.GetTempPath(), "netconsole-next-workspace")),
+                "test-data", "ping-loss-evidence-tests", Guid.NewGuid().ToString("N"));
             Settings = new() { DataRoot = Root, SyslogBind = IPAddress.Loopback, SyslogPort = 0, WebPort = 18771, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             Catalog = new(Settings); Catalog.Initialize();
+            if (preserveRoot && (Catalog.QueryManagedDeviceInventory().Items.Count != 0 ||
+                Scalar("SELECT COUNT(*) FROM task_runs") != "0" || Scalar("SELECT COUNT(*) FROM h3c_facts") != "0" ||
+                (Directory.Exists(Path.Combine(Root, "diagnostics")) && Directory.EnumerateFileSystemEntries(Path.Combine(Root, "diagnostics")).Any())))
+                throw new InvalidOperationException("Export refuses an existing business or diagnostic fixture.");
             Catalog.CreateH3cDeviceProfile(new(Profile, "192.0.2.71", 22, "fixture", "FIXTURE_REFERENCE",
                 "SHA256:" + Convert.ToBase64String(new byte[32]).TrimEnd('='), true, 0, 0));
             Device = Catalog.QueryManagedDeviceInventory().Items.Single().Id;
@@ -165,7 +237,7 @@ internal static class PingLossEvidenceTests
         private SqliteConnection Open() { var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(Root, "catalog.db"), Pooling = false }.ToString()); db.Open(); return db; }
         public void Execute(string sql) { using var db = Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
         public string Scalar(string sql) { using var db = Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; return Convert.ToString(cmd.ExecuteScalar())!; }
-        public void Dispose() { SqliteConnection.ClearAllPools(); Directory.Delete(Root, true); }
+        public void Dispose() { SqliteConnection.ClearAllPools(); if (!preserveRoot) Directory.Delete(Root, true); }
     }
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); checks++; }
 }
