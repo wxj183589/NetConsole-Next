@@ -191,21 +191,39 @@ try {
     await page.reload({ waitUntil: 'networkidle' })
     const trend = page.getByTestId('quick-ping-history-trend')
     const beforeCsv = trace.filter(item => item.pathname === '/api/system/diagnostics/runs').length
-    await trend.getByRole('button', { name: '加载 Quick Ping 趋势', exact: true }).click()
+    await trend.getByRole('button', { name: '加载 Quick / Long Ping 趋势', exact: true }).click()
     const exportButton = trend.getByRole('button', { name: '导出趋势 CSV', exact: true })
     await exportButton.waitFor()
     const downloaded = page.waitForEvent('download'); await exportButton.click()
-    const download = await downloaded, destination = path.join(output, `quick-ping-history-${width}.csv`)
+    const download = await downloaded, destination = path.join(output, `quick-long-ping-history-${width}.csv`)
     await download.saveAs(destination)
     const rows = csvRecords(readFileSync(destination, 'utf8'))
-    const row = rows.find(item => item.run_id === saved.id), ping = saved.items[0].quickPing
-    check(row && row.device_id === 'r76-browser-loopback' && row.site_id === 'local' && row.actor === saved.actor &&
-      row.destination_address === '127.0.0.1' && row.protocol === 'ICMP' && Number(row.sent) === ping.sent &&
-      Number(row.received) === ping.received && Number(row.lost) === ping.lost && Number(row.p95_replied_ms_nearest_rank) === ping.p95Ms &&
-      row.export_scope === 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS', `QUICK_PING_${width}_CSV_MATCHES_REAL_HTTP_HISTORY`)
-    check(!rows.some(row => row.run_id === created.id) && trace.filter(item => item.pathname === '/api/system/diagnostics/runs').length === beforeCsv,
-      `QUICK_PING_${width}_CSV_READONLY_AND_LONG_PING_NOT_MISLABELLED`)
-    await screenshot('quick-ping-history-csv', width)
+    for (const [source, kind] of [[terminal, 'LONG_PING'], [saved, 'QUICK_PING']]) {
+      const matching = rows.filter(item => item.run_id === source.id)
+      assert(matching.length === 1, `${kind}: one CSV point for the exact run`)
+      const row = matching[0], item = source.items[0], ping = item.quickPing
+      const replied = ping.samples.filter(sample => sample.status === 'REPLIED').map(sample => sample.latencyMs).sort((a, b) => a - b)
+      const actualP95 = replied[Math.ceil(replied.length * .95) - 1]
+      const actualAverage = Math.round(replied.reduce((sum, value) => sum + value, 0) / replied.length * 100) / 100
+      check(row.diagnostic_kind === kind && row.item_id === item.id && row.device_id === 'r76-browser-loopback' &&
+        row.site_id === 'local' && row.actor === source.actor && row.destination_address === '127.0.0.1' &&
+        row.protocol === 'ICMP' && row.state === item.state && Number(row.requested) === ping.requestedSamples &&
+        Number(row.sent) === ping.sent && Number(row.received) === ping.received && Number(row.lost) === ping.lost &&
+        Number(row.unsent_unknown) === ping.requestedSamples - ping.sent &&
+        Number(row.loss_percent_sent_only) === ping.lossPercent && Number(row.average_replied_ms) === actualAverage &&
+        Number(row.p95_replied_ms_nearest_rank) === actualP95 && ping.p95Ms === actualP95 &&
+        row.metrics_known === 'true' && row.export_scope === 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS',
+        `${kind}_${width}_CSV_MATCHES_REAL_HTTP_SAMPLES_AND_P95`)
+      if (kind === 'LONG_PING') check(Number(row.unsent_unknown) > 0 && Number(row.lost) === 0 &&
+        Number(row.loss_percent_sent_only) === 0 && ping.sent === ping.samples.length,
+        `LONG_PING_${width}_CSV_PAUSED_AND_CANCELLED_UNSENT_NOT_LOSS`)
+    }
+    const tables = trend.getByRole('table', { name: 'Quick / Long Ping 跨任务趋势', exact: true })
+    check(await tables.count() === 2 && rows.every(row => ['QUICK_PING', 'LONG_PING'].includes(row.diagnostic_kind)),
+      `PING_${width}_QUICK_AND_LONG_HISTORY_GROUPS_STAY_SEPARATE`)
+    check(trace.filter(item => item.pathname === '/api/system/diagnostics/runs').length === beforeCsv,
+      `PING_${width}_HISTORY_LOAD_AND_CSV_EXPORT_DO_NOT_PROBE`)
+    await screenshot('quick-long-ping-history-csv', width)
   }
   check(result.pageErrors.length === 0, 'NO_BROWSER_PAGE_ERRORS')
   check(trace.every(item => item.pathname === '/api/auth/login' || /^\/api\/system\/diagnostics\/runs(?:\/[^/]+\/(?:cancel|long-ping\/(?:pause|resume)))?$/.test(item.pathname)), 'ONLY_AUTH_AND_DIAGNOSTIC_UI_MUTATIONS')
