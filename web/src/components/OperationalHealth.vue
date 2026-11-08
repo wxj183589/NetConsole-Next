@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { getOperationalHealth, getH3cTaskPlanReport, recoverOperationalDevice, type H3cTaskPlanReport, type OperationalHealthSnapshot, type OperationalRecoveryReport } from '../api/client'
 
-const props = withDefaults(defineProps<{ canRecover?: boolean }>(), { canRecover: false })
+const props = withDefaults(defineProps<{ canRecover?: boolean; identityKey?: string }>(), { canRecover: false, identityKey: '' })
 const snapshot = ref<OperationalHealthSnapshot | null>(null)
 const report = ref<OperationalRecoveryReport | null>(null)
 const recollection = ref<H3cTaskPlanReport | null>(null)
@@ -26,7 +26,7 @@ async function load(page = 1) {
 }
 async function recover() {
   const device = snapshot.value?.devices.find(item => item.deviceId === selectedDevice.value)
-  if (!device?.profileId || !props.canRecover || recovering.value || loading.value) return
+  if (!active || !device?.profileId || !props.canRecover || recovering.value || loading.value) return
   const current = generation
   recovering.value = true
   error.value = ''
@@ -36,16 +36,16 @@ async function recover() {
     const result = await recoverOperationalDevice({ deviceId: device.deviceId, expectedProfileId: device.profileId })
     if (current === generation) { report.value = result; if (result.planId) await readRecollection() }
   } catch (cause) { if (current === generation) error.value = cause instanceof Error ? cause.message : '只读恢复失败' }
-  finally { recovering.value = false }
+  finally { if (current === generation) recovering.value = false }
 }
 async function readRecollection() {
   const planId = report.value?.planId
-  if (!planId || checking.value) return
+  if (!active || !planId || checking.value) return
   const current = generation
   checking.value = true
   try { const result = await getH3cTaskPlanReport(planId); if (current === generation && report.value?.planId === planId) recollection.value = result }
   catch (cause) { if (current === generation) error.value = cause instanceof Error ? cause.message : '补采结果读取失败' }
-  finally { checking.value = false }
+  finally { if (current === generation) checking.value = false }
 }
 function metric(item: { state: string; value: number | null } | null | undefined) { return item?.value == null ? 'UNKNOWN' : `${item.value} (${item.state})` }
 function time(at: number | null | undefined) { return at ? new Date(at).toLocaleString() : '—' }
@@ -57,9 +57,11 @@ function evidenceUrl(event: OperationalHealthSnapshot['events'][number]) {
   return profileId ? `/api/system/h3c/profiles/${encodeURIComponent(profileId)}/facts?limit=1000` : undefined
 }
 onMounted(() => { void load() })
-onDeactivated(() => { active = false; generation++; snapshot.value = null; report.value = null; recollection.value = null; selectedDevice.value = ''; loading.value = false })
+function invalidate() { generation++; snapshot.value = null; report.value = null; recollection.value = null; selectedDevice.value = ''; loading.value = false; recovering.value = false; checking.value = false; error.value = '' }
+onDeactivated(() => { active = false; invalidate() })
 onActivated(() => { if (!active) { active = true; void load() } })
-onBeforeUnmount(() => { generation++ })
+onBeforeUnmount(() => { active = false; invalidate() })
+watch(() => props.identityKey, () => { invalidate(); if (active) void load() })
 </script>
 
 <template>

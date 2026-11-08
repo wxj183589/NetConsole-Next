@@ -151,7 +151,7 @@ onBeforeUnmount(() => { active = false; generation++; window.removeEventListener
       <section class="card"><div class="card__header"><h2>系统资源</h2><span class="state-pill">进程采样</span></div><div class="card__body resource-list"><div class="resource-row"><span>CPU</span><div class="resource-track"><span :style="{ width: `${Math.min(100, cpuPercent || 0)}%` }" /></div><b>{{ cpuPercent === null ? '—' : `${cpuPercent.toFixed(0)}%` }}</b></div><div class="resource-row"><span>内存</span><div class="resource-track"><span class="resource-track--green" :style="{ width: health?.resources?.workingSetBytes ? '100%' : '0%' }" /></div><b>{{ workingSet }}</b></div><div class="resource-row"><span>磁盘</span><div class="resource-track"><span class="resource-track--violet" :style="{ width: freeDisk === '—' ? '0%' : '100%' }" /></div><b>{{ freeDisk }}</b></div><div class="overview-footer"><span><el-icon><CircleCheck /></el-icon>线程 {{ health?.resources?.threadCount ?? '—' }}</span><span><el-icon><Warning /></el-icon>未解决 Raw {{ health?.unresolvedIntegrityIssues ?? '未知' }}</span></div></div></section>
     </div>
 
-    <OperationalHealth :can-recover="auth.user?.role === 'SUPERADMIN'" />
+    <OperationalHealth :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" :can-recover="auth.user?.role === 'SUPERADMIN'" />
     <div id="dashboard-fault-center" ref="faultCenterHost" tabindex="-1"><FaultCenter :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" :can-recover="auth.user?.role === 'SUPERADMIN'" /></div>
 
     <div class="section-label">运行边界</div>

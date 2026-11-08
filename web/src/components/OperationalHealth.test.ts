@@ -60,4 +60,50 @@ describe('OperationalHealth', () => {
     expect(wrapper.text()).not.toContain('fixture a')
     wrapper.unmount()
   })
+
+  it('clears the previous account health immediately and rejects its pending response', async () => {
+    const wrapper = render(); await flushPromises()
+    let resolve!: (value: unknown) => void
+    api.getOperationalHealth.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    await button(wrapper, '刷新设备健康').trigger('click')
+    api.getOperationalHealth.mockResolvedValueOnce({ ...snapshot, devices: [], totalDevices: 0 })
+    await wrapper.setProps({ identityKey: 'reader:READONLY', canRecover: false }); await flushPromises()
+    expect(wrapper.text()).not.toContain('fixture a')
+    resolve(snapshot); await flushPromises()
+    expect(wrapper.text()).not.toContain('fixture a')
+    expect(wrapper.text()).toContain('当前范围没有设备')
+    expect(wrapper.find('select').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not read an old recovery plan after the account changes', async () => {
+    let resolve!: (value: unknown) => void
+    api.recoverOperationalDevice.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = render(); await flushPromises()
+    await wrapper.get('select').setValue('a'); await button(wrapper, '执行只读恢复').trigger('click')
+    api.getOperationalHealth.mockResolvedValueOnce({ ...snapshot, devices: [], totalDevices: 0 })
+    await wrapper.setProps({ identityKey: 'other:SUPERADMIN' }); await flushPromises()
+    resolve({ state: 'RECOLLECTION_QUEUED', attempts: [], planId: 'old-account-plan' }); await flushPromises()
+    expect(api.getH3cTaskPlanReport).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('old-account-plan')
+    expect(button(wrapper, '刷新设备健康').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('discards a pending recollection and unlocks checks for the current account', async () => {
+    let resolve!: (value: unknown) => void
+    api.recoverOperationalDevice.mockResolvedValue({ state: 'RECOLLECTION_QUEUED', attempts: [], planId: 'old-plan' })
+    api.getH3cTaskPlanReport.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = render(); await flushPromises()
+    await wrapper.get('select').setValue('a'); await button(wrapper, '执行只读恢复').trigger('click'); await flushPromises()
+    await wrapper.setProps({ identityKey: 'current:SUPERADMIN' }); await flushPromises()
+    api.recoverOperationalDevice.mockResolvedValue({ state: 'RECOLLECTION_QUEUED', attempts: [], planId: 'current-plan' })
+    await wrapper.get('select').setValue('a'); await button(wrapper, '执行只读恢复').trigger('click'); await flushPromises()
+    expect(api.getH3cTaskPlanReport).toHaveBeenCalledWith('current-plan')
+    resolve({ plan: { state: 'FAILED' }, items: [] }); await flushPromises()
+    expect(wrapper.text()).not.toContain('old-plan')
+    expect(wrapper.text()).toContain('current-plan')
+    expect(wrapper.text()).toContain('补采计划当前状态：QUEUED')
+    wrapper.unmount()
+  })
 })
