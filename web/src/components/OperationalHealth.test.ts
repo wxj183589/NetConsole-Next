@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({ getOperationalHealth: vi.fn(), recoverOperationa
 vi.mock('../api/client', () => api)
 const unknown = { state: 'UNKNOWN', value: null, unit: '%', capturedMs: null, evidenceIds: [] }
 const snapshot = { asOfMs: 1000, freshnessWindowMs: 300000, page: 1, totalDevices: 1, hasMore: false, devices: [{ deviceId: 'a', name: 'fixture a', siteId: 'site-a', profileId: 'profile-a', state: 'UNKNOWN', reachability: unknown, cpuPercent: unknown, memoryPercent: unknown, interfaceDown: unknown, lldpNeighbors: unknown, warnings: [] }], events: [], limitations: ['bounded'] }
-const render = (canRecover = true) => mount(OperationalHealth, { props: { canRecover }, global: { stubs: { RouterLink: { props: ['to'], template: '<a><slot /></a>' } } } })
+const render = (canRecover = true) => mount(OperationalHealth, { props: { canRecover }, global: { stubs: { RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' } } } })
 const button = (wrapper: ReturnType<typeof render>, text: string) => wrapper.findAll('button').find(item => item.text() === text)!
 describe('OperationalHealth', () => {
   beforeEach(() => { vi.resetAllMocks(); api.getOperationalHealth.mockResolvedValue(structuredClone(snapshot)); api.getH3cTaskPlanReport.mockResolvedValue({ plan: { state: 'QUEUED' }, items: [] }) })
@@ -16,6 +16,7 @@ describe('OperationalHealth', () => {
     expect(wrapper.text()).toContain('UNKNOWN')
     expect(wrapper.text()).toContain('采集失败不代表设备离线')
     expect(wrapper.text()).toContain('没有故障事件')
+    expect(wrapper.findComponent({ name: 'RouterLink' }).props('to')).toEqual({ path: '/devices', query: { deviceId: 'a' } })
     expect(api.recoverOperationalDevice).not.toHaveBeenCalled()
     expect(button(wrapper, '执行只读恢复').attributes('disabled')).toBeDefined()
     wrapper.unmount()

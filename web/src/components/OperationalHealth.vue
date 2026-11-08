@@ -77,7 +77,7 @@ watch(() => props.identityKey, () => { invalidate(); if (active) void load() })
         <div v-else class="operational-health__table">
           <table><thead><tr><th>设备 / Site</th><th>证据状态</th><th>CPU / 内存 %</th><th>Ping ms / 丢失 %</th><th>接口 DOWN</th><th>LLDP 邻居</th><th>最近采集证据</th></tr></thead>
             <tbody><tr v-for="device in snapshot.devices" :key="device.deviceId">
-              <td><RouterLink :to="{ path: '/devices', query: { q: device.name } }">{{ device.name }}</RouterLink><br>{{ device.siteId }}</td>
+              <td><RouterLink :to="{ path: '/devices', query: { deviceId: device.deviceId } }">{{ device.name }}</RouterLink><br>{{ device.siteId }}</td>
               <td>{{ device.state }}<small v-for="warning in device.warnings" :key="warning">{{ warning }}</small></td>
               <td>{{ metric(device.cpuPercent) }} / {{ metric(device.memoryPercent) }}</td>
               <td>{{ metric(device.pingDelayMs) }} / {{ metric(device.packetLossPercent) }}</td>

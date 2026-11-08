@@ -22,13 +22,13 @@ const capabilities = () => ({ profileId: profile.id, model: 'S9850-HCL', version
   { key: 'HA_SWITCH', state: 'UNKNOWN', reason: 'NOT_VERIFIED', evidenceIds: [], capturedMs: null, source: 'NONE', freshness: 'UNKNOWN' },
 ] })
 const wrappers: VueWrapper[] = []
-async function render() {
+async function render(initial = '/devices', clickDetail = true) {
   const pinia = createPinia(); setActivePinia(pinia)
   useAuthStore().user = { username: 'reader', role: 'ADMIN' }
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/devices', component: DevicesView }, { path: '/config-backups', component: { template: '<div />' } },
   ] })
-  await router.push('/devices'); await router.isReady()
+  await router.push(initial); await router.isReady()
   const wrapper = mount(DevicesView, { global: { plugins: [pinia, router], directives: { loading: () => {} }, stubs: {
     NcLayout: { template: '<main><slot name="actions"/><slot/></main>' },
     'el-button': { template: '<button><slot/></button>' },
@@ -36,7 +36,7 @@ async function render() {
     'el-icon': { template: '<span />' },
   } } })
   wrappers.push(wrapper); await flushPromises()
-  await button(wrapper, '详情').trigger('click'); await flushPromises()
+  if (clickDetail) { await button(wrapper, '详情').trigger('click'); await flushPromises() }
   return { wrapper, router }
 }
 function button(wrapper: VueWrapper, text: string) { return wrapper.findAll('button').find(item => item.text() === text)! }
@@ -54,6 +54,68 @@ describe('device detail configuration backup entry', () => {
     api.getH3cLldpClaims.mockResolvedValue({ profileId: profile.id, scopeState: 'AUTHORIZED', relationCount: 0, relations: [] })
   })
   afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
+
+  it('opens an exact linked UUID outside the displayed page without searching by name', async () => {
+    api.getDeviceInventory.mockResolvedValue({ items: [], total: 0, summary: { totalRecords: 0 } })
+    const { wrapper } = await render('/devices?deviceId=inventory-b', false)
+    expect(api.getDeviceInventoryDetail).toHaveBeenCalledTimes(1)
+    expect(api.getDeviceInventoryDetail).toHaveBeenCalledWith('inventory-b')
+    expect(api.getDeviceInventory).toHaveBeenCalledWith(expect.objectContaining({ search: '' }))
+    expect(wrapper.find('[role=dialog]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('交换机乙')
+    expect(api.getH3cOperationalCapabilities).toHaveBeenCalledWith(profile.id)
+  })
+
+  it('updates an existing page to the exact linked device and closes when the link is removed', async () => {
+    const { wrapper, router } = await render('/devices', false)
+    const other = detail(); other.item.id = 'other-id'; other.item.name = item.name
+    api.getDeviceInventoryDetail.mockResolvedValue(other)
+    await router.push('/devices?deviceId=other-id'); await flushPromises()
+    expect(api.getDeviceInventoryDetail).toHaveBeenLastCalledWith('other-id')
+    expect(wrapper.find('[role=dialog]').exists()).toBe(true)
+    await router.push('/devices'); await flushPromises()
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+  })
+
+  it('discards a late linked device when a different UUID becomes current', async () => {
+    let resolve!: (value: ReturnType<typeof detail>) => void
+    api.getDeviceInventoryDetail.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const { wrapper, router } = await render('/devices?deviceId=inventory-b', false)
+    const other = detail(); other.item.id = 'other-id'; other.item.name = '当前精确设备'
+    api.getDeviceInventoryDetail.mockResolvedValue(other)
+    await router.push('/devices?deviceId=other-id'); await flushPromises()
+    resolve(detail()); await flushPromises()
+    expect(wrapper.get('[role=dialog]').text()).toContain('当前精确设备')
+    expect(wrapper.get('[role=dialog]').text()).not.toContain('交换机乙')
+  })
+
+  it.each(['missing', 'mismatched'])('shows a persistent error for a %s linked device without choosing a name match', async kind => {
+    if (kind === 'missing') api.getDeviceInventoryDetail.mockRejectedValue(new Error('404'))
+    else { const other = detail(); other.item.id = 'unrelated'; api.getDeviceInventoryDetail.mockResolvedValue(other) }
+    const { wrapper } = await render('/devices?deviceId=inventory-b', false)
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    expect(wrapper.get('[role=alert]').text()).toContain('设备不存在、无权查看或详情读取失败')
+    expect(api.getH3cOperationalCapabilities).not.toHaveBeenCalled()
+    expect(api.getDeviceInventoryDetail).toHaveBeenCalledTimes(1)
+    expect(api.getDeviceInventoryDetail).toHaveBeenCalledWith('inventory-b')
+  })
+
+  it.each(['removed', 'account', 'left'])('discards a pending exact detail after the link is %s', async kind => {
+    let resolve!: (value: ReturnType<typeof detail>) => void
+    api.getDeviceInventoryDetail.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const { wrapper, router } = await render('/devices?deviceId=inventory-b', false)
+    if (kind === 'account') useAuthStore().user = { username: 'other', role: 'ADMIN' }
+    else await router.push(kind === 'left' ? '/config-backups' : '/devices')
+    await flushPromises(); resolve(detail()); await flushPromises()
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    expect(api.getH3cOperationalCapabilities).not.toHaveBeenCalled()
+  })
+
+  it.each(['deviceId=', 'deviceId=a&deviceId=b'])('rejects an invalid link %s without a detail request', async query => {
+    const { wrapper } = await render('/devices?' + query, false)
+    expect(wrapper.get('[role=alert]').text()).toContain('设备链接无效')
+    expect(api.getDeviceInventoryDetail).not.toHaveBeenCalled()
+  })
 
   it('opens the existing backup page with the inventory UUID rather than connection identity', async () => {
     const { wrapper, router } = await render()

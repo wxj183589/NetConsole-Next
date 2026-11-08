@@ -20,6 +20,7 @@ const result = ref<DeviceInventoryPage | null>(null); const sites = ref<DeviceSi
 const loading = ref(false); const saving = ref(false); const unsupported = ref(false); const page = ref(1); const pageSize = ref(20)
 const search = ref(String(route.query.q || '')); const status = ref(''); const vendor = ref(''); const deviceType = ref(''); const siteId = ref('local'); const groupId = ref('')
 const showEditor = ref(false); const showDetail = ref(false); const showGroup = ref(false); const showImport = ref(false)
+const detailError = ref('')
 const showOnboard = ref(false)
 const showCredential = ref(false); const credentialProfileId = ref(''); const credentialPassword = ref(''); const clearCredential = ref(false)
 const selected = ref<DeviceInventoryDetail | null>(null); const importPreview = ref<DeviceImportPreview | null>(null); const importCsv = ref('')
@@ -68,10 +69,11 @@ const operationStateLabel = computed(() => ({ PENDING_CONFIRM: '待确认', RUNN
 const summary = computed(() => result.value?.summary || { totalRecords: 0, validDevices: 0, invalidRecords: 0, enabledDevices: 0, disabledDevices: 0, onlineDevices: 0, offlineDevices: 0, unknownStatus: 0 })
 let refreshSequence = 0; let groupSequence = 0; let profileSequence = 0; let detailSequence = 0
 let connectionContext = 0; let connectionActive = true; let connectionPollCount = 0
+let detailsReady = false
 let connectionPoll: ReturnType<typeof setTimeout> | undefined
 
 function clearCapabilityState(): void { operationalCapabilities.value = null; capabilityLoading.value = false; capabilityError.value = ''; capabilityUnavailable.value = '' }
-function invalidateDetails(): void { ++detailSequence; clearCapabilityState(); showDetail.value = false; selected.value = null }
+function invalidateDetails(): void { ++detailSequence; clearCapabilityState(); showDetail.value = false; selected.value = null; detailError.value = '' }
 watch([siteId, groupId, () => auth.user?.username, () => auth.user?.role], invalidateDetails, { flush: 'sync' })
 watch(showDetail, visible => { if (!visible) { ++detailSequence; clearCapabilityState() } }, { flush: 'sync' })
 onDeactivated(invalidateDetails)
@@ -176,7 +178,7 @@ async function cancelConnectionTests(): Promise<void> {
 }
 watch(siteId, () => { clearSelection(); invalidateConnectionTests() }, { flush: 'sync' })
 watch(canWrite, () => { clearSelection(); invalidateConnectionTests() }, { flush: 'sync' })
-onActivated(() => { connectionActive = true })
+onActivated(() => { connectionActive = true; if (detailsReady) openRouteDetail() })
 onDeactivated(() => { connectionActive = false; clearSelection(); invalidateConnectionTests() })
 onBeforeUnmount(() => { connectionActive = false; invalidateConnectionTests() })
 
@@ -276,7 +278,17 @@ async function onboardDevice(): Promise<void> {
 async function openEdit(row: DeviceInventoryItem): Promise<void> {
   try { selected.value = await getDeviceInventoryDetail(row.id); const item = selected.value.item; Object.assign(form, { id: item.id, name: item.name, managementIp: item.managementIp || item.managementAddress, vendor: item.vendor === '—' ? '' : item.vendor, model: item.model === '—' ? '' : item.model, deviceType: item.deviceType, siteId: item.siteId || 'local', groupId: item.groupId || '', description: selected.value.description, enabled: item.enabled, terminalProfileId: item.terminalProfileId || '' }); showEditor.value = true } catch { ElMessage.error('设备详情读取失败') }
 }
-async function openDetails(row: DeviceInventoryItem): Promise<void> {
+function openRouteDetail(): void {
+  if (!detailsReady || !connectionActive) return
+  invalidateDetails()
+  if (route.path !== '/devices') return
+  const id = route.query.deviceId
+  if (typeof id === 'string' && id.trim()) void openDetails({ id })
+  else if (id != null) detailError.value = '设备链接无效，请从设备列表重新选择。'
+}
+watch(() => [route.path, route.query.deviceId], openRouteDetail, { flush: 'sync' })
+async function openDetails(row: Pick<DeviceInventoryItem, 'id'>): Promise<void> {
+  if (!connectionActive) return
   invalidateDetails(); const sequence = detailSequence
   backupModuleState.value = 'unknown'
   try {
@@ -288,7 +300,7 @@ async function openDetails(row: DeviceInventoryItem): Promise<void> {
     backupModuleState.value = module ? module.enabled ? 'enabled' : 'disabled' : 'unknown'
     showDetail.value = true
     await loadCapabilities(sequence)
-  } catch { if (sequence === detailSequence) ElMessage.error('设备详情读取失败') }
+  } catch { if (sequence === detailSequence) { detailError.value = '设备不存在、无权查看或详情读取失败，请从设备列表重新选择。'; ElMessage.error('设备详情读取失败') } }
 }
 function openConfigBackups(): void {
   if (!selected.value || backupUnavailableReason.value) return
@@ -354,7 +366,7 @@ function onFile(event: Event): void { const file = (event.target as HTMLInputEle
 async function previewImport(): Promise<void> { try { importPreview.value = await previewDeviceImport(importCsv.value); showImport.value = true } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : 'CSV 预览失败') } }
 async function commitImport(): Promise<void> { if (!importPreview.value || importPreview.value.conflictCount || importPreview.value.errorCount) return; try { const output = await commitDeviceImport(importPreview.value.previewId); ElMessage.success(`导入完成：新增 ${output.created}，更新 ${output.updated}`); showImport.value = false; importPreview.value = null; await refresh() } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '导入提交失败') } }
 function importFile(): void { document.getElementById('device-import-file')?.click() }
-onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await refreshSites(); await Promise.all([refresh(), refreshGroups(), refreshProfiles()]) })
+onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceBatchOperationId'); if (saved) { operationId.value = saved; try { batchOperation.value = await getDeviceBatchOperation(saved); showBatchPreview.value = true } catch { sessionStorage.removeItem('netconsole.deviceBatchOperationId') } } await refreshSites(); await Promise.all([refresh(), refreshGroups(), refreshProfiles()]); detailsReady = true; openRouteDetail() })
 </script>
 
 <template>
@@ -362,6 +374,7 @@ onMounted(async () => { const saved = sessionStorage.getItem('netconsole.deviceB
     <template #actions>
       <el-button size="small" :loading="loading" @click="refresh">刷新</el-button><el-button size="small" @click="showGroup = true">分组管理</el-button><el-button size="small" @click="importFile"><el-icon><Upload /></el-icon>CSV 导入</el-button><el-button v-if="canWrite" type="primary" size="small" @click="openOnboard">快速添加设备</el-button><el-button v-if="canWrite" size="small" @click="openCreate">高级设备资料</el-button><input id="device-import-file" type="file" accept=".csv,text/csv" hidden @change="onFile" />
     </template>
+    <p v-if="detailError" role="alert">{{ detailError }}</p>
     <div v-if="unsupported" class="card"><div class="empty-state"><div><el-icon><Monitor /></el-icon><strong>设备库存 API 尚未启用</strong><small>当前服务未提供设备查询能力；页面不会使用前端模拟数据。</small></div></div></div>
     <template v-else>
       <div class="inventory-summary"><span class="summary-chip"><b>{{ summary.totalRecords }}</b> 条设备</span><span class="summary-chip summary-chip--success"><b>{{ summary.enabledDevices }}</b> 已启用</span><span class="summary-chip"><b>{{ summary.disabledDevices }}</b> 已禁用</span><span class="summary-chip summary-chip--info"><b>{{ summary.onlineDevices }}</b> 最近在线</span><span class="summary-chip"><b>{{ summary.unknownStatus }}</b> 状态未知</span></div>
