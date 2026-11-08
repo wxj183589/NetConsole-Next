@@ -537,7 +537,7 @@ onActivated(() => {
                 <small>可见成员 {{ groupDetail.total }} 个；成员与来源证据经过当前 Site claims 过滤。</small>
               </div>
             </section>
-            <section class="card"><div class="card__header"><h2>Observation 详情</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><div v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>{{ observation.sourceSiteId }} · {{ formatTime(observation.capturedMs) }} · {{ observation.rawManifestRef }}</small><small>raw={{ observation.rawState }} · parser={{ observation.parserRevision }} · {{ observation.relationStatus }}</small></div></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看 Physical AP Identity 与各 AC 独立 Observation。</small></div></div></section>
+            <section class="card"><div class="card__header"><h2>AP 来源状态</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><article v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>最近采集 {{ formatTime(observation.capturedMs) }}</small><details class="wireless-observation__evidence"><summary>采集证据</summary><dl><dt>来源站点</dt><dd>{{ observation.sourceSiteId }}</dd><dt>设备原始状态</dt><dd>{{ observation.rawState }}</dd><dt>状态关联</dt><dd>{{ observation.relationStatus }}</dd><dt>解析版本</dt><dd>{{ observation.parserRevision }}</dd><dt>事实引用</dt><dd><code>{{ observation.rawManifestRef }}</code></dd></dl></details></article></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看每台 AC 独立采集到的运行状态。</small></div></div></section>
           </div>
           <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
             <div class="card__header"><h2>状态与最近变化</h2><span class="state-pill" :class="stateClass(runtimeState?.normalizedState || 'UNKNOWN')">{{ stateText(runtimeState?.normalizedState || 'UNKNOWN') }}</span></div>
@@ -611,6 +611,11 @@ onActivated(() => {
 .wireless-group-row__status { flex-shrink: 0; text-align: right; }
 .wireless-group-row:hover, .wireless-group-row.selected { background: var(--nc-primary-soft); }
 .wireless-group-row:last-child, .wireless-observation:last-child { border-bottom: 0; }
+.wireless-observation { flex-wrap: wrap; }
+.wireless-observation__evidence { flex-basis: 100%; color: var(--nc-text-muted); }
+.wireless-observation__evidence summary { width: fit-content; cursor: pointer; }
+.wireless-observation__evidence dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.wireless-observation__evidence dd { margin: 0; color: var(--nc-text-secondary); }
 .wireless-group-row strong, .wireless-group-row small, .wireless-observation strong, .wireless-observation small { display: block; }
 .wireless-group-row small { margin-top: 3px; color: var(--nc-text-muted); }
 .wireless-group-detail { margin: 0 14px 14px; border: 1px solid var(--nc-border); border-radius: 7px; padding: 12px; color: var(--nc-text-secondary); font-size: 11px; }

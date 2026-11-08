@@ -113,7 +113,9 @@ describe('AP group source identity', () => {
     api.getWirelessApResources.mockResolvedValue(page([observedResource('old-claim-ref')]))
     const wrapper = render()
     await flushPromises()
-    expect(wrapper.text()).toContain('old-claim-ref')
+    expect(wrapper.get('.wireless-observation').text()).toContain('采集证据')
+    expect(wrapper.get('.wireless-observation > div').text()).not.toContain('old-claim-ref')
+    expect(wrapper.get('.wireless-observation__evidence').text()).toContain('old-claim-ref')
     api.getWirelessApResources.mockRejectedValue(new Error('claims changed'))
     const refresh = wrapper.findAll('button').find(item => item.text() === '刷新数据')!
     await refresh.trigger('click')
@@ -132,7 +134,7 @@ describe('AP group source identity', () => {
       api.getWirelessApResources.mockResolvedValue(page([observedResource('old-raw-ref')]))
       const wrapper = render()
       await flushPromises()
-      expect(wrapper.get('.wireless-observation').text()).toContain('old-raw-ref')
+      expect(wrapper.get('.wireless-observation__evidence').text()).toContain('old-raw-ref')
       await wrapper.get('.wireless-task-row button').trigger('click')
       await flushPromises()
       api.getWirelessApResources.mockResolvedValue(page([observedResource('published-raw-ref')]))
@@ -140,8 +142,8 @@ describe('AP group source identity', () => {
       const collectionsBefore = api.getWirelessCollectionManifests.mock.calls.length
       await vi.advanceTimersByTimeAsync(3000)
       await flushPromises()
-      expect(wrapper.get('.wireless-observation').text()).toContain('published-raw-ref')
-      expect(wrapper.get('.wireless-observation').text()).not.toContain('old-raw-ref')
+      expect(wrapper.get('.wireless-observation__evidence').text()).toContain('published-raw-ref')
+      expect(wrapper.get('.wireless-observation__evidence').text()).not.toContain('old-raw-ref')
       expect(api.getWirelessCollectionManifests.mock.calls.length).toBeGreaterThan(collectionsBefore)
       const reads = api.getWirelessApResources.mock.calls.length
       await wrapper.get('.wireless-task-detail button').trigger('click')
@@ -163,8 +165,8 @@ describe('AP group source identity', () => {
     api.getWirelessApResources.mockResolvedValue(page([observedResource('after-navigation')]))
     shown.value = true
     await flushPromises()
-    expect(wrapper.get('.wireless-observation').text()).toContain('after-navigation')
-    expect(wrapper.get('.wireless-observation').text()).not.toContain('before-navigation')
+    expect(wrapper.get('.wireless-observation__evidence').text()).toContain('after-navigation')
+    expect(wrapper.get('.wireless-observation__evidence').text()).not.toContain('before-navigation')
     expect(api.getWirelessApResources).toHaveBeenCalledTimes(2)
   })
 
