@@ -11,7 +11,7 @@
 | 双 AC HA | NOT_TESTED | 未执行切换、回切、收敛、客户端连续性或业务恢复测量。 |
 | 无线 AP 历史 | PARTIAL | 双分辨率导出通过，但当前数据没有有效变化记录；不从空历史推断 HA 或状态变化。 |
 | Long Ping 远端业务 | PARTIAL | 回环 ICMP 生命周期和 CSV 已通过；远端设备、车辆移动、AP/Site 时间关联和多日运行未验。 |
-| 丢包上下文 | PARTIAL | 应使用丢包时刻以前的同 Site/设备/目标事实；没有可靠客户端到 AP 关联时显示 UNKNOWN，不使用未来 Observation。 |
+| 丢包上下文 | PARTIAL | 历史上下文已实现且HTTP18/双视口18检查通过，真实客户端到AP关联仍UNKNOWN；不使用未来Observation。 |
 | 故障中心 | PARTIAL | 合成权限、持久化和取消误报回归通过；真实设备故障、恢复、通知和复发未验。 |
 | 配置恢复 | PARTIAL / HARDWARE_PENDING | 备份、预检、差异、脱敏和模拟器流程通过；设备 Writer、完整回读、业务验证和失败回滚未验。 |
 | Windows 部署 | NOT_TESTED | LocalManager/安装计划离线检查通过；真实 elevated SCM 安装、自动启动、崩溃恢复、升级/回滚/卸载未执行。 |

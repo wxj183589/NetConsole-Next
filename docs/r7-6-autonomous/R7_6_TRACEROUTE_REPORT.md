@@ -1,5 +1,15 @@
 # R7.6 Traceroute 实现与启动对照报告
 
+## 2026-11-08 最新集成检查点
+
+本批已完成丢失采样历史上下文、实际Raw完整性复核并部署。产品56d16e3/6e48a0a，夹具与验收d99e103/8cd1e2f/0dd6a14。最新候选build/r76-loss-context-8cd1e2f，ProductVersion1.0.0+8cd1e2f96038acef6c63181ad49cb6d7c4920403，Service18771/PID41856 HEALTHY；Vite5174/PID32812保留。
+
+当前Web36files/391tests、typecheck、Service全量EXIT0、loss37/37、候选发布、loss HTTP18与双视口Chrome18、最新候选广覆盖浏览器PASS。SQLite/140Raw逐项长度SHA256、单DB检查点与19静态资源均通过。本批未重跑完整离线门禁，之前ICMP_PERMISSION_DENIED失败未解除；真实客户端/AP关联为UNKNOWN，HA/设备恢复/SCM/8–24h仍未验。
+
+完整当前制品身份、证据路径、数据影响和续跑步骤见[R7_6_PING_LOSS_EVIDENCE_REPORT.md](R7_6_PING_LOSS_EVIDENCE_REPORT.md)。本节取代下文旧候选/PID/测试数作为当前值；下文为此前批次实际证据，未重跑的检查不得视为本批通过。
+
+## 此前批次证据
+
 日期：2026-11-08。Agent：codex-A。源码基线：`cef8273`。状态：**PARTIAL / FINAL_OFFLINE_TRACEROUTE_FAILED_BOTH_MODES**。
 
 本轮 Windows 生产路径复用普通进程令牌下的系统 ICMP tracert，并修复输出编码、原生错误分类和终点跳提前返回时可能吞掉 stderr 超限的问题。历史窄范围启动对照中显式 dotnet DLL 成功、apphost 返回原生错误码 5；最终集成候选的完整 APPHOST 和 DOTNET_DLL_EXPLICIT 门禁均因必需 Traceroute 的 ICMP_PERMISSION_DENIED 失败。不同证据分别保留，不能将历史 DLL 成功升级为最终完整门禁通过或断言具体系统策略原因。

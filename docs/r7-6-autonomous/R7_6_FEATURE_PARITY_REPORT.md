@@ -1,5 +1,15 @@
 # R7.6 原版功能对等事实报告
 
+## 2026-11-08 最新集成检查点
+
+本批已完成丢失采样历史上下文、实际Raw完整性复核并部署。产品56d16e3/6e48a0a，夹具与验收d99e103/8cd1e2f/0dd6a14。最新候选build/r76-loss-context-8cd1e2f，ProductVersion1.0.0+8cd1e2f96038acef6c63181ad49cb6d7c4920403，Service18771/PID41856 HEALTHY；Vite5174/PID32812保留。
+
+当前Web36files/391tests、typecheck、Service全量EXIT0、loss37/37、候选发布、loss HTTP18与双视口Chrome18、最新候选广覆盖浏览器PASS。SQLite/140Raw逐项长度SHA256、单DB检查点与19静态资源均通过。本批未重跑完整离线门禁，之前ICMP_PERMISSION_DENIED失败未解除；真实客户端/AP关联为UNKNOWN，HA/设备恢复/SCM/8–24h仍未验。
+
+完整当前制品身份、证据路径、数据影响和续跑步骤见[R7_6_PING_LOSS_EVIDENCE_REPORT.md](R7_6_PING_LOSS_EVIDENCE_REPORT.md)。本节取代下文旧候选/PID/测试数作为当前值；下文为此前批次实际证据，未重跑的检查不得视为本批通过。
+
+## 此前批次证据
+
 日期：2026-11-08。Agent：codex-A。源码基线：`50db848`。总体结论：**PARTIAL**。
 
 权威逐项比较仍为 [原版到 Next 的 25 项功能矩阵](../r6-feature-parity/ORIGINAL_TO_NEXT_FEATURE_MATRIX.md)。该矩阵的审计基线为 R7.1 `bdcd4f9`，本报告记录当前主线增量及剩余条件，不把矩阵中的 PARTIAL 项、受阻恢复或未测现场能力批量升级为 PASS。
