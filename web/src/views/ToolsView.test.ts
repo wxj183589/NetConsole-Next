@@ -6,7 +6,7 @@ import { ApiRequestError, type NetworkDiagnosticItem, type NetworkDiagnosticRun,
 import { useAuthStore } from '../stores/auth'
 import ToolsView from './ToolsView.vue'
 
-const api = vi.hoisted(() => ({ getHostTools: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(),
+const api = vi.hoisted(() => ({ getHostTools: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(), getDeviceInventoryDetail: vi.fn(),
   updateHostTool: vi.fn(), launchHostTool: vi.fn(), startNetworkDiagnostics: vi.fn(), listNetworkDiagnostics: vi.fn(), getNetworkDiagnostics: vi.fn(), cancelNetworkDiagnostics: vi.fn(), setLongPingPaused: vi.fn() }))
 vi.mock('../api/client', async importOriginal => ({ ...await importOriginal<typeof import('../api/client')>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }))
@@ -52,6 +52,10 @@ describe('network diagnostic tools and traceroute', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     api.getHostTools.mockResolvedValue([]); api.getTerminalDevices.mockResolvedValue([])
+    api.getDeviceInventoryDetail.mockImplementation(async id => {
+      if (id !== 'device-one' && id !== 'device-two') throw new Error('not found')
+      return { item: { id, enabled: true, isValid: true } }
+    })
     api.getDeviceInventory.mockResolvedValue({ items: [
       { id: 'device-one', name: '交换机甲', managementIp: '192.0.2.10', enabled: true, isValid: true },
       { id: 'device-two', name: '路由器乙', managementIp: '192.0.2.20', enabled: true, isValid: true },
@@ -63,6 +67,105 @@ describe('network diagnostic tools and traceroute', () => {
     api.setLongPingPaused.mockResolvedValue({ accepted: true })
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
+
+  it('pages beyond 100 devices while keeping the exact cross-page selection visible and clearable', async () => {
+    api.getDeviceInventory.mockResolvedValueOnce({ total: 101, hasMore: true, items: [
+      { id: 'device-one', name: '第一页设备', enabled: true, isValid: true },
+    ] }).mockResolvedValueOnce({ total: 101, hasMore: false, items: [
+      { id: 'device-101', name: '第一百零一台', enabled: true, isValid: true },
+    ] })
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断设备"]').setValue(['device-one'])
+    await button(wrapper, '下一页设备').trigger('click'); await flushPromises()
+    expect(api.getDeviceInventory).toHaveBeenLastCalledWith({ page: 2, pageSize: 100, search: undefined })
+    expect(wrapper.get('[aria-label="诊断设备分页"]').text()).toContain('第 2 页 · 匹配 101 条 · 已选 1 台')
+    expect(wrapper.get('select[aria-label="诊断设备"]').text()).toContain('第一页设备')
+    await wrapper.get('select[aria-label="诊断设备"]').setValue(['device-one', 'device-101'])
+    await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics.mock.calls[0]![0].deviceIds).toEqual(['device-one', 'device-101'])
+    await button(wrapper, '清空设备选择').trigger('click')
+    expect(wrapper.get('[aria-label="诊断设备分页"]').text()).toContain('已选 0 台')
+    expect(wrapper.get('select[aria-label="诊断设备"]').text()).not.toContain('第一页设备')
+  })
+
+  it('uses server search, rejects superseded inventory and shows failures separately from empty results', async () => {
+    const pending = deferred<object>()
+    const wrapper = await render()
+    api.getDeviceInventory.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ total: 0, hasMore: false, items: [] })
+    await wrapper.get('input[aria-label="搜索诊断设备"]').setValue(' old ')
+    await wrapper.get('.diagnostic-devices form').trigger('submit')
+    await wrapper.get('input[aria-label="搜索诊断设备"]').setValue(' new ')
+    await wrapper.get('.diagnostic-devices form').trigger('submit'); await flushPromises()
+    expect(api.getDeviceInventory).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, search: 'new' })
+    pending.resolve({ total: 1, hasMore: false, items: [{ id: 'old', name: '过期设备', enabled: true, isValid: true }] }); await flushPromises()
+    expect(wrapper.get('select[aria-label="诊断设备"]').text()).not.toContain('过期设备')
+    expect(wrapper.get('[aria-label="诊断设备分页"]').text()).toContain('匹配 0 条')
+    api.getDeviceInventory.mockRejectedValueOnce(new Error('offline'))
+    await wrapper.get('.diagnostic-devices form').trigger('submit'); await flushPromises()
+    expect(wrapper.text()).toContain('诊断设备读取失败，请重试')
+    expect(wrapper.get('[aria-label="诊断设备分页"]').text()).toContain('匹配 未知 条')
+    api.getDeviceInventory.mockResolvedValueOnce({ total: 0, items: [] })
+    await wrapper.get('.diagnostic-devices form').trigger('submit'); await flushPromises()
+    expect(wrapper.text()).not.toContain('诊断设备读取失败')
+  })
+
+  it('clears selected inventory and ignores the previous account response when identity changes', async () => {
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断设备"]').setValue(['device-one'])
+    const pending = deferred<object>(); api.getDeviceInventory.mockReturnValueOnce(pending.promise)
+    await wrapper.get('.diagnostic-devices form').trigger('submit')
+    api.getDeviceInventory.mockResolvedValueOnce({ total: 0, items: [] })
+    useAuthStore().user = { username: 'reader-two', role: 'READONLY' } as never; await flushPromises()
+    pending.resolve({ total: 1, items: [{ id: 'forbidden', name: '旧账号设备', enabled: true, isValid: true }] }); await flushPromises()
+    expect(wrapper.get('[aria-label="诊断设备分页"]').text()).toContain('已选 0 台')
+    expect(wrapper.get('select[aria-label="诊断设备"]').text()).toBe('')
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('keeps the submitted search while paging if the search box has unsent edits', async () => {
+    const wrapper = await render()
+    api.getDeviceInventory.mockResolvedValue({ total: 101, hasMore: true, items: [] })
+    await wrapper.get('input[aria-label="搜索诊断设备"]').setValue('AC')
+    await wrapper.get('.diagnostic-devices form').trigger('submit'); await flushPromises()
+    await wrapper.get('input[aria-label="搜索诊断设备"]').setValue('unsent')
+    await button(wrapper, '下一页设备').trigger('click'); await flushPromises()
+    expect(api.getDeviceInventory).toHaveBeenLastCalledWith({ page: 2, pageSize: 100, search: 'AC' })
+  })
+
+  it('checks the exact failed target outside the current inventory page before starting TCP', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ deviceId: 'device-101', state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    api.getDeviceInventoryDetail.mockResolvedValue({ item: { id: 'device-101', enabled: true, isValid: true } })
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click'); await flushPromises()
+    expect(api.getDeviceInventoryDetail).toHaveBeenCalledWith('device-101')
+    expect(api.startNetworkDiagnostics).toHaveBeenCalledWith({ deviceIds: ['device-101'], kinds: ['TCP'], timeoutMs: 2000 })
+  })
+
+  it('does not submit after identity changes while the exact TCP target is being checked', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const pending = deferred<object>(); api.getDeviceInventoryDetail.mockReturnValueOnce(pending.promise)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click')
+    await button(wrapper, '开始诊断').trigger('click')
+    useAuthStore().user = { username: 'reader', role: 'READONLY' } as never; await flushPromises()
+    pending.resolve({ item: { id: 'device-one', enabled: true, isValid: true } }); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('rejects a disabled exact TCP target even if its cached inventory entry was enabled', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    api.getDeviceInventoryDetail.mockResolvedValue({ item: { id: 'device-one', enabled: false, isValid: true } })
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('该设备不在当前可用设备列表中')
+  })
 
   it('offers TCP only after ICMP permission failure and submits the exact failed device on explicit click', async () => {
     const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })

@@ -5,7 +5,7 @@ import NcLayout from '../components/NcLayout.vue'
 import SyslogWorkspace from '../components/SyslogWorkspace.vue'
 import QuickPingHistoryTrend from '../components/QuickPingHistoryTrend.vue'
 import PingLossEvidence from '../components/PingLossEvidence.vue'
-import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
+import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, getDeviceInventoryDetail, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -17,6 +17,19 @@ const saving = ref('')
 const editing = ref<Record<string, string>>({})
 const inventory = ref<DeviceInventoryItem[]>([])
 const selectedDiagnosticDevices = ref<string[]>([])
+const selectedInventory = ref<DeviceInventoryItem[]>([])
+const inventorySearch = ref('')
+const inventoryPage = ref(1)
+const inventoryTotal = ref<number | null>(null)
+const inventoryHasMore = ref(false)
+const inventoryLoading = ref(false)
+const inventoryError = ref('')
+const tcpChecking = ref(false)
+let inventoryGeneration = 0
+let hostGeneration = 0
+let appliedInventorySearch = ''
+const diagnosticDevices = computed(() => [...new Map([...selectedInventory.value, ...inventory.value].map(device => [device.id, device])).values()])
+watch(selectedDiagnosticDevices, ids => { selectedInventory.value = diagnosticDevices.value.filter(device => ids.includes(device.id)) })
 const diagnosticKinds = ref<NetworkDiagnosticKind[]>(['PING', 'TCP', 'DNS'])
 const diagnosticRun = ref<NetworkDiagnosticRun | null>(null)
 const diagnosticHistory = ref<NetworkDiagnosticRunSummary[]>([])
@@ -45,16 +58,45 @@ let pageActive = true
 const isSuperAdmin = () => auth.user?.role === 'SUPERADMIN'
 
 async function refresh(): Promise<void> {
+  void loadInventory(1)
+  const generation = ++hostGeneration
   loading.value = true
   try {
-    tools.value = await getHostTools()
+    const result = await getHostTools()
+    if (!pageActive || generation !== hostGeneration) return
+    tools.value = result
     tools.value.forEach(tool => { if (editing.value[tool.id] === undefined) editing.value[tool.id] = tool.executablePath || '' })
-    try { devices.value = await getTerminalDevices() } catch { devices.value = [] }
-    try { inventory.value = (await getDeviceInventory({ pageSize: 100 })).items.filter(item => item.enabled && item.isValid) } catch { inventory.value = [] }
+    try {
+      const result = await getTerminalDevices()
+      if (!pageActive || generation !== hostGeneration) return
+      devices.value = result
+    } catch { if (pageActive && generation === hostGeneration) devices.value = [] }
     if (!selectedDevice.value) selectedDevice.value = devices.value[0]?.id || ''
   }
-  catch { ElMessage.error('宿主机工具或设备列表读取失败') }
-  finally { loading.value = false }
+  catch { if (pageActive && generation === hostGeneration) ElMessage.error('宿主机工具或设备列表读取失败') }
+  finally { if (generation === hostGeneration) loading.value = false }
+}
+function searchInventory(): void { appliedInventorySearch = inventorySearch.value.trim(); void loadInventory(1) }
+async function loadInventory(page = 1): Promise<void> {
+  const generation = ++inventoryGeneration
+  inventoryLoading.value = true
+  inventoryError.value = ''
+  try {
+    const result = await getDeviceInventory({ page, pageSize: 100, search: appliedInventorySearch || undefined })
+    if (!pageActive || generation !== inventoryGeneration) return
+    inventory.value = result.items.filter(device => device.enabled && device.isValid)
+    inventoryPage.value = page
+    inventoryTotal.value = result.total ?? result.items.length
+    inventoryHasMore.value = result.hasMore === true
+    const invalid = result.items.filter(device => !device.enabled || !device.isValid).map(device => device.id)
+    selectedDiagnosticDevices.value = selectedDiagnosticDevices.value.filter(id => !invalid.includes(id))
+    selectedInventory.value = diagnosticDevices.value.filter(device => selectedDiagnosticDevices.value.includes(device.id))
+  } catch {
+    if (pageActive && generation === inventoryGeneration) {
+      inventory.value = []; inventoryTotal.value = null; inventoryHasMore.value = false
+      inventoryError.value = '诊断设备读取失败，请重试。已选设备保留，提交时由服务重新检查权限与状态。'
+    }
+  } finally { if (generation === inventoryGeneration) inventoryLoading.value = false }
 }
 function stopDiagnosticPolling(): void { if (diagnosticPoll) { clearTimeout(diagnosticPoll); diagnosticPoll = undefined } }
 function diagnosticCurrent(id: string, generation: number): boolean { return pageActive && diagnosticGeneration === generation && selectedDiagnosticRun.value === id }
@@ -68,6 +110,7 @@ function clearDiagnosticSelection(id = ''): void {
   diagnosticCancelling.value = false
   diagnosticControlling.value = false
   diagnosticReading.value = false
+  tcpChecking.value = false
 }
 function rememberDiagnostic(run: NetworkDiagnosticRun): void {
   const summary: NetworkDiagnosticRunSummary = { id: run.id, state: run.state, totalDevices: run.totalDevices,
@@ -132,7 +175,7 @@ function selectDiagnosticKind(): void {
   if (!diagnosticKinds.value.includes('QUICK_PING') && !diagnosticKinds.value.includes('LONG_PING') && diagnosticKinds.value.includes('TRACEROUTE') && diagnosticTimeoutMs.value < 10000) diagnosticTimeoutMs.value = 30000
 }
 async function startDiagnostics(): Promise<void> {
-  if (diagnosticStarting.value || diagnosticActive.value) return
+  if (tcpChecking.value || diagnosticStarting.value || diagnosticActive.value) return
   if (!isSuperAdmin()) { ElMessage.warning('仅 SUPERADMIN 可启动诊断任务'); return }
   if (!selectedDiagnosticDevices.value.length) { ElMessage.warning('请选择至少一台设备'); return }
   if (!diagnosticKinds.value.length) { ElMessage.warning('请选择至少一种诊断类型'); return }
@@ -154,11 +197,19 @@ function icmpDenied(item: NetworkDiagnosticItem): boolean {
   return item.state === 'FAILED' && item.outcome === 'ICMP_PERMISSION_DENIED' && ['PING', 'QUICK_PING', 'LONG_PING', 'TRACEROUTE'].includes(item.kind)
 }
 async function retryWithTcp(item: NetworkDiagnosticItem): Promise<void> {
-  if (!pageActive || !isSuperAdmin() || diagnosticStarting.value || diagnosticActive.value || !icmpDenied(item) || !diagnosticRun.value?.items.includes(item)) return
-  if (!inventory.value.some(device => device.id === item.deviceId && device.enabled && device.isValid)) {
-    diagnosticError.value = '该设备不在当前可用设备列表中，请刷新设备后重试。'; return
-  }
-  await submitDiagnostics({ deviceIds: [item.deviceId], kinds: ['TCP'], timeoutMs: 2000 })
+  if (!pageActive || !isSuperAdmin() || tcpChecking.value || diagnosticStarting.value || diagnosticActive.value || !icmpDenied(item) || !diagnosticRun.value?.items.includes(item)) return
+  const generation = diagnosticGeneration, id = selectedDiagnosticRun.value
+  tcpChecking.value = true
+  try {
+    const { item: device } = await getDeviceInventoryDetail(item.deviceId)
+    if (!diagnosticCurrent(id, generation) || !isSuperAdmin()) return
+    if (device.id !== item.deviceId || !device.enabled || !device.isValid) {
+      diagnosticError.value = '该设备不在当前可用设备列表中，请刷新设备后重试。'; return
+    }
+    tcpChecking.value = false
+    await submitDiagnostics({ deviceIds: [item.deviceId], kinds: ['TCP'], timeoutMs: 2000 })
+  } catch { if (diagnosticCurrent(id, generation)) diagnosticError.value = '该设备不在当前可用设备列表中，或设备信息读取失败，请刷新设备后重试。' }
+  finally { if (diagnosticCurrent(id, generation)) tcpChecking.value = false }
 }
 async function submitDiagnostics(payload: Parameters<typeof startNetworkDiagnostics>[0]): Promise<void> {
   stopDiagnosticPolling()
@@ -200,7 +251,7 @@ async function controlLongPing(): Promise<void> {
   catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '长期 Ping 控制失败' }
   finally { if (generation === diagnosticGeneration) diagnosticControlling.value = false }
 }
-function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticControlling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
+function suspendDiagnostics(): void { pageActive = false; hostGeneration++; loading.value = false; inventoryGeneration++; inventoryLoading.value = false; tcpChecking.value = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticControlling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
 function diagnosticHistoryLabel(item: NetworkDiagnosticRunSummary): string { return `${new Date(item.createdMs).toLocaleString('zh-CN', { hour12: false })} · ${diagnosticStateLabel(item.state)} · ${item.totalDevices} 台设备 · ${item.kinds.map(diagnosticKindLabel).join('、')}` }
 function diagnosticKindLabel(value: string): string { return ({ QUICK_PING: 'Quick Ping 连续采样', LONG_PING: '长期 Ping', PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
 function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', PAUSING: '正在暂停', PAUSED: '已暂停', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
@@ -224,8 +275,13 @@ function statusLabel(value: string): string { return ({ READY: '可用', NOT_CON
 onMounted(() => { void refresh(); void refreshDiagnosticHistory() })
 onUnmounted(suspendDiagnostics)
 onDeactivated(suspendDiagnostics)
-onActivated(() => { if (!pageActive) { pageActive = true; void refreshDiagnosticHistory(); if (selectedDiagnosticRun.value && diagnosticActive.value) void pollDiagnostics(selectedDiagnosticRun.value) } })
-watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelection(); diagnosticHistory.value = []; diagnosticHistoryError.value = ''; diagnosticHistoryGeneration++; if (pageActive) void refreshDiagnosticHistory() })
+onActivated(() => { if (!pageActive) { pageActive = true; void loadInventory(1); void refreshDiagnosticHistory(); if (selectedDiagnosticRun.value && diagnosticActive.value) void pollDiagnostics(selectedDiagnosticRun.value) } })
+watch(() => [auth.user?.username, auth.user?.role], () => {
+  clearDiagnosticSelection(); diagnosticHistory.value = []; diagnosticHistoryError.value = ''; diagnosticHistoryGeneration++
+  inventoryGeneration++; inventory.value = []; selectedDiagnosticDevices.value = []; selectedInventory.value = []; inventorySearch.value = ''; appliedInventorySearch = ''; inventoryTotal.value = null; inventoryPage.value = 1; inventoryHasMore.value = false; inventoryError.value = ''; devices.value = []; selectedDevice.value = ''
+  hostGeneration++; tools.value = []; editing.value = {}; loading.value = false
+  if (pageActive) { void refresh(); void refreshDiagnosticHistory() }
+})
 </script>
 
 <template>
@@ -244,7 +300,13 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
         </div>
         <p v-if="diagnosticHistoryError" role="alert" class="diagnostic-error">{{ diagnosticHistoryError }}</p>
         <div class="toolbar diagnostic-controls">
-          <label class="form-field diagnostic-devices"><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" aria-label="诊断设备" multiple size="4" :disabled="diagnosticStarting || diagnosticActive"><option v-for="device in inventory" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
+          <div class="form-field diagnostic-devices">
+            <form class="toolbar" @submit.prevent="searchInventory"><input v-model="inventorySearch" aria-label="搜索诊断设备" placeholder="搜索设备名称或地址" /><el-button native-type="submit" size="small">搜索设备</el-button></form>
+            <label><span>设备（可多选）</span><select v-model="selectedDiagnosticDevices" aria-label="诊断设备" multiple size="4" :disabled="diagnosticStarting || diagnosticActive"><option v-for="device in diagnosticDevices" :key="device.id" :value="device.id">{{ device.name }} · {{ device.managementIp }}</option></select></label>
+            <div class="toolbar"><el-button size="small" :disabled="inventoryLoading || inventoryPage <= 1" @click="loadInventory(inventoryPage - 1)">上一页设备</el-button><span role="status" aria-label="诊断设备分页">第 {{ inventoryPage }} 页 · 匹配 {{ inventoryTotal === null ? '未知' : inventoryTotal }} 条 · 已选 {{ selectedDiagnosticDevices.length }} 台{{ inventoryLoading ? ' · 读取中' : '' }}</span><el-button size="small" :disabled="inventoryLoading || !inventoryHasMore" @click="loadInventory(inventoryPage + 1)">下一页设备</el-button><el-button size="small" :disabled="diagnosticStarting || diagnosticActive || !selectedDiagnosticDevices.length" @click="selectedDiagnosticDevices = []">清空设备选择</el-button></div>
+            <small class="muted">每页最多 100 条，禁用或无效设备不列入可选项；翻页和搜索保留已选设备。</small>
+            <p v-if="inventoryError" role="alert" class="diagnostic-error">{{ inventoryError }}</p>
+          </div>
           <div class="form-field"><span>检查类型</span><label v-for="kind in diagnosticKindOptions" :key="kind" class="check-row"><input v-model="diagnosticKinds" type="checkbox" :value="kind" :disabled="diagnosticStarting || diagnosticActive" @change="selectDiagnosticKind" />{{ diagnosticKindLabel(kind) }}</label></div>
           <label class="form-field"><span>每项检查总超时</span><select v-model.number="diagnosticTimeoutMs" aria-label="每项检查总超时" :disabled="diagnosticStarting || diagnosticActive"><option :value="2000">2 秒</option><option :value="5000">5 秒</option><option :value="10000">10 秒</option><option :value="30000">30 秒</option></select><small class="muted">Traceroute 最多 30 跳，建议 30 秒。</small></label>
           <fieldset v-if="diagnosticKinds.includes('QUICK_PING')" class="quick-ping-options" :disabled="diagnosticStarting || diagnosticActive"><legend>Quick Ping</legend>
@@ -259,7 +321,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
             <label class="form-field"><span>持续时长</span><select v-model.number="longPingDurationSeconds" aria-label="长期 Ping 持续时长"><option :value="60">1 分钟</option><option :value="300">5 分钟</option><option :value="900">15 分钟</option><option :value="3600">1 小时</option></select></label>
             <small class="muted">最多 8 台设备；使用设备登记端口，不保存原始网络报文。</small>
           </fieldset>
-          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button v-if="longPingActive" size="small" :loading="diagnosticControlling" :disabled="diagnosticControlling || diagnosticCancelling || !isSuperAdmin()" @click="controlLongPing">{{ longPingPaused ? '恢复长期 Ping' : '暂停长期 Ping' }}</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
+          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || tcpChecking || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button v-if="longPingActive" size="small" :loading="diagnosticControlling" :disabled="diagnosticControlling || diagnosticCancelling || !isSuperAdmin()" @click="controlLongPing">{{ longPingPaused ? '恢复长期 Ping' : '暂停长期 Ping' }}</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
         <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="selectedDiagnosticRun && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(selectedDiagnosticRun)">{{ diagnosticActive ? '重新读取进度' : '重新读取结果' }}</el-button></div>
         <template v-if="diagnosticRun">
@@ -267,7 +329,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
           <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
           <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
-            <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}<div v-if="icmpDenied(item)" class="tcp-alternative"><p>主机未允许 ICMP。可使用设备登记端口执行 TCP 连通性检查，结果只表示该端口是否可连接。</p><el-button size="small" :aria-label="item.deviceName + ' 改用 TCP 端口检查'" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" :loading="diagnosticStarting" @click="retryWithTcp(item)">改用 TCP 端口检查</el-button></div></td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
+            <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}<div v-if="icmpDenied(item)" class="tcp-alternative"><p>主机未允许 ICMP。可使用设备登记端口执行 TCP 连通性检查，结果只表示该端口是否可连接。</p><el-button size="small" :aria-label="item.deviceName + ' 改用 TCP 端口检查'" :disabled="!isSuperAdmin() || tcpChecking || diagnosticStarting || diagnosticActive" :loading="tcpChecking || diagnosticStarting" @click="retryWithTcp(item)">改用 TCP 端口检查</el-button></div></td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
             <tr v-if="item.kind === 'DNS'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + ' DNS 结果'">
               <template v-if="item.dns"><div class="trace-heading"><strong class="mono">查询 {{ item.dns.query }}</strong><span>{{ item.dns.resolutionMode === 'IP_LITERAL' ? '直接 IP 地址，未查询 DNS' : '系统 DNS 解析' }}</span><span class="muted">{{ new Date(item.dns.capturedMs).toLocaleString() }}</span></div>
               <ul v-if="item.dns.addresses.length" class="dns-addresses" aria-label="解析地址"><li v-for="address in item.dns.addresses" :key="address" class="mono">{{ address }}</li></ul><p v-else class="muted">没有取得解析地址。</p>
@@ -317,6 +379,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
 .diagnostic-history select { width: 100%; }
 .diagnostic-devices { flex: 1 1 360px; max-width: 560px; min-width: 0; }
 .diagnostic-devices select { width: 100%; }
+.diagnostic-devices .toolbar input { min-width: 0; flex: 1; max-width: 100%; }
 .diagnostic-controls .check-row { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .diagnostic-controls .check-row input { width: auto; margin: 0; }
 .diagnostic-error { display: flex; align-items: center; gap: 12px; margin-top: 14px; color: var(--nc-danger, #c93442); }
