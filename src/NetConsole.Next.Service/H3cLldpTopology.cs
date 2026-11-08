@@ -1,4 +1,6 @@
+using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace NetConsole.Next.Service;
 
@@ -76,13 +78,19 @@ internal static class H3cLldpTopologyProjection
                 !string.Equals(scopedProfile, fact.ProfileId, StringComparison.Ordinal) ||
                 !ReadString(scope, "deviceId", out var localDeviceId) ||
                 !ReadString(scope, "siteId", out var siteId) ||
-                !ReadString(document.RootElement, "localInterface", out var localInterface))
+                !ReadString(document.RootElement, "localInterface", out var localInterface) ||
+                !Regex.IsMatch(localInterface, @"^[A-Za-z][A-Za-z0-9/._:-]{1,63}$", RegexOptions.CultureInvariant) ||
+                !localInterface.Any(char.IsDigit))
                 return false;
 
             var neighborPort = ReadOptional(document.RootElement, "neighborInterface");
             var neighborName = ReadOptional(document.RootElement, "neighborSysname");
             var chassis = ReadOptional(document.RootElement, "chassisId");
             var management = ReadOptional(document.RootElement, "managementAddress");
+            // Older parsers persisted legend rows and sometimes placed a system
+            // name in the management-address column. Keep the original fact/Raw,
+            // but never publish those values as an observed link or IP address.
+            if (!IPAddress.TryParse(management, out _)) management = null;
             var neighborIdentity = FirstNonEmpty(chassis, neighborName, management);
             if (neighborIdentity is null) return false;
             var neighborDevice = FirstNonEmpty(neighborName, chassis, management) ?? neighborIdentity;
@@ -114,7 +122,7 @@ internal static class H3cLldpTopologyProjection
 
     private static string? ReadOptional(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
-            ? element.GetString()?.Trim() is { Length: > 0 } value ? value : null
+            ? element.GetString()?.Trim() is { Length: > 0 } value && value is not ("-" or "--") ? value : null
             : null;
 
     private static string? FirstNonEmpty(params string?[] values) =>

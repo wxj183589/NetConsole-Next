@@ -13,7 +13,37 @@ internal static class H3cLldpTopologyTests
         SimulatorSwitchListRetainsColumnsAndRejectsLegends();
         LegacyApBannerReplayRetainsEndpointsWithoutCompleteTableProof();
         ActualAcRadioTablePreservesDownAndZeroClients();
-        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=6/6 PASS");
+        HistoricalProjectionRejectsLegendsAndInvalidAddresses();
+        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=7/7 PASS");
+    }
+
+    private static void HistoricalProjectionRejectsLegendsAndInvalidAddresses()
+    {
+        const string profile = "profile-old-parser";
+        H3cFactSnapshot Old(string id, string local, string? neighbor, string? chassis, string? address) =>
+            new(id, profile, "lldp.neighbor", id, "STALE", "H3C_TASK_RAW:historical", 1000, true,
+                JsonSerializer.Serialize(new { localInterface = local, neighborSysname = neighbor,
+                    neighborInterface = "GE1/0/1", chassisId = chassis, managementAddress = address,
+                    capturedScope = new { profileId = profile, deviceId = "device-a", siteId = "site-a" } }));
+        var facts = new[] {
+            Old("legend-chassis", "Chassis", "ID", null, "* -- -- Nearest nontpmr bridge neighbor"),
+            Old("legend-default", "Default", "--", null, "Nearest bridge neighbor"),
+            Old("old-name-in-ip", "GE1/0/1", "4c48-8d10-0100", null, "AC1"),
+            Old("empty-neighbor", "GE1/0/2", "--", null, "--"),
+            Old("ipv6", "GE1/0/3", "--", "4c48-cb6e-0400", "2001:db8::4"),
+            Old("ipv4-only", "GE1/0/4", null, null, "192.0.2.4"),
+            Old("host-only", "GE1/0/5", null, null, "hostname-is-not-management-ip") };
+        var rows = H3cLldpTopologyProjection.Project(profile, facts);
+        Assert(rows.Count == 3 && rows.All(row => row.LocalInterface.StartsWith("GE", StringComparison.Ordinal)),
+            "persisted legend rows and placeholder-only identities cannot become asset links");
+        Assert(rows.Single(row => row.FactRevision == "old-name-in-ip").NeighborManagementAddress is null,
+            "historical system names in the IP column must display unknown rather than an invented address");
+        Assert(rows.Single(row => row.FactRevision == "ipv6") is {
+            NeighborManagementAddress: "2001:db8::4", NeighborDevice: "4c48-cb6e-0400" } &&
+            rows.Single(row => row.FactRevision == "ipv4-only").NeighborDevice == "192.0.2.4",
+            "valid IPv4/IPv6 and chassis fallback retain captured provenance");
+        Assert(facts[2].PayloadJson.Contains("AC1", StringComparison.Ordinal) && facts.Length == 7,
+            "projection filtering does not rewrite stored facts or historical evidence");
     }
 
     private static void ActualAcRadioTablePreservesDownAndZeroClients()
