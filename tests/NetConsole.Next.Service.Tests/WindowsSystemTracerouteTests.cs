@@ -36,6 +36,11 @@ internal static class WindowsSystemTracerouteTests
             await OwnedProcessStops("revoke");
             await RejectsMalformedOutput();
             await RejectsStderrOverflow();
+            await TerminalHopStopsOwnedProcess();
+            await StderrFaultAfterTerminalHop("reached");
+            await StderrFaultAfterTerminalHop("unreachable");
+            await StderrFaultAfterTerminalHop("cancel");
+            await StderrFaultAfterTerminalHop("revoke");
         }
         Console.WriteLine("WINDOWS_SYSTEM_TRACEROUTE_TESTS=parser/command PASS; owned process cancellation/deadline/revocation/output PASS (Windows only)");
     }
@@ -109,6 +114,61 @@ internal static class WindowsSystemTracerouteTests
         }
         catch (PingException) { }
         Check(pid > 0 && Exited(pid) && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5), "stderr overflow must stop a child with silent stdout");
+    }
+    private static async Task TerminalHopStopsOwnedProcess()
+    {
+        var pid = 0;
+        var started = Stopwatch.GetTimestamp();
+        var result = await WindowsSystemTraceroute.RunProcessAsync(Fixture(
+            "[Console]::WriteLine(' 1 1 ms 1 ms 1 ms 127.0.0.1'); [Console]::Out.Flush(); Start-Sleep -Seconds 30"),
+            IPAddress.Loopback, 5000, () => { }, _ => { }, CancellationToken.None, value => pid = value);
+        Check(result.DestinationReached && pid > 0 && Exited(pid) && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5),
+            "a clean terminal hop must still actively stop and reap its child");
+    }
+
+    private static async Task StderrFaultAfterTerminalHop(string kind)
+    {
+        // Gate stderr until progress has received the terminal stdout hop. The child
+        // then exits after writing exactly one character beyond the stderr limit,
+        // before progress returns. A larger write could block after the drain faults.
+        // This deterministically exercises the early-return cleanup path, without sleeps.
+        var eventName = "Local\\NetConsoleTraceroute-" + Guid.NewGuid().ToString("N");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, eventName);
+        using var cancel = new CancellationTokenSource();
+        var originalRevocation = new InvalidOperationException("original target revocation");
+        var pid = 0;
+        var published = 0;
+        var hop = kind == "unreachable" ? " 1 127.0.0.1 reports: Destination host unreachable." : " 1 1 ms 1 ms 1 ms 127.0.0.1";
+        var script = "[Console]::WriteLine('" + hop + "'); [Console]::Out.Flush(); " +
+            "$event=[Threading.EventWaitHandle]::OpenExisting('" + eventName + "'); " +
+            "if (-not $event.WaitOne(5000)) { exit 20 }; " +
+            "[Console]::Error.Write(('x' * 65537)); [Console]::Error.Flush(); $event.Dispose()";
+        try
+        {
+            await WindowsSystemTraceroute.RunProcessAsync(Fixture(script), IPAddress.Loopback, 10000, () => { }, _ =>
+            {
+                published++;
+                release.Set();
+                using var child = Process.GetProcessById(pid);
+                Check(child.WaitForExit(5000), "stderr fixture must finish writing before terminal progress returns");
+                if (kind == "cancel") { cancel.Cancel(); cancel.Token.ThrowIfCancellationRequested(); }
+                if (kind == "revoke") throw originalRevocation;
+            }, cancel.Token, value => pid = value);
+            throw new Exception("terminal hop hid a completed stderr overflow: " + kind);
+        }
+        catch (PingException error) when (kind is "reached" or "unreachable")
+        {
+            Check(error.Message.Contains("error output exceeded", StringComparison.Ordinal), "terminal hop must propagate the actual stderr limit failure");
+        }
+        catch (OperationCanceledException error) when (kind == "cancel")
+        {
+            Check(error.CancellationToken == cancel.Token, "stderr cleanup must preserve the original cancellation token");
+        }
+        catch (InvalidOperationException error) when (kind == "revoke")
+        {
+            Check(ReferenceEquals(error, originalRevocation), "stderr cleanup must preserve the original revocation exception");
+        }
+        Check(pid > 0 && Exited(pid) && published == 1, "terminal stderr failure must reap its owned child: " + kind);
     }
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 }

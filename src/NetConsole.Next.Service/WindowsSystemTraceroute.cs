@@ -48,6 +48,7 @@ internal static class WindowsSystemTraceroute
         Task? stderr = null;
         Task<string?>? pendingLine = null;
         var launched = false;
+        var completedNormally = false;
         try
         {
             deadline.Token.ThrowIfCancellationRequested();
@@ -77,13 +78,17 @@ internal static class WindowsSystemTraceroute
                 hops.Add(hop);
                 progress(Snapshot());
                 if (hop.Status is "REACHED" or "UNREACHABLE" || hops.Count == NetworkTraceroute.MaximumHops)
+                {
+                    completedNormally = true;
                     return Snapshot();
+                }
             }
             await process.WaitForExitAsync(deadline.Token);
             await stderr;
             requireCurrentTarget();
             if (process.ExitCode != 0 || hops.Count < NetworkTraceroute.MaximumHops)
                 throw new PingException("System ICMP traceroute ended without a complete path.");
+            completedNormally = true;
             return Snapshot();
         }
         catch (Win32Exception error)
@@ -99,9 +104,15 @@ internal static class WindowsSystemTraceroute
                 catch (InvalidOperationException) when (process.HasExited) { }
                 await process.WaitForExitAsync(CancellationToken.None);
             }
-            deadline.Cancel();
-            if (pendingLine is not null) try { await pendingLine; } catch (OperationCanceledException) { } catch (PingException) { }
-            if (stderr is not null) try { await stderr; } catch (OperationCanceledException) { } catch (PingException) { }
+            try
+            {
+                if (pendingLine is not null) try { await pendingLine; } catch (OperationCanceledException) { } catch (PingException) { }
+                // Reaping closes the pipes: drain emitted stderr before cancelling its
+                // reader, so a terminal hop cannot hide an already-produced overflow.
+                // Preserve original cancellation, revocation and parse exceptions.
+                if (stderr is not null) try { await stderr; } catch (OperationCanceledException) { } catch (PingException) when (!completedNormally) { }
+            }
+            finally { deadline.Cancel(); }
         }
     }
 
