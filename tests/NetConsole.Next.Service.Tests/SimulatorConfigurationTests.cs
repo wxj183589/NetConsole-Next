@@ -28,10 +28,11 @@ internal static class SimulatorConfigurationTests
         await VerifyLiveRevocation();
         await VerifySerialization();
         await VerifyCaptureErrors();
+        await InterruptedWriteRemainsReviewable();
         await VerifyReconnectFailureRecovery();
         await RejectChangedReadbackVersion();
         await RejectChangedRollbackVersion();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=21/21 PASS");
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=22/22 PASS");
     }
 
     private static async Task StorageRejectsInvalidDirectories()
@@ -356,6 +357,32 @@ internal static class SimulatorConfigurationTests
         catch (OperationCanceledException) { }
     }
 
+    private static async Task InterruptedWriteRemainsReviewable()
+    {
+        using var fixture = new Fixture();
+        var backup = await fixture.Capture();
+        fixture.Factory.Mode = "pause-after-write";
+        var inFlight = fixture.Change(backup, "interrupted-change");
+        await fixture.Factory.WriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var restartedCatalog = new Catalog(new RuntimeSettings { DataRoot = fixture.Root, WebPort = 18771,
+            SyslogPort = 0, SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 });
+        restartedCatalog.Initialize();
+        var restartedService = new SimulatorConfigurationService(restartedCatalog,
+            new RuntimeSettings { DataRoot = fixture.Root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 }, fixture.Factory);
+        var interrupted = restartedService.Changes(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Single();
+        Assert(interrupted.State == "REQUIRES_REVIEW" && interrupted.BeforeBackupId is not null &&
+            interrupted.AfterBackupId is null && fixture.Factory.Writes == 1 &&
+            SimulatorConfigurationService.Description(fixture.Factory.Text, Interface) == "interrupted-change",
+            "a new Service instance must retain the durable uncertain-write marker and never replay the device operation");
+
+        fixture.Factory.ContinueWrite.TrySetResult();
+        var completed = await inFlight.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert(completed.State == "VERIFIED" && fixture.Factory.Writes == 1,
+            "the original operation may finish readback without a second write after the interruption window closes");
+    }
+
     private static async Task VerifyReconnectFailureRecovery()
     {
         using var fixture = new Fixture();
@@ -449,6 +476,8 @@ internal static class SimulatorConfigurationTests
         public bool DelayReads;
         public Action? OnConfigurationRead;
         public Exception? OpenError;
+        public TaskCompletionSource WriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ContinueWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<ISimulatorConfigurationSession> OpenAsync(H3cDeviceProfileSnapshot profile, CancellationToken cancellationToken)
         {
             Opens++;
@@ -470,7 +499,7 @@ internal static class SimulatorConfigurationTests
                 owner.OnConfigurationRead?.Invoke();
                 return owner.Text;
             }
-            public Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken)
+            public async Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken)
             {
                 owner.Writes++;
                 if (owner.Mode == "rollback-fails" && owner.Writes == 2) throw new IOException("synthetic recovery interruption");
@@ -482,7 +511,11 @@ internal static class SimulatorConfigurationTests
                 }
                 if (owner.Writes == 1 && owner.Mode == "unrelated-drift") owner.Text = owner.Text.Replace("sysname fixture", "sysname drifted");
                 if (owner.Writes == 1 && owner.Mode is "throw-after-write" or "rollback-fails" or "rollback-version-drift") throw new IOException("synthetic uncertain write");
-                return Task.CompletedTask;
+                if (owner.Writes == 1 && owner.Mode == "pause-after-write")
+                {
+                    owner.WriteEntered.TrySetResult();
+                    await owner.ContinueWrite.Task.WaitAsync(cancellationToken);
+                }
             }
             public ValueTask DisposeAsync() { owner.Active--; return ValueTask.CompletedTask; }
         }
