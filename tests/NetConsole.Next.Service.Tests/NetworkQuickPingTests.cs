@@ -28,6 +28,16 @@ internal static class NetworkQuickPingTests
             try { NetworkQuickPing.Validate(arguments.Item1, arguments.Item2, arguments.Item3, arguments.Item4, arguments.Item5); throw new Exception("invalid limits accepted"); }
             catch (ArgumentException) { }
         }
+        NetworkQuickPing.ValidateLongPing(3_600, 1_000, 2_000, "ICMP", 8);
+        foreach (var arguments in new[] { (9, 1_000, 2_000, "ICMP", 1), (3_601, 1_000, 2_000, "ICMP", 1),
+            (60, 999, 2_000, "ICMP", 1), (60, 1_000, 2_000, "OTHER", 1), (60, 1_000, 2_000, "TCP", 9) })
+        {
+            try { NetworkQuickPing.ValidateLongPing(arguments.Item1, arguments.Item2, arguments.Item3, arguments.Item4, arguments.Item5); throw new Exception("invalid long ping limits accepted"); }
+            catch (ArgumentException) { }
+        }
+        var longRun = await NetworkQuickPing.RunForDurationAsync("fixture", 22, "TCP", 1, 1_000, 100,
+            new Probe(), () => { }, _ => { }, CancellationToken.None);
+        Assert(longRun is { RequestedSamples: 1, Sent: 1 }, "duration-based long ping reports the bounded sample plan and completion");
         var noReplies = await NetworkQuickPing.RunAsync("fixture", 22, "TCP", 2, 100, 100,
             new Probe { AllLost = true }, () => { }, _ => { }, CancellationToken.None);
         Assert(noReplies is { LossPercent: 100, AverageMs: null, MinMs: null, MaxMs: null }, "missing latency remains unknown");
@@ -67,6 +77,15 @@ internal static class NetworkQuickPingTests
                 using var deadline = new CancellationTokenSource(5000);
                 while (service.Get(id, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 }) await Task.Delay(10, deadline.Token);
                 Assert(service.Get(id, P2B5SiteScopeDecision.Global)?.Items.Single() is { State: "SUCCEEDED", QuickPing: { Sent: 3, Received: 3 } }, "real TCP sampling through inventory endpoint");
+                var longRun = service.Start(new([device], ["LONG_PING"], 500, IntervalMs: 1_000,
+                    QuickPingProtocol: "TCP", LongPingDurationSeconds: 10), actor, P2B5SiteScopeDecision.Global);
+                using var longDeadline = new CancellationTokenSource(5_000);
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent == 0)
+                    await Task.Delay(10, longDeadline.Token);
+                Assert(service.Cancel(longRun.Id, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "long ping remains cancellable during its duration window");
+                using var cancelDeadline = new CancellationTokenSource(5_000);
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 }) await Task.Delay(10, cancelDeadline.Token);
+                Assert(service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single() is { Kind: "LONG_PING", State: "CANCELLED" }, "long ping cancellation is durably published");
             }
             using var restarted = new NetworkDiagnosticsService(catalog);
             Assert(restarted.Get(id, actor, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Samples.Count == 3, "complete samples survive restart");

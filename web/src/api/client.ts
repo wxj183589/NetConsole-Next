@@ -536,7 +536,7 @@ export interface H3cTaskPlanReport {
   items: Array<{ item: H3cTaskPlanItem; run?: TaskRun | null; commands: TaskCommand[] }>
 }
 
-export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE' | 'QUICK_PING'
+export type NetworkDiagnosticKind = 'PING' | 'TCP' | 'DNS' | 'LLDP' | 'TRACEROUTE' | 'QUICK_PING' | 'LONG_PING'
 export interface NetworkTraceRoute {
   destinationAddress: string
   destinationReached: boolean
@@ -1489,7 +1489,7 @@ export function retryTask(runId: string): Promise<{ runId: string; previousRunId
 export function resumeTask(runId: string): Promise<{ runId: string; previousRunId: string; action: string }> {
   return request(`/api/system/tasks/${encodeURIComponent(runId)}/resume`, { method: 'POST' })
 }
-export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string; sampleCount?: number; intervalMs?: number; quickPingProtocol?: 'ICMP' | 'TCP' }): Promise<NetworkDiagnosticRun> {
+export function startNetworkDiagnostics(payload: { deviceIds: string[]; kinds: NetworkDiagnosticKind[]; timeoutMs?: number; siteId?: string; sampleCount?: number; intervalMs?: number; quickPingProtocol?: 'ICMP' | 'TCP'; longPingDurationSeconds?: number }): Promise<NetworkDiagnosticRun> {
   return request('/api/system/diagnostics/runs', { method: 'POST', body: JSON.stringify(payload) })
 }
 export function getNetworkDiagnostics(id: string): Promise<NetworkDiagnosticRun> {
