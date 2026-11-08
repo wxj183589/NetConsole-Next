@@ -50,7 +50,7 @@ const scopeLabel = computed(() => {
   return states.join(' / ')
 })
 const relationCount = computed(() => relations.value.length)
-const loadedEmpty = computed(() => !loading.value && !errorMessage.value && !assets.value.length && !relations.value.length)
+const loadedEmpty = computed(() => !loading.value && !errorMessage.value && !partialErrors.value.length && !assets.value.length && !relations.value.length)
 
 function formatTime(value?: number | null): string {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
@@ -87,22 +87,28 @@ async function refresh(): Promise<void> {
   claims.value = []
   relations.value = []
   try {
-    const [inventoryResult, profilesResult] = await Promise.all([getDeviceInventory({ page: 1, pageSize: 100 }), getH3cProfiles()])
+    const [inventoryResult, profilesResult] = await Promise.allSettled([getDeviceInventory({ page: 1, pageSize: 100 }), getH3cProfiles()])
     if (current !== generation) return
-    inventory.value = inventoryResult
+    if (inventoryResult.status === 'rejected') throw inventoryResult.reason
+    inventory.value = inventoryResult.value
+    if (profilesResult.status === 'rejected') {
+      partialErrors.value.push('连接档案读取失败，LLDP 关系状态未知')
+      return
+    }
+    const profiles = profilesResult.value
     // Bound requests even when inventory contains thousands of connection profiles.
     const relationResults: PromiseSettledResult<H3cLldpClaims>[] = []
     let nextProfile = 0
-    await Promise.all(Array.from({ length: Math.min(4, profilesResult.length) }, async () => {
-      while (current === generation && nextProfile < profilesResult.length) {
+    await Promise.all(Array.from({ length: Math.min(4, profiles.length) }, async () => {
+      while (current === generation && nextProfile < profiles.length) {
         const index = nextProfile++
         try {
-          relationResults[index] = { status: 'fulfilled', value: await getH3cLldpClaims(profilesResult[index].id, { history: readHistory, limit: 1000 }) }
+          relationResults[index] = { status: 'fulfilled', value: await getH3cLldpClaims(profiles[index].id, { history: readHistory, limit: 1000 }) }
         } catch (reason) { relationResults[index] = { status: 'rejected', reason } }
       }
     }))
     if (current !== generation) return
-    relationResults.forEach((result, index) => profileRelations(profilesResult[index], result))
+    relationResults.forEach((result, index) => profileRelations(profiles[index], result))
     loadedMs.value = Date.now()
   } catch (cause) {
     if (current !== generation) return
@@ -154,10 +160,10 @@ onBeforeUnmount(() => { ++generation; ++assetGeneration })
           <span class="summary-chip summary-chip--success"><b>{{ summary.onlineDevices }}</b> 最近在线</span>
           <span class="summary-chip summary-chip--danger"><b>{{ summary.offlineDevices }}</b> 最近离线</span>
           <span class="summary-chip"><b>{{ summary.unknownStatus }}</b> 状态未知</span>
-          <span class="summary-chip summary-chip--info"><b>{{ relationCount }}</b> 条 LLDP 关系</span>
+          <span class="summary-chip summary-chip--info">已读取 <b>{{ relationCount }}</b> 条 LLDP 关系</span>
           <span class="summary-chip"><b>{{ siteCount }}</b> 个当前页局点</span>
         </div>
-        <div v-if="partialErrors.length" class="data-quality-note" role="status"><el-icon><Warning /></el-icon>{{ partialErrors.join('；') }}。已展示其他成功读取的关系。</div>
+        <div v-if="partialErrors.length" class="data-quality-note" role="status"><el-icon><Warning /></el-icon>{{ partialErrors.join('；') }}。已保留成功读取的资产与关系。</div>
         <section class="card topology-scope-card">
           <div class="card__header"><div><h2>LLDP 作用域</h2><p>scope 状态由服务端 claims 返回；页面不根据名称或地址猜测归属。</p></div><span class="state-pill info">{{ scopeLabel }}</span></div>
           <div class="card__body overview-footer"><span v-for="item in claims" :key="item.profileId"><b>{{ item.profileId }}</b> · {{ item.relationCount }} 条关系 · revision {{ item.claimsRevision || '—' }}</span><span v-if="!claims.length" class="muted">暂无可展示的 LLDP scope 事实</span></div>

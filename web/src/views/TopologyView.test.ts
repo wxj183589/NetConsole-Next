@@ -109,6 +109,20 @@ describe('TopologyView', () => {
     expect(wrapper.text()).not.toContain('核心交换机')
   })
 
+  it('keeps authorized assets when connection profiles fail and recovers on refresh', async () => {
+    api.getH3cProfiles.mockRejectedValueOnce(new Error('profile service unavailable'))
+    const wrapper = render(); await flushPromises()
+    expect(wrapper.text()).toContain('核心交换机')
+    expect(wrapper.get('[data-testid="topology-summary"]').text()).toContain('1 台资产')
+    expect(wrapper.text()).toContain('LLDP 关系状态未知')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(api.getH3cLldpClaims).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(item => item.text() === '刷新')!.trigger('click'); await flushPromises()
+    expect(wrapper.text()).not.toContain('LLDP 关系状态未知')
+    expect(wrapper.text()).toContain('接入交换机')
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps successful assets and marks a failed profile as partial', async () => {
     api.getH3cProfiles.mockResolvedValue([profile, { ...profile, id: 'profile-2', host: '192.0.2.12' }])
     api.getH3cLldpClaims.mockResolvedValueOnce(claims).mockRejectedValueOnce(new Error('denied'))
