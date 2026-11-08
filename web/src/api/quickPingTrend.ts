@@ -7,6 +7,7 @@ export interface QuickPingTrendPoint {
 }
 export interface QuickPingTrendGroup {
   key: string; actor: string; siteId: string; deviceId: string; deviceName: string
+  kind: 'QUICK_PING' | 'LONG_PING'
   protocol: string; endpoint: string; port: number | null; points: QuickPingTrendPoint[]
   sent: number | null; received: number | null; lost: number | null; unsent: number | null
   lossPercent: number | null; averageMs: number | null; minMs: number | null; maxMs: number | null; p95Ms: number | null
@@ -51,11 +52,11 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
   const seen = new Set<string>()
   let pending = 0, missingIdentity = 0
   for (const run of runs) for (const item of run.items) {
-    if (item.kind !== 'QUICK_PING') continue
+    if (item.kind !== 'QUICK_PING' && item.kind !== 'LONG_PING') continue
     const identity = JSON.stringify([run.id, item.id])
     if (seen.has(identity)) continue
     seen.add(identity)
-    if (item.state === 'RUNNING' || item.state === 'QUEUED') { ++pending; continue }
+    if (['RUNNING', 'QUEUED', 'PAUSING', 'PAUSED'].includes(item.state)) { ++pending; continue }
     if (!run.actor || !item.siteId || !item.deviceId) { ++missingIdentity; continue }
     const ping = item.quickPing
     const hasEndpoint = ping && ['ICMP', 'TCP'].includes(ping.protocol) && !!ping.destinationAddress &&
@@ -64,12 +65,12 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
     const endpoint = hasEndpoint ? ping.destinationAddress : 'UNKNOWN'
     const port = hasEndpoint ? ping.port : null
     // Missing endpoint snapshots cannot establish comparability with another run.
-    const key = JSON.stringify([run.actor, item.siteId, item.deviceId, protocol, endpoint, port,
+    const key = JSON.stringify([run.actor, item.siteId, item.deviceId, item.kind, protocol, endpoint, port,
       ...(hasEndpoint ? [] : [run.id, item.id])])
     let group = groups.get(key)
     if (!group) {
       group = { key, actor: run.actor, siteId: item.siteId, deviceId: item.deviceId, deviceName: item.deviceName,
-        protocol, endpoint, port, points: [], sent: null, received: null, lost: null, unsent: null,
+        kind: item.kind, protocol, endpoint, port, points: [], sent: null, received: null, lost: null, unsent: null,
         lossPercent: null, averageMs: null, minMs: null, maxMs: null, p95Ms: null }
       groups.set(key, group)
     }
@@ -93,12 +94,12 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
 }
 
 export function quickPingTrendCsv(groups: readonly QuickPingTrendGroup[], context: { loadedMs: number; failedRuns: readonly string[] }): string {
-  const header = ['actor', 'site_id', 'device_id', 'device_name', 'protocol', 'destination_address', 'port',
+  const header = ['actor', 'site_id', 'device_id', 'device_name', 'diagnostic_kind', 'protocol', 'destination_address', 'port',
     'run_id', 'item_id', 'captured_utc', 'state', 'requested', 'sent', 'received', 'lost', 'unsent_unknown',
     'loss_percent_sent_only', 'average_replied_ms', 'p95_replied_ms_nearest_rank', 'metrics_known', 'loaded_utc', 'failed_run_ids', 'export_scope']
   const rows: Array<Array<string | number | boolean | null>> = [header]
   for (const group of groups) for (const point of group.points) rows.push([
-    group.actor, group.siteId, group.deviceId, group.deviceName, group.protocol, group.endpoint, group.port,
+    group.actor, group.siteId, group.deviceId, group.deviceName, group.kind, group.protocol, group.endpoint, group.port,
     point.runId, point.itemId, new Date(point.capturedMs).toISOString(), point.state, point.requested,
     point.sent, point.received, point.lost, point.unsent, point.lossPercent, point.averageMs, point.p95Ms, point.metricsKnown,
     new Date(context.loadedMs).toISOString(), JSON.stringify(context.failedRuns), 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS',

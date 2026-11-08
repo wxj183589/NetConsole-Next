@@ -17,6 +17,43 @@ const load = async (wrapper: ReturnType<typeof render>) => { await wrapper.findA
 
 describe('Quick Ping history workspace', () => {
   beforeEach(() => { vi.resetAllMocks(); api.getNetworkDiagnostics.mockImplementation((id: string) => Promise.resolve(row(id))) })
+  it('loads mixed saved Ping types and exports Long Ping without counting paused gaps as loss', async () => {
+    api.getNetworkDiagnostics.mockImplementation(async (id: string) => {
+      const result = row(id)
+      if (id !== 'quick') {
+        result.items[0]!.kind = 'LONG_PING'
+        result.items[0]!.quickPing!.requestedSamples = 60
+        if (id === 'paused') result.items[0]!.state = 'PAUSED'
+      }
+      return result
+    })
+    const wrapper = render([])
+    await wrapper.setProps({ history: [
+      { id: 'quick', kinds: ['QUICK_PING'] }, { id: 'long', kinds: ['LONG_PING'] },
+      { id: 'paused', kinds: ['LONG_PING'] }, { id: 'dns', kinds: ['DNS'] },
+    ] as NetworkDiagnosticRunSummary[] })
+    await load(wrapper)
+    expect(api.getNetworkDiagnostics.mock.calls.map(call => call[0])).toEqual(['quick', 'long', 'paused'])
+    expect(wrapper.findAll('.trend-group')).toHaveLength(2)
+    expect(wrapper.text()).toContain('Long Ping 长期采样')
+    expect(wrapper.text()).toContain('Quick Ping 连续采样')
+    expect(wrapper.text()).toContain('运行中跳过 1 项')
+    const longGroup = wrapper.findAll('.trend-group').find(group => group.text().includes('Long Ping'))!
+    expect(longGroup.text()).toContain('合计发送 1 / 回复 1 / 丢失 0 / 未发送 UNKNOWN 59')
+    const parts: BlobPart[][] = []
+    vi.stubGlobal('Blob', class { constructor(value: BlobPart[]) { parts.push(value) } })
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:history'), revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await wrapper.findAll('button').find(button => button.text() === '导出趋势 CSV')!.trigger('click')
+      const csv = String(parts[0]![0])
+      expect(csv).toContain('diagnostic_kind')
+      expect(csv).toContain('"LONG_PING"')
+      expect(csv).toContain('"QUICK_PING"')
+      expect(csv).not.toContain('"paused"')
+      expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(3)
+    } finally { click.mockRestore(); vi.unstubAllGlobals() }
+  })
   it('only reads saved runs on explicit load and displays zero accurately', async () => {
     const wrapper = render()
     expect(api.getNetworkDiagnostics).not.toHaveBeenCalled()
@@ -67,7 +104,11 @@ describe('Quick Ping history workspace', () => {
   it('bounds reads to 20 runs and four concurrent requests', async () => {
     let active = 0, maximum = 0
     api.getNetworkDiagnostics.mockImplementation(async (id: string) => { ++active; maximum = Math.max(maximum, active); await Promise.resolve(); --active; return row(id) })
-    const wrapper = render(Array.from({ length: 25 }, (_, index) => String(index))); await load(wrapper)
+    const wrapper = render([])
+    await wrapper.setProps({ history: Array.from({ length: 25 }, (_, index) => ({
+      id: String(index), kinds: index % 2 ? ['LONG_PING'] : ['QUICK_PING', 'LONG_PING'],
+    } as NetworkDiagnosticRunSummary)) })
+    await load(wrapper)
     expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(20)
     expect(maximum).toBeLessThanOrEqual(4)
     expect(wrapper.text()).toContain('已达 20 任务上限')

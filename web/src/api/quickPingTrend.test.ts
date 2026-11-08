@@ -14,6 +14,40 @@ export function run(id: string, values: Array<number | null>, changes: Partial<N
 }
 
 describe('Quick Ping history trends', () => {
+  it('keeps Quick and Long Ping separate and counts only actual probes after pauses', () => {
+    const long = run('long', [0, null, 20], {}, { requestedSamples: 60 })
+    long.items[0]!.kind = 'LONG_PING'
+    const groups = buildQuickPingTrends([run('quick', [100]), long]).groups
+    expect(groups).toHaveLength(2)
+    expect(groups.find(group => group.kind === 'LONG_PING')).toMatchObject({
+      sent: 3, received: 2, lost: 1, unsent: 57, lossPercent: 33.33, averageMs: 10, p95Ms: 20,
+    })
+    expect(groups.find(group => group.kind === 'QUICK_PING')).toMatchObject({ sent: 1, averageMs: 100 })
+    const csv = quickPingTrendCsv(groups, { loadedMs: 3000, failedRuns: [] })
+    expect(csv).toContain('diagnostic_kind')
+    expect(csv).toContain('"LONG_PING"')
+    expect(csv).toContain('"QUICK_PING"')
+  })
+  it('skips every active Long Ping state and does not turn a finished empty window into loss', () => {
+    const active = ['QUEUED', 'RUNNING', 'PAUSING', 'PAUSED'].map(state => {
+      const value = run(state, [1]); value.items[0]!.kind = 'LONG_PING'; value.items[0]!.state = state; return value
+    })
+    const empty = run('empty', [], {}, { requestedSamples: 60 }); empty.items[0]!.kind = 'LONG_PING'
+    empty.items[0]!.state = 'NO_EVIDENCE'
+    const result = buildQuickPingTrends([...active, empty])
+    expect(result.pending).toBe(4)
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0]).toMatchObject({ kind: 'LONG_PING', sent: 0, lost: 0, unsent: 60, lossPercent: null, p95Ms: null })
+    expect(result.groups[0]!.points).toHaveLength(1)
+  })
+  it('retains Long Ping completion boundaries and rejects out-of-window samples', () => {
+    const long = run('long', [1], { startedMs: 1000, endedMs: 2000 }, { requestedSamples: 60 })
+    long.items[0]!.kind = 'LONG_PING'
+    long.items[0]!.quickPing!.samples[0]!.capturedMs = 2001
+    expect(buildQuickPingTrends([long]).groups[0]).toMatchObject({ kind: 'LONG_PING', sent: null, lost: null, averageMs: null })
+    long.items[0]!.quickPing!.samples[0]!.capturedMs = 2000
+    expect(buildQuickPingTrends([long]).groups[0]).toMatchObject({ sent: 1, lost: 0, unsent: 59 })
+  })
   it('weights by actual replied samples, preserves zero and excludes unsent from loss', () => {
     const { groups } = buildQuickPingTrends([run('a', [0]), run('b', [30, 30, 30], {}, { requestedSamples: 5 }), run('c', [null, null])])
     expect(groups).toHaveLength(1)
