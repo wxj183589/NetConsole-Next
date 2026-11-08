@@ -52,6 +52,7 @@ def jump_request(**values):
 def connection():
     result = mock.Mock()
     result.remote_conn_pre = None
+    result.find_prompt.return_value = "<synthetic>"
     result.read_channel.return_value = ""
     result.is_alive.return_value = True
     return result
@@ -799,12 +800,109 @@ class DiagnosticInteractionTests(unittest.TestCase):
             self.worker.execute(self.request)
         self.target.send_command.assert_not_called()
 
-    def test_ordinary_execution_retains_existing_netmiko_call(self):
+    def test_other_driver_execution_retains_existing_netmiko_call(self):
+        self.worker.driver = "huawei_vrp"
         self.target.send_command.return_value = "version output"
         self.worker.execute({"command": "display version"})
         self.target.find_prompt.assert_not_called()
         self.target.send_command.assert_called_once_with("display version", read_timeout=30,
             cmd_verify=False, strip_prompt=False, strip_command=False)
+
+
+class ComwareReadCompletionTests(unittest.TestCase):
+    def worker_for(self, driver="hp_comware", prompt="<AP.1(2)>"):
+        target = connection()
+        target.find_prompt.return_value = prompt
+        worker = module.Worker()
+        worker.connection, worker.driver = target, driver
+        return worker, target
+
+    def test_both_transports_keep_full_prompt_raw_and_shared_deadline(self):
+        for driver, prompt in (("hp_comware", "<AP.1(2)>"), ("hp_comware_telnet", "[AP.1(2)-interface]")):
+            with self.subTest(driver=driver):
+                worker, target = self.worker_for(driver, prompt)
+                transcript = "display version\nAP.1(2) uptime is 1 day\nH3C Comware\n" + prompt
+                target.send_command.return_value = transcript
+                with mock.patch.object(module.time, "monotonic", side_effect=[10, 12]):
+                    self.assertEqual(worker.execute({"command": "display version", "read_timeout": 30})["output"], transcript)
+                target.find_prompt.assert_called_once_with()
+                call = target.send_command.call_args
+                self.assertEqual(call.kwargs["read_timeout"], 28)
+                self.assertFalse(call.kwargs["auto_find_prompt"])
+                self.assertFalse(call.kwargs["strip_prompt"])
+                self.assertFalse(call.kwargs["strip_command"])
+                self.assertIsNone(module.re.search(call.kwargs["expect_string"], "AP.1(2) uptime is 1 day"))
+                self.assertIsNone(module.re.search(call.kwargs["expect_string"], prompt + " body continues"))
+                self.assertIsNotNone(module.re.search(call.kwargs["expect_string"], transcript))
+
+    def test_display_matching_is_case_and_whitespace_tolerant(self):
+        worker, target = self.worker_for()
+        target.send_command.return_value = "H3C Comware\n<AP.1(2)>\r\n"
+        worker.execute({"command": "  DiSpLaY\tversion  "})
+        target.find_prompt.assert_called_once_with()
+        self.assertEqual(target.send_command.call_args.args[0], "  DiSpLaY\tversion  ")
+
+    def test_unbounded_or_non_comware_prompt_prevents_command(self):
+        for prompt in (None, "AP#", "<AP>\n<other>", "<" + "x" * 251 + ">", "<AP<other>>", "[AP[other]]"):
+            with self.subTest(prompt=prompt):
+                worker, target = self.worker_for(prompt=prompt)
+                with self.assertRaises(ValueError):
+                    worker.execute({"command": "display version"})
+                target.send_command.assert_not_called()
+                target.disconnect.assert_called_once_with()
+
+    def test_prompt_detection_uses_remaining_command_budget_without_sending_after_deadline(self):
+        worker, target = self.worker_for()
+        with mock.patch.object(module.time, "monotonic", side_effect=[10, 41]):
+            with self.assertRaises(ReadTimeout):
+                worker.execute({"command": "display version", "read_timeout": 30})
+        target.send_command.assert_not_called()
+        target.disconnect.assert_called_once_with()
+
+    def test_partial_or_changed_prompt_is_not_published_as_complete(self):
+        for transcript in ("version output", "AP.1(2) uptime is 1 day", "version\n<other>", "version\n[AP.1(2)]"):
+            with self.subTest(transcript=transcript):
+                worker, target = self.worker_for()
+                target.send_command.return_value = transcript
+                with self.assertRaises(ReadTimeout) as error:
+                    worker.execute({"command": "display version"})
+                self.assertEqual(module.failure_kind(error.exception, "execute"), "COMMAND_TIMEOUT")
+                target.send_command.assert_called_once()
+                target.disconnect.assert_called_once_with()
+
+    def test_timeout_or_disconnect_after_send_is_not_retried(self):
+        for failure in (ReadTimeout("partial"), EOFError("partial")):
+            with self.subTest(failure=type(failure).__name__):
+                worker, target = self.worker_for()
+                target.send_command.side_effect = failure
+                expected = ReadTimeout if isinstance(failure, ReadTimeout) else module.CommandInterruptedError
+                with self.assertRaises(expected):
+                    worker.execute({"command": "display interface brief"})
+                target.send_command.assert_called_once()
+                target.disconnect.assert_called_once_with()
+
+    def test_official_netmiko_waits_past_hostname_in_fragmented_display_output(self):
+        for driver in ("hp_comware", "hp_comware_telnet"):
+            with self.subTest(driver=driver):
+                target = module.ConnectHandler(device_type=driver, host="192.0.2.71", auto_connect=False)
+                target.is_alive = mock.Mock(return_value=True)
+                target.find_prompt = mock.Mock(return_value="<AP.1(2)>")
+                target.write_channel = mock.Mock()
+                chunks = ["display version\nAP.1(2) uptime is 1 day\n", "H3C Comware Software, Version 7.1.064\n", "<AP.1(2)>"]
+                target.read_channel = mock.Mock(side_effect=chunks)
+                worker = module.Worker()
+                worker.connection, worker.driver = target, driver
+                result = worker.execute({"command": "display version", "read_timeout": 1})
+                self.assertEqual(result["output"], "".join(chunks))
+                self.assertEqual(target.read_channel.call_count, 3)
+                target.write_channel.assert_called_once()
+
+    def test_other_commands_retain_netmiko_mode_transition_behavior(self):
+        worker, target = self.worker_for()
+        target.send_command.return_value = "[AP.1(2)]"
+        self.assertEqual(worker.execute({"command": "system-view"})["output"], "[AP.1(2)]")
+        target.find_prompt.assert_not_called()
+        self.assertNotIn("expect_string", target.send_command.call_args.kwargs)
 
 
 if __name__ == "__main__":

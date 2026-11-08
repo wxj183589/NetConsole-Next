@@ -304,6 +304,9 @@ class Worker:
             try:
                 if request.get("confirmation_pattern") is not None:
                     output = self._execute_diagnostic(request)
+                elif (self.driver in ("hp_comware", "hp_comware_telnet") and
+                      re.match(r"(?i)^display(?:[ \t]|$)", request["command"].strip())):
+                    output = self._execute_comware_read(request)
                 else:
                     output = self.connection.send_command(
                         request["command"],
@@ -324,6 +327,27 @@ class Worker:
             self.close()
             raise
         return {"output": output, "driver": self.driver}
+
+    def _execute_comware_read(self, request: dict[str, Any]) -> str:
+        # Netmiko's base_prompt excludes Comware's <>/[] delimiters. The bare
+        # hostname can also occur in display output, so it is not proof that
+        # the command reached its terminal prompt. Keep Netmiko in charge of
+        # the channel, but require the complete detected user/system prompt.
+        deadline = time.monotonic() + float(request.get("read_timeout", 30))
+        prompt = self.connection.find_prompt()
+        if not isinstance(prompt, str) or not re.fullmatch(
+                r"(?:<[^<>\r\n]{1,250}>|\[[^\[\]\r\n]{1,250}\])", prompt.strip()):
+            raise ValueError("Netmiko did not return a bounded Comware prompt")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ReadTimeout("display read deadline expired before command")
+        pattern = r"(?m:^[ \t]*" + re.escape(prompt.strip()) + r"[ \t\r\n]*\Z)"
+        output = self.connection.send_command(
+            request["command"], expect_string=pattern, read_timeout=remaining,
+            auto_find_prompt=False, cmd_verify=False, strip_prompt=False, strip_command=False)
+        if re.search(pattern, output) is None:
+            raise ReadTimeout("display did not reach its terminal prompt")
+        return output
 
     def _execute_diagnostic(self, request: dict[str, Any]) -> str:
         # Policy and this narrowly declared interaction come from the service.
