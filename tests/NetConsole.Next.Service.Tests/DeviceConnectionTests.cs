@@ -298,9 +298,14 @@ internal static class DeviceConnectionTests
 
         public Fixture()
         {
-            var repository = new DirectoryInfo(AppContext.BaseDirectory);
-            while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
-                repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
+            DirectoryInfo? FindRepository(string start)
+            {
+                for (var directory = new DirectoryInfo(start); directory is not null; directory = directory.Parent)
+                    if (File.Exists(Path.Combine(directory.FullName, "tools", "workspace_paths.py"))) return directory;
+                return null;
+            }
+            var repository = FindRepository(Directory.GetCurrentDirectory()) ?? FindRepository(AppContext.BaseDirectory)
+                ?? throw new InvalidOperationException("Run tests from the repository or its child directory.");
             Root = Path.Combine(repository.Parent!.FullName, "test-data", "device-connection-tests-" + Guid.NewGuid().ToString("N"));
             var settings = new RuntimeSettings { DataRoot = Root, WebPort = 18773, SyslogPort = 0,
                 SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 1024 * 1024 };

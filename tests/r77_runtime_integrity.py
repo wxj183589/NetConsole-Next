@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from pathlib import Path
 import sqlite3
 import sys
@@ -41,7 +42,10 @@ def run(args):
         report['incomplete'] = sum(n for state, n in report['rawCounts'].items() if state != 'FINALIZED')
         assert report['incomplete'] == 0
         if args.checkpoint:
-            checkpoint = workspace_path('test-data', 'r77-runtime-checkpoint-20261108')
+            checkpoint_name = getattr(args, 'checkpoint_name', 'r77-runtime-checkpoint-20261108')
+            if not re.fullmatch(r'r7[78]-runtime-checkpoint-[0-9]{8}(?:-[a-z0-9]+)?', checkpoint_name):
+                raise ValueError('Invalid checkpoint directory name')
+            checkpoint = workspace_path('test-data', checkpoint_name)
             checkpoint.mkdir(exist_ok=False)
             target = checkpoint / 'catalog.db'
             with sqlite3.connect(target) as destination:
@@ -53,6 +57,9 @@ def run(args):
     with database(original) as db:
         assert db.execute('pragma integrity_check').fetchone()[0] == 'ok'
     report['originalCheckpointUnchanged'] = True
+    r77 = workspace_path('test-data', 'r77-runtime-checkpoint-20261108', 'catalog.db')
+    assert digest(r77) == '7f7c35efd69fbf919a78630e3a16ef98913f392241eb29c72e646648b6edccf8'
+    report['r77CheckpointUnchanged'] = True
     repo = Path(__file__).resolve().parents[1]
     assets = json.loads(workspace_path('reports', 'r76-protected-assets.json').read_text(encoding='utf-8-sig'))
     for item in assets:
@@ -76,4 +83,5 @@ if __name__ == '__main__':
     parser.add_argument('--pid', required=True, type=int)
     parser.add_argument('--output', required=True)
     parser.add_argument('--checkpoint', action='store_true')
+    parser.add_argument('--checkpoint-name', default='r77-runtime-checkpoint-20261108')
     run(parser.parse_args())

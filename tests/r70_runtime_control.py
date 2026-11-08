@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["start", "stop", "signal"])
     parser.add_argument("--pid", type=int)
-    parser.add_argument("--report-prefix", default="r70", choices=["r70", "r71", "r72", "r73", "r74", "r75", "r76", "r77"])
+    parser.add_argument("--report-prefix", default="r70", choices=["r70", "r71", "r72", "r73", "r74", "r75", "r76", "r77", "r78"])
     parser.add_argument("--web-port", type=int, default=18771)
     parser.add_argument("--syslog-port", type=int, default=0)
     parser.add_argument("--data-root", default=str(workspace_path("test-data", "simulator-live-20261105")))
