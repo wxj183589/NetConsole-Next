@@ -322,8 +322,9 @@ internal sealed class ConfigBackupService(
         else if (configurationKind is not null && !ConfigBackupKinds.IsSupported(configurationKind))
             _ = ConfigBackupKinds.CommandFor(configurationKind);
         var directory = ProfileDirectory(profileId);
-        if (!Directory.Exists(directory) || IsReparse(directory)) return Array.Empty<ConfigBackupSnapshot>();
+        if (!Directory.Exists(directory) || !IsLocalBackupPath(directory)) return Array.Empty<ConfigBackupSnapshot>();
         var snapshots = Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)
+            .Where(IsLocalBackupPath)
             .Select(ReadSnapshot)
             .Where(item => item is not null && IsValidSnapshot(item) && item.ProfileId == profileId &&
                 item.State == "SUCCEEDED" && (configurationKind is null || item.ConfigurationKind == configurationKind))
@@ -342,7 +343,7 @@ internal sealed class ConfigBackupService(
             !catalog.H3cProfileIsInScope(snapshot.ProfileId, scope))
             return null;
         var directory = ProfileDirectory(snapshot.ProfileId);
-        if (!Directory.Exists(directory) || IsReparse(directory)) return null;
+        if (!Directory.Exists(directory) || !IsLocalBackupPath(directory)) return null;
         return snapshot with { CanDownload = true };
     }
 
@@ -709,13 +710,26 @@ internal sealed class ConfigBackupService(
     private static ConfigBackupException UnsafeBackupPath() =>
         new("CONFIG_BACKUP_STORAGE_PATH_UNSAFE", "配置备份目录包含链接或越界路径，未写入配置数据。", 409);
 
+    private bool IsLocalBackupPath(string path)
+    {
+        try
+        {
+            EnsureBackupDirectoryIsLocal(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is ConfigBackupException or IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
     private ConfigBackupSnapshot? FindSnapshot(string id)
     {
-        if (!IsSafeId(id)) return null;
+        if (!IsSafeId(id) || !IsLocalBackupPath(_root)) return null;
         foreach (var manifest in Directory.Exists(_root)
-                     ? Directory.EnumerateFiles(_root, id + ".json", SearchOption.AllDirectories)
+                     ? Directory.EnumerateFiles(_root, id + ".json", new EnumerationOptions
+                     { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint })
                      : Array.Empty<string>())
         {
+            if (!IsLocalBackupPath(manifest)) continue;
             var snapshot = ReadSnapshot(manifest);
             if (snapshot?.Id == id && IsValidSnapshot(snapshot) && !IsReparse(manifest) &&
                 !IsReparse(Path.GetDirectoryName(manifest)!)) return snapshot;
@@ -747,7 +761,7 @@ internal sealed class ConfigBackupService(
         try
         {
             var path = SnapshotPath(snapshot);
-            if (!File.Exists(path) || IsReparse(path)) return null;
+            if (!File.Exists(path) || !IsLocalBackupPath(path)) return null;
             stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             if (stream.Length == snapshot.ByteCount &&

@@ -56,7 +56,40 @@ internal static class ConfigBackupTests
         VerifyStartupFileSupport();
         await VerifyStartupBodyCollection(actor);
         await RejectReparseBackupDirectory(actor);
-        Console.WriteLine("CONFIG_BACKUP_TESTS=11/11 PASS");
+        await RejectReparseBackupReads(actor);
+        Console.WriteLine("CONFIG_BACKUP_TESTS=12/12 PASS");
+    }
+
+    private static async Task RejectReparseBackupReads(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var batch = await fixture.Backup(actor);
+        var snapshotId = batch.Items.Single().SnapshotId!;
+        var opened = fixture.Backups.OpenDownload(snapshotId, P2B5SiteScopeDecision.Global)
+            ?? throw new InvalidOperationException("the ordinary backup must remain downloadable before relocating its directory");
+        opened.Stream.Dispose();
+        var configDirectory = Path.Combine(fixture.Root, "backup", "config");
+        var relocatedDirectory = Path.Combine(fixture.Root, "relocated-config");
+        Directory.Move(configDirectory, relocatedDirectory);
+        try
+        {
+            if (!TryCreateDirectoryLink(configDirectory, relocatedDirectory))
+            {
+                Console.WriteLine("CONFIG_BACKUP_REPARSE_READ=SKIPPED_NO_LINK_PERMISSION");
+                return;
+            }
+            Assert(fixture.Backups.List(fixture.Profile, P2B5SiteScopeDecision.Global).Count == 0 &&
+                fixture.Backups.Get(snapshotId, P2B5SiteScopeDecision.Global) is null &&
+                fixture.Backups.OpenDownload(snapshotId, P2B5SiteScopeDecision.Global) is null &&
+                fixture.Backups.Diff(snapshotId, snapshotId, P2B5SiteScopeDecision.Global) is null,
+                "backup history, lookup, download and diff must reject an ancestor reparse point");
+            Console.WriteLine("CONFIG_BACKUP_REPARSE_READ=PASS");
+        }
+        finally
+        {
+            RemoveDirectoryLink(configDirectory);
+            Directory.Move(relocatedDirectory, configDirectory);
+        }
     }
 
     private static async Task RejectReparseBackupDirectory(WebUserIdentity actor)
@@ -511,7 +544,9 @@ internal static class ConfigBackupTests
                 ? Environment.CurrentDirectory : AppContext.BaseDirectory);
             while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
                 repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
-            Root = Path.Combine(repository.Parent!.FullName, "test-data", "next-config-backup-" + Guid.NewGuid().ToString("N"));
+            var workspace = repository.Parent!.Name.Equals("worktrees", StringComparison.OrdinalIgnoreCase)
+                ? repository.Parent.Parent! : repository.Parent;
+            Root = Path.Combine(workspace.FullName, "test-data", "next-config-backup-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
             Settings = new() { DataRoot = Root, WebPort = 18771, SyslogPort = 0,
                 SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
