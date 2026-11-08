@@ -8,6 +8,10 @@ internal static class WindowsSystemTracerouteTests
     internal static async Task RunAsync()
     {
         var destination = IPAddress.Parse("192.0.2.9");
+        const string localized = " 1  <1 毫秒  1 毫秒  2 毫秒  192.0.2.9";
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        foreach (var encoding in new[] { System.Text.Encoding.UTF8, System.Text.Encoding.GetEncoding(936) })
+            Check(WindowsSystemTraceroute.ParseHop(WindowsSystemTraceroute.DecodeOutputLine(encoding.GetBytes(localized)), destination)?.Status == "REACHED", "UTF8 and OEM native output");
         Check(WindowsSystemTraceroute.ParseHop(" 1  <1 ms  1 ms  2 ms  192.0.2.9", destination) is
             { Status: "REACHED", LatencyMs: 0, Address: "192.0.2.9" }, "English reached hop");
         Check(WindowsSystemTraceroute.ParseHop(" 2  2 毫秒  3 毫秒  4 毫秒  192.0.2.1", destination) is

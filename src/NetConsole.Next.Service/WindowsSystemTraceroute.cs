@@ -107,15 +107,30 @@ internal static class WindowsSystemTraceroute
 
     private static async Task<string?> ReadLineBoundedAsync(StreamReader stream, CancellationToken token)
     {
-        var line = new System.Text.StringBuilder();
-        var buffer = new char[1];
-        while (await stream.ReadAsync(buffer.AsMemory(), token) != 0)
+        var line = new List<byte>();
+        var buffer = new byte[1];
+        while (await stream.BaseStream.ReadAsync(buffer.AsMemory(), token) != 0)
         {
-            if (buffer[0] == '\n') return line.ToString().TrimEnd('\r');
-            line.Append(buffer[0]);
-            if (line.Length > 4096) throw new PingException("System ICMP traceroute line exceeded its limit.");
+            if (buffer[0] == 10) return DecodeOutputLine(line.ToArray()).TrimEnd('\r');
+            line.Add(buffer[0]);
+            if (line.Count > 16384) throw new PingException("System ICMP traceroute line exceeded its limit.");
         }
-        return line.Length == 0 ? null : line.ToString();
+        return line.Count == 0 ? null : DecodeOutputLine(line.ToArray());
+    }
+
+    internal static string DecodeOutputLine(byte[] bytes)
+    {
+        // Published apphost and dotnet may select different native code pages.
+        // ASCII is identical; prefer strictly valid UTF-8, otherwise use OEM.
+        string line;
+        try { line = new UTF8Encoding(false, true).GetString(bytes); }
+        catch (DecoderFallbackException)
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            line = Encoding.GetEncoding((int)GetOEMCP()).GetString(bytes);
+        }
+        if (line.Length > 4096) throw new PingException("System ICMP traceroute line exceeded its limit.");
+        return line;
     }
 
     private static async Task DrainErrorsAsync(StreamReader stream, CancellationToken token)
