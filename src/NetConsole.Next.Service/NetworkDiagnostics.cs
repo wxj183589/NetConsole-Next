@@ -28,7 +28,11 @@ internal sealed record NetworkDiagnosticItemSnapshot(
     int EvidenceCount,
     IReadOnlyList<string> EvidenceSources,
     NetworkTracerouteSnapshot? TraceRoute = null,
-    QuickPingSnapshot? QuickPing = null);
+    QuickPingSnapshot? QuickPing = null,
+    NetworkDnsSnapshot? Dns = null);
+
+internal sealed record NetworkDnsSnapshot(string Query, string ResolutionMode,
+    IReadOnlyList<string> Addresses, long CapturedMs);
 
 internal sealed record NetworkDiagnosticRunSnapshot(
     string Id,
@@ -374,10 +378,14 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                 }
                 case "DNS":
                 {
-                    var addresses = await Dns.GetHostAddressesAsync(item.Target.Host, timeout.Token);
-                    var detail = addresses.Length == 0 ? "DNS 未返回地址" : $"DNS 返回 {addresses.Length} 个地址";
-                    Complete(item, addresses.Length == 0 ? "FAILED" : "SUCCEEDED", addresses.Length == 0 ? "DNS_EMPTY" : "OK",
-                        detail, ElapsedMs(started), 0, Array.Empty<string>());
+                    var resolution = await ResolveDnsAsync(item.Target.Host, timeout.Token);
+                    var literal = resolution.ResolutionMode == "IP_LITERAL";
+                    var values = resolution.Addresses;
+                    lock (item.Gate) item.Dns = resolution;
+                    var detail = literal ? $"目标已是 IP 地址：{values[0]}，未发起 DNS 查询" :
+                        values.Count == 0 ? "系统解析器未返回地址" : $"系统解析器返回：{string.Join("、", values)}";
+                    Complete(item, values.Count == 0 ? "FAILED" : "SUCCEEDED", values.Count == 0 ? "DNS_EMPTY" : "OK",
+                        detail, ElapsedMs(started), values.Count, new[] { literal ? "SERVICE_HOST_IP_LITERAL" : "SERVICE_HOST_SYSTEM_RESOLVER" });
                     break;
                 }
                 case "LLDP":
@@ -433,6 +441,15 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         {
             Complete(item, "FAILED", "DIAGNOSTIC_FAILED", "诊断执行失败", ElapsedMs(started), 0, Array.Empty<string>());
         }
+    }
+
+    internal static async Task<NetworkDnsSnapshot> ResolveDnsAsync(string host, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var literal = IPAddress.TryParse(host, out var parsed);
+        var addresses = literal ? new[] { parsed! } : await Dns.GetHostAddressesAsync(host, cancellationToken);
+        var values = addresses.Select(address => address.ToString()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        return new(host, literal ? "IP_LITERAL" : "SYSTEM_RESOLVER", values, UtcNowMs());
     }
 
     private void RequireCurrentTraceTarget(string actorId, P2B5SiteScopeDecision admittedScope, DiagnosticTarget target)
@@ -626,12 +643,13 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public IReadOnlyList<string> EvidenceSources { get; set; } = Array.Empty<string>();
         public NetworkTracerouteSnapshot? TraceRoute { get; set; }
         public QuickPingSnapshot? QuickPing { get; set; }
+        public NetworkDnsSnapshot? Dns { get; set; }
         public LongPingControl LongPingControl { get; } = new();
 
         public NetworkDiagnosticItemSnapshot ToSnapshot()
         {
             lock (Gate) return new(Id, Target.DeviceId, Target.Name, Target.SiteId, Kind,
-                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute, QuickPing);
+                State, Outcome, Detail, StartedMs, EndedMs, LatencyMs, EvidenceCount, EvidenceSources, TraceRoute, QuickPing, Dns);
         }
     }
 

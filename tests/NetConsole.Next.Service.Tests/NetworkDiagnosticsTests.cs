@@ -15,13 +15,14 @@ internal static class NetworkDiagnosticsTests
         try { await historyIntegrity; }
         catch { throw historyIntegrity.Exception!; }
         await BatchReportsProgressAndIsolatesFailures();
+        await DnsReturnsAddressesAndDistinguishesLiteralFromResolution();
         await CancellationStopsQueuedChecks();
         await LldpReportsOnlyVerifiedFacts();
         await PersistsCompletedRunAcrossRestart();
         await ListsLiveAndCompletedWithoutNewChecks();
         await HistoryListBoundsAndRestoresSafeSummaries();
         await HistoryReadsRespectCurrentAccountAndSiteScope();
-        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=10/10 PASS");
+        Console.WriteLine("NETWORK_DIAGNOSTICS_TESTS=11/11 PASS");
     }
 
     private static void CompletionProgressWaitsForRunPublication()
@@ -99,6 +100,25 @@ internal static class NetworkDiagnosticsTests
             "an unreachable device must be isolated as a failed child task");
         Assert(!final.Items.Any(item => item.Detail?.Contains("password", StringComparison.OrdinalIgnoreCase) == true),
             "diagnostic results must not expose credentials or connection secrets");
+    }
+
+    private static async Task DnsReturnsAddressesAndDistinguishesLiteralFromResolution()
+    {
+        using var fixture = new Fixture();
+        var literal = fixture.Catalog.CreateDeviceInventory(new(null, "Literal", "127.0.0.1", "", "", "NETWORK_DEVICE", "local", null, "fixture", true, null), "test");
+        using var service = new NetworkDiagnosticsService(fixture.Catalog);
+        var final = await WaitTerminal(service, service.Start(new([literal.Item.Id], ["DNS"], 5_000), "test", P2B5SiteScopeDecision.Global).Id);
+        var direct = final.Items.Single(item => item.DeviceId == literal.Item.Id);
+        var resolved = await NetworkDiagnosticsService.ResolveDnsAsync("localhost", CancellationToken.None);
+        Assert(direct.Dns is { ResolutionMode: "IP_LITERAL", Query: "127.0.0.1" } &&
+            direct.Dns.Addresses.SequenceEqual(["127.0.0.1"]) && direct.Detail!.Contains("未发起 DNS 查询") &&
+            direct.EvidenceSources.SequenceEqual(["SERVICE_HOST_IP_LITERAL"]), "literal input must not claim DNS server success");
+        Assert(resolved is { ResolutionMode: "SYSTEM_RESOLVER", Query: "localhost" } &&
+            resolved.Addresses.Count > 0 && resolved.Addresses.All(value => IPAddress.IsLoopback(IPAddress.Parse(value))),
+            "DNS results must retain actual addresses and the resolver source without claiming a particular DNS server");
+        using var restarted = new NetworkDiagnosticsService(fixture.Catalog);
+        Assert(restarted.Get(final.Id, P2B5SiteScopeDecision.Global)!.Items.Single().Dns!.Addresses.SequenceEqual(direct.Dns!.Addresses),
+            "DNS evidence must survive bounded diagnostic history persistence");
     }
 
     private static async Task CancellationStopsQueuedChecks()

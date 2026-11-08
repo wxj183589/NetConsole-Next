@@ -567,6 +567,7 @@ export interface NetworkDiagnosticItem {
   evidenceSources: string[]
   traceRoute?: NetworkTraceRoute | null
   quickPing?: QuickPingSnapshot | null
+  dns?: { query: string; resolutionMode: 'IP_LITERAL' | 'SYSTEM_RESOLVER'; addresses: string[]; capturedMs: number } | null
 }
 export interface NetworkDiagnosticRun {
   id: string
