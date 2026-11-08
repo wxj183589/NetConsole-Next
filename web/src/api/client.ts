@@ -1230,6 +1230,18 @@ export interface SimulatorConfigurationChange {
 export function getCompleteConfigurations(profileId: string): Promise<CompleteConfigurationBackup[]> {
   return request('/api/system/simulator-config/backups?profileId=' + encodeURIComponent(profileId))
 }
+export interface CompleteConfigurationDrift {
+  profileId: string; deviceId: string; siteId: string
+  state: 'NO_BASELINE' | 'BASELINE_ONLY' | 'CHANGED' | 'UNCHANGED' | 'UNKNOWN'; reason: string
+  beforeBackupId?: string | null; afterBackupId?: string | null
+  beforeVersion?: number | null; afterVersion?: number | null
+  beforeCapturedMs?: number | null; afterCapturedMs?: number | null
+  configurationChanged?: boolean | null; sensitiveValuesChanged?: boolean | null; modelOrSoftwareChanged?: boolean | null
+  categories?: string[] | null
+}
+export function getCompleteConfigurationDrift(profileId: string): Promise<CompleteConfigurationDrift> {
+  return request('/api/system/simulator-config/drift?profileId=' + encodeURIComponent(profileId))
+}
 export function captureCompleteConfiguration(profileId: string): Promise<CompleteConfigurationBackup> {
   return request('/api/system/simulator-config/backups/' + encodeURIComponent(profileId), { method: 'POST' })
 }

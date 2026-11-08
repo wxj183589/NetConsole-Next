@@ -1009,6 +1009,14 @@ app.MapGet("/api/system/simulator-config/compare", (HttpContext context, string 
     try { return Results.Ok(configurations.Compare(beforeId, afterId, CurrentIdentity(context), CurrentSiteScope(context))); }
     catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
 });
+app.MapGet("/api/system/simulator-config/drift", (HttpContext context, string profileId, SimulatorConfigurationService configurations) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(403);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    context.Response.Headers.CacheControl = "no-store";
+    try { return Results.Ok(configurations.DetectDrift(profileId, CurrentIdentity(context), CurrentSiteScope(context))); }
+    catch (ConfigRestoreException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+});
 app.MapPost("/api/system/simulator-config/backups/{id}/restore-preview", async (HttpContext context, string id,
     SimulatorConfigurationService configurations, CancellationToken cancellationToken) =>
 {

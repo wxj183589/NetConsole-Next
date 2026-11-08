@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import ConfigurationRestoreReadiness from './ConfigurationRestoreReadiness.vue'
 import ConfigurationStorage from './ConfigurationStorage.vue'
+import { getCompleteConfigurationDrift, type CompleteConfigurationDrift } from '../api/client'
 import { captureCompleteConfiguration, changeSimulatorDescription, compareCompleteConfigurations, previewCompleteConfigurationRestore, verifyNativeCheckpointRestore, getNativeCheckpointOperations, getCompleteConfigurations, getCompleteConfigurationView, getSimulatorConfigurationChanges, type CompleteConfigurationBackup, type CompleteConfigurationComparison, type CompleteConfigurationRestorePreview, type H3cCheckpointRestoreOperation, type SimulatorConfigurationChange } from '../api/client'
 
 const props = defineProps<{ profileId: string }>()
@@ -16,6 +17,9 @@ const content = ref('')
 const error = ref('')
 const busy = ref(false)
 const loaded = ref(false)
+const drift = ref<CompleteConfigurationDrift | null>(null)
+const driftError = ref('')
+const driftLabels = { NO_BASELINE: '尚无完整备份', BASELINE_ONLY: '已有基线，等待第二次采集', CHANGED: '最近两次采集发现配置变化', UNCHANGED: '最近两次采集配置一致', UNKNOWN: '无法判断最近配置变化' }
 const beforeId = ref('')
 const afterId = ref('')
 const comparison = ref<CompleteConfigurationComparison | null>(null)
@@ -32,6 +36,7 @@ watch(() => props.profileId, () => {
   loaded.value = false; beforeId.value = ''; afterId.value = ''; comparison.value = null; restorePreview.value = null; category.value = 'ALL'
   checkpointConfirmed.value = false; checkpointOperations.value = []
   interfaceName.value = ''; description.value = ''; removeDescription.value = false
+  drift.value = null; driftError.value = ''
 }, { immediate: true })
 watch(selected, () => { content.value = ''; confirmed.value = false; checkpointConfirmed.value = false; restorePreview.value = null })
 watch([beforeId, afterId], () => { comparison.value = null; restorePreview.value = null })
@@ -45,6 +50,7 @@ async function run(operation: (profile: string) => Promise<void>) {
 }
 async function load(profile: string) {
   const current = generation
+  drift.value = null; driftError.value = ''
   const [next, operations, checkpoints] = await Promise.all([getCompleteConfigurations(profile), getSimulatorConfigurationChanges(profile), getNativeCheckpointOperations(profile)])
   if (current !== generation) return
   backups.value = next; changes.value = operations; loaded.value = true
@@ -53,6 +59,18 @@ async function load(profile: string) {
   const valid = next.filter(item => item.sourceVerified)
   if (!valid.some(item => item.id === afterId.value)) afterId.value = valid[0]?.id || ''
   if (!valid.some(item => item.id === beforeId.value)) beforeId.value = valid[1]?.id || valid[0]?.id || ''
+  try {
+    const detected = await getCompleteConfigurationDrift(profile)
+    if (current === generation) drift.value = detected
+  } catch (cause) {
+    if (current === generation) driftError.value = cause instanceof Error ? cause.message : '配置变化检测失败'
+  }
+}
+function inspectDrift() {
+  const detected = drift.value
+  if (!detected?.beforeBackupId || !detected.afterBackupId) return
+  beforeId.value = detected.beforeBackupId; afterId.value = detected.afterBackupId
+  void Promise.resolve().then(compare)
 }
 function capture() { void run(async profile => { await captureCompleteConfiguration(profile); if (props.profileId === profile) await load(profile) }) }
 function view() { void run(async () => { const id = selected.value; const current = generation; const result = await getCompleteConfigurationView(id); if (current === generation && selected.value === id) content.value = result.redactedConfiguration }) }
@@ -109,6 +127,16 @@ function apply() {
       <div class="toolbar"><el-button :disabled="busy" @click="run(load)">刷新完整备份</el-button><el-button :loading="busy" :disabled="busy" @click="capture">采集完整配置</el-button></div>
       <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="loaded && !backups.length" role="status">暂无通过完整性校验的完整备份，请采集当前配置。</p>
+      <div v-if="drift" aria-label="最近配置变化检测" :role="drift.state === 'CHANGED' ? 'alert' : 'status'">
+        <strong>{{ driftLabels[drift.state] }}</strong>
+        <p>只反映已采集备份之间的变化，不代表设备此刻配置。{{ drift.reason }}</p>
+        <p v-if="drift.beforeVersion && drift.afterVersion">v{{ drift.beforeVersion }} → v{{ drift.afterVersion }} · {{ new Date(drift.beforeCapturedMs!).toLocaleString() }} → {{ new Date(drift.afterCapturedMs!).toLocaleString() }}</p>
+        <p v-if="drift.sensitiveValuesChanged">敏感值存在变化，具体内容已隐藏。</p>
+        <p v-if="drift.modelOrSoftwareChanged">设备型号或软件版本存在变化。</p>
+        <p v-if="drift.categories?.length">变化范围：{{ drift.categories.join(' / ') }}</p>
+        <el-button v-if="drift.state === 'CHANGED'" :disabled="busy" @click="inspectDrift">查看最近配置差异</el-button>
+      </div>
+      <p v-if="driftError" role="status">无法判断最近配置变化：{{ driftError }}。已有备份仍可查看。</p>
       <label class="form-field"><span>写入前基线</span><select v-model="selected" aria-label="完整配置基线" :disabled="busy"><option value="">请选择已验证的完整备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.sourceVerified">{{ new Date(item.capturedMs).toLocaleString() }} · {{ item.integrity }} · 原件校验={{ item.sourceVerified }} · 整机可恢复={{ item.restorable }}</option></select></label>
       <el-button :disabled="busy || !selected" @click="view">查看脱敏完整配置</el-button>
       <el-button :disabled="busy || !selected" @click="downloadBackup">下载脱敏完整配置</el-button>

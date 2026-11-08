@@ -2,13 +2,40 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import SimulatorConfiguration from './SimulatorConfiguration.vue'
 
-const api = vi.hoisted(() => ({ captureCompleteConfiguration: vi.fn(), changeSimulatorDescription: vi.fn(), compareCompleteConfigurations: vi.fn(), previewCompleteConfigurationRestore: vi.fn(), verifyNativeCheckpointRestore: vi.fn(), getNativeCheckpointOperations: vi.fn(), getCompleteConfigurations: vi.fn(), getCompleteConfigurationView: vi.fn(), getSimulatorConfigurationChanges: vi.fn() }))
+const api = vi.hoisted(() => ({ getCompleteConfigurationDrift: vi.fn(), captureCompleteConfiguration: vi.fn(), changeSimulatorDescription: vi.fn(), compareCompleteConfigurations: vi.fn(), previewCompleteConfigurationRestore: vi.fn(), verifyNativeCheckpointRestore: vi.fn(), getNativeCheckpointOperations: vi.fn(), getCompleteConfigurations: vi.fn(), getCompleteConfigurationView: vi.fn(), getSimulatorConfigurationChanges: vi.fn() }))
 vi.mock('../api/client', () => api)
 const backup = { id: 'complete-a', profileId: 'a', capturedMs: 1000, integrity: 'VERIFIED', restorable: false, sourceVerified: true }
 const comparison = { before: backup, after: { ...backup, id: 'complete-b' }, originalConfigurationChanged: true, sensitiveValuesChanged: true, addedLines: 1, removedLines: 1, truncated: false, contexts: [{ context: 'interface GigabitEthernet1/0/1', categories: ['INTERFACE'], addedLines: 1, removedLines: 1, sensitiveValuesChanged: false, truncated: false, lines: [{ kind: 'REMOVED', text: ' description before' }, { kind: 'ADDED', text: ' description after' }] }, { context: 'vlan 10', categories: ['VLAN'], addedLines: 1, removedLines: 0, sensitiveValuesChanged: false, truncated: false, lines: [{ kind: 'ADDED', text: 'vlan 10' }] }] }
 function render() { return mount(SimulatorConfiguration, { props: { profileId: 'a' }, global: { stubs: { ConfigurationRestoreReadiness: true, 'el-button': { template: '<button><slot /></button>' } } } }) }
 function button(wrapper: ReturnType<typeof render>, name: string) { return wrapper.findAll('button').find(item => item.text() === name)! }
 describe('simulator configuration changes', () => {
+  it('automatically detects sensitive drift and opens its exact historical pair', async () => {
+    api.getCompleteConfigurationDrift.mockResolvedValue({ state: 'CHANGED', reason: 'LATEST_TWO_VERIFIED_CAPTURES', beforeBackupId: 'complete-a', afterBackupId: 'complete-b', beforeVersion: 1, afterVersion: 2, beforeCapturedMs: 1000, afterCapturedMs: 2000, sensitiveValuesChanged: true, categories: ['GENERAL'] })
+    api.getCompleteConfigurations.mockResolvedValue([backup, { ...backup, id: 'complete-b' }])
+    api.compareCompleteConfigurations.mockResolvedValue(comparison)
+    const wrapper = render()
+    await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
+    expect(wrapper.get('[aria-label="最近配置变化检测"]').attributes('role')).toBe('alert')
+    expect(wrapper.text()).toContain('敏感值存在变化，具体内容已隐藏')
+    await button(wrapper, '查看最近配置差异').trigger('click'); await flushPromises()
+    expect(api.compareCompleteConfigurations).toHaveBeenCalledWith('complete-a', 'complete-b')
+    expect(api.changeSimulatorDescription).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+  it('keeps backups readable when drift detection fails and ignores an old device response', async () => {
+    api.getCompleteConfigurationDrift.mockRejectedValueOnce(new Error('检测服务暂不可用'))
+    const wrapper = render()
+    await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('无法判断最近配置变化')
+    expect(button(wrapper, '查看脱敏完整配置').attributes('disabled')).toBeUndefined()
+    let resolve!: (value: unknown) => void
+    api.getCompleteConfigurationDrift.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
+    await wrapper.setProps({ profileId: 'b' })
+    resolve({ state: 'CHANGED', reason: 'stale' }); await flushPromises()
+    expect(wrapper.find('[aria-label="最近配置变化检测"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('shows storage admission failure and keeps existing history available', async () => {
     const wrapper = render()
     await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
@@ -21,7 +48,7 @@ describe('simulator configuration changes', () => {
     expect(api.captureCompleteConfiguration).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
-  beforeEach(() => { vi.resetAllMocks(); api.getCompleteConfigurations.mockResolvedValue([backup]); api.getSimulatorConfigurationChanges.mockResolvedValue([]); api.getNativeCheckpointOperations.mockResolvedValue([]); api.changeSimulatorDescription.mockResolvedValue({ state: 'VERIFIED' }) })
+  beforeEach(() => { vi.resetAllMocks(); api.getCompleteConfigurationDrift.mockResolvedValue({ state: 'BASELINE_ONLY', reason: 'SECOND_CAPTURE_REQUIRED' }); api.getCompleteConfigurations.mockResolvedValue([backup]); api.getSimulatorConfigurationChanges.mockResolvedValue([]); api.getNativeCheckpointOperations.mockResolvedValue([]); api.changeSimulatorDescription.mockResolvedValue({ state: 'VERIFIED' }) })
   it('requires a verified baseline and explicit confirmation before writing', async () => {
     const wrapper = render()
     expect(api.captureCompleteConfiguration).not.toHaveBeenCalled()

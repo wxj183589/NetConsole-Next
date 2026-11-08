@@ -32,7 +32,81 @@ internal static class SimulatorConfigurationTests
         await VerifyReconnectFailureRecovery();
         await RejectChangedReadbackVersion();
         await RejectChangedRollbackVersion();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=22/22 PASS");
+        await DetectVerifiedDriftWithoutConnecting();
+        await DetectSensitiveDriftWithoutDisclosure();
+        await DamagedLatestDriftIsUnknown();
+        await DriftDoesNotBridgeVersionsOrIdentity();
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=26/26 PASS");
+    }
+
+    private static async Task DetectVerifiedDriftWithoutConnecting()
+    {
+        using var fixture = new Fixture();
+        CompleteConfigurationDrift Detect() => fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        Assert(Detect().State == "NO_BASELINE", "empty history has no baseline");
+        var first = await fixture.Capture();
+        Assert(Detect().State == "BASELINE_ONLY", "one verified backup does not establish unchanged configuration");
+        var second = await fixture.Capture();
+        var unchanged = Detect();
+        Assert(unchanged.State == "UNCHANGED" && unchanged.BeforeBackupId == first.Id && unchanged.AfterBackupId == second.Id,
+            "consecutive equal captures produce an exact pair");
+        fixture.Factory.Text = Original.Replace("description original", "description changed");
+        var third = await fixture.Capture();
+        var changed = Detect();
+        Assert(changed.State == "CHANGED" && changed.ConfigurationChanged == true && changed.Categories!.Contains("INTERFACE") &&
+            changed.BeforeBackupId == second.Id && changed.AfterBackupId == third.Id && fixture.Factory.Opens == 3 && fixture.Factory.Writes == 0,
+            "automatic drift uses stored complete captures without connecting or writing");
+        var restarted = fixture.WithCapacity(1048576, 100);
+        Assert(restarted.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global) == changed ||
+            restarted.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).AfterBackupId == third.Id,
+            "detection survives a new service instance");
+        await Reject(() => Task.FromResult(fixture.Service.DetectDrift(fixture.Profile, Actor with { Role = "ADMIN" },
+            P2B5SiteScopeDecision.Global)), "CONFIG_CHANGE_PERMISSION_DENIED");
+    }
+
+    private static async Task DetectSensitiveDriftWithoutDisclosure()
+    {
+        using var fixture = new Fixture();
+        await fixture.Capture();
+        fixture.Factory.Text = Original.Replace("SYNTHETIC_SECRET", "SYNTHETIC_REPLACEMENT");
+        await fixture.Capture();
+        var drift = fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        var json = System.Text.Json.JsonSerializer.Serialize(drift);
+        Assert(drift.State == "CHANGED" && drift.SensitiveValuesChanged == true && !json.Contains("SYNTHETIC"),
+            "sensitive-only changes remain detectable without returning values or configuration lines");
+    }
+
+    private static async Task DamagedLatestDriftIsUnknown()
+    {
+        using var fixture = new Fixture();
+        await fixture.Capture(); await fixture.Capture();
+        var latest = await fixture.Capture();
+        File.AppendAllText(fixture.Raw(latest), "tampered");
+        var drift = fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        Assert(drift.State == "UNKNOWN" && drift.Reason == "BACKUP_INTEGRITY_FAILED" && drift.ConfigurationChanged is null,
+            "a corrupt latest body must not fall back to the previous unchanged pair");
+        File.WriteAllText(Path.ChangeExtension(fixture.Raw(latest), ".json"), "{}");
+        Assert(fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Reason == "MANIFEST_UNAVAILABLE",
+            "unknown ordering from a corrupt manifest must fail closed");
+    }
+
+    private static async Task DriftDoesNotBridgeVersionsOrIdentity()
+    {
+        using var fixture = new Fixture();
+        var first = await fixture.Capture(); await fixture.Capture();
+        var latest = await fixture.Capture();
+        var manifestPath = Path.ChangeExtension(fixture.Raw(latest), ".json");
+        var json = File.ReadAllText(manifestPath);
+        File.WriteAllText(manifestPath, json.Replace("\"version\":3", "\"version\":5"));
+        Assert(fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Reason == "VERSION_GAP",
+            "missing intermediate version must not be treated as consecutive capture");
+        File.WriteAllText(manifestPath, json.Replace("\"version\":3", "\"version\":2"));
+        Assert(fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Reason == "VERSION_AMBIGUOUS",
+            "duplicate versions must not be ordered using arbitrary identifiers");
+        File.WriteAllText(manifestPath, json);
+        fixture.Sql("UPDATE device_inventory SET id='replacement-device'");
+        Assert(fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Reason == "DEVICE_IDENTITY_CHANGED",
+            "a replacement inventory identity must not inherit another device's unchanged result");
     }
 
     private static async Task StorageRejectsInvalidDirectories()
