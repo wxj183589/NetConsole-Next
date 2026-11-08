@@ -172,10 +172,7 @@ onBeforeUnmount(() => { ++runtimeGeneration; runtimeController?.abort(); ++taskD
 const domainApCount = computed(() => visibleResources.value.length)
 const scopeLabel = computed(() => selectedDomain.value?.siteScopeStatus || '—')
 const runtimeLabel = computed(() => {
-  const states = selectedDomain.value?.members.map(member => member.runtimeState) || []
-  if (states.includes('RUNNING_MASTER')) return 'RUNNING_MASTER'
-  if (states.includes('RUNNING_BACKUP')) return 'RUNNING_BACKUP'
-  return states[0] || 'UNKNOWN'
+  return runtimeState.value?.normalizedState || 'UNKNOWN'
 })
 
 function selectDomain(domain: WirelessAcDomain): void {

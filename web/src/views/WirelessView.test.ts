@@ -90,6 +90,25 @@ describe('AP group source identity', () => {
     } finally { create.mockRestore(); revoke.mockRestore(); click.mockRestore() }
   })
 
+  it('shows the selected AP runtime projection instead of an AC member state', async () => {
+    const runningBackupDomain = { ...domain, members: domain.members.map(member => ({ ...member, runtimeState: 'RUNNING_BACKUP' })) }
+    api.getWirelessAcDomains.mockResolvedValue(page([runningBackupDomain]))
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('ap-master-evidence')]))
+    api.getWirelessRuntimeState.mockResolvedValue({
+      resourceId: 'physical-ap', normalizedState: 'RUNNING_MASTER', sources: [],
+      scope: { status: 'FULL', claimsRevision: 'synthetic-claims' }, asOf: domain.asOf,
+      sourceRevision: 'ap-runtime-revision', freshnessWindowMs: 300_000, warnings: [],
+      current: null, previousEffective: null, recent10: [],
+    })
+
+    const wrapper = render()
+    await flushPromises()
+
+    expect(wrapper.findAll('.wireless-stats .stat-card')[2].find('.stat-card__value').text()).toBe('运行主')
+    expect(wrapper.find('.wireless-members').text()).toContain('运行备')
+    wrapper.unmount()
+  })
+
   it('clears prior observations when a refreshed resource query fails', async () => {
     api.getWirelessApResources.mockResolvedValue(page([observedResource('old-claim-ref')]))
     const wrapper = render()

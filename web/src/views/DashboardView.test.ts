@@ -51,9 +51,10 @@ describe('dashboard wireless summary', () => {
     wrapper.unmount()
   })
   it('opens existing Syslog/topology routes and focuses local fault history without new requests', async () => {
+    api.getHealth.mockResolvedValue({ healthState: 'DEGRADED', healthError: 'Raw integrity issue', resources: {}, unresolvedIntegrityIssues: 1 })
     const wrapper = mount(DashboardView, { attachTo: document.body, global: { stubs: {
       OperationalHealth: true, FaultCenter: true, RouterLink: { props: ['to'], template: '<a :href="to"><slot/></a>' }, NcLayout: { template: '<main><slot/></main>' },
-      'el-button': true, 'el-icon': true,
+      'el-button': { template: '<button><slot/></button>' }, 'el-icon': { template: '<span />' },
     }, directives: { loading: () => {} } } })
     await flushPromises()
     const nav = wrapper.get('[aria-label="运维快捷操作"]')
@@ -61,6 +62,9 @@ describe('dashboard wireless summary', () => {
     expect(nav.findAll('a').find(a => a.text() === '拓扑与资产关系')?.attributes('href')).toBe('/topology')
     const host = wrapper.get('#dashboard-fault-center').element as HTMLElement
     host.scrollIntoView = vi.fn()
+    await wrapper.get('button[aria-label="查看故障详情"]').trigger('click')
+    expect(document.activeElement).toBe(host)
+    expect(host.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
     await nav.get('a[href="#dashboard-fault-center"]').trigger('click')
     expect(document.activeElement).toBe(host)
     expect(host.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })

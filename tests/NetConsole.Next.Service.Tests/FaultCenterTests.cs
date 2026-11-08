@@ -14,7 +14,7 @@ internal static class FaultCenterTests
         RecoveryRequiresExactFreshVerifiedResource();
         RecoveryAndAggregationKeepSourceScope();
         LldpRecoveryRequiresExactCompleteNewTable();
-        ApRecoveryRequiresLiveMasterAndAllSources();
+        ApRecoveryRequiresLiveRoleAndAllSources();
         HistoryIsBounded();
         PersistenceSurvivesRestart();
         CorruptionIsFailClosedAndPreserved();
@@ -128,18 +128,28 @@ internal static class FaultCenterTests
         for (var n = 1; n < 80; n++) item = FaultLifecycle.Observe(item, Event("fact-" + n, Now + n), "profile-a", "actor", Now + n);
         Assert(item.Occurrences == 80 && item.History.Count == 50 && item.History.Last().EvidenceId == "fact-79", "retain latest 50 effective transitions, not refresh samples");
     }
-    private static void ApRecoveryRequiresLiveMasterAndAllSources()
+    private static void ApRecoveryRequiresLiveRoleAndAllSources()
     {
         var item = Incident() with { Kind = "AP_OFFLINE", ResourceKey = "ap-a" };
         var current = new WirelessEffectiveState("RUNNING_MASTER", "R/M", Now + 1, "new", "raw", "parser", "LIVE_VERIFIED");
         var source = new WirelessSourceRuntimeState("device-a", "site-a", "RUNNING_MASTER", current, null, [], "SUCCESS", Now + 1, Now + 300001, "RECENT10_COMPLETE");
         var view = new WirelessRuntimeStateView("ap-a", "RUNNING_MASTER", [source], new("FULL", "fixture"), Now + 2, "new", 300000, []);
         Assert(FaultLifecycle.FreshApRecoveryEvidence(item, view, Now + 2) == "new", "new live master observation is a qualifying AP recovery");
-        foreach (var rejected in new[] { view with { NormalizedState = "RUNNING_BACKUP" }, view with { ResourceId = "other-ap" },
+
+        var backup = new WirelessEffectiveState("RUNNING_BACKUP", "R/B", Now + 1, "backup", "raw-backup", "parser", "LIVE_VERIFIED");
+        var backupSource = source with { NormalizedState = "RUNNING_BACKUP", Current = backup };
+        var backupView = view with { NormalizedState = "RUNNING_BACKUP", Sources = [backupSource], SourceRevision = "backup" };
+        Assert(FaultLifecycle.FreshApRecoveryEvidence(item, backupView, Now + 2) == "backup",
+            "a fresh verified R/B observation proves the AP is running on the backup AC");
+        Assert(FaultLifecycle.FreshApRecoveryEvidence(item with { Kind = "AP_CONFLICT" }, backupView, Now + 2) is null,
+            "backup-only evidence does not resolve a conflicting multi-source AP state");
+
+        foreach (var rejected in new[] { view with { NormalizedState = "OFFLINE" }, view with { ResourceId = "other-ap" },
             view with { Sources = [source with { Current = current with { VerificationLevel = "OFFLINE_FIXTURE" } }] },
             view with { Sources = [source with { LatestOutcome = "PARTIAL" }] },
             view with { Sources = [source, source with { SourceAcDeviceId = "other", Current = current with { CapturedMs = Now - 1 } }] } })
-            Assert(FaultLifecycle.FreshApRecoveryEvidence(item, rejected, Now + 2) is null, "backup alone, other AP, fixture, incomplete or old sources cannot confirm recovery");
+            Assert(FaultLifecycle.FreshApRecoveryEvidence(item, rejected, Now + 2) is null,
+                "offline, other AP, fixture, incomplete or old sources cannot confirm recovery");
     }
     private static void PersistenceSurvivesRestart()
     {

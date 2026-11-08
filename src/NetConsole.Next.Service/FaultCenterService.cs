@@ -159,7 +159,9 @@ internal static class FaultLifecycle
         .MaxBy(f => f.CapturedMs);
 
     public static string? FreshApRecoveryEvidence(FaultIncident item, WirelessRuntimeStateView? runtime, long now) =>
-        runtime?.ResourceId == item.ResourceKey && runtime.NormalizedState == "RUNNING_MASTER" && runtime.Sources.Count > 0 &&
+        runtime?.ResourceId == item.ResourceKey &&
+        (runtime.NormalizedState == "RUNNING_MASTER" || item.Kind == "AP_OFFLINE" && runtime.NormalizedState == "RUNNING_BACKUP") &&
+        runtime.Sources.Count > 0 &&
         runtime.Sources.All(s => s.LatestOutcome == "SUCCESS" && s.Current?.VerificationLevel == "LIVE_VERIFIED" &&
             s.Current.CapturedMs > item.LastSeenMs && s.Current.CapturedMs <= now && now - s.Current.CapturedMs <= runtime.FreshnessWindowMs) &&
         runtime.Sources.Any(s => s.SourceAcDeviceId == item.DeviceId && s.SourceSiteId == item.SiteId) ? runtime.SourceRevision : null;
