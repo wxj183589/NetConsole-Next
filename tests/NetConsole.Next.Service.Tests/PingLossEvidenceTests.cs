@@ -24,6 +24,20 @@ internal static class PingLossEvidenceTests
         var json = JsonSerializer.Serialize(initial);
         Check(!json.Contains("payloadJson") && !json.Contains("output\":"), "response does not expose full transcripts or payloads");
 
+        var relative = f.Scalar($"SELECT relative_path FROM task_run_raw_outputs WHERE task_run_id='{first}'");
+        var rawPath = Path.Combine(f.Root, relative);
+        var sealedBytes = File.ReadAllBytes(rawPath);
+        File.WriteAllBytes(rawPath, sealedBytes[..^1]);
+        Check(f.Project(run)!.Facts.Count == 0, "a truncated file cannot pass an unchanged FINALIZED manifest");
+        var corrupt = (byte[])sealedBytes.Clone();
+        corrupt[0] ^= 1;
+        File.WriteAllBytes(rawPath, corrupt);
+        Check(f.Project(run)!.Facts.Count == 0, "same-length corruption cannot pass the sealed SHA256");
+        File.Delete(rawPath);
+        Check(f.Project(run)!.Facts.Count == 0, "a missing file cannot pass an unchanged FINALIZED manifest");
+        File.WriteAllBytes(rawPath, sealedBytes);
+        Check(f.Project(run)!.Facts.Single().Id == before.Id, "restored exact sealed bytes can be verified again without writes to the ledger");
+
         await Task.Delay(5);
         var later = await f.Seal(H3cCommandPolicy.DisplayVersion, "H3C Comware Software, Version 7.1.070, Release 9999\nH3C WA6320");
         var future = f.Catalog.QueryH3cFacts(f.Profile, "device.identity").Single();

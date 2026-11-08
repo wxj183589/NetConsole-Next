@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace NetConsole.Next.Service;
@@ -58,8 +59,9 @@ internal static class PingLossEvidence
             ping.Protocol is not ("ICMP" or "TCP") || (ping.Protocol == "TCP" && ping.Port != profile.Port))
             return Result("TARGET_BINDING_UNPROVEN");
 
-        var rows = catalog.QueryPingLossFacts(profile.Id, item.DeviceId, item.SiteId, sample.CapturedMs, scope, 21);
-        return Result(rows.Count == 0 ? "NO_PRIOR_VERIFIED_EVIDENCE" : "HISTORICAL_CONTEXT", rows.Take(20).ToArray(), rows.Count > 20);
+        var candidates = catalog.QueryPingLossFacts(profile.Id, item.DeviceId, item.SiteId, sample.CapturedMs, scope, 21);
+        var rows = catalog.VerifyPingLossRaw(candidates, scope);
+        return Result(rows.Count == 0 ? "NO_PRIOR_VERIFIED_EVIDENCE" : "HISTORICAL_CONTEXT", rows.Take(20).ToArray(), candidates.Count > 20);
     }
 }
 
@@ -76,7 +78,7 @@ internal sealed partial class Catalog
         // is_current is intentionally absent: a later revision cannot hide earlier evidence.
         command.CommandText = $@"WITH prior AS (
             SELECT h3c_facts.*,t.ended_ms collection_ended_ms,
-                ROW_NUMBER() OVER(PARTITION BY kind,identity_key,authority_key,scope_key ORDER BY captured_ms DESC,h3c_facts.id) revision
+                ROW_NUMBER() OVER(PARTITION BY kind,identity_key,authority_key,scope_key ORDER BY captured_ms DESC,h3c_facts.id DESC) revision
             FROM h3c_facts JOIN task_runs t ON t.id=json_extract(payload_json,'$.rawProvenance.runId')
             WHERE profile_id=$profile AND captured_ms<=$cutoff AND t.ended_ms<=$cutoff AND t.ended_ms>=captured_ms
                 AND json_extract(payload_json,'$.capturedScope.deviceId')=$device
@@ -84,7 +86,7 @@ internal sealed partial class Catalog
                 AND {scoped} AND {H3cFactRawVerificationPredicate("h3c_facts")}
                 AND status NOT IN ('PARTIAL','FAILED','UNSUPPORTED','EMPTY'))
             SELECT id,kind,identity_key,status,source,scope_key,captured_ms,collection_ended_ms,payload_json
-            FROM prior WHERE revision=1 ORDER BY captured_ms DESC,kind,identity_key,id LIMIT $limit";
+            FROM prior WHERE revision=1 ORDER BY captured_ms DESC,kind,identity_key,id DESC LIMIT $limit";
         command.Parameters.AddWithValue("$profile", profileId);
         command.Parameters.AddWithValue("$device", deviceId);
         command.Parameters.AddWithValue("$site", siteId);
@@ -107,6 +109,38 @@ internal sealed partial class Catalog
                 cutoffMs - reader.GetInt64(6), ObservationValues(document.RootElement), references));
         }
         return rows;
+    }
+
+    internal IReadOnlyList<PingLossFactEvidence> VerifyPingLossRaw(IReadOnlyList<PingLossFactEvidence> candidates, P2B5SiteScopeDecision scope)
+    {
+        // Only the bounded candidate set is inspected. Cache each run within this read;
+        // canonical diagnostic reading verifies path, bounds, sealed identity and SHA.
+        var verified = new Dictionary<string, HashSet<(string Command, string Output, string Segment)>>();
+        foreach (var runId in candidates.Take(21).SelectMany(fact => fact.RawReferences).Select(raw => raw.RunId).Distinct())
+        {
+            var proofs = new HashSet<(string, string, string)>();
+            verified[runId] = proofs;
+            var access = ReadTaskDiagnosticAccess(runId, scope);
+            if (access is null || access.Run.State != "SUCCEEDED") continue;
+            var plan = access.Definition.CommandPlan;
+            var rows = ReadDiagnosticRows(runId);
+            if (rows.Count > 32 || rows.Select(row => row.Index).Distinct().Count() != rows.Count ||
+                rows.Any(row => row.Index < 0 || row.Index >= plan.Count || plan[row.Index] != row.Command)) continue;
+            foreach (var row in rows)
+            {
+                if (row.Capture != "COMPLETE") continue;
+                try
+                {
+                    var bytes = ReadDiagnosticOutput(row, runId, access.Access, CancellationToken.None);
+                    if (bytes.LongLength == row.Bytes && string.Equals(Convert.ToHexString(SHA256.HashData(bytes)), row.OutputSha, StringComparison.OrdinalIgnoreCase))
+                        proofs.Add((row.Command, row.OutputSha.ToLowerInvariant(), row.SegmentSha.ToLowerInvariant()));
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or InvalidOperationException or
+                    FormatException or ArgumentException or KeyNotFoundException) { /* Unavailable evidence stays unknown. */ }
+            }
+        }
+        return candidates.Take(21).Where(fact => fact.RawReferences.Count is > 0 and <= 32 && fact.RawReferences.All(raw =>
+            verified.TryGetValue(raw.RunId, out var proofs) && proofs.Contains((raw.Command, raw.OutputSha256.ToLowerInvariant(), raw.SegmentSha256.ToLowerInvariant())))).ToArray();
     }
 
     private static IReadOnlyDictionary<string, string> ObservationValues(JsonElement payload)
