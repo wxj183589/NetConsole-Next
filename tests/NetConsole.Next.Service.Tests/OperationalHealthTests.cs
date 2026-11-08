@@ -6,6 +6,7 @@ internal static class OperationalHealthTests
     public static async Task RunAsync()
     {
         MissingEvidenceIsUnknown();
+        WirelessFaultScanRotatesBeyondFirstPage();
         OnlyFreshVerifiedEvidenceCounts();
         InterfaceAndStaleEvidence();
         RouteReachedPreservesEvidence();
@@ -20,7 +21,24 @@ internal static class OperationalHealthTests
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=15/15 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=16/16 PASS");
+    }
+    private static void WirelessFaultScanRotatesBeyondFirstPage()
+    {
+        var ids = Enumerable.Range(0, 23).Select(index => $"ap-{index:D2}").ToArray();
+        var first = OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, 0);
+        var second = OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, 10);
+        var third = OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, 20);
+        Assert(first.Count == 10 && second.Count == 10 && third.Count == 10 &&
+            first.Concat(second).Concat(third).Distinct(StringComparer.Ordinal).Count() == ids.Length,
+            "consecutive bounded scans must eventually cover every authorized AP beyond the initial ten");
+        Assert(OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, 20).SequenceEqual(third),
+            "scan selection is deterministic for a given cursor");
+        Assert(OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, -1).SequenceEqual(ids.TakeLast(1).Concat(ids.Take(9))),
+            "negative cursor normalization wraps without skipping a resource");
+        Assert(OperationalHealthProjection.SelectWirelessFaultResourceIds(ids, 0, 0).Count == 0 &&
+            OperationalHealthProjection.SelectWirelessFaultResourceIds([], 0).Count == 0,
+            "empty resources and nonpositive budgets remain bounded");
     }
     private static void CompleteEmptyLldpIsObservedZero()
     {

@@ -26,6 +26,18 @@ internal sealed record OperationalRecoveryReport(string Id, string DeviceId, str
 internal static class OperationalHealthProjection
 {
     public const long FreshnessWindowMs = 300_000;
+    internal const int WirelessFaultResourcesPerScan = 10;
+
+    internal static IReadOnlyList<string> SelectWirelessFaultResourceIds(
+        IReadOnlyList<string> orderedResourceIds, int start, int maximum = WirelessFaultResourcesPerScan)
+    {
+        if (maximum <= 0 || orderedResourceIds.Count == 0) return Array.Empty<string>();
+        if (orderedResourceIds.Count <= maximum) return orderedResourceIds.ToArray();
+        var offset = (int)(((long)start % orderedResourceIds.Count + orderedResourceIds.Count) % orderedResourceIds.Count);
+        return Enumerable.Range(0, Math.Min(maximum, orderedResourceIds.Count))
+            .Select(index => orderedResourceIds[(offset + index) % orderedResourceIds.Count]).ToArray();
+    }
+
     internal static HashSet<string>? CompleteLldpNeighbors(H3cFactSnapshot fact)
     {
         if (fact.Kind != "lldp.table" || !fact.CollectedRawVerified || !fact.IsCurrent ||
@@ -126,6 +138,8 @@ internal static class OperationalHealthProjection
 
 internal sealed class OperationalHealthService(Catalog catalog, WirelessReadModelService wireless, NetworkDiagnosticsService diagnostics)
 {
+    private int _wirelessFaultScanCursor;
+
     public OperationalHealthSnapshot Get(P2B5SiteScopeDecision scope, int page = 1, string? actorUserId = null)
     {
         if (!scope.IsAuthorized) throw new TaskScopeRevokedException("OPERATIONAL_SCOPE_DENIED");
@@ -209,8 +223,17 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
         // Reuse the same scoped, verified wireless runtime that drives the AP
         // workbench. Keep source identity and Raw references in its drill-down.
         var wirelessSnapshot = wireless.GetSnapshot(scope);
-        foreach (var resource in wirelessSnapshot.ApResources.Where(r => r.Observations.Any(o => visible.ContainsKey(o.SourceAcDeviceId))).Take(10))
+        var wirelessResources = wirelessSnapshot.ApResources
+            .Where(r => r.Observations.Any(o => visible.ContainsKey(o.SourceAcDeviceId)))
+            .OrderBy(r => r.Id, StringComparer.Ordinal).ToArray();
+        var scanStart = Interlocked.Add(ref _wirelessFaultScanCursor, OperationalHealthProjection.WirelessFaultResourcesPerScan) -
+            OperationalHealthProjection.WirelessFaultResourcesPerScan;
+        var selectedIds = OperationalHealthProjection.SelectWirelessFaultResourceIds(
+            wirelessResources.Select(r => r.Id).ToArray(), scanStart);
+        var resourcesById = wirelessResources.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        foreach (var resourceId in selectedIds)
         {
+            var resource = resourcesById[resourceId];
             var runtime = wireless.GetRuntimeState(resource.Id, scope, nowMs: now);
             var live = runtime?.Sources.Where(s => s.Current?.VerificationLevel == "LIVE_VERIFIED" &&
                 s.Current.CapturedMs <= now && now - s.Current.CapturedMs <= runtime.FreshnessWindowMs &&
@@ -233,7 +256,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             devices, events.OrderByDescending(e => e.AtMs).Take(100).ToArray(),
             ["仅汇总当前页授权设备；最多读取 100 项近期任务、每设备 1000 条 Current Facts、显示 100 项事件。",
              "CPU、内存和缺少证据的指标为 UNKNOWN；接口和 LLDP 仅代表已观测条目。",
-             "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内完成的真实采样；无线事件最多检查本页 AC 关联的 10 个 AP。",
+             "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内完成的真实采样；无线故障每次检查本页最多 10 个 AP，并在后续调用间轮转。",
              "LLDP 消失仅对照同来源与捕获范围的最近 1000 个独立邻居身份的最后观测和完整 Current 表；身份超限会遗漏事件。",
              "连接会话关闭或采集失败不代表设备离线。"]);
     }
