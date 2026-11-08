@@ -32,11 +32,11 @@ RUN = "/api/system/config-backup-schedules/missing-fixture-plan/run"
 SYSLOG = "/api/system/syslog/query"
 
 
-def start(dll, root, run_dir):
+def start(dll, root, run_dir, *, h3c_enabled=False):
     port = free_port()
     env = dict(os.environ, NETCONSOLE_NEXT_DATA_ROOT=str(root),
                NETCONSOLE_NEXT_WEB_BIND="127.0.0.1", NETCONSOLE_NEXT_WEB_PORT=str(port),
-               NETCONSOLE_NEXT_SYSLOG_PORT="0", NETCONSOLE_NEXT_H3C_ENABLED="0",
+               NETCONSOLE_NEXT_SYSLOG_PORT="0", NETCONSOLE_NEXT_H3C_ENABLED="1" if h3c_enabled else "0",
                NETCONSOLE_NEXT_TERMINAL_ENABLED="0", Logging__LogLevel__Default="Warning")
     log = (run_dir / "service.log").open("a", encoding="utf-8")
     process = subprocess.Popen(["dotnet", str(dll)], cwd=dll.parent, env=env,
@@ -161,6 +161,10 @@ def run(dll):
         owner, reader, anonymous = Client(base), Client(base), Client(base)
         owner.login("superadmin", "superadmin")
         reader.login("admin", "admin")
+        for missing in ("/api/system/h3c/profiles", "/api/system/not-a-feature", "/api/not-a-feature.json"):
+            body = expect(owner, missing, status=404)
+            body = json.loads(body) if isinstance(body, str) else body
+            check(body.get("error") == "API_NOT_AVAILABLE", "UNAVAILABLE_API_JSON_404_" + missing.rsplit("/", 1)[-1])
         query = dict(fromMs=now - 1000, toMs=now + 1000, limit=20)
         selected = dict(profileIds=["missing-fixture-profile"])
         policy = dict(faultId="fault-site-a", expectedProfileId="profile-site-a", enabled=True,

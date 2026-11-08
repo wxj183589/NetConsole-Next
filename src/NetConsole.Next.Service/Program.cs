@@ -2264,6 +2264,13 @@ app.MapGet("/api/system/wireless/ap-groups/{id}/members", (HttpContext context, 
     { return WirelessAuthorityUnavailable(ex); }
 });
 
+// Disabled or unknown APIs must not return a successful HTML page to API clients.
+app.MapFallback("/api/{**path}", () => Results.NotFound(new
+{
+    error = "API_NOT_AVAILABLE",
+    detail = "接口不存在或当前服务未启用此功能。"
+}));
+
 // Vue Router uses history mode. API and WebSocket routes are mapped above; all other
 // application paths must return the same offline entry so browser refresh keeps working.
 app.MapFallbackToFile("index.html");
