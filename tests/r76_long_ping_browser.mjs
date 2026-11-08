@@ -141,7 +141,7 @@ try {
     const request = response.request(), pathname = new URL(response.url()).pathname
     if (!pathname.startsWith('/api/')) return
     result.apiResponses.push({ method: request.method(), pathname, status: response.status() })
-    if (request.method() === 'POST') trace.push({ pathname, payload: request.postDataJSON() })
+    if (request.method() === 'POST') trace.push({ pathname, payload: pathname === '/api/auth/login' ? { redacted: true } : request.postDataJSON() })
   })
   await page.goto(base + '/login', { waitUntil: 'networkidle' })
   await page.getByLabel('用户名', { exact: true }).fill('superadmin')
