@@ -46,6 +46,29 @@ async function download(button, filename) {
   await file.saveAs(target)
   return readFileSync(target, 'utf8')
 }
+function csvRecords(text) {
+  const records = [], cells = []
+  let cell = '', quoted = false
+  const input = text.replace(/^\uFEFF/, '')
+  for (let index = 0; index < input.length; index++) {
+    const ch = input[index]
+    if (ch === '"') {
+      if (quoted && input[index + 1] === '"') { cell += '"'; index++ }
+      else quoted = !quoted
+    } else if (!quoted && (ch === ',' || ch === '\n')) {
+      cells.push(cell); cell = ''
+      if (ch === '\n') { records.push(cells.splice(0)); }
+    } else if (quoted || ch !== '\r') cell += ch
+  }
+  assert(!quoted, 'CSV has an unterminated quoted field')
+  if (cell || cells.length) { cells.push(cell); records.push(cells.splice(0)) }
+  const header = records.shift()
+  assert(header && new Set(header).size === header.length, 'CSV headers missing or duplicated')
+  return records.map(record => {
+    assert(record.length === header.length, 'CSV field count mismatch')
+    return Object.fromEntries(header.map((name, index) => [name, record[index]]))
+  })
+}
 try {
   await page.goto(base, { waitUntil: 'networkidle' })
   await page.getByLabel('用户名', { exact: true }).fill(process.env.R76_USER || 'superadmin')
@@ -88,6 +111,62 @@ try {
       }
       assert(exports.length > 0, 'No existing AP observations exported')
       return { selectedAc, collectButtonCheckedWithoutClick: true, exports }
+    })
+    await step('wirelessSelectedApHistoryCsv', width, async () => {
+      const pending = page.waitForResponse(response => /\/api\/system\/wireless\/ap-resources\/[^/]+\/runtime-state$/.test(new URL(response.url()).pathname))
+      await page.goto(base + '/wireless', { waitUntil: 'networkidle' })
+      const response = await pending
+      assert(response.ok() && response.request().method() === 'GET', 'AP runtime history GET failed')
+      const runtime = await response.json()
+      const selected = page.locator('.wireless-table tbody tr.selected')
+      assert(await selected.count() === 1, 'Exactly one AP row must be selected')
+      // Vue selects the first visible resource by default. Clicking that actual row keeps its loaded history.
+      await selected.click()
+      const resourceId = (await selected.locator('td').first().locator('.device-subline').innerText()).trim()
+      assert(runtime.resourceId === resourceId, 'Runtime response belongs to a different selected AP')
+      const panel = page.locator('.wireless-runtime')
+      const button = panel.getByRole('button', { name: '导出 AP 状态历史 CSV', exact: true })
+      await button.waitFor(); assert(await button.isEnabled(), 'Selected AP history export is disabled')
+      const csv = await download(button, 'wireless-ap-state-history-' + width + '.csv')
+      const rows = csvRecords(csv)
+      const runtimeUrl = new URL(response.url())
+      assert(rows.length > 0, 'AP history CSV is empty')
+      for (const row of rows) {
+        assert(row.resource_id === resourceId && row.runtime_revision === runtime.sourceRevision, 'AP history identity/revision drift')
+        assert(row.scope_status === runtime.scope.status && row.claims_revision === runtime.scope.claimsRevision, 'AP history scope/claims lost')
+        assert(row.filter_domain_id === (runtimeUrl.searchParams.get('domainId') || '') && row.filter_ac_device_id === (runtimeUrl.searchParams.get('sourceAcId') || ''), 'AP history selected scope mismatch')
+        assert(row.export_scope === 'LOADED_SCOPED_CURRENT_PREVIOUS_RECENT10_ONLY', 'AP history bounded export scope missing')
+        assert(row.warnings_json === JSON.stringify(runtime.warnings), 'AP history evidence warnings lost')
+      }
+      assert(rows.filter(row => row.record_type === 'RUNTIME_STATUS').length === 1, 'AP runtime status row missing')
+      const aggregateChanges = rows.filter(row => row.record_type === 'AGGREGATE_CHANGE')
+      assert(aggregateChanges.length === (runtime.recent10 || []).length, 'Aggregate Recent10 count differs from loaded API')
+      for (const change of runtime.recent10 || []) {
+        const row = aggregateChanges.find(item => item.change_id === change.id)
+        assert(row && row.previous_state === change.previousState && row.normalized_state === change.normalizedState && row.source_revision === change.sourceRevision && row.captured_utc === new Date(change.capturedMs).toISOString(), 'Aggregate change fields lost')
+        assert(row.aggregate_source_evidence_json === JSON.stringify(change.sources), 'Aggregate source Raw evidence lost')
+      }
+      let sourceChanges = 0
+      for (const source of runtime.sources) {
+        const sourceRows = rows.filter(row => row.source_ac_device_id === source.sourceAcDeviceId)
+        assert(sourceRows.filter(row => row.record_type === 'SOURCE_STATUS').length === 1, 'Independent AC source status missing')
+        assert(sourceRows.every(row => row.source_site_id === source.sourceSiteId && row.latest_collection_outcome === source.latestOutcome && row.history_status === source.historyStatus), 'AC source collection outcome/history status lost')
+        for (const [type, value] of [['SOURCE_CURRENT', source.current], ['SOURCE_PREVIOUS', source.previousEffective]]) {
+          const records = sourceRows.filter(row => row.record_type === type)
+          assert(records.length === (value ? 1 : 0), 'AC effective state count differs from API')
+          if (value) assert(records[0].raw_manifest_ref === value.rawManifestRef && records[0].raw_state === value.rawState && records[0].normalized_state === value.normalizedState && records[0].verification_level === value.verificationLevel, 'AC effective state Raw/provenance lost')
+        }
+        const changes = sourceRows.filter(row => row.record_type === 'SOURCE_CHANGE')
+        assert(changes.length === source.recent10.length, 'AC Recent10 count differs from loaded API')
+        for (const change of source.recent10) {
+          const row = changes.find(item => item.change_id === change.id)
+          assert(row && row.raw_manifest_ref === change.rawManifestRef && row.source_revision === change.sourceRevision && row.previous_state === change.previousState && row.normalized_state === change.normalizedState && row.captured_utc === new Date(change.capturedMs).toISOString(), 'AC Recent10 Raw/time/state lost')
+        }
+        sourceChanges += changes.length
+      }
+      assert(rows.filter(row => row.record_type.startsWith('SOURCE_')).every(row => runtime.sources.some(source => source.sourceAcDeviceId === row.source_ac_device_id)), 'CSV contains an AC outside loaded scoped history')
+      return { status: aggregateChanges.length || sourceChanges ? 'PASS' : 'PARTIAL', reason: aggregateChanges.length || sourceChanges ? undefined : 'NO_STORED_EFFECTIVE_CHANGES',
+        resourceId, independentAcSources: runtime.sources.length, aggregateChanges: aggregateChanges.length, sourceChanges, csvBytes: Buffer.byteLength(csv), deviceCollectionStarted: false }
     })
     await step('quickPingP95HistoryCsv', width, async () => {
       await page.goto(`${base}/tools`, { waitUntil: 'networkidle' })
