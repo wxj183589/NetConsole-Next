@@ -44,6 +44,12 @@ internal sealed class ConfigBackupBatchHistoryStore
         return _items.TryGetValue(id, out var item) ? item with { Items = item.Items.ToArray() } : null;
     }
 
+    internal IReadOnlyList<string> Ids()
+    {
+        RequireAvailable();
+        return _items.Keys.ToArray();
+    }
+
     internal void Store(ConfigBackupBatch item)
     {
         RequireAvailable();

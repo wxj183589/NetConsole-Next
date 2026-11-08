@@ -26,7 +26,73 @@ internal static class H3cTaskFactPublicationTests
         await VlanTablePublishesWholeRevisionsWithRawAndScope();
         await CompleteLldpTablesReplaceOnlyScopedCollectedCurrent();
         await SameIdentityLldpAuthoritiesAndScopesRemainIndependent();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=18/18 PASS");
+        await LldpLossRecoveryAndRecurrencePersist();
+        LldpHistoryRevisionsCannotCrowdOutIdentity();
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=20/20 PASS");
+    }
+
+    private static void LldpHistoryRevisionsCannotCrowdOutIdentity()
+    {
+        using var f = new Fixture();
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string>
+            { [H3cCommandPolicy.DisplayLldpNeighborInformationList] = "Local Interface Chassis ID Port ID System Name\nGE1/0/1 0011-2233-4455 GE2/0/1 SAME" }, 1000, "offline-baseline");
+        var original = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Single();
+        // Fixture-only historical rows model one noisy identity without creating
+        // 1100 device sessions. They deliberately do not acquire Raw proof.
+        f.Execute(@"WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<1100)
+            INSERT INTO h3c_facts(id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json)
+            SELECT 'busy-'||n,profile_id,kind,'busy-neighbor',status,source,1000+n,0,payload_json
+            FROM h3c_facts,seq WHERE id='" + original.Id + "'");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor", history: true, limit: 1000).All(x => x.Id != original.Id),
+            "fixture reproduces a busy identity crowding out the old neighbor in a revision-limited page");
+        var latest = f.Catalog.QueryLatestLldpNeighborHistory(f.Profile, P2B5SiteScopeDecision.Global);
+        Assert(latest.Count == 2 && latest.Any(x => x.Id == original.Id) && latest.Single(x => x.IdentityKey == "busy-neighbor").CapturedMs == 2100,
+            "fault baseline limit applies after exact authority/scope/identity deduplication");
+        var other = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other" }, "other-claims");
+        Assert(f.Catalog.QueryLatestLldpNeighborHistory(f.Profile, other).Count == 0,
+            "deduplicated fault history retains the original captured-scope authorization predicate");
+    }
+
+    private static async Task LldpLossRecoveryAndRecurrencePersist()
+    {
+        using var f = new Fixture();
+        const string header = "Local Interface Chassis ID Port ID System Name";
+        const string populated = header + "\nGE1/0/1 0011-2233-4455 GE2/0/1 SAME";
+        var output = populated;
+        var factory = new Factory { Execute = _ => output };
+        await using var scheduler = f.Scheduler(factory);
+        var scopes = new P2B5SiteScopeStore(f.Settings);
+        var wireless = new WirelessReadModelService(f.Catalog);
+        using var diagnostics = new NetworkDiagnosticsService(f.Catalog);
+        var health = new OperationalHealthService(f.Catalog, wireless, diagnostics);
+        var recovery = new OperationalRecoveryService(f.Catalog, f.Authorizer, scopes,
+            new(f.Catalog, factory), new(f.Catalog, f.Authorizer, scopes, scheduler));
+        FaultCenterService Center() => new(f.Catalog, health, recovery, wireless, scopes, f.Authorizer,
+            f.Settings, Microsoft.Extensions.Logging.Abstractions.NullLogger<FaultCenterService>.Instance);
+        using var center = Center();
+        var actor = f.Catalog.QueryFaultMonitorActor()!;
+        const string command = H3cCommandPolicy.DisplayLldpNeighborInformationList;
+        await f.Run(scheduler, command);
+        output = header; await Task.Delay(20); var lostRun = await f.Run(scheduler, command);
+        center.Sync(actor, P2B5SiteScopeDecision.Global, 1);
+        var incident = center.Query(actor, P2B5SiteScopeDecision.Global, kind: "LLDP_NEIGHBOR_LOST").Items.Single();
+        Assert(incident.State == "OPEN" && incident.SourceAuthority == "H3C_TASK_RAW" && incident.CapturedScopeKey != "UNSCOPED" &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.table").Single().Source.EndsWith(lostRun.Id),
+            "sealed empty table enters the normal persistent scoped fault center");
+        center.Sync(actor, P2B5SiteScopeDecision.Global, 1);
+        Assert(center.Query(actor, P2B5SiteScopeDecision.Global, kind: "LLDP_NEIGHBOR_LOST").Items.Single().Occurrences == 1,
+            "repeated read of the same table is deduplicated");
+        output = populated; await Task.Delay(20); await f.Run(scheduler, command);
+        Assert(center.Verify(incident.Id, actor, P2B5SiteScopeDecision.Global).State == "RECOVERY_VERIFIED",
+            "new complete same-neighbor Raw validates recovery through the normal service entry");
+        using var restarted = Center();
+        Assert(restarted.Query(actor, P2B5SiteScopeDecision.Global, kind: "LLDP_NEIGHBOR_LOST").Items.Single().State == "RESOLVED",
+            "LLDP recovery persists after service reconstruction");
+        output = header; await Task.Delay(20); await f.Run(scheduler, command);
+        restarted.Sync(actor, P2B5SiteScopeDecision.Global, 1);
+        var recurring = restarted.Query(actor, P2B5SiteScopeDecision.Global, kind: "LLDP_NEIGHBOR_LOST").Items.Single();
+        Assert(recurring.Id == incident.Id && recurring.State == "REOPENED" && recurring.Occurrences == 2,
+            "later exact loss reopens the retained same-partition incident");
     }
 
     private static async Task SameIdentityLldpAuthoritiesAndScopesRemainIndependent()

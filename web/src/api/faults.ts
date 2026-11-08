@@ -5,6 +5,7 @@ export interface FaultIncident {
   id: string; deviceId: string; profileId: string; siteId: string; kind: string; resourceKey: string
   severity: string; state: string; firstSeenMs: number; lastSeenMs: number; evidenceType: string
   evidenceId: string; detail: string; occurrences: number; history: FaultTransition[]
+  sourceAuthority?: string | null; capturedScopeKey?: string | null
 }
 export interface FaultPolicy {
   deviceId: string; faultId: string; enabled: boolean; intervalMinutes: number; maximumAttempts: number

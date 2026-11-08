@@ -73,6 +73,37 @@ describe('AP group source identity', () => {
         receivedMs: domain.asOf, rawManifestRef: revision, parserRevision: 'synthetic', sourceRevision: revision, relationStatus: 'OBSERVED' }] }
   }
 
+  it('exports loaded observations through the normal AP toolbar', async () => {
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('export-raw-ref')]))
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:wireless-export')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      const wrapper = render()
+      await flushPromises()
+      const button = wrapper.findAll('button').find(item => item.text() === '导出当前 AP 观察 CSV')!
+      await button.trigger('click')
+      expect(create).toHaveBeenCalledOnce()
+      expect(click).toHaveBeenCalledOnce()
+      expect(revoke).toHaveBeenCalledWith('blob:wireless-export')
+      wrapper.unmount()
+    } finally { create.mockRestore(); revoke.mockRestore(); click.mockRestore() }
+  })
+
+  it('clears prior observations when a refreshed resource query fails', async () => {
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('old-claim-ref')]))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.text()).toContain('old-claim-ref')
+    api.getWirelessApResources.mockRejectedValue(new Error('claims changed'))
+    const refresh = wrapper.findAll('button').find(item => item.text() === '刷新数据')!
+    await refresh.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('old-claim-ref')
+    expect(wrapper.text()).toContain('AP 资源读取失败')
+    wrapper.unmount()
+  })
+
   it('reloads Observation and collection evidence when a running task finishes', async () => {
     vi.useFakeTimers()
     try {

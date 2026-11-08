@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   getWirelessAcDomains: vi.fn(), getWirelessApResources: vi.fn(),
 }))
 vi.mock('../api/client', async original => ({ ...await original<object>(), ...api }))
-vi.mock('echarts', () => ({ init: () => ({ setOption: vi.fn(), dispose: vi.fn(), resize: vi.fn() }) }))
+vi.mock('echarts/core', () => ({ use: vi.fn(), init: () => ({ setOption: vi.fn(), dispose: vi.fn(), resize: vi.fn() }) }))
 vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
 
 describe('dashboard wireless summary', () => {

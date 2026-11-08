@@ -19,6 +19,8 @@ else if (args.Length > 0 && args[0] == "--netmiko-worker-budget-tests")
     await NetmikoWorkerBudgetTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--sqlite-probe")
     SqliteSecurityTests.Run();
+else if (args.Length > 0 && args[0] == "--icmp-deployment-tests")
+    await IcmpDeploymentDiagnosticsTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--r67-live-parser")
     R67LiveParser.Run(args[1]);
 else if (args.Length > 0 && args[0] == "--r67-ap-parser-tests")
@@ -168,6 +170,7 @@ internal static class SchedulerTests
         await FaultCenterTests.RunAsync();
         await CompleteConfigurationComparisonTests.RunAsync();
         await OperationalHealthTests.RunAsync();
+        await IcmpDeploymentDiagnosticsTests.RunAsync();
         await NetworkQuickPingTests.RunAsync();
         await H3cCheckpointRestoreTests.RunAsync();
         await ConfigurationRestoreReadinessTests.RunAsync();

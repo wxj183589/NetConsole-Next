@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import ConfigurationRestoreReadiness from './ConfigurationRestoreReadiness.vue'
+import ConfigurationStorage from './ConfigurationStorage.vue'
 import { captureCompleteConfiguration, changeSimulatorDescription, compareCompleteConfigurations, previewCompleteConfigurationRestore, verifyNativeCheckpointRestore, getNativeCheckpointOperations, getCompleteConfigurations, getCompleteConfigurationView, getSimulatorConfigurationChanges, type CompleteConfigurationBackup, type CompleteConfigurationComparison, type CompleteConfigurationRestorePreview, type H3cCheckpointRestoreOperation, type SimulatorConfigurationChange } from '../api/client'
 
 const props = defineProps<{ profileId: string }>()
@@ -104,6 +105,7 @@ function apply() {
   <section class="card" aria-label="模拟器完整配置">
     <div class="card__header"><div><h2>模拟器完整配置与接口描述</h2><small>仅授权模拟器。原始配置保存在本机，页面仅显示脱敏内容。整机恢复尚未开放。</small></div></div>
     <div class="card__body">
+      <ConfigurationStorage :profile-id="profileId" />
       <div class="toolbar"><el-button :disabled="busy" @click="run(load)">刷新完整备份</el-button><el-button :loading="busy" :disabled="busy" @click="capture">采集完整配置</el-button></div>
       <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="loaded && !backups.length" role="status">暂无通过完整性校验的完整备份，请采集当前配置。</p>

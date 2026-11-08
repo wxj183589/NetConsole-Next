@@ -18,6 +18,9 @@ export function createCompleteConfigurationBatch(profileIds: string[]): Promise<
 export function getCompleteConfigurationBatch(id: string): Promise<CompleteConfigurationBatch> {
   return request('/api/system/config-backups/batches/' + encodeURIComponent(id))
 }
+export function getCompleteConfigurationBatches(): Promise<CompleteConfigurationBatch[]> {
+  return request('/api/system/complete-configuration/batches')
+}
 export async function getCompleteConfigurationSchedules(): Promise<CompleteConfigurationSchedule[]> {
   const plans = await request<Array<ConfigBackupSchedule | CompleteConfigurationSchedule>>('/api/system/config-backup-schedules')
   return plans.filter((item): item is CompleteConfigurationSchedule => item.configurationKind === 'COMPLETE_RUNNING')

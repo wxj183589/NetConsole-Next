@@ -14,11 +14,51 @@ internal static class OperationalHealthTests
         RouteRequiresHopObservations();
         RouteNonBusinessFailuresStayUnknown();
         RouteExplicitFailuresAreObserved();
+        LldpLossRequiresCompletePartitionEvidence();
+        CompleteEmptyLldpIsObservedZero();
         await TransientFailureRecovers();
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=13/13 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=15/15 PASS");
+    }
+    private static void CompleteEmptyLldpIsObservedZero()
+    {
+        var table = new H3cFactSnapshot("empty-table", "profile-a", "lldp.table", "scope-a", "STALE", "H3C_TASK_RAW:empty",
+            Now, true, "{\"status\":\"PARSED\",\"neighbors\":[]}") { CollectedRawVerified = true, CapturedScopeKey = "scope-a" };
+        var metric = OperationalHealthProjection.Device(Device(), [table], Now).LldpNeighbors;
+        Assert(metric.State == "OBSERVED" && metric.Value == 0 && metric.EvidenceIds.SequenceEqual([table.Id]),
+            "fresh complete empty table proves an observed zero with exact evidence");
+        foreach (var rejected in new[] { table with { Status = "PARTIAL" }, table with { CollectedRawVerified = false },
+            table with { CapturedMs = Now - 300001 }, table with { PayloadJson = "{bad" } })
+            Assert(OperationalHealthProjection.Device(Device(), [rejected], Now).LldpNeighbors.Value is null,
+                "partial, unverified, stale and malformed empty tables remain unknown");
+    }
+    private static void LldpLossRequiresCompletePartitionEvidence()
+    {
+        var prior = new H3cFactSnapshot("neighbor", "profile-a", "lldp.neighbor", "GE1|GE2|AA", "STALE",
+            "H3C_TASK_RAW:old", Now - 10, false, "{}") { CollectedRawVerified = true, CapturedScopeKey = "scope-a" };
+        var table = prior with { Id = "table", Kind = "lldp.table", IdentityKey = "table", Source = "H3C_TASK_RAW:new",
+            CapturedMs = Now, IsCurrent = true, PayloadJson = "{\"status\":\"PARSED\",\"neighbors\":[]}" };
+        var lost = OperationalHealthProjection.LostLldpNeighbors(Device(), [prior, prior with { Id = "older", CapturedMs = Now - 20 }], [table], Now);
+        Assert(lost.Count == 1 && lost[0].Kind == "LLDP_NEIGHBOR_LOST" && lost[0].EvidenceId == "table" &&
+            lost[0].ResourceKey == prior.IdentityKey && lost[0].SourceAuthority == "H3C_TASK_RAW" && lost[0].CapturedScopeKey == "scope-a",
+            "complete empty table proves one lost exact neighbor, with authority, capture partition and table evidence");
+        foreach (var rejected in new[] {
+            table with { CapturedMs = Now + 1 }, table with { CapturedMs = Now - 300001 },
+            table with { Source = "OTHER" }, table with { CapturedScopeKey = "scope-b" },
+            table with { CapturedScopeKey = "UNSCOPED" }, table with { ProfileId = "profile-b" },
+            table with { IsCurrent = false }, table with { CollectedRawVerified = false },
+            table with { Status = "PARTIAL" }, table with { PayloadJson = "{bad" },
+            table with { PayloadJson = "{\"status\":\"PARTIAL\",\"neighbors\":[]}" },
+            table with { PayloadJson = "{\"status\":\"PARSED\",\"neighbors\":[null]}" }
+        }) Assert(OperationalHealthProjection.LostLldpNeighbors(Device(), [prior], [rejected], Now).Count == 0,
+            "incomplete, stale, future, foreign, unscoped and malformed tables cannot imply loss");
+        Assert(OperationalHealthProjection.LostLldpNeighbors(Device(), [prior with { CollectedRawVerified = false }], [table], Now).Count == 0,
+            "unverified historical neighbor cannot create a loss");
+        var restored = table with { PayloadJson = "{\"status\":\"PARSED\",\"neighbors\":[{\"localInterface\":\"GE1\",\"neighborInterface\":\"GE2\",\"chassisId\":\"AA\"}]}" };
+        Assert(OperationalHealthProjection.LostLldpNeighbors(Device(), [prior], [restored], Now).Count == 0,
+            "present exact neighbor suppresses loss; names never substitute identity");
     }
     private static DeviceInventoryItem Device() => new("device-a", "device a", "192.0.2.10", 22,
         "fixture", "H3C", "fixture", "SW", "SSH", "site-a", "", true, "DISCONNECTED", Now,

@@ -14,6 +14,17 @@ const button = (wrapper: ReturnType<typeof render>, text: string) => wrapper.fin
 
 describe('FaultCenter', () => {
   beforeEach(() => { vi.resetAllMocks(); api.getFaults.mockResolvedValue(structuredClone(result)); api.setFaultPolicy.mockResolvedValue({ state: 'SCHEDULED' }); api.verifyFault.mockResolvedValue({ state: 'RECOVERY_NOT_VERIFIED', detail: '缺少恢复证据' }) })
+  it('filters lost LLDP neighbors and exposes the exact evidence partition', async () => {
+    api.getFaults.mockResolvedValue({ ...result, items: [{ ...incident, kind: 'LLDP_NEIGHBOR_LOST', sourceAuthority: 'H3C_TASK_RAW', capturedScopeKey: '["scope-a"]' }] })
+    const wrapper = render(); await flushPromises()
+    await wrapper.get('[aria-label="故障类型"]').setValue('LLDP_NEIGHBOR_LOST')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(api.getFaults.mock.calls.at(-1)?.[1].kind).toBe('LLDP_NEIGHBOR_LOST')
+    await button(wrapper, '查看处理历史').trigger('click')
+    expect(wrapper.text()).toContain('H3C_TASK_RAW'); expect(wrapper.text()).toContain('["scope-a"]')
+    expect(wrapper.text()).toContain('完整 LLDP 表')
+    wrapper.unmount()
+  })
   it('loads durable events without admitting device actions and expands evidence history', async () => {
     const wrapper = render(); await flushPromises()
     expect(wrapper.text()).toContain('OPEN'); expect(wrapper.text()).toContain('2 次有效观测')
@@ -123,7 +134,7 @@ describe('FaultCenter', () => {
     vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: revoke })
     vi.stubGlobal('Blob', class { constructor(value: BlobPart[]) { parts.push(value) } })
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function(this: HTMLAnchorElement) { filename = this.download })
-    api.getFaults.mockResolvedValue({ ...result, page: 2, total: 80, hasMore: true, items: [{ ...incident, resourceKey: ' \t=SUM(1,2)', detail: 'password="hidden word"; Authorization: Bearer abc-secret; https://user:pass@example.test/\nnext "quoted"', history: [{ ...incident.history[0], action: '@CMD', detail: 'password cipher h3c-secret; api_key=api-secret; -----BEGIN PRIVATE KEY-----\nprivate-secret\n-----END PRIVATE KEY-----' }] }] })
+    api.getFaults.mockResolvedValue({ ...result, page: 2, total: 80, hasMore: true, items: [{ ...incident, resourceKey: ' \t=SUM(1,2)', sourceAuthority: 'H3C_TASK_RAW', capturedScopeKey: '["scope-a"]', detail: 'password="hidden word"; Authorization: Bearer abc-secret; https://user:pass@example.test/\nnext "quoted"', history: [{ ...incident.history[0], action: '@CMD', detail: 'password cipher h3c-secret; api_key=api-secret; -----BEGIN PRIVATE KEY-----\nprivate-secret\n-----END PRIVATE KEY-----' }] }] })
     const wrapper = render(false); await flushPromises()
     await wrapper.get('[aria-label="设备 ID"]').setValue('edited-but-not-applied')
     try {
@@ -133,6 +144,8 @@ describe('FaultCenter', () => {
       expect(csv).toContain('CURRENT_PAGE_LOADED_QUERY_ONLY","2","25","80"')
       expect(csv).toContain('"EVENT","fault-a","device-a","profile-a","site-a"')
       expect(csv).toContain('"HISTORY","fault-a"')
+      expect(csv).toContain('source_authority'); expect(csv).toContain('captured_scope_key')
+      expect(csv).toContain('H3C_TASK_RAW'); expect(csv).toContain('[""scope-a""]')
       expect(csv).toContain("' \t=SUM(1,2)"); expect(csv).toContain("'@CMD")
       expect(csv).toContain('next ""quoted""'); expect(csv).toContain('[REDACTED]')
       expect(csv).toContain('1970-01-01T00:00:02.000Z'); expect(csv).toContain('"actor","fact-a"')

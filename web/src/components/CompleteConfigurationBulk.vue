@@ -2,7 +2,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import ConfigurationRestoreBulkReadiness from './ConfigurationRestoreBulkReadiness.vue'
 import { deleteConfigBackupSchedule, getDeviceSites, getWirelessAcDomains, setConfigBackupScheduleEnabled, type DeviceSite } from '../api/client'
-import { createCompleteConfigurationBatch, createCompleteConfigurationSchedule, getCompleteConfigurationBatch, getCompleteConfigurationSchedules, resolveCompleteConfigurationTargets, runCompleteConfigurationSchedule, type CompleteConfigurationBatch, type CompleteConfigurationSchedule, type CompleteConfigurationTargetPreview } from '../api/completeConfiguration'
+import { createCompleteConfigurationBatch, createCompleteConfigurationSchedule, getCompleteConfigurationBatch, getCompleteConfigurationBatches, getCompleteConfigurationSchedules, resolveCompleteConfigurationTargets, runCompleteConfigurationSchedule, type CompleteConfigurationBatch, type CompleteConfigurationSchedule, type CompleteConfigurationTargetPreview } from '../api/completeConfiguration'
 
 const props = defineProps<{ selectedProfileIds: string[] }>()
 const emit = defineEmits<{ completed: []; inspect: [profileId: string] }>()
@@ -13,6 +13,8 @@ const preview = ref<CompleteConfigurationTargetPreview | null>(null)
 const batch = ref<CompleteConfigurationBatch | null>(null)
 const schedules = ref<CompleteConfigurationSchedule[]>([])
 const viewingPlanId = ref('')
+const history = ref<CompleteConfigurationBatch[]>([])
+const historyId = ref('')
 const interval = ref(1440); const busy = ref(false); const error = ref(''); const choicesError = ref('')
 let sequence = 0; let pollSequence = 0; let timer: ReturnType<typeof setTimeout> | undefined; let disposed = false; let active = true
 const failedProfiles = computed(() => batch.value?.items.filter(item => item.state === 'FAILED').map(item => item.profileId) ?? [])
@@ -37,6 +39,24 @@ async function resolve(): Promise<void> {
 }
 async function refreshPlans(): Promise<void> {
   const next = await getCompleteConfigurationSchedules(); if (!disposed) schedules.value = next
+}
+async function refreshHistory(): Promise<void> {
+  if (busy.value || running.value) return
+  busy.value = true; error.value = ''
+  try { const next = await getCompleteConfigurationBatches(); if (!disposed) history.value = next }
+  catch { if (!disposed) error.value = '批次历史暂不可读，请检查当前权限后重试。' }
+  finally { if (!disposed) busy.value = false }
+}
+async function inspectHistory(): Promise<void> {
+  if (busy.value || running.value || !historyId.value) return
+  busy.value = true; error.value = ''
+  try {
+    const next = await getCompleteConfigurationBatch(historyId.value)
+    if (disposed) return
+    ++pollSequence; clearTimeout(timer); batch.value = next; viewingPlanId.value = ''
+    if (!next.completedMs) void poll(next.id)
+  } catch { if (!disposed) error.value = '批次已过期或权限已变化，请刷新批次历史。' }
+  finally { if (!disposed) busy.value = false }
 }
 async function inspectPlan(plan: CompleteConfigurationSchedule): Promise<void> {
   if (busy.value || running.value || !plan.lastBatchId || plan.lastBatchAvailable === false) return
@@ -126,6 +146,8 @@ onBeforeUnmount(() => { disposed = true; active = false; ++sequence; ++pollSeque
     <div class="card__header"><h2>完整配置批量与定时备份</h2></div>
     <div class="card__body">
       <p class="muted">完整原件保存在服务私有目录；页面与下载只提供脱敏副本。当前仅支持授权模拟器，整机恢复仍受设备能力验证限制。</p>
+      <div class="toolbar"><el-button :disabled="busy || running" @click="refreshHistory">刷新完整备份批次历史</el-button><select v-model="historyId" aria-label="完整备份批次历史" :disabled="busy || running"><option value="">选择最近 50 个可读批次</option><option v-for="item in history" :key="item.id" :value="item.id">{{ time(item.createdMs) }} · {{ state(item.state) }} · {{ item.succeeded }}/{{ item.total }} · {{ item.id }}</option></select><el-button :disabled="busy || running || !historyId" @click="inspectHistory">查看批次结果</el-button></div>
+      <p class="muted">最近 128 个终态批次明细可跨重启查询。每台配置版本长期保留，批次展示上限不会删除配置。</p>
       <div class="toolbar">
         <label class="form-field"><span>备份范围</span><select v-model="selection" aria-label="完整配置备份范围" :disabled="busy || running"><option value="PROFILES">上方所选设备（{{ selectedProfileIds.length }} 台）</option><option value="SITE">按 Site</option><option value="DOMAIN">按 AC Domain</option></select></label>
         <label v-if="selection === 'SITE'" class="form-field"><span>Site</span><select v-model="siteId" aria-label="完整配置 Site" :disabled="busy || running"><option value="">请选择 Site</option><option v-for="site in sites" :key="site.id" :value="site.id">{{ site.name }}</option></select></label>

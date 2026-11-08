@@ -250,6 +250,20 @@ internal sealed class ConfigBackupService(
             throw new ConfigBackupException("CONFIG_BACKUP_TARGET_UNSUPPORTED", "当前配置备份仅支持独立管理的 H3C 设备。", 409);
     }
 
+    public IReadOnlyList<ConfigBackupBatch> ListCompleteBatches(WebUserIdentity actor, P2B5SiteScopeDecision scope)
+    {
+        if (actor.Role != "SUPERADMIN" || !scope.IsAuthorized || catalog.GetActiveTaskActor(actor.UserId)?.Role != "SUPERADMIN")
+            throw new ConfigBackupException("CONFIG_BACKUP_PERMISSION_DENIED", "需要有效的 SUPERADMIN Site 权限。", 403);
+        lock (_batchGate)
+        {
+            return _batches.Keys.Concat(_batchHistory.Ids()).Distinct(StringComparer.Ordinal)
+                .Select(id => GetBatch(id, actor, scope))
+                .OfType<ConfigBackupBatch>().Where(item => item.ConfigurationKind == ConfigBackupKinds.CompleteRunning)
+                .OrderByDescending(item => item.CreatedMs).ThenBy(item => item.Id, StringComparer.Ordinal)
+                .Take(50).ToArray();
+        }
+    }
+
     public ConfigBackupBatch? GetBatch(string id, WebUserIdentity actor, P2B5SiteScopeDecision scope)
     {
         if (actor.Role != "SUPERADMIN" || !scope.IsAuthorized) return null;

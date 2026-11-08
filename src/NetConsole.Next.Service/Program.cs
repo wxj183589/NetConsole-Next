@@ -9,6 +9,18 @@ using System.IO.Ports;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging.EventLog;
 
+if (args.Length > 0 && args[0] == "--icmp-diagnose")
+{
+    if (args.Length != 1)
+    {
+        Console.Error.WriteLine("--icmp-diagnose accepts no arguments and probes only loopback.");
+        Environment.ExitCode = 2;
+        return;
+    }
+    Environment.ExitCode = await IcmpDeploymentDiagnostics.RunAsync(Console.Out);
+    return;
+}
+
 using var singleInstance = SingleInstanceGuard.Acquire();
 var settings = RuntimeSettings.FromEnvironment();
 var builder = WebApplication.CreateBuilder(args);

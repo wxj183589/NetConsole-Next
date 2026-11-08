@@ -483,7 +483,8 @@ internal sealed partial class SimulatorConfigurationService
     private void CheckPath(string path)
     {
         for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
-            if ((File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            if (new FileInfo(current).LinkTarget is not null ||
+                (File.Exists(current) || Directory.Exists(current)) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
                 throw Failure("CONFIG_COMPLETE_PATH_UNSAFE", "配置存储路径不能包含链接。");
     }
     private void SaveChange(SimulatorConfigurationChange operation) => Write(Path.Combine(ChangeDirectory(operation.ProfileId, true), operation.Id + ".json"),

@@ -14,6 +14,8 @@ internal static class CompleteConfigurationBatchTests
     public static async Task RunAsync()
     {
         await PrivateBatchPreservesOriginals();
+        await ManualBatchHistorySurvivesRestart();
+        await MixedSiteHistoryCannotLeakPartialBatches();
         await PartialFailureAndRetry();
         await RejectMixedTargetsBeforeAdmission();
         await FrozenEndpointCannotBeReplaced();
@@ -31,7 +33,42 @@ internal static class CompleteConfigurationBatchTests
         await FailedBatchPublicationIsExplicit();
         DanglingMetadataPartsCannotEscapeStorage();
         FailureCodesRemainPersistable();
-        Console.WriteLine("CompleteConfigurationBatch: 18/18 PASS");
+        Console.WriteLine("CompleteConfigurationBatch: 20/20 PASS");
+    }
+
+    private static async Task MixedSiteHistoryCannotLeakPartialBatches()
+    {
+        using var fixture = new Fixture();
+        fixture.Sql("INSERT INTO sites(id,name) VALUES('other','Other');" +
+            $"UPDATE device_inventory SET site_id='other' WHERE terminal_profile_id='{fixture.Second}';" +
+            $"UPDATE collection_sources SET site_id='other' WHERE id=(SELECT source_id FROM h3c_device_profiles WHERE id='{fixture.Second}')");
+        var localBatch = await fixture.Finish(fixture.Start(fixture.First));
+        var otherBatch = await fixture.Finish(fixture.Start(fixture.Second));
+        await fixture.Finish(fixture.Start(fixture.First, fixture.Second));
+        fixture.RestartBackups();
+        var local = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture", "claims-local");
+        var other = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "other" }, "fixture", "claims-other");
+        Assert(fixture.Backups.ListCompleteBatches(Actor, local).Select(item => item.Id).SequenceEqual([localBatch.Id]) &&
+            fixture.Backups.ListCompleteBatches(Actor, other).Select(item => item.Id).SequenceEqual([otherBatch.Id]) &&
+            fixture.Backups.ListCompleteBatches(Actor, Scope).Count == 3,
+            "current claims filter entire cross-Site batches, without exposing their IDs or partial counts");
+        Expect("CONFIG_BACKUP_PERMISSION_DENIED", () => fixture.Backups.ListCompleteBatches(Actor,
+            new("REVOKED", false, new HashSet<string>(), "fixture", "claims-revoked")));
+        Assert(fixture.Factory.Opens.Count == 4, "history/claims changes must not start any further device sessions");
+    }
+
+    private static async Task ManualBatchHistorySurvivesRestart()
+    {
+        using var fixture = new Fixture();
+        var completed = await fixture.Finish(fixture.Start(fixture.First));
+        fixture.RestartBackups();
+        var listed = fixture.Backups.ListCompleteBatches(Actor, Scope);
+        Assert(listed.Count == 1 && listed[0].Id == completed.Id && listed[0].Items.SequenceEqual(completed.Items) &&
+            fixture.Factory.Opens.Count == 1, "manual batch discovery survives restart without recollection");
+        Assert(fixture.Backups.ListCompleteBatches(Actor,
+            new("AUTHORIZED", false, new HashSet<string> { "foreign" }, "fixture", "claims")).Count == 0,
+            "history lists never expose another Site's batch or counts");
+        Expect("CONFIG_BACKUP_PERMISSION_DENIED", () => fixture.Backups.ListCompleteBatches(Actor with { Role = "ADMIN" }, Scope));
     }
 
     private static async Task CompletedScheduleBatchSurvivesRestart()
@@ -105,6 +142,7 @@ internal static class CompleteConfigurationBatchTests
         f.RestartBackups();
         Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Start(f.First));
         Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Backups.GetBatch("missing", Actor, Scope));
+        Expect("CONFIG_BACKUP_BATCH_STORE_UNAVAILABLE", () => f.Backups.ListCompleteBatches(Actor, Scope));
         Assert(f.Factory.Opens.IsEmpty && File.ReadAllText(path) == damaged,
             "damaged optional history must preserve evidence and reject collection before connecting");
         return Task.CompletedTask;

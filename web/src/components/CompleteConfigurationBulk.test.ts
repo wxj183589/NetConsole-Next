@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import CompleteConfigurationBulk from './CompleteConfigurationBulk.vue'
 
-const api = vi.hoisted(() => ({ createCompleteConfigurationBatch: vi.fn(), createCompleteConfigurationSchedule: vi.fn(), getCompleteConfigurationBatch: vi.fn(), getCompleteConfigurationSchedules: vi.fn(), resolveCompleteConfigurationTargets: vi.fn(), runCompleteConfigurationSchedule: vi.fn() }))
+const api = vi.hoisted(() => ({ createCompleteConfigurationBatch: vi.fn(), createCompleteConfigurationSchedule: vi.fn(), getCompleteConfigurationBatch: vi.fn(), getCompleteConfigurationBatches: vi.fn(), getCompleteConfigurationSchedules: vi.fn(), resolveCompleteConfigurationTargets: vi.fn(), runCompleteConfigurationSchedule: vi.fn() }))
 const shared = vi.hoisted(() => ({ getDeviceSites: vi.fn(), getWirelessAcDomains: vi.fn(), setConfigBackupScheduleEnabled: vi.fn(), deleteConfigBackupSchedule: vi.fn() }))
 vi.mock('../api/completeConfiguration', () => api)
 vi.mock('../api/client', () => shared)
@@ -15,6 +15,18 @@ function button(wrapper: ReturnType<typeof render>, label: string) { return wrap
 async function resolve(wrapper: ReturnType<typeof render>) { await button(wrapper, '预览完整备份目标').trigger('click'); await flushPromises() }
 
 describe('complete configuration bulk workflow', () => {
+  it('discovers a stored manual batch and retries only its failed device', async () => {
+    api.getCompleteConfigurationBatches.mockResolvedValue([partial])
+    const wrapper = render(); await flushPromises()
+    await button(wrapper, '刷新完整备份批次历史').trigger('click'); await flushPromises()
+    await wrapper.get('select[aria-label="完整备份批次历史"]').setValue('batch1')
+    await button(wrapper, '查看批次结果').trigger('click'); await flushPromises()
+    expect(api.getCompleteConfigurationBatch).toHaveBeenCalledWith('batch1')
+    expect(wrapper.text()).toContain('CONFIG_DEVICE_TIMEOUT')
+    await button(wrapper, '仅重试失败设备').trigger('click'); await flushPromises()
+    expect(api.createCompleteConfigurationBatch).toHaveBeenCalledWith(['p2'])
+    wrapper.unmount()
+  })
   afterEach(() => { vi.useRealTimers() })
   beforeEach(() => {
     vi.resetAllMocks()

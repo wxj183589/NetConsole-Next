@@ -67,12 +67,12 @@ function exportCsv() {
   const iso = (at: number) => new Date(at).toISOString()
   const rows: unknown[][] = [['scope', 'page', 'page_size', 'total_matching', 'loaded_at', 'filter_state', 'filter_device_id', 'filter_kind', 'filter_from_ms', 'filter_to_ms',
     'record_type', 'fault_id', 'device_id', 'profile_id', 'site_id', 'kind', 'resource_key', 'severity', 'state', 'occurrences', 'first_seen', 'last_seen', 'source_type', 'evidence_id', 'detail_redacted',
-    'history_at', 'history_action', 'history_actor_user_id', 'history_evidence_id', 'history_detail_redacted']]
+    'history_at', 'history_action', 'history_actor_user_id', 'history_evidence_id', 'history_detail_redacted', 'source_authority', 'captured_scope_key']]
   const prefix = ['CURRENT_PAGE_LOADED_QUERY_ONLY', data.page, data.pageSize, data.total, scope.at, scope.filters.state, scope.filters.deviceId, scope.filters.kind, scope.filters.fromMs, scope.filters.toMs]
   for (const item of data.items) {
     const facts = [item.id, item.deviceId, item.profileId, item.siteId, item.kind, item.resourceKey, item.severity, item.state, item.occurrences, iso(item.firstSeenMs), iso(item.lastSeenMs), item.evidenceType, item.evidenceId, redact(item.detail)]
-    rows.push([...prefix, 'EVENT', ...facts, '', '', '', '', ''])
-    for (const entry of item.history) rows.push([...prefix, 'HISTORY', ...facts, iso(entry.atMs), entry.action, entry.actorUserId, entry.evidenceId, redact(entry.detail)])
+    rows.push([...prefix, 'EVENT', ...facts, '', '', '', '', '', item.sourceAuthority, item.capturedScopeKey])
+    for (const entry of item.history) rows.push([...prefix, 'HISTORY', ...facts, iso(entry.atMs), entry.action, entry.actorUserId, entry.evidenceId, redact(entry.detail), item.sourceAuthority, item.capturedScopeKey])
   }
   const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }))
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = `fault-history-page-${data.page}.csv`; anchor.click(); URL.revokeObjectURL(url)
@@ -112,7 +112,7 @@ onBeforeUnmount(() => { generation++ })
       <form class="fault-center__filters" @submit.prevent="load()">
         <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>
-        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
+        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>LLDP_NEIGHBOR_LOST</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
         <label>起始时间 <input v-model="from" aria-label="起始时间" type="datetime-local"></label><label>截止时间 <input v-model="to" aria-label="截止时间" type="datetime-local"></label>
         <button :disabled="busy" type="submit">查询故障</button><button :disabled="busy" type="button" @click="resetFilters">重置故障筛选</button><button v-if="props.canRecover" :disabled="busy" type="button" @click="synchronize">同步当前证据</button>
       </form>
@@ -130,10 +130,10 @@ onBeforeUnmount(() => { generation++ })
             <td><small>{{ item.evidenceType }}: {{ item.evidenceId }}</small><a v-if="sourceEvidence(item)" :href="sourceEvidence(item)!.href" target="_blank" rel="noopener">{{ sourceEvidence(item)!.label }}</a><button :disabled="busy" @click="expanded = expanded === item.id ? '' : item.id">查看处理历史</button>
               <template v-if="props.canRecover && item.state !== 'RESOLVED'"><button :disabled="busy || !['OPEN', 'REOPENED'].includes(item.state)" @click="acknowledge(item)">确认故障</button><button :disabled="busy || item.state === 'PROCESSING'" @click="process(item)">开始处理</button><button :disabled="busy" @click="verify(item)">核验恢复</button></template></td>
           </tr><tr v-if="expanded === item.id"><td colspan="5">
-            <ol><li v-for="(entry, index) in item.history" :key="index">{{ time(entry.atMs) }} · {{ entry.action }} · {{ entry.actorUserId }}<small>{{ entry.detail }} · 证据 {{ entry.evidenceId }}</small></li></ol>
+            <div v-if="item.sourceAuthority">来源 {{ item.sourceAuthority }}<details><summary>捕获范围</summary><span class="mono">{{ item.capturedScopeKey || 'UNSCOPED' }}</span></details></div><ol><li v-for="(entry, index) in item.history" :key="index">{{ time(entry.atMs) }} · {{ entry.action }} · {{ entry.actorUserId }}<small>{{ entry.detail }} · 证据 {{ entry.evidenceId }}</small></li></ol>
             <p v-if="policy(item)">补采策略 {{ policy(item)?.state }} · {{ policy(item)?.attempts }}/{{ policy(item)?.maximumAttempts }} 轮 · 下次 {{ time(policy(item)?.nextRunMs ?? null) }}<small v-if="policy(item)?.lastError">{{ policy(item)?.lastError }}</small><a v-if="policy(item)?.planId" :href="`/api/system/h3c/task-plans/${encodeURIComponent(policy(item)?.planId ?? '')}/report`" target="_blank" rel="noopener">查看真实补采计划</a></p>
             <template v-if="props.canRecover && item.state !== 'RESOLVED'">
-              <p>仅重新连接并采集版本和接口，不修改配置。最多 3 轮，每轮最多 3 次瞬态连接探测；认证或密钥失败停止。启用后等待完整间隔。</p>
+              <p>重新连接并采集版本和接口；邻居消失故障同时读取完整 LLDP 表。最多 3 轮，每轮最多 3 次瞬态连接探测；认证或密钥失败停止。启用后等待完整间隔。</p>
               <label>间隔分钟 <input v-model.number="interval" type="number" min="5" max="1440"></label><label>最多轮数 <input v-model.number="attempts" type="number" min="1" max="3"></label>
               <button :disabled="busy || policy(item)?.enabled || ['RUNNING', 'AWAITING_RECOLLECTION'].includes(policy(item)?.state ?? '')" @click="configure(item, true)">启用有限只读补采</button><button v-if="policy(item)?.enabled" :disabled="busy" @click="configure(item, false)">停止后续补采</button>
             </template>

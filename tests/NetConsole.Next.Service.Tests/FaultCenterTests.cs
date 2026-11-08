@@ -13,6 +13,7 @@ internal static class FaultCenterTests
         ReopensOnlyNewFaultEvidence();
         RecoveryRequiresExactFreshVerifiedResource();
         RecoveryAndAggregationKeepSourceScope();
+        LldpRecoveryRequiresExactCompleteNewTable();
         ApRecoveryRequiresLiveMasterAndAllSources();
         HistoryIsBounded();
         PersistenceSurvivesRestart();
@@ -30,7 +31,22 @@ internal static class FaultCenterTests
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=21/21 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=22/22 PASS");
+    }
+    private static void LldpRecoveryRequiresExactCompleteNewTable()
+    {
+        var item = FaultLifecycle.Observe(null, Event() with { Kind = "LLDP_NEIGHBOR_LOST", ResourceKey = "GE1|GE2|AA" }, "profile-a", "actor", Now);
+        var table = new H3cFactSnapshot("restored", "profile-a", "lldp.table", "table", "STALE", "H3C_SSH_READONLY", Now + 1, true,
+            "{\"status\":\"PARSED\",\"neighbors\":[{\"localInterface\":\"GE1\",\"neighborInterface\":\"GE2\",\"chassisId\":\"AA\"}]}")
+            { CollectedRawVerified = true, CapturedScopeKey = "scope-a" };
+        Assert(FaultLifecycle.FreshRecoveryFact(item, [table], Now + 2)?.Id == "restored", "exact returned neighbor in fresh complete table verifies recovery");
+        foreach (var rejected in new[] { table with { CapturedMs = Now }, table with { CapturedScopeKey = "scope-b" },
+            table with { Source = "OTHER" }, table with { ProfileId = "other" }, table with { CollectedRawVerified = false },
+            table with { PayloadJson = "{\"status\":\"PARSED\",\"neighbors\":[]}" }, table with { Status = "PARTIAL" } })
+            Assert(FaultLifecycle.FreshRecoveryFact(item, [rejected], Now + 2) is null, "wrong identity, scope, authority, age or incomplete table cannot resolve loss");
+        var resolved = item with { State = "RESOLVED", History = FaultLifecycle.Append(item, new(Now + 2, "RECOVERY_VERIFIED", "actor", table.Id, "restored")) };
+        var recurring = FaultLifecycle.Observe(resolved, Event("table-again", Now + 3) with { Kind = "LLDP_NEIGHBOR_LOST", ResourceKey = item.ResourceKey }, "profile-a", "actor", Now + 4);
+        Assert(recurring.State == "REOPENED" && recurring.Occurrences == 2, "later exact neighbor loss reopens the same incident");
     }
     private static void CollectionRecoveryRequiresSameCommandPlan()
     {

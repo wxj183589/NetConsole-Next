@@ -26,6 +26,46 @@ internal sealed record OperationalRecoveryReport(string Id, string DeviceId, str
 internal static class OperationalHealthProjection
 {
     public const long FreshnessWindowMs = 300_000;
+    internal static HashSet<string>? CompleteLldpNeighbors(H3cFactSnapshot fact)
+    {
+        if (fact.Kind != "lldp.table" || !fact.CollectedRawVerified || !fact.IsCurrent ||
+            fact.CapturedScopeKey == "UNSCOPED" || fact.Status is "FAILED" or "PARTIAL" or "EMPTY" or "UNSUPPORTED") return null;
+        try
+        {
+            var table = JsonSerializer.Deserialize<H3cLldpListTable>(fact.PayloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            if (table?.Status != "PARSED" || table.Neighbors is null ||
+                table.Neighbors.Any(n => n is null || string.IsNullOrWhiteSpace(n.LocalInterface) ||
+                    string.IsNullOrWhiteSpace(n.NeighborInterface) || string.IsNullOrWhiteSpace(n.ChassisId))) return null;
+            return table.Neighbors.Select(n => $"{n.LocalInterface}|{n.NeighborInterface}|{n.ChassisId}")
+                .ToHashSet(StringComparer.Ordinal);
+        }
+        catch (JsonException) { return null; }
+    }
+
+    internal static IReadOnlyList<OperationalFaultEvent> LostLldpNeighbors(DeviceInventoryItem device,
+        IReadOnlyList<H3cFactSnapshot> history, IReadOnlyList<H3cFactSnapshot> tables, long now)
+    {
+        var events = new List<OperationalFaultEvent>();
+        foreach (var table in tables.Where(t => t.ProfileId == device.TerminalProfileId &&
+            t.CapturedMs <= now && now - t.CapturedMs <= FreshnessWindowMs))
+        {
+            var neighbors = CompleteLldpNeighbors(table);
+            if (neighbors is null) continue;
+            foreach (var prior in history.Where(f => f.Kind == "lldp.neighbor" && f.CollectedRawVerified &&
+                f.ProfileId == table.ProfileId && f.SourceAuthority == table.SourceAuthority &&
+                f.CapturedScopeKey == table.CapturedScopeKey && f.CapturedMs < table.CapturedMs &&
+                f.Status is not ("FAILED" or "PARTIAL" or "EMPTY" or "UNSUPPORTED"))
+                .DistinctBy(f => f.IdentityKey))
+            {
+                if (neighbors.Contains(prior.IdentityKey)) continue;
+                events.Add(new("lldp-lost:" + table.Id + ":" + prior.Id, device.Id, device.SiteId,
+                    "LLDP_NEIGHBOR_LOST", "WARNING", "OBSERVED", table.CapturedMs, "FACT", table.Id,
+                    "完整 LLDP 表已不再包含此前邻居；请检查邻居与接口，不据此判断设备离线。", prior.IdentityKey,
+                    table.SourceAuthority, table.CapturedScopeKey));
+            }
+        }
+        return events;
+    }
     public static string ProbeResource(string protocol, string address, int? port) =>
         JsonSerializer.Serialize(new object?[] { protocol, address, port });
     public static OperationalMetric RouteMetric(NetworkDiagnosticItemSnapshot item, string runId,
@@ -58,14 +98,16 @@ internal static class OperationalHealthProjection
         var interfaceMetric = known.Length == 0 ? Unknown("interfaces") : new OperationalMetric(
             "OBSERVED", down, "interfaces", known.Max(f => f.Fact.CapturedMs), known.Select(f => f.Fact.Id).ToArray());
         var lldp = fresh.Where(f => f.Kind == "lldp.neighbor").ToArray();
+        var emptyLldpTables = fresh.Where(f => CompleteLldpNeighbors(f) is { Count: 0 }).ToArray();
+        var lldpEvidence = lldp.Length > 0 ? lldp : emptyLldpTables;
         var reachable = fresh.Length == 0 ? Unknown("state") : new OperationalMetric("OBSERVED", 1, "state",
             fresh.Max(f => f.CapturedMs), fresh.Select(f => f.Id).Take(10).ToArray());
         var state = !device.Enabled ? "DISABLED" : !device.IsValid || down > 0 ? "ATTENTION" :
             fresh.Length > 0 ? "OBSERVED" : "UNKNOWN";
         return new(device.Id, device.Name, device.SiteId, device.TerminalProfileId, state, reachable,
             Unknown("%"), Unknown("%"), interfaceMetric,
-            lldp.Length == 0 ? Unknown("neighbors") : new("OBSERVED", lldp.Length, "neighbors",
-                lldp.Max(f => f.CapturedMs), lldp.Select(f => f.Id).ToArray()), warnings);
+            lldpEvidence.Length == 0 ? Unknown("neighbors") : new("OBSERVED", lldp.Length, "neighbors",
+                lldpEvidence.Max(f => f.CapturedMs), lldpEvidence.Select(f => f.Id).ToArray()), warnings);
     }
 
     public static string? LinkState(string json)
@@ -104,6 +146,10 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             var facts = device.TerminalProfileId is { } profile
                 ? catalog.QueryH3cFacts(profile, limit: 1000, scope: scope, requireCapturedScope: true) : [];
             var health = OperationalHealthProjection.Device(device, facts, now);
+            if (device.TerminalProfileId is { } lldpProfile)
+                events.AddRange(OperationalHealthProjection.LostLldpNeighbors(device,
+                    catalog.QueryLatestLldpNeighborHistory(lldpProfile, scope),
+                    catalog.QueryH3cFacts(lldpProfile, "lldp.table", limit: 1000, scope: scope, requireCapturedScope: true), now));
             var pingEvidence = diagnosticItems.FirstOrDefault(pair => pair.Item.DeviceId == device.Id && pair.Item.SiteId == device.SiteId &&
                 pair.Item.QuickPing is { } sample && sample.DestinationAddress == device.ManagementIp &&
                 (sample.Protocol != "TCP" || sample.Port == device.Port));
@@ -188,6 +234,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             ["仅汇总当前页授权设备；最多读取 100 项近期任务、每设备 1000 条 Current Facts、显示 100 项事件。",
              "CPU、内存和缺少证据的指标为 UNKNOWN；接口和 LLDP 仅代表已观测条目。",
              "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内完成的真实采样；无线事件最多检查本页 AC 关联的 10 个 AP。",
+             "LLDP 消失仅对照同来源与捕获范围的最近 1000 个独立邻居身份的最后观测和完整 Current 表；身份超限会遗漏事件。",
              "连接会话关闭或采集失败不代表设备离线。"]);
     }
 }
@@ -223,7 +270,7 @@ internal sealed class OperationalRecoveryService(Catalog catalog, TaskSiteScopeA
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<OperationalRecoveryReport> RecoverAsync(OperationalRecoveryRequest request,
-        string actorUserId, CancellationToken cancellationToken, TaskScopeSnapshot? expectedTarget = null)
+        string actorUserId, CancellationToken cancellationToken, TaskScopeSnapshot? expectedTarget = null, bool includeLldp = false)
     {
         if (!await _gate.WaitAsync(0, cancellationToken)) throw new InvalidOperationException("OPERATIONAL_RECOVERY_BUSY");
         try
@@ -260,7 +307,8 @@ internal sealed class OperationalRecoveryService(Catalog catalog, TaskSiteScopeA
             TaskPlanSnapshot? plan = null;
             if (OperationalRecoveryRunner.Connected(attempts[^1].Status))
                 plan = tasks.CreateAndSchedule(new(id, [frozen.ProfileId], "display version", 120000,
-                    ["display version", "display interface brief"]), actorUserId,
+                    includeLldp ? ["display version", "display interface brief", H3cCommandPolicy.DisplayLldpNeighborInformationList]
+                        : ["display version", "display interface brief"]), actorUserId,
                     new Dictionary<string, string> { [frozen.ProfileId] = frozen.DeviceId });
             var state = plan is null ? "CONNECTION_NOT_RECOVERED" : plan.Items.Any(i => i.RunId is not null)
                 ? "RECOLLECTION_QUEUED" : "RECOLLECTION_NOT_QUEUED";

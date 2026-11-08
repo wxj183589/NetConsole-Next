@@ -111,6 +111,13 @@ def seed_catalog(root, now):
             last_received_ms,record_count,byte_count,sha256,sealed_ms)
             VALUES('r72-http-syslog','syslog-local',?,'FINALIZED',?,?,1,?,?,?)""",
             (relative, now, now, len(content), hashlib.sha256(content).hexdigest(), now))
+        db.execute("INSERT INTO collection_sources(id,site_id,kind,label) VALUES('r73-storage-source','local','H3C_SSH_READONLY','Synthetic storage fixture')")
+        db.execute("""INSERT INTO h3c_device_profiles(id,source_id,host,port,username,credential_reference,
+            host_key_sha256,enabled,created_ms,updated_ms,terminal_protocol) VALUES('r73-storage-profile','r73-storage-source',
+            '192.168.56.3',22,'fixture','SYNTHETIC_UNUSED_REFERENCE','',1,?,?,'SSH')""", (now, now))
+        db.execute("""INSERT INTO device_inventory(id,name,management_ip,vendor,device_type,site_id,
+            enabled,created_ms,updated_ms,terminal_profile_id) VALUES('r73-storage-device','Synthetic storage fixture',
+            '192.168.56.3','H3C','SWITCH','local',1,?,?,'r73-storage-profile')""", (now, now))
         db.commit()
     return user, message
 
@@ -159,9 +166,23 @@ def run(dll):
         policy = dict(faultId="fault-site-a", expectedProfileId="profile-site-a", enabled=True,
                       intervalMinutes=5, maximumAttempts=1)
         for path, method, payload in ((FAULTS, "GET", None), (SYSLOG, "POST", query),
-                (TARGETS, "POST", selected), (RUN, "POST", {})):
+                (TARGETS, "POST", selected), (RUN, "POST", {}),
+                ("/api/system/complete-configuration/batches", "GET", None),
+                ("/api/system/simulator-config/storage?profileId=r73-storage-profile", "GET", None)):
             expect(anonymous, path, method, payload, 401)
         check(True, "ANONYMOUS_FEATURE_ROUTES_401")
+        expect(reader, "/api/system/complete-configuration/batches", status=403, label="READ_ROLE_BATCH_HISTORY_403")
+        expect(reader, "/api/system/simulator-config/storage?profileId=r73-storage-profile", status=403, label="READ_ROLE_STORAGE_403")
+        check(expect(owner, "/api/system/complete-configuration/batches") == [], "OWNER_EMPTY_BATCH_HISTORY_HTTP")
+        storage_directory = root / "backup" / "config-complete"
+        existed_before = storage_directory.exists()
+        storage = expect(owner, "/api/system/simulator-config/storage?profileId=r73-storage-profile")
+        check(storage["profileId"] == "r73-storage-profile" and storage["profileStoredBytes"] == 0 and
+              storage["manifestCount"] == 0 and storage["automaticDeletion"] is False and
+              storage["retentionPolicy"] == "PRESERVE_ALL_STOP_AT_CAPACITY" and
+              storage_directory.exists() == existed_before, "OWNER_STORAGE_NO_DEVICE_OR_DIRECTORY_WRITE")
+        expect(owner, "/api/system/simulator-config/storage?profileId=missing-profile", status=404,
+               label="STORAGE_UNKNOWN_PROFILE_HIDDEN_404")
         all_faults = expect(reader, FAULTS)
         check(all_faults["summary"] == dict(open=3, acknowledged=0, processing=0, resolved=0,
               reopened=0, affectedDevices=3), "FILTERED_FAULT_SUMMARY_HTTP")
@@ -217,7 +238,9 @@ def run(dll):
         for module in ("config-backups", "tools"):
             expect(owner, "/api/system/modules/" + module, "PUT", dict(enabled=False))
         for path, method, payload in ((TARGETS, "POST", selected), (RUN, "POST", {}),
-                ("/api/system/config-backup-schedules", "GET", None), (SYSLOG, "POST", query)):
+                ("/api/system/config-backup-schedules", "GET", None), (SYSLOG, "POST", query),
+                ("/api/system/complete-configuration/batches", "GET", None),
+                ("/api/system/simulator-config/storage?profileId=r73-storage-profile", "GET", None)):
             expect(owner, path, method, payload, 404)
         check(True, "DISABLED_CONFIG_BACKUPS_AND_TOOLS_NEW_ROUTES_404")
         expect(owner, FAULTS)

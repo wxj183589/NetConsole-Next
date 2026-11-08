@@ -11,6 +11,8 @@ internal static class SimulatorConfigurationTests
     public static async Task RunAsync()
     {
         await CaptureAndRedact();
+        await StorageReportsRetainedFilesWithoutConnecting();
+        await StorageRejectsInvalidDirectories();
         await RejectIncomplete();
         await RejectTampering();
         await DamagedHistoryDoesNotReuseVersions();
@@ -29,7 +31,65 @@ internal static class SimulatorConfigurationTests
         await VerifyReconnectFailureRecovery();
         await RejectChangedReadbackVersion();
         await RejectChangedRollbackVersion();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=19/19 PASS");
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=21/21 PASS");
+    }
+
+    private static async Task StorageRejectsInvalidDirectories()
+    {
+        using var fixture = new Fixture();
+        var root = Path.Combine(fixture.Root, "backup", "config-complete");
+        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        File.WriteAllText(root, "preserve-blocking-file");
+        try
+        {
+            fixture.Service.Storage(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+            throw new InvalidOperationException("A file blocking the directory must not produce zero usage.");
+        }
+        catch (IOException) { }
+        Assert(File.ReadAllText(root) == "preserve-blocking-file", "damaged storage remains intact");
+        // Authorization is evaluated before even inspecting the damaged root.
+        await Reject(() => Task.FromResult(fixture.Service.Storage(fixture.Profile, Actor with { Role = "ADMIN" },
+            P2B5SiteScopeDecision.Global)), "CONFIG_CHANGE_PERMISSION_DENIED");
+        File.Delete(root);
+        var target = Path.Combine(fixture.Root, "absent-link-target");
+        Directory.CreateSymbolicLink(root, target);
+        try
+        {
+            await Reject(() => Task.FromResult(fixture.Service.Storage(fixture.Profile, Actor,
+                P2B5SiteScopeDecision.Global)), "CONFIG_COMPLETE_PATH_UNSAFE");
+            Assert(!Directory.Exists(target) && fixture.Factory.Opens == 0,
+                "dangling storage directory links neither create targets nor open sessions");
+        }
+        finally { Directory.Delete(root); }
+    }
+
+    private static async Task StorageReportsRetainedFilesWithoutConnecting()
+    {
+        using var fixture = new Fixture();
+        var empty = fixture.Service.Storage(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        Assert(empty.ManifestCount == 0 && empty.ProfileStoredBytes == 0 && fixture.Factory.Opens == 0 &&
+            !Directory.Exists(Path.Combine(fixture.Root, "backup", "config-complete")),
+            "storage reads do not connect a device or create absent storage");
+        var backup = await fixture.Service.CaptureAsync(fixture.Profile, Actor, P2B5SiteScopeDecision.Global, default);
+        var directory = Path.GetDirectoryName(fixture.Raw(backup))!;
+        File.WriteAllText(Path.Combine(directory, "orphan.cfg"), "orphan-data");
+        File.WriteAllText(Path.Combine(directory, "damaged.json"), "{invalid");
+        var original = File.ReadAllBytes(fixture.Raw(backup));
+        var expectedBytes = Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Sum(path => new FileInfo(path).Length);
+        var capped = fixture.WithCapacity(expectedBytes, 2);
+        var status = capped.Storage(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        var scoped = capped.Storage(fixture.Profile, Actor,
+            new("AUTHORIZED", false, new HashSet<string> { "local" }, "fixture", "claims-local"));
+        Assert(status.ManifestCount == 2 && status.ProfileStoredBytes == expectedBytes && status.SharedStoredBytes == expectedBytes &&
+            status.ProfileLimitReached && status.SharedLimitReached == true && status.AvailableDiskBytes > 0 &&
+            !status.AutomaticDeletion && status.RetentionPolicy == "PRESERVE_ALL_STOP_AT_CAPACITY" &&
+            fixture.Factory.Opens == 1 && File.ReadAllBytes(fixture.Raw(backup)).SequenceEqual(original),
+            "capacity counts damaged/orphan files without deleting history or connecting devices");
+        Assert(scoped.ProfileStoredBytes == expectedBytes && scoped.SharedStoredBytes is null && scoped.SharedLimitReached is null,
+            "explicit Site authority receives no global occupancy or cross-Site quota status");
+        await Reject(() => Task.FromResult(capped.Storage(fixture.Profile, Actor with { Role = "ADMIN" }, P2B5SiteScopeDecision.Global)), "CONFIG_CHANGE_PERMISSION_DENIED");
+        await Reject(() => Task.FromResult(capped.Storage(fixture.Profile, Actor,
+            new("AUTHORIZED", false, new HashSet<string> { "foreign" }, "fixture", "claims"))), "CONFIG_CHANGE_TARGET_NOT_VISIBLE");
     }
 
     private static async Task CaptureAndRedact()

@@ -146,7 +146,8 @@ internal static class FaultLifecycle
             now - f.CapturedMs <= OperationalHealthProjection.FreshnessWindowMs &&
             f.Status is not ("FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY") &&
             (item.Kind == "EVIDENCE_STALE" || item.Kind == "INTERFACE_DOWN" && f.Kind == "interface" &&
-                f.IdentityKey == item.ResourceKey && OperationalHealthProjection.LinkState(f.PayloadJson) == "UP"))
+                f.IdentityKey == item.ResourceKey && OperationalHealthProjection.LinkState(f.PayloadJson) == "UP" ||
+                item.Kind == "LLDP_NEIGHBOR_LOST" && OperationalHealthProjection.CompleteLldpNeighbors(f)?.Contains(item.ResourceKey) == true))
         .MaxBy(f => f.CapturedMs);
 
     public static string? FreshApRecoveryEvidence(FaultIncident item, WirelessRuntimeStateView? runtime, long now) =>
@@ -447,7 +448,8 @@ internal sealed class FaultCenterService : BackgroundService
         try
         {
             _authorizer.Require(new(policy.Target, policy.Target.ActorUserId, "fault-policy-" + policy.FaultId), policy.Target.ProfileId, "FAULT_AUTOMATION");
-            var result = await _recovery.RecoverAsync(new(policy.DeviceId, policy.Target.ProfileId), policy.Target.ActorUserId, token, policy.Target);
+            var includeLldp = _store.Current.Incidents.Any(i => i.Id == policy.FaultId && i.Kind == "LLDP_NEIGHBOR_LOST");
+            var result = await _recovery.RecoverAsync(new(policy.DeviceId, policy.Target.ProfileId), policy.Target.ActorUserId, token, policy.Target, includeLldp);
             lock (_gate)
             {
                 var latest = _store.Current.Policies.Single(p => p.DeviceId == policy.DeviceId);

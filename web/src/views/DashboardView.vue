@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref } from 'vue'
-import * as echarts from 'echarts'
+import { init, use, type EChartsType } from 'echarts/core'
+import { PieChart } from 'echarts/charts'
+import { LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { Bell, CircleCheck, DataLine, List, Monitor, TrendCharts, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
@@ -9,6 +12,7 @@ import FaultCenter from '../components/FaultCenter.vue'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
+use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer])
 import { getDeviceInventory, getHealth, getTasks, getWirelessAcDomains, getWirelessApResources, type DeviceInventoryPage, type HealthSnapshot, type TaskRun, type WirelessPage, type WirelessAcDomain, type WirelessApResource } from '../api/client'
 
 const health = ref<HealthSnapshot | null>(null)
@@ -21,7 +25,7 @@ const loading = ref(true)
 const statusChartHost = ref<HTMLElement | null>(null)
 const faultCenterHost = ref<HTMLElement | null>(null)
 function focusFaultCenter() { faultCenterHost.value?.focus({ preventScroll: true }); faultCenterHost.value?.scrollIntoView({ block: 'start' }) }
-let statusChart: echarts.ECharts | undefined
+let statusChart: EChartsType | undefined
 let generation = 0
 let active = true
 const pageErrors = ref<string[]>([])
@@ -64,7 +68,7 @@ function statusClass(state?: string): string {
 function renderStatusChart(): void {
   if (!statusChartHost.value) return
   statusChart?.dispose()
-  statusChart = echarts.init(statusChartHost.value)
+  statusChart = init(statusChartHost.value)
   const values = [
     { name: '在线会话', value: summary.value.onlineDevices, color: '#1eb69b' },
     { name: '离线会话', value: summary.value.offlineDevices, color: '#eb5360' },
