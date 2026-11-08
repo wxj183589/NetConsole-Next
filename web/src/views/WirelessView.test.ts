@@ -187,6 +187,30 @@ describe('AP group source identity', () => {
     expect(wrapper.get('.wireless-task-result').text()).toContain('RUNNING')
   })
 
+  it('starts the standard read-only collection directly for the selected AC', async () => {
+    const plan = { id: 'ac-refresh', state: 'QUEUED', items: [{ ordinal: 0, target: 'ac-b', state: 'QUEUED' }] }
+    const summary = { id: plan.id, state: 'QUEUED', createdMs: domain.asOf, updatedMs: domain.asOf, total: 1, succeeded: 0, failed: 0 }
+    api.createWirelessTask.mockResolvedValue({ id: plan.id, plan })
+    api.getWirelessTasks.mockResolvedValue([summary])
+    api.getWirelessTask.mockResolvedValue({ summary, items: [] })
+    const wrapper = render()
+    await flushPromises()
+
+    await wrapper.findAll('.wireless-tree__member')[1].trigger('click')
+    const quickCollect = wrapper.get('.wireless-task-quick-collect')
+    expect(quickCollect.text()).toContain('采集当前 AC')
+    await quickCollect.trigger('click')
+    await flushPromises()
+
+    expect(api.createWirelessTask).toHaveBeenCalledWith(
+      ['domain-one'],
+      ['display version', 'display wlan ap all', 'display wlan ap all address'],
+      ['ac-b'],
+    )
+    expect(wrapper.get('.wireless-task-result').text()).toContain('QUEUED')
+    expect(wrapper.get('.wireless-task-detail').text()).toContain('ac-refresh')
+  })
+
   it('loads task history and reads a selected report', async () => {
     const summary = { id: 'history-one', state: 'FAILED', createdMs: domain.asOf, total: 1, succeeded: 0, failed: 1 }
     api.getWirelessTasks.mockResolvedValue([summary])

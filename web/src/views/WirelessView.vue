@@ -183,13 +183,21 @@ function selectDomain(domain: WirelessAcDomain): void {
   void loadCollectionManifests(domain.id)
 }
 async function createTask(): Promise<void> {
-  if (!taskDomains.value.length || !taskCommands.value.length || taskSubmitting.value) return
+  await submitTask(taskDomains.value, taskCommands.value, taskAcs.value.length ? taskAcs.value : undefined)
+}
+async function collectCurrentAc(): Promise<void> {
+  const domain = selectedDomain.value
+  if (!domain || !selectedAcId.value || taskSubmitting.value) return
+  await submitTask([domain.id], ['display version', 'display wlan ap all', 'display wlan ap all address'], [selectedAcId.value])
+}
+async function submitTask(domainIds: string[], commands: string[], acIds?: string[]): Promise<void> {
+  if (!domainIds.length || !commands.length || taskSubmitting.value) return
   taskSubmitting.value = true
   taskError.value = ''
   taskResult.value = null
   taskPlan.value = null
   try {
-    taskResult.value = await createWirelessTask(taskDomains.value, taskCommands.value, taskAcs.value.length ? taskAcs.value : undefined)
+    taskResult.value = await createWirelessTask(domainIds, commands, acIds)
     taskPlan.value = taskResult.value.plan
     await loadTaskHistory()
     await showTask(taskResult.value.id)
@@ -436,6 +444,7 @@ onActivated(() => {
       <main class="wireless-main">
         <section v-if="domains.length" class="card wireless-task">
           <div class="card__header"><h2>无线采集任务</h2></div>
+          <div v-if="selectedAcId" class="wireless-task-quick"><span>当前 AC：{{ selectedDomain?.members.find(member => member.deviceId === selectedAcId)?.displayName || selectedAcId }}</span><el-button class="wireless-task-quick-collect" size="small" :loading="taskSubmitting" :disabled="taskSubmitting" @click="collectCurrentAc">采集当前 AC</el-button></div>
           <div><label v-for="domain in domains" :key="domain.id" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskDomains" type="checkbox" :value="domain.id">{{ domain.displayName }}</label></div>
           <div v-if="taskMembers.length"><span>AC（不选则采集全部成员）：</span><label v-for="member in taskMembers" :key="member.deviceId" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskAcs" type="checkbox" :value="member.deviceId">{{ member.displayName }}</label></div>
           <div><label v-for="command in taskCommandOptions" :key="command" style="display:inline-flex;gap:6px;margin:0 16px 8px 0"><input v-model="taskCommands" type="checkbox" :value="command">{{ command }}</label></div>
@@ -586,6 +595,7 @@ onActivated(() => {
 .tree-branch { display: inline-block; width: 15px; color: var(--nc-text-muted); }
 .wireless-main { min-width: 0; display: grid; gap: 14px; }
 .wireless-task, .wireless-task-history { padding: 14px; }
+.wireless-task-quick { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .wireless-task-row button { border: 0; background: transparent; color: var(--nc-text); cursor: pointer; padding: 8px 0; text-align: left; }
 .wireless-task-detail { border-top: 1px solid var(--nc-border); margin-top: 8px; padding-top: 8px; overflow-wrap: anywhere; }
 .wireless-domain-header { display: flex; justify-content: space-between; gap: 12px; padding: 18px 20px; }
