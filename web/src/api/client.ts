@@ -583,6 +583,7 @@ export interface NetworkDiagnosticRun {
   cancelledChecks: number
   queuedChecks: number
   runningChecks: number
+  pausedChecks?: number
   progressPercent: number
   createdMs: number
   startedMs?: number | null
@@ -1502,6 +1503,9 @@ export function listNetworkDiagnostics(limit = 50): Promise<NetworkDiagnosticRun
 }
 export function cancelNetworkDiagnostics(id: string): Promise<{ cancelled: boolean }> {
   return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+}
+export function setLongPingPaused(id: string, paused: boolean): Promise<{ accepted: boolean; action: string }> {
+  return request(`/api/system/diagnostics/runs/${encodeURIComponent(id)}/long-ping/${paused ? 'pause' : 'resume'}`, { method: 'POST' })
 }
 export function getHostTools(): Promise<HostTool[]> { return request('/api/system/host-tools') }
 export function updateHostTool(id: string, executablePath: string | null): Promise<HostTool> {

@@ -54,6 +54,7 @@ internal static class NetworkQuickPingTests
             throw new Exception("revocation expected");
         }
         catch (DeviceSiteScopeException) { }
+        await LongPingControlTests.RunAsync();
         await LiveLoopbackHistoryAndScope();
         Console.WriteLine("QUICK_PING_TESTS=9/9 PASS (loss, progress, cancellation, limits, unknown, revocation, real TCP/history/scope, P95 rank, legacy P95)");
     }
@@ -76,6 +77,7 @@ internal static class NetworkQuickPingTests
             catalog.CreateH3cDeviceProfile(new(device, "127.0.0.1", ((IPEndPoint)listener.LocalEndpoint).Port,
                 "fixture", "", "", true, 0, 0));
             string id;
+            string pausedHistoryId;
             using (var service = new NetworkDiagnosticsService(catalog))
             {
                 id = service.Start(new([device], ["QUICK_PING"], 500, SampleCount: 3, IntervalMs: 100, QuickPingProtocol: "TCP"), actor, P2B5SiteScopeDecision.Global).Id;
@@ -89,9 +91,26 @@ internal static class NetworkQuickPingTests
                     "diagnostic history summaries retain exact device and Site association");
                 var longRun = service.Start(new([device], ["LONG_PING"], 500, IntervalMs: 1_000,
                     QuickPingProtocol: "TCP", LongPingDurationSeconds: 10), actor, P2B5SiteScopeDecision.Global);
+                pausedHistoryId = longRun.Id;
                 using var longDeadline = new CancellationTokenSource(5_000);
-                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent == 0)
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent is not >= 1)
                     await Task.Delay(10, longDeadline.Token);
+                Assert(service.SetLongPingPaused(longRun.Id, true, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "long ping accepts pause");
+                Assert(service.SetLongPingPaused(longRun.Id, true, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "repeated service pause is idempotent");
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.PausedChecks != 1) await Task.Delay(10, longDeadline.Token);
+                var paused = service.Get(longRun.Id, P2B5SiteScopeDecision.Global)!;
+                await Task.Delay(250);
+                Assert(paused is { State: "RUNNING", RunningChecks: 0, CompletedChecks: 0 } &&
+                    service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent == paused.Items.Single().QuickPing?.Sent,
+                    "paused task remains active with unchanged actual samples and separate paused count");
+                var foreign = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "foreign" }, "fixture");
+                Assert(!service.SetLongPingPaused(longRun.Id, false, actor, "SUPERADMIN", foreign) &&
+                    !service.SetLongPingPaused(id, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "foreign scope and terminal non-long tasks cannot be resumed");
+                Assert(service.SetLongPingPaused(longRun.Id, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "current owner can resume exact inventory target");
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Sent <= paused.Items.Single().QuickPing?.Sent)
+                    await Task.Delay(10, longDeadline.Token);
+                service.SetLongPingPaused(longRun.Id, true, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global);
+                while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.PausedChecks != 1) await Task.Delay(10, longDeadline.Token);
                 Assert(service.Cancel(longRun.Id, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global), "long ping remains cancellable during its duration window");
                 using var cancelDeadline = new CancellationTokenSource(5_000);
                 while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 }) await Task.Delay(10, cancelDeadline.Token);
@@ -101,11 +120,63 @@ internal static class NetworkQuickPingTests
                     "cancelled Long Ping history retains its device and Site association");
             }
             using var restarted = new NetworkDiagnosticsService(catalog);
+            Assert(restarted.Get(pausedHistoryId, actor, P2B5SiteScopeDecision.Global)?.Items.Single() is
+                { State: "CANCELLED", QuickPing: { Sent: >= 2, Lost: 0 } } &&
+                !restarted.SetLongPingPaused(pausedHistoryId, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global),
+                "restart retains real paused cancellation samples without replay or resume");
             Assert(restarted.Get(id, actor, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Samples.Count == 3, "complete samples survive restart");
             var denied = new P2B5SiteScopeDecision("AUTHORIZED", false, new HashSet<string> { "foreign" }, "fixture");
             Assert(restarted.Get(id, actor, denied)?.Items.Count == 0 && restarted.List(actor, denied).Count == 0, "hidden samples and summaries do not leak across Sites");
+            await PausedTargetChangesStop(catalog, db, actor);
         }
         finally { listener.Stop(); SqliteConnection.ClearAllPools(); }
+    }
+
+    private static async Task PausedTargetChangesStop(Catalog catalog, SqliteConnection db, string actor)
+    {
+        using var sites = db.CreateCommand();
+        sites.CommandText = "INSERT OR IGNORE INTO sites(id,name) VALUES('long-other','Long other')";
+        sites.ExecuteNonQuery();
+        var addressSuffix = 20;
+        foreach (var mutation in new[]
+        {
+            ("device_inventory", "enabled=0"), ("device_inventory", "site_id='long-other'"),
+            ("device_inventory", "terminal_profile_id=NULL"), ("h3c_device_profiles", "host='127.0.0.253'"),
+            ("h3c_device_profiles", "port=2222"), ("web_users", "disabled=1"), ("web_users", "role='ADMIN'")
+        })
+        {
+            var device = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(device, $"127.0.0.{addressSuffix++}", 22, "fixture", "", "", true, 0, 0));
+            using var service = new NetworkDiagnosticsService(catalog, new IcmpNetworkTracerouteProbe(), new Probe());
+            var run = service.Start(new([device], ["LONG_PING"], 500, IntervalMs: 1000,
+                QuickPingProtocol: "TCP", LongPingDurationSeconds: 10), actor, P2B5SiteScopeDecision.Global);
+            service.SetLongPingPaused(run.Id, true, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global);
+            using var deadline = new CancellationTokenSource(5_000);
+            while (service.Get(run.Id, P2B5SiteScopeDecision.Global)?.PausedChecks != 1) await Task.Delay(10, deadline.Token);
+            var before = service.Get(run.Id, P2B5SiteScopeDecision.Global)!.Items.Single().QuickPing!.Sent;
+            try
+            {
+                using var change = db.CreateCommand();
+                change.CommandText = $"UPDATE {mutation.Item1} SET {mutation.Item2} WHERE id=$id";
+                change.Parameters.AddWithValue("$id", mutation.Item1 == "web_users" ? actor : device);
+                change.ExecuteNonQuery();
+                var accepted = false;
+                try { accepted = service.SetLongPingPaused(run.Id, false, actor, "SUPERADMIN", P2B5SiteScopeDecision.Global); }
+                catch (DeviceSiteScopeException) { }
+                Assert(!accepted, "resume revalidates current actor, Site, enabled state and exact profile endpoint");
+                while (service.Get(run.Id, P2B5SiteScopeDecision.Global)?.ProgressPercent != 100) await Task.Delay(10, deadline.Token);
+                var terminal = service.Get(run.Id, P2B5SiteScopeDecision.Global)!.Items.Single();
+                Assert(terminal is { State: "CANCELLED", Outcome: "DIAGNOSTIC_SCOPE_REVOKED" } && terminal.QuickPing?.Sent == before,
+                    "revoked paused task stops without another probe or invented loss");
+            }
+            finally
+            {
+                using var restore = db.CreateCommand();
+                restore.CommandText = "UPDATE web_users SET disabled=0,role='SUPERADMIN' WHERE id=$id";
+                restore.Parameters.AddWithValue("$id", actor); restore.ExecuteNonQuery();
+            }
+        }
+        Console.WriteLine("LONG_PING_SERVICE_AUTHORITY_TESTS=7/7 PASS (enabled, Site, profile, host, port, disabled actor, role downgrade)");
     }
 
     private sealed class Probe : IQuickPingProbe

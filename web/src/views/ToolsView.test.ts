@@ -7,7 +7,7 @@ import { useAuthStore } from '../stores/auth'
 import ToolsView from './ToolsView.vue'
 
 const api = vi.hoisted(() => ({ getHostTools: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(),
-  updateHostTool: vi.fn(), launchHostTool: vi.fn(), startNetworkDiagnostics: vi.fn(), listNetworkDiagnostics: vi.fn(), getNetworkDiagnostics: vi.fn(), cancelNetworkDiagnostics: vi.fn() }))
+  updateHostTool: vi.fn(), launchHostTool: vi.fn(), startNetworkDiagnostics: vi.fn(), listNetworkDiagnostics: vi.fn(), getNetworkDiagnostics: vi.fn(), cancelNetworkDiagnostics: vi.fn(), setLongPingPaused: vi.fn() }))
 vi.mock('../api/client', async importOriginal => ({ ...await importOriginal<typeof import('../api/client')>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }))
 
@@ -60,8 +60,45 @@ describe('network diagnostic tools and traceroute', () => {
     api.startNetworkDiagnostics.mockResolvedValue(run()); api.getNetworkDiagnostics.mockResolvedValue(run())
     api.listNetworkDiagnostics.mockResolvedValue([])
     api.cancelNetworkDiagnostics.mockResolvedValue({ cancelled: true })
+    api.setLongPingPaused.mockResolvedValue({ accepted: true })
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
+
+  it('pauses and resumes Long Ping while keeping cancellation available and showing window semantics', async () => {
+    const active = run({ state: 'RUNNING', completedChecks: 0, progressPercent: 0, items: [item({ kind: 'LONG_PING', state: 'RUNNING', traceRoute: null })] })
+    api.startNetworkDiagnostics.mockResolvedValue(active)
+    api.getNetworkDiagnostics.mockResolvedValue(active)
+    const wrapper = await render(); await selectTrace(wrapper); await button(wrapper, '开始诊断').trigger('click'); await flushPromises()
+    api.getNetworkDiagnostics.mockResolvedValue({ ...active, pausedChecks: 1, items: [item({ kind: 'LONG_PING', state: 'PAUSED', traceRoute: null })] })
+    await button(wrapper, '暂停长期 Ping').trigger('click'); await flushPromises()
+    expect(api.setLongPingPaused).toHaveBeenLastCalledWith('diagnostic-one', true)
+    expect(wrapper.text()).toContain('已暂停'); expect(wrapper.text()).toContain('原持续时长继续计时')
+    expect(button(wrapper, '取消任务').attributes('disabled')).toBeUndefined()
+    api.getNetworkDiagnostics.mockResolvedValue(active)
+    await button(wrapper, '恢复长期 Ping').trigger('click'); await flushPromises()
+    expect(api.setLongPingPaused).toHaveBeenLastCalledWith('diagnostic-one', false)
+    api.getNetworkDiagnostics.mockResolvedValue(run({ state: 'CANCELLED' }))
+    await button(wrapper, '取消任务').trigger('click'); await flushPromises()
+    expect(api.cancelNetworkDiagnostics).toHaveBeenCalledWith('diagnostic-one')
+    expect(wrapper.text()).not.toContain('暂停长期 Ping')
+  })
+
+  it('ignores a late pause acknowledgement after switching history and resets the control button', async () => {
+    const active = run({ state: 'RUNNING', items: [item({ kind: 'LONG_PING', state: 'RUNNING' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(active), summary(run({ id: 'other' }))])
+    api.getNetworkDiagnostics.mockResolvedValue(active)
+    const late = deferred<{ accepted: boolean }>()
+    api.setLongPingPaused.mockReturnValue(late.promise)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('diagnostic-one'); await flushPromises()
+    await button(wrapper, '暂停长期 Ping').trigger('click'); await flushPromises()
+    api.getNetworkDiagnostics.mockResolvedValue(run({ id: 'other' }))
+    await wrapper.get('select[aria-label="诊断历史"]').setValue('other'); await flushPromises()
+    late.resolve({ accepted: true }); await flushPromises()
+    expect(wrapper.get('select[aria-label="诊断历史"]').element).toHaveProperty('value', 'other')
+    expect(wrapper.text()).not.toContain('恢复长期 Ping')
+    expect(api.getNetworkDiagnostics).toHaveBeenCalledTimes(2)
+  })
 
   it('submits continuous TCP sampling and renders real loss and unavailable latency', async () => {
     api.startNetworkDiagnostics.mockResolvedValue(run({ state: 'FAILED', items: [item({ kind: 'QUICK_PING', state: 'FAILED', traceRoute: null,

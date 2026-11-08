@@ -114,7 +114,8 @@ internal static class NetworkQuickPing
 
     public static async Task<QuickPingSnapshot> RunForDurationAsync(string host, int port, string protocol,
         int durationSeconds, int intervalMs, int timeoutMs, IQuickPingProbe probe, Action requireCurrentTarget,
-        Action<QuickPingSnapshot> progress, CancellationToken token)
+        Action<QuickPingSnapshot> progress, CancellationToken token, LongPingControl? control = null,
+        Action<string>? stateChanged = null)
     {
         using var duration = CancellationTokenSource.CreateLinkedTokenSource(token);
         duration.CancelAfter(TimeSpan.FromSeconds(checked(durationSeconds + 5)));
@@ -138,8 +139,11 @@ internal static class NetworkQuickPing
         }
         progress(Snapshot());
         var started = Stopwatch.GetTimestamp();
+        TimeSpan Remaining() => TimeSpan.FromSeconds(durationSeconds) - Stopwatch.GetElapsedTime(started);
         for (var index = 1; index <= sampleLimit && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(durationSeconds); index++)
         {
+            if (control is not null && !await control.WaitToProbeAsync(Remaining, requireCurrentTarget,
+                    stateChanged ?? (_ => { }), duration.Token)) break;
             duration.Token.ThrowIfCancellationRequested();
             requireCurrentTarget();
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(duration.Token);

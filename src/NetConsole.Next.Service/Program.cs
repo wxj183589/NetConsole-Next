@@ -868,6 +868,21 @@ app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, st
         ? Results.Ok(new { cancelled = true })
         : Results.NotFound(new { error = "DIAGNOSTIC_RUN_NOT_VISIBLE_OR_TERMINAL" });
 });
+app.MapPost("/api/system/diagnostics/runs/{id}/long-ping/{action}", (HttpContext context, string id, string action,
+    NetworkDiagnosticsService diagnostics) =>
+{
+    if (!IsSuperAdmin(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    if (action is not ("pause" or "resume")) return Results.BadRequest(new { error = "LONG_PING_ACTION_INVALID" });
+    var identity = CurrentIdentity(context);
+    try
+    {
+        return diagnostics.SetLongPingPaused(id, action == "pause", identity.UserId, identity.Role, CurrentSiteScope(context))
+            ? Results.Ok(new { accepted = true, action })
+            : Results.NotFound(new { error = "LONG_PING_NOT_VISIBLE_OR_TERMINAL" });
+    }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code }, statusCode: StatusCodes.Status403Forbidden); }
+});
 app.MapPost("/api/system/config-backups", (HttpContext context, ConfigBackupRequest request,
     ConfigBackupService backups) =>
 {

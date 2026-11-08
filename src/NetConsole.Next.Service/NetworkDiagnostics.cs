@@ -50,7 +50,10 @@ internal sealed record NetworkDiagnosticRunSnapshot(
     long? StartedMs,
     long? EndedMs,
     string? FailureReason,
-    IReadOnlyList<NetworkDiagnosticItemSnapshot> Items);
+    IReadOnlyList<NetworkDiagnosticItemSnapshot> Items)
+{
+    public int PausedChecks => Items?.Count(item => item?.State == "PAUSED") ?? 0;
+}
 
 internal sealed record NetworkDiagnosticRunSummary(
     string Id, string State, int TotalDevices, int TotalChecks, int CompletedChecks,
@@ -216,6 +219,37 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         }
     }
 
+    public bool SetLongPingPaused(string id, bool paused, string actor, string role, P2B5SiteScopeDecision scope)
+    {
+        lock (_gate)
+        {
+            if (!_runs.TryGetValue(id, out var run) || IsTerminalRun(run.State) || run.Cancellation.IsCancellationRequested ||
+                !CanOperate(run, actor, role, scope)) return false;
+            var items = run.Items.Where(item => item.Kind == "LONG_PING" && !IsTerminal(item.State)).ToArray();
+            if (items.Length == 0) return false;
+            // Revalidate both the operator and the admitted owner before changing any child.
+            foreach (var item in items)
+            {
+                RequireCurrentTraceTarget(actor, scope, item.Target);
+                RequireCurrentTraceTarget(run.Actor, run.Scope, item.Target);
+            }
+            foreach (var item in items)
+                item.LongPingControl.SetPaused(paused, state => UpdateLongPingState(item, state));
+            return true;
+        }
+    }
+
+    private static void UpdateLongPingState(DiagnosticItem item, string state)
+    {
+        lock (item.Gate)
+        {
+            if (IsTerminal(item.State) || item.State == "QUEUED") return;
+            item.State = state;
+            item.Detail = state == "PAUSING" ? "等待在途采样结束后暂停" : state == "PAUSED"
+                ? "已暂停；原持续时长继续计时，不补记丢失采样" : null;
+        }
+    }
+
     private async Task ExecuteRunAsync(DiagnosticRun run)
     {
         run.State = "RUNNING";
@@ -307,9 +341,12 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                     var sample = await NetworkQuickPing.RunForDurationAsync(item.Target.Host, item.Target.Port,
                         run.QuickPingProtocol, run.LongPingDurationSeconds, run.IntervalMs, run.TimeoutMs,
                         _quickPingProbe, () => RequireCurrentTraceTarget(run.Actor, run.Scope, item.Target),
-                        snapshot => { lock (item.Gate) item.QuickPing = snapshot; }, timeout.Token);
-                    Complete(item, sample.Lost == 0 ? "SUCCEEDED" : "FAILED", sample.Lost == 0 ? "OK" : "LONG_PING_LOSS",
-                        $"{sample.Protocol} 响应 {sample.Received}/{sample.Sent}，丢失 {sample.LossPercent}%", ElapsedMs(started),
+                        snapshot => { lock (item.Gate) item.QuickPing = snapshot; }, timeout.Token,
+                        item.LongPingControl, state => UpdateLongPingState(item, state));
+                    Complete(item, sample.Sent == 0 ? "NO_EVIDENCE" : sample.Lost == 0 ? "SUCCEEDED" : "FAILED",
+                        sample.Sent == 0 ? "LONG_PING_NO_SAMPLES" : sample.Lost != 0 ? "LONG_PING_LOSS" :
+                            sample.Sent < sample.RequestedSamples ? "LONG_PING_WINDOW_ENDED" : "OK",
+                        $"{sample.Protocol} 响应 {sample.Received}/{sample.Sent}；未执行 {sample.RequestedSamples - sample.Sent} 次不计丢失；原持续时长已结束", ElapsedMs(started),
                         sample.Sent, new[] { "SERVICE_HOST_" + sample.Protocol });
                     break;
                 }
@@ -449,7 +486,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var noEvidence = visible.Count(item => item.State == "NO_EVIDENCE");
         var cancelled = visible.Count(item => item.State == "CANCELLED");
         var queued = visible.Count(item => item.State == "QUEUED");
-        var running = visible.Count(item => item.State == "RUNNING");
+        var running = visible.Count(item => item.State is "RUNNING" or "PAUSING");
         var percent = ProgressPercent(completed, visible.Length, run.State);
         return new(run.Id, run.Actor, run.State, run.SiteId, run.TimeoutMs, run.Targets.Count, visible.Length,
             completed, succeeded, failed, noEvidence, cancelled, queued, running, percent, run.CreatedMs,
@@ -531,7 +568,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         var noEvidence = visible.Count(item => item.State == "NO_EVIDENCE");
         var cancelled = visible.Count(item => item.State == "CANCELLED");
         var queued = visible.Count(item => item.State == "QUEUED");
-        var running = visible.Count(item => item.State == "RUNNING");
+        var running = visible.Count(item => item.State is "RUNNING" or "PAUSING");
         var devices = visible.Select(item => item.DeviceId).Distinct(StringComparer.Ordinal).Count();
         return snapshot with
         {
@@ -589,6 +626,7 @@ internal sealed class NetworkDiagnosticsService : IDisposable
         public IReadOnlyList<string> EvidenceSources { get; set; } = Array.Empty<string>();
         public NetworkTracerouteSnapshot? TraceRoute { get; set; }
         public QuickPingSnapshot? QuickPing { get; set; }
+        public LongPingControl LongPingControl { get; } = new();
 
         public NetworkDiagnosticItemSnapshot ToSnapshot()
         {

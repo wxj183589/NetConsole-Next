@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import SyslogWorkspace from '../components/SyslogWorkspace.vue'
 import QuickPingHistoryTrend from '../components/QuickPingHistoryTrend.vue'
-import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
+import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -30,9 +30,12 @@ const quickPingProtocol = ref<'ICMP' | 'TCP'>('ICMP')
 const longPingDurationSeconds = ref(300)
 const diagnosticStarting = ref(false)
 const diagnosticCancelling = ref(false)
+const diagnosticControlling = ref(false)
 const diagnosticReading = ref(false)
 const diagnosticError = ref('')
 const diagnosticActive = computed(() => diagnosticRun.value?.state === 'QUEUED' || diagnosticRun.value?.state === 'RUNNING')
+const longPingActive = computed(() => diagnosticActive.value && diagnosticRun.value?.items.some(item => item.kind === 'LONG_PING' && ['QUEUED', 'RUNNING', 'PAUSING', 'PAUSED'].includes(item.state)))
+const longPingPaused = computed(() => diagnosticRun.value?.items.some(item => item.kind === 'LONG_PING' && ['PAUSING', 'PAUSED'].includes(item.state)))
 let diagnosticPoll: ReturnType<typeof setTimeout> | undefined
 let diagnosticGeneration = 0
 let diagnosticReadGeneration = -1
@@ -62,6 +65,7 @@ function clearDiagnosticSelection(id = ''): void {
   diagnosticError.value = ''
   diagnosticStarting.value = false
   diagnosticCancelling.value = false
+  diagnosticControlling.value = false
   diagnosticReading.value = false
 }
 function rememberDiagnostic(run: NetworkDiagnosticRun): void {
@@ -164,15 +168,28 @@ async function cancelDiagnostics(): Promise<void> {
   const generation = ++diagnosticGeneration
   stopDiagnosticPolling()
   diagnosticCancelling.value = true
+  diagnosticControlling.value = false
   diagnosticError.value = ''
   try { await cancelNetworkDiagnostics(id); if (diagnosticCurrent(id, generation)) await pollDiagnostics(id, generation) }
   catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '诊断任务取消失败' }
   finally { if (generation === diagnosticGeneration) diagnosticCancelling.value = false }
 }
-function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
+async function controlLongPing(): Promise<void> {
+  if (!diagnosticRun.value || !longPingActive.value || diagnosticControlling.value || diagnosticCancelling.value || !isSuperAdmin()) return
+  const id = diagnosticRun.value.id
+  const paused = !longPingPaused.value
+  const generation = ++diagnosticGeneration
+  stopDiagnosticPolling()
+  diagnosticControlling.value = true
+  diagnosticError.value = ''
+  try { await setLongPingPaused(id, paused); if (diagnosticCurrent(id, generation)) await pollDiagnostics(id, generation) }
+  catch (cause) { if (diagnosticCurrent(id, generation)) diagnosticError.value = cause instanceof Error ? cause.message : '长期 Ping 控制失败' }
+  finally { if (generation === diagnosticGeneration) diagnosticControlling.value = false }
+}
+function suspendDiagnostics(): void { pageActive = false; diagnosticGeneration++; diagnosticHistoryGeneration++; diagnosticHistoryLoading.value = false; diagnosticStarting.value = false; diagnosticCancelling.value = false; diagnosticControlling.value = false; diagnosticReading.value = false; stopDiagnosticPolling() }
 function diagnosticHistoryLabel(item: NetworkDiagnosticRunSummary): string { return `${new Date(item.createdMs).toLocaleString('zh-CN', { hour12: false })} · ${diagnosticStateLabel(item.state)} · ${item.totalDevices} 台设备 · ${item.kinds.map(diagnosticKindLabel).join('、')}` }
 function diagnosticKindLabel(value: string): string { return ({ QUICK_PING: 'Quick Ping 连续采样', LONG_PING: '长期 Ping', PING: 'Ping', TCP: 'TCP 端口', DNS: 'DNS', TRACEROUTE: 'Traceroute 路径', LLDP: 'LLDP 事实' } as Record<string, string>)[value] || value }
-function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
+function diagnosticStateLabel(value: string): string { return ({ QUEUED: '排队中', RUNNING: '执行中', PAUSING: '正在暂停', PAUSED: '已暂停', SUCCEEDED: '已完成', PARTIAL: '部分完成', FAILED: '失败', CANCELLED: '已取消', NO_EVIDENCE: '暂无证据' } as Record<string, string>)[value] || value }
 function diagnosticOutcomeLabel(value?: string | null): string { return ({ OK: '检查成功', TRACEROUTE_MAX_HOPS: '达到跳数上限，尚未到达目标', TRACEROUTE_UNREACHABLE: '目标不可达', TIMEOUT: '检查总超时', CANCELLED: '已取消', DIAGNOSTIC_SCOPE_REVOKED: '设备访问权限已变化' } as Record<string, string>)[value || ''] || value || '—' }
 function hopStatusLabel(value: string): string { return ({ REACHED: '已到达目标', TTL_EXPIRED: '中间节点', TIMED_OUT: '该跳超时', UNREACHABLE: '不可达', OTHER: '其他响应' } as Record<string, string>)[value] || '未知响应' }
 async function save(tool: HostTool): Promise<void> {
@@ -228,10 +245,11 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
             <label class="form-field"><span>持续时长</span><select v-model.number="longPingDurationSeconds" aria-label="长期 Ping 持续时长"><option :value="60">1 分钟</option><option :value="300">5 分钟</option><option :value="900">15 分钟</option><option :value="3600">1 小时</option></select></label>
             <small class="muted">最多 8 台设备；使用设备登记端口，不保存原始网络报文。</small>
           </fieldset>
-          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
+          <div class="toolbar" style="align-self:flex-end"><el-button type="primary" size="small" :loading="diagnosticStarting" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" @click="startDiagnostics">开始诊断</el-button><el-button v-if="longPingActive" size="small" :loading="diagnosticControlling" :disabled="diagnosticControlling || diagnosticCancelling || !isSuperAdmin()" @click="controlLongPing">{{ longPingPaused ? '恢复长期 Ping' : '暂停长期 Ping' }}</el-button><el-button size="small" :loading="diagnosticCancelling" :disabled="!diagnosticActive || diagnosticCancelling || !isSuperAdmin()" @click="cancelDiagnostics">取消任务</el-button></div>
         </div>
         <div v-if="diagnosticError" role="alert" class="diagnostic-error"><span>{{ diagnosticError }}</span><el-button v-if="selectedDiagnosticRun && !diagnosticCancelling" size="small" :loading="diagnosticReading" :disabled="diagnosticReading" @click="pollDiagnostics(selectedDiagnosticRun)">{{ diagnosticActive ? '重新读取进度' : '重新读取结果' }}</el-button></div>
         <template v-if="diagnosticRun">
+          <p v-if="longPingActive" class="muted">暂停将在当前采样结束后生效，原持续时长继续计时；恢复不补发采样。取消任务会停止整个批次。服务重启后需重新创建任务。</p>
           <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
           <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
