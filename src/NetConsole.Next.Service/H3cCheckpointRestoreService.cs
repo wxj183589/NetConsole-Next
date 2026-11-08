@@ -188,9 +188,16 @@ internal sealed partial class SimulatorConfigurationService
         if (!interfaces.Recognized) throw Failure("CONFIG_CHECKPOINT_SERVICE_PROBE_UNAVAILABLE", "接口关键探针无法识别。");
         Require(execution, "CHECKPOINT_LLDP_PROBE");
         var lldpText = await session.ReadAsync(H3cCommandPolicy.DisplayLldpNeighborInformationList, token).ConfigureAwait(false);
-        var lldp = H3cComwareParser.ParseLldpList(lldpText);
-        if (lldp.Count == 0 && !Regex.IsMatch(lldpText, @"(?i)(?:Total\s*(?:number\s+of\s+neighbors)?\s*:\s*0\b|no\s+(?:LLDP\s+)?neighbor|Local\s+Interface.*Neighbor|System\s+Name.*Local\s+Interface)"))
+        var transcript = CliTranscriptParser.Parse(lldpText, H3cCommandPolicy.DisplayLldpNeighborInformationList, completedExec: true);
+        var table = H3cComwareParser.ParseLldpListTable(lldpText, completedExec: true);
+        var explicitEmpty = (transcript.Status == CliTranscriptStatus.Complete ||
+            transcript.Status == CliTranscriptStatus.Incomplete && transcript.Prompt.Length == 0) &&
+            !CliTranscriptParser.HasCommandBoundaryMismatch(lldpText, H3cCommandPolicy.DisplayLldpNeighborInformationList) &&
+            Regex.IsMatch(transcript.Output.Trim(), @"\A(?:Total\s*(?:number\s+of\s+neighbors)?\s*:\s*0|No\s+(?:LLDP\s+)?neighbors?)\.?\z",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (table.Status != "PARSED" && !explicitEmpty)
             throw Failure("CONFIG_CHECKPOINT_SERVICE_PROBE_UNAVAILABLE", "LLDP 关键探针无法识别，不能将空输出视为业务正常。");
+        var lldp = table.Neighbors;
         return JsonSerializer.Serialize(new
         {
             interfaces = interfaces.Interfaces.OrderBy(item => item.InterfaceName, StringComparer.Ordinal).Select(item => new { item.InterfaceName, item.LinkStatus, item.ProtocolStatus, item.IpAddress, item.Speed, item.Duplex, item.PortMode, item.Vlan }),

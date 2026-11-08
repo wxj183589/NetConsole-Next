@@ -22,7 +22,56 @@ internal static class H3cCheckpointRestoreTests
         await RawEchoCheckpointTable();
         RawEchoAndPromptForms();
         RejectUnexpectedTranscriptContent();
-        Console.WriteLine("H3C_CHECKPOINT_RESTORE_TESTS=14/14 PASS");
+        await RejectInvalidLldpBaseline();
+        await AcceptExplicitEmptyLldpBaseline();
+        await LldpMismatch();
+        await RejectInvalidLldpReadback();
+        Console.WriteLine("H3C_CHECKPOINT_RESTORE_TESTS=18/18 PASS");
+    }
+    private static async Task RejectInvalidLldpBaseline()
+    {
+        foreach (var output in new[]
+        {
+            "Local Interface Chassis ID Port ID System Name\nPermission denied\n",
+            "Local Interface Chassis ID Port ID System Name\n--More--\n",
+            "Local Interface Chassis ID Port ID System Name\ntruncated row\n",
+            "Total number of neighbors: 0\nPermission denied\n",
+            "<fixture>\nTotal number of neighbors: 0\n"
+        })
+        {
+            using var fixture = new Fixture(); fixture.Factory.LldpOutput = output;
+            var result = await fixture.Run();
+            Assert(result.State == "FAILED" && result.Error == "CONFIG_CHECKPOINT_SERVICE_PROBE_UNAVAILABLE" &&
+                fixture.Factory.Commits == 0 && fixture.Factory.Descriptions == 0 && !result.ServiceVerified,
+                "failed, paged or malformed LLDP probes must not authorize checkpoint mutation or business success");
+        }
+    }
+    private static async Task AcceptExplicitEmptyLldpBaseline()
+    {
+        foreach (var output in new[] { "Total number of neighbors: 0\n", "No LLDP neighbor.\n",
+                     "Local Interface Chassis ID Port ID System Name\n" })
+        {
+            using var fixture = new Fixture(); fixture.Factory.LldpOutput = output;
+            var result = await fixture.Run();
+            Assert(result.State == "SERVICE_VERIFIED" && result.ServiceVerified,
+                "recognized complete zero-neighbor probes remain a valid baseline");
+        }
+    }
+    private static async Task LldpMismatch()
+    {
+        using var fixture = new Fixture(); fixture.Factory.Mode = "lldp-drift";
+        var result = await fixture.Run();
+        Assert(result.ConfigReadbackVerified && !result.ServiceVerified && !result.RollbackVerified &&
+            result.State == "ROLLBACK_FAILED" && result.Error!.Contains("CONFIG_CHECKPOINT_SERVICE_CHECK_FAILED"),
+            "changed LLDP neighbor identity must prevent business and rollback verification despite identical configuration");
+    }
+    private static async Task RejectInvalidLldpReadback()
+    {
+        using var fixture = new Fixture(); fixture.Factory.Mode = "lldp-readback-denied";
+        var result = await fixture.Run();
+        Assert(result.ConfigReadbackVerified && !result.ServiceVerified && !result.RollbackVerified &&
+            result.State == "ROLLBACK_FAILED" && result.Error!.Contains("CONFIG_CHECKPOINT_SERVICE_PROBE_UNAVAILABLE"),
+            "an unavailable LLDP probe after restore must not count as service or rollback verification");
     }
     private static async Task Success()
     {
@@ -182,6 +231,7 @@ internal static class H3cCheckpointRestoreTests
         public int Commits;
         public int Descriptions;
         public int Restores;
+        public string? LldpOutput;
         private string? _checkpoint;
         public Task<ISimulatorConfigurationSession> OpenAsync(H3cDeviceProfileSnapshot profile, CancellationToken token)
         { Opens++; return Task.FromResult<ISimulatorConfigurationSession>(new Session(this)); }
@@ -205,7 +255,10 @@ internal static class H3cCheckpointRestoreTests
                         "Brief information on interfaces in route mode:\nInterface Link Protocol IP\nVlan-interface1 " +
                         (owner.Mode == "service-drift" && owner.Restores > 0 ? "DOWN" : "UP") + " UP 192.168.56.3\n");
                 if (command == H3cCommandPolicy.DisplayLldpNeighborInformationList)
-                    return Task.FromResult("Local Interface Neighbor Interface Chassis ID\nGE1/0/1 neighbor port1 0011.2233.4455\n");
+                    return Task.FromResult(owner.Mode == "lldp-readback-denied" && owner.Restores > 0
+                        ? "Local Interface Chassis ID Port ID System Name\nPermission denied\n" : owner.LldpOutput ??
+                        "Local Interface Chassis ID Port ID System Name\nGE1/0/1 0011.2233.4455 port1 " +
+                        (owner.Mode == "lldp-drift" && owner.Restores > 0 ? "changed-neighbor" : "neighbor") + "\n");
                 throw new InvalidOperationException("Unexpected read command " + command);
             }
             public Task SetDescriptionAsync(string name, string? description, CancellationToken token)
