@@ -327,6 +327,9 @@ internal sealed class FaultCenterService : BackgroundService
             var now = Now(); string? evidence = null;
             var facts = _catalog.QueryH3cFacts(item.ProfileId, limit: 1000, scope: scope, requireCapturedScope: true);
             evidence = FaultLifecycle.FreshRecoveryFact(item, facts, now)?.Id;
+            if (item.Kind == "CONFIGURATION_CHANGED")
+                evidence = CompleteConfigurationFaultProjection.StableEvidence(item,
+                    _health.ConfigurationDrift(item.ProfileId, scope), now);
             if (item.Kind is "PROBE_PACKET_LOSS" or "TRACEROUTE_ANOMALY")
             {
                 // The health projection enforces current endpoint, authorized state and fresh actual samples.
@@ -375,7 +378,8 @@ internal sealed class FaultCenterService : BackgroundService
                 return new("RECOVERY_NOT_VERIFIED", "缺少更新且有效的恢复证据。", recordBlocked ? blocked : item);
             }
             var updated = item with { State = "RESOLVED", History = FaultLifecycle.Append(item,
-                new(now, "RECOVERY_VERIFIED", actor.UserId, evidence, "已核验更新的同资源恢复证据。")) };
+                new(now, "RECOVERY_VERIFIED", actor.UserId, evidence, item.Kind == "CONFIGURATION_CHANGED"
+                    ? "后续连续完整备份确认配置已稳定；不表示已回滚到变化前配置。" : "已核验更新的同资源恢复证据。")) };
             Save(updated); return new("RECOVERY_VERIFIED", "恢复证据已保存。", updated);
         }
     }

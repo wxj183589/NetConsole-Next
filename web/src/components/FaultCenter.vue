@@ -91,6 +91,7 @@ function sourceEvidence(item: FaultIncident): { href: string; label: string } | 
   if (item.evidenceType === 'TASK_RUN') return { href: `/api/system/tasks/${id}`, label: '查看来源任务证据' }
   if (item.evidenceType === 'DIAGNOSTIC') return { href: `/api/system/diagnostics/runs/${id}`, label: '查看来源诊断证据' }
   if (item.evidenceType === 'WIRELESS_RUNTIME') return { href: `/api/system/wireless/ap-resources/${id}/runtime-state`, label: '查看 AP 运行证据' }
+  if (item.evidenceType === 'CONFIG_COMPLETE_BACKUP' && item.profileId && props.canRecover) return { href: `/api/system/simulator-config/backups/${id}/view?profileId=${encodeURIComponent(item.profileId)}`, label: '查看脱敏配置证据' }
   return null
 }
 onMounted(() => { void load() })
@@ -111,10 +112,11 @@ onBeforeUnmount(() => { generation++ })
       <p>事件按设备、Site、故障类型与资源聚合。确认表示已知悉；恢复必须通过更新的有效证据核验。</p>
       <p>Ping 连续 3 次有效丢失形成丢包事件；同目标末尾连续 3 次有效应答且均晚于事件才可恢复。累计丢包率保留，不代表设备离线。</p>
       <p>运行中的 Long Ping 按真实样本同步故障、恢复与复发，无须等待任务结束。暂停和取消不提供恢复证据；ICMP 与 TCP 端口分别核验。</p>
+      <p>配置变化来自连续完整备份；后续备份一致表示配置已稳定，不表示已回滚到变化前配置。备份缺失或损坏不能确认恢复。</p>
       <form class="fault-center__filters" @submit.prevent="load()">
         <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>
-        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>LLDP_NEIGHBOR_LOST</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
+        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>LLDP_NEIGHBOR_LOST</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option><option value="CONFIGURATION_CHANGED">配置变化</option></select></label>
         <label>起始时间 <input v-model="from" aria-label="起始时间" type="datetime-local"></label><label>截止时间 <input v-model="to" aria-label="截止时间" type="datetime-local"></label>
         <button :disabled="busy" type="submit">查询故障</button><button :disabled="busy" type="button" @click="resetFilters">重置故障筛选</button><button v-if="props.canRecover" :disabled="busy" type="button" @click="synchronize">同步当前证据</button>
       </form>
@@ -126,7 +128,7 @@ onBeforeUnmount(() => { generation++ })
         <p v-if="!result.items.length">当前筛选没有故障记录。</p>
         <div v-else class="fault-center__table"><table><thead><tr><th>故障 / 资源</th><th>设备 / Site</th><th>生命周期</th><th>首次 / 最近观测</th><th>证据 / 操作</th></tr></thead>
           <tbody><template v-for="item in result.items" :key="item.id"><tr>
-            <td><strong>{{ item.kind }}</strong><small>{{ item.resourceKey }}</small><small>{{ item.detail }}</small></td>
+            <td><strong>{{ item.kind === 'CONFIGURATION_CHANGED' ? '配置变化' : item.kind }}</strong><small v-if="item.kind === 'CONFIGURATION_CHANGED'">{{ item.kind }}</small><small>{{ item.resourceKey }}</small><small>{{ item.detail }}</small></td>
             <td>{{ item.deviceId }}<small>{{ item.siteId }}</small><button :disabled="busy" @click="filterDevice(item)">仅看此设备故障</button><RouterLink v-if="item.deviceId && item.profileId" :to="{ path: '/config-backups', query: { deviceId: item.deviceId } }">查看此设备配置历史</RouterLink></td><td>{{ item.state }}<small>{{ item.occurrences }} 次有效观测</small></td>
             <td>{{ time(item.firstSeenMs) }}<small>{{ time(item.lastSeenMs) }}</small></td>
             <td><small>{{ item.evidenceType }}: {{ item.evidenceId }}</small><a v-if="sourceEvidence(item)" :href="sourceEvidence(item)!.href" target="_blank" rel="noopener">{{ sourceEvidence(item)!.label }}</a><button :disabled="busy" @click="expanded = expanded === item.id ? '' : item.id">查看处理历史</button>
@@ -134,7 +136,8 @@ onBeforeUnmount(() => { generation++ })
           </tr><tr v-if="expanded === item.id"><td colspan="5">
             <div v-if="item.sourceAuthority">来源 {{ item.sourceAuthority }}<details><summary>捕获范围</summary><span class="mono">{{ item.capturedScopeKey || 'UNSCOPED' }}</span></details></div><ol><li v-for="(entry, index) in item.history" :key="index">{{ time(entry.atMs) }} · {{ entry.action }} · {{ entry.actorUserId }}<small>{{ entry.detail }} · 证据 {{ entry.evidenceId }}</small></li></ol>
             <p v-if="policy(item)">补采策略 {{ policy(item)?.state }} · {{ policy(item)?.attempts }}/{{ policy(item)?.maximumAttempts }} 轮 · 下次 {{ time(policy(item)?.nextRunMs ?? null) }}<small v-if="policy(item)?.lastError">{{ policy(item)?.lastError }}</small><a v-if="policy(item)?.planId" :href="`/api/system/h3c/task-plans/${encodeURIComponent(policy(item)?.planId ?? '')}/report`" target="_blank" rel="noopener">查看真实补采计划</a></p>
-            <template v-if="props.canRecover && item.state !== 'RESOLVED'">
+            <p v-if="item.kind === 'CONFIGURATION_CHANGED'">请在此设备配置历史中采集完整备份，再核验配置是否稳定。</p>
+            <template v-if="props.canRecover && item.state !== 'RESOLVED' && item.kind !== 'CONFIGURATION_CHANGED'">
               <p>重新连接并采集版本和接口；邻居消失故障同时读取完整 LLDP 表。最多 3 轮，每轮最多 3 次瞬态连接探测；认证或密钥失败停止。启用后等待完整间隔。</p>
               <label>间隔分钟 <input v-model.number="interval" type="number" min="5" max="1440"></label><label>最多轮数 <input v-model.number="attempts" type="number" min="1" max="3"></label>
               <button :disabled="busy || policy(item)?.enabled || ['RUNNING', 'AWAITING_RECOLLECTION'].includes(policy(item)?.state ?? '')" @click="configure(item, true)">启用有限只读补采</button><button v-if="policy(item)?.enabled" :disabled="busy" @click="configure(item, false)">停止后续补采</button>

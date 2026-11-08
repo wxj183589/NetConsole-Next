@@ -36,7 +36,112 @@ internal static class SimulatorConfigurationTests
         await DetectSensitiveDriftWithoutDisclosure();
         await DamagedLatestDriftIsUnknown();
         await DriftDoesNotBridgeVersionsOrIdentity();
-        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=26/26 PASS");
+        await ConfigurationFaultRequiresExactFreshPair();
+        await ConfigurationDriftDrivesFaultLifecycle();
+        Console.WriteLine("SIMULATOR_CONFIGURATION_TESTS=28/28 PASS");
+    }
+
+    private static async Task ConfigurationFaultRequiresExactFreshPair()
+    {
+        using var fixture = new Fixture();
+        await fixture.Capture();
+        fixture.Factory.Text = Original.Replace("description original", "description monitored");
+        await fixture.Capture();
+        var drift = fixture.Service.DetectDrift(fixture.Profile, Actor, P2B5SiteScopeDecision.Global);
+        var device = fixture.Catalog.GetTaskScopeTarget(fixture.Profile, P2B5SiteScopeDecision.Global)!;
+        var now = drift.AfterCapturedMs!.Value;
+        var observation = CompleteConfigurationFaultProjection.Changed(drift, device, now)!;
+        Assert(observation.Kind == "CONFIGURATION_CHANGED" && observation.EvidenceId == drift.AfterBackupId &&
+            observation.ResourceKey == fixture.Profile && observation.SourceAuthority == "CONFIG_COMPLETE_BACKUP" &&
+            observation.CapturedScopeKey == device.SiteId && !observation.Detail.Contains("description"),
+            "configuration events retain exact version, backup, profile and Site metadata without configuration content");
+        foreach (var bad in new[] {
+            drift with { State = "UNKNOWN" }, drift with { State = "NO_BASELINE" }, drift with { State = "BASELINE_ONLY" },
+            drift with { State = "UNCHANGED" }, drift with { DeviceId = "another-device" }, drift with { ProfileId = "other" },
+            drift with { SiteId = "another-site" }, drift with { BeforeVersion = null }, drift with { AfterVersion = drift.AfterVersion + 1 },
+            drift with { BeforeBackupId = null }, drift with { BeforeBackupId = drift.AfterBackupId },
+            drift with { AfterBackupId = null }, drift with { BeforeCapturedMs = 0 }, drift with { AfterCapturedMs = now + 1 },
+            drift with { BeforeCapturedMs = now + 1 }, drift with { ConfigurationChanged = false, ModelOrSoftwareChanged = false }
+        }) Assert(CompleteConfigurationFaultProjection.Changed(bad, device, now) is null,
+            "unknown, incomplete, foreign, ambiguous or future evidence cannot create configuration alerts");
+        Assert(CompleteConfigurationFaultProjection.Changed(drift, device, now + 300001) is null,
+            "expired backups cannot create a current configuration event");
+        var item = FaultLifecycle.Observe(null, observation, fixture.Profile, Actor.UserId, now);
+        var stable = drift with { State = "UNCHANGED", BeforeBackupId = drift.AfterBackupId, AfterBackupId = "new-stable",
+            BeforeVersion = drift.AfterVersion, AfterVersion = drift.AfterVersion + 1,
+            BeforeCapturedMs = now, AfterCapturedMs = now + 1, ConfigurationChanged = false,
+            SensitiveValuesChanged = false, ModelOrSoftwareChanged = false };
+        Assert(CompleteConfigurationFaultProjection.StableEvidence(item, stable, now + 1) == "new-stable",
+            "a later complete unchanged pair following this exact changed backup confirms stability");
+        foreach (var bad in new[] { stable with { State = "UNKNOWN" }, stable with { State = "CHANGED" },
+            stable with { ConfigurationChanged = null }, stable with { SensitiveValuesChanged = true },
+            stable with { ModelOrSoftwareChanged = true }, stable with { SiteId = "another-site" },
+            stable with { DeviceId = "another-device" }, stable with { ProfileId = "another-profile" },
+            stable with { BeforeBackupId = "unrelated-same-time" }, stable with { BeforeCapturedMs = now - 1 },
+            stable with { AfterCapturedMs = now }, stable with { AfterCapturedMs = now + 2 },
+            stable with { AfterVersion = stable.AfterVersion + 1 } })
+            Assert(CompleteConfigurationFaultProjection.StableEvidence(item, bad, now + 1) is null,
+                "unknown, old, foreign or changed evidence cannot verify stability");
+        Assert(CompleteConfigurationFaultProjection.StableEvidence(item, stable, now + 300002) is null &&
+            CompleteConfigurationFaultProjection.StableEvidence(item with { SourceAuthority = "OTHER" }, stable, now + 1) is null &&
+            CompleteConfigurationFaultProjection.StableEvidence(item with { CapturedScopeKey = "other" }, stable, now + 1) is null,
+            "recovery keeps freshness and source partition boundaries");
+    }
+
+    private static async Task ConfigurationDriftDrivesFaultLifecycle()
+    {
+        using var fixture = new Fixture();
+        var scopes = new P2B5SiteScopeStore(fixture.Settings);
+        var authorizer = new TaskSiteScopeAuthorizer(fixture.Catalog, scopes);
+        var sessions = new RejectMonitoringConnections();
+        await using var scheduler = new BoundedCollectionScheduler(sessions, 1, 4, fixture.Catalog, scopeAuthorizer: authorizer);
+        using var diagnostics = new NetworkDiagnosticsService(fixture.Catalog, new IcmpNetworkTracerouteProbe());
+        var wireless = new WirelessReadModelService(fixture.Catalog);
+        var health = new OperationalHealthService(fixture.Catalog, wireless, diagnostics, fixture.Service);
+        var recovery = new OperationalRecoveryService(fixture.Catalog, authorizer, scopes, new(fixture.Catalog, sessions),
+            new(fixture.Catalog, authorizer, scopes, scheduler));
+        using var faults = new FaultCenterService(fixture.Catalog, health, recovery, wireless, scopes, authorizer,
+            fixture.Settings, Microsoft.Extensions.Logging.Abstractions.NullLogger<FaultCenterService>.Instance);
+        var actor = fixture.Catalog.QueryFaultMonitorActor()!;
+        IReadOnlyList<FaultIncident> Incidents() => faults.Query(actor, P2B5SiteScopeDecision.Global,
+            kind: "CONFIGURATION_CHANGED").Items;
+        void Sync() => faults.Sync(actor, P2B5SiteScopeDecision.Global, 1);
+        await fixture.Capture(); Sync();
+        Assert(Incidents().Count == 0, "one baseline cannot imply normality or a change event");
+        await Task.Delay(2);
+        fixture.Factory.Text = Original.Replace("description original", "description monitored");
+        var changed = await fixture.Capture(); Sync();
+        var first = Incidents().Single();
+        Assert(first.State == "OPEN" && first.EvidenceId == changed.Id && first.Occurrences == 1,
+            "stored verified drift automatically enters the actual fault store");
+        Sync(); Sync();
+        Assert(Incidents().Single().Occurrences == 1 && Incidents().Single().History.Count == 1,
+            "reading the same backup repeatedly does not write duplicate fault occurrences or transitions");
+        var originalBytes = File.ReadAllBytes(fixture.Raw(changed));
+        File.AppendAllText(fixture.Raw(changed), "tamper"); Sync();
+        Assert(faults.Verify(first.Id, actor, P2B5SiteScopeDecision.Global, recordBlocked: false).State == "RECOVERY_NOT_VERIFIED" &&
+            Incidents().Single().State == "OPEN", "damaged latest backup remains unknown and cannot resolve an existing change");
+        File.WriteAllBytes(fixture.Raw(changed), originalBytes);
+        await Task.Delay(2);
+        var stable = await fixture.Capture(); Sync();
+        faults.VerifyObservedDevices(actor, P2B5SiteScopeDecision.Global, [first.DeviceId]);
+        var resolved = Incidents().Single();
+        Assert(resolved.State == "RESOLVED" && resolved.History.Last().EvidenceId == stable.Id &&
+            resolved.History.Last().Detail.Contains("稳定"), "automatic verification records new unchanged captures as stability, not rollback");
+        Sync(); faults.VerifyObservedDevices(actor, P2B5SiteScopeDecision.Global, [first.DeviceId]);
+        Assert(Incidents().Single().History.Count == resolved.History.Count,
+            "re-reading resolved evidence produces no extra recovery transition");
+        await Task.Delay(2);
+        fixture.Factory.Text = Original.Replace("description original", "description monitored-again");
+        var recurring = await fixture.Capture(); Sync();
+        Assert(Incidents().Single().State == "REOPENED" && Incidents().Single().Occurrences == 2 &&
+            Incidents().Single().EvidenceId == recurring.Id && fixture.Factory.Opens == 4 && fixture.Factory.Writes == 0,
+            "a later verified change reopens the same resource; monitoring itself never connects or writes configuration");
+    }
+
+    private sealed class RejectMonitoringConnections : IDeviceSessionFactory
+    {
+        public IDeviceSession Create(string target) => throw new InvalidOperationException("Monitoring must not open a session.");
     }
 
     private static async Task DetectVerifiedDriftWithoutConnecting()
@@ -505,12 +610,13 @@ internal static class SimulatorConfigurationTests
         public Catalog Catalog { get; }
         public Factory Factory { get; } = new();
         public SimulatorConfigurationService Service { get; }
+        public RuntimeSettings Settings { get; }
         public Fixture()
         {
             Root = Path.Combine(Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_WORKSPACE_ROOT") ??
                 @"D:\study\NetConsole-Next-Workspace", "test-data", "r69-config-unit-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
-            var settings = new RuntimeSettings { DataRoot = Root, WebPort = 18771, SyslogPort = 0,
+            var settings = Settings = new RuntimeSettings { DataRoot = Root, WebPort = 18771, SyslogPort = 0,
                 SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             Catalog = new(settings);
             Catalog.Initialize();

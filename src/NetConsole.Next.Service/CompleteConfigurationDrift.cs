@@ -8,6 +8,40 @@ internal sealed record CompleteConfigurationDrift(string ProfileId, string Devic
     bool? ConfigurationChanged = null, bool? SensitiveValuesChanged = null, bool? ModelOrSoftwareChanged = null,
     IReadOnlyList<string>? Categories = null);
 
+internal static class CompleteConfigurationFaultProjection
+{
+    internal const string Authority = "CONFIG_COMPLETE_BACKUP";
+    internal static bool IsFreshPair(CompleteConfigurationDrift? drift, string deviceId, string profileId,
+        string siteId, long now) => drift is not null && drift.DeviceId == deviceId && drift.ProfileId == profileId &&
+        drift.SiteId == siteId && !string.IsNullOrWhiteSpace(drift.BeforeBackupId) &&
+        !string.IsNullOrWhiteSpace(drift.AfterBackupId) && drift.BeforeBackupId != drift.AfterBackupId &&
+        drift.BeforeVersion is > 0 && drift.AfterVersion == (long)drift.BeforeVersion + 1 &&
+        drift.BeforeCapturedMs is > 0 && drift.AfterCapturedMs is { } at && at >= drift.BeforeCapturedMs &&
+        at <= now && now - at <= OperationalHealthProjection.FreshnessWindowMs;
+
+    internal static OperationalFaultEvent? Changed(CompleteConfigurationDrift? drift, DeviceInventoryItem device, long now)
+    {
+        if (device.TerminalProfileId is not { } profile || !device.Enabled ||
+            !IsFreshPair(drift, device.Id, profile, device.SiteId, now) || drift!.State != "CHANGED" ||
+            !(drift.ConfigurationChanged == true || drift.ModelOrSoftwareChanged == true)) return null;
+        return new("configuration:" + drift.AfterBackupId, device.Id, device.SiteId, "CONFIGURATION_CHANGED",
+            "WARNING", "OBSERVED", drift.AfterCapturedMs!.Value, Authority, drift.AfterBackupId!,
+            $"连续完整备份 v{drift.BeforeVersion} → v{drift.AfterVersion} 检出配置或版本变化；敏感值不在故障摘要中展示。",
+            profile, Authority, device.SiteId);
+    }
+
+    // This confirms stability, not rollback to the configuration before the alert.
+    internal static string? StableEvidence(FaultIncident item, CompleteConfigurationDrift? drift, long now) =>
+        item.Kind == "CONFIGURATION_CHANGED" && item.ResourceKey == item.ProfileId &&
+        item.SourceAuthority == Authority && item.CapturedScopeKey == item.SiteId &&
+        IsFreshPair(drift, item.DeviceId, item.ProfileId, item.SiteId, now) &&
+        drift!.State == "UNCHANGED" && drift.ConfigurationChanged == false && drift.SensitiveValuesChanged == false &&
+        drift.ModelOrSoftwareChanged == false && drift.AfterCapturedMs > item.LastSeenMs &&
+        (drift.BeforeCapturedMs > item.LastSeenMs ||
+            drift.BeforeCapturedMs == item.LastSeenMs && drift.BeforeBackupId == item.EvidenceId)
+            ? drift.AfterBackupId : null;
+}
+
 internal sealed partial class SimulatorConfigurationService
 {
     // Read-only detection also covers scheduled/bulk captures. Never skip a damaged

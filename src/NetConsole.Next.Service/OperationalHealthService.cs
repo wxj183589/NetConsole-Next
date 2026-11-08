@@ -180,9 +180,24 @@ internal static class OperationalHealthProjection
     private static OperationalMetric Unknown(string unit) => new("UNKNOWN", null, unit, null, []);
 }
 
-internal sealed class OperationalHealthService(Catalog catalog, WirelessReadModelService wireless, NetworkDiagnosticsService diagnostics)
+internal sealed class OperationalHealthService(Catalog catalog, WirelessReadModelService wireless, NetworkDiagnosticsService diagnostics,
+    SimulatorConfigurationService? configurations = null)
 {
     private int _wirelessFaultScanCursor;
+
+    internal CompleteConfigurationDrift? ConfigurationDrift(string profileId, P2B5SiteScopeDecision scope)
+    {
+        if (configurations is null || !scope.IsAuthorized) return null;
+        try
+        {
+            // Internal read-only monitor: returns only verified metadata, never Raw or a write session.
+            // DetectDrift retains its exact simulator endpoint, inventory and Site guards.
+            return configurations.DetectDrift(profileId,
+                new WebUserIdentity("fault-monitor", "fault-monitor", "SUPERADMIN", "fault-monitor"), scope);
+        }
+        catch (Exception ex) when (ex is ConfigRestoreException or IOException or UnauthorizedAccessException)
+        { return null; }
+    }
 
     public OperationalHealthSnapshot Get(P2B5SiteScopeDecision scope, int page = 1, string? actorUserId = null)
     {
@@ -202,6 +217,9 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             .OrderByDescending(pair => OperationalHealthProjection.DiagnosticObservationMs(pair.Item)).ToArray();
         foreach (var device in inventory.Items)
         {
+            if (device.TerminalProfileId is { } configurationProfile &&
+                CompleteConfigurationFaultProjection.Changed(ConfigurationDrift(configurationProfile, scope), device, now) is { } change)
+                events.Add(change);
             var facts = device.TerminalProfileId is { } profile
                 ? catalog.QueryH3cFacts(profile, limit: 1000, scope: scope, requireCapturedScope: true) : [];
             var health = OperationalHealthProjection.Device(device, facts, now);
@@ -315,6 +333,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
              "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内的有效采样，含运行中的 Long Ping；暂停和取消不提供确认或恢复证据，同协议与端口采用最新任务。无线故障每次检查本页最多 10 个 AP，并在后续调用间轮转。",
              "Ping 连续 3 次有效丢失确认丢包事件；末尾连续 3 次有效应答且均晚于事件才可核验恢复，累计丢包率仍保留。",
              "LLDP 消失仅对照同来源与捕获范围的最近 1000 个独立邻居身份的最后观测和完整 Current 表；身份超限会遗漏事件。",
+             "配置变化仅对授权模拟器的连续完整备份检测，最新备份须在 5 分钟内；UNKNOWN、损坏及缺失版本不确认变化或稳定。",
              "连接会话关闭或采集失败不代表设备离线。"]);
     }
 }
