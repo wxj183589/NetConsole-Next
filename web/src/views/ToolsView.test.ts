@@ -64,6 +64,70 @@ describe('network diagnostic tools and traceroute', () => {
   })
   afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
 
+  it('offers TCP only after ICMP permission failure and submits the exact failed device on explicit click', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)])
+    api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断设备"]').setValue(['device-two'])
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('结果只表示该端口是否可连接')
+    api.startNetworkDiagnostics.mockResolvedValue(run({ id: 'tcp-result', items: [item({ kind: 'TCP', traceRoute: null, outcome: 'TCP_CONNECTED' })] }))
+    await button(wrapper, '改用 TCP 端口检查').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).toHaveBeenCalledTimes(1)
+    expect(api.startNetworkDiagnostics).toHaveBeenCalledWith({ deviceIds: ['device-one'], kinds: ['TCP'], timeoutMs: 2000 })
+    expect(wrapper.text()).toContain('TCP 端口')
+    expect(wrapper.text()).not.toContain('改用 TCP 端口检查')
+  })
+
+  it('prevents duplicate TCP submissions and ignores their late result after history switches', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    const other = run({ id: 'other-run', items: [item({ deviceName: '其他历史设备' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed), summary(other)])
+    api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const late = deferred<NetworkDiagnosticRun>(); api.startNetworkDiagnostics.mockReturnValue(late.promise)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click')
+    await button(wrapper, '改用 TCP 端口检查').trigger('click')
+    expect(api.startNetworkDiagnostics).toHaveBeenCalledTimes(1)
+    api.getNetworkDiagnostics.mockResolvedValue(other)
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(other.id); await flushPromises()
+    late.resolve(run({ id: 'late-tcp', items: [item({ kind: 'TCP' })] })); await flushPromises()
+    expect(wrapper.get('select[aria-label="诊断历史"]').element).toHaveProperty('value', other.id)
+    expect(wrapper.text()).toContain('其他历史设备')
+    expect(wrapper.text()).not.toContain('late-tcp')
+  })
+
+  it.each(['READONLY', 'OPERATOR'])('does not allow %s to start a TCP alternative', async role => {
+    const failed = run({ state: 'FAILED', items: [item({ state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const wrapper = await render(role)
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    expect(button(wrapper, '改用 TCP 端口检查').attributes('disabled')).toBeDefined()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+  })
+
+  it('rejects unavailable failed devices instead of targeting a different selected device', async () => {
+    const failed = run({ state: 'FAILED', items: [item({ deviceId: 'missing-device', state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    await button(wrapper, '改用 TCP 端口检查').trigger('click'); await flushPromises()
+    expect(api.startNetworkDiagnostics).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('该设备不在当前可用设备列表中')
+  })
+
+  it.each(['TCP', 'DNS', 'LLDP'])('does not offer a TCP alternative for a %s record', async kind => {
+    const failed = run({ state: 'FAILED', items: [item({ kind: kind as NetworkDiagnosticItem['kind'], state: 'FAILED', outcome: 'ICMP_PERMISSION_DENIED' })] })
+    api.listNetworkDiagnostics.mockResolvedValue([summary(failed)]); api.getNetworkDiagnostics.mockResolvedValue(failed)
+    const wrapper = await render()
+    await wrapper.get('select[aria-label="诊断历史"]').setValue(failed.id); await flushPromises()
+    expect(wrapper.text()).not.toContain('改用 TCP 端口检查')
+  })
+
   it('shows actual DNS addresses and distinguishes literal IP evidence when reading saved history', async () => {
     const saved = run({ items: [item({ kind: 'DNS', traceRoute: null, dns: {
       query: 'switch.example.test', resolutionMode: 'SYSTEM_RESOLVER',

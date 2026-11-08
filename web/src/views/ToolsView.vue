@@ -5,7 +5,7 @@ import NcLayout from '../components/NcLayout.vue'
 import SyslogWorkspace from '../components/SyslogWorkspace.vue'
 import QuickPingHistoryTrend from '../components/QuickPingHistoryTrend.vue'
 import PingLossEvidence from '../components/PingLossEvidence.vue'
-import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
+import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -148,12 +148,25 @@ async function startDiagnostics(): Promise<void> {
      !Number.isInteger(quickPingInterval.value) || quickPingInterval.value < 1000 || quickPingInterval.value > 5000 || diagnosticTimeoutMs.value > 5000)) {
     ElMessage.warning('长期 Ping 时长需为 10 秒至 1 小时，间隔 1–5 秒，单次超时不超过 5 秒'); return
   }
+  await submitDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value, ...(diagnosticKinds.value.includes('QUICK_PING') || diagnosticKinds.value.includes('LONG_PING') ? { intervalMs: quickPingInterval.value, quickPingProtocol: quickPingProtocol.value } : {}), ...(diagnosticKinds.value.includes('QUICK_PING') ? { sampleCount: quickPingSamples.value } : {}), ...(diagnosticKinds.value.includes('LONG_PING') ? { longPingDurationSeconds: longPingDurationSeconds.value } : {}) })
+}
+function icmpDenied(item: NetworkDiagnosticItem): boolean {
+  return item.state === 'FAILED' && item.outcome === 'ICMP_PERMISSION_DENIED' && ['PING', 'QUICK_PING', 'LONG_PING', 'TRACEROUTE'].includes(item.kind)
+}
+async function retryWithTcp(item: NetworkDiagnosticItem): Promise<void> {
+  if (!pageActive || !isSuperAdmin() || diagnosticStarting.value || diagnosticActive.value || !icmpDenied(item) || !diagnosticRun.value?.items.includes(item)) return
+  if (!inventory.value.some(device => device.id === item.deviceId && device.enabled && device.isValid)) {
+    diagnosticError.value = '该设备不在当前可用设备列表中，请刷新设备后重试。'; return
+  }
+  await submitDiagnostics({ deviceIds: [item.deviceId], kinds: ['TCP'], timeoutMs: 2000 })
+}
+async function submitDiagnostics(payload: Parameters<typeof startNetworkDiagnostics>[0]): Promise<void> {
   stopDiagnosticPolling()
   const generation = ++diagnosticGeneration
   diagnosticStarting.value = true
   diagnosticError.value = ''
   try {
-    const run = await startNetworkDiagnostics({ deviceIds: [...selectedDiagnosticDevices.value], kinds: [...diagnosticKinds.value], timeoutMs: diagnosticTimeoutMs.value, ...(diagnosticKinds.value.includes('QUICK_PING') || diagnosticKinds.value.includes('LONG_PING') ? { intervalMs: quickPingInterval.value, quickPingProtocol: quickPingProtocol.value } : {}), ...(diagnosticKinds.value.includes('QUICK_PING') ? { sampleCount: quickPingSamples.value } : {}), ...(diagnosticKinds.value.includes('LONG_PING') ? { longPingDurationSeconds: longPingDurationSeconds.value } : {}) })
+    const run = await startNetworkDiagnostics(payload)
     if (!pageActive || generation !== diagnosticGeneration) return
     selectedDiagnosticRun.value = run.id
     diagnosticRun.value = run
@@ -225,7 +238,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
       <div class="card__header"><div><h2>网络诊断</h2><small>从 NetConsole 服务所在主机检查已登记设备；LLDP 读取当前局点内已验证的事实</small></div><span v-if="diagnosticRun" class="state-pill" :class="diagnosticRun.state === 'SUCCEEDED' ? 'good' : diagnosticRun.state === 'PARTIAL' ? 'warn' : ''">{{ diagnosticStateLabel(diagnosticRun.state) }} · {{ diagnosticRun.progressPercent }}%</span></div>
       <div class="card__body">
         <div class="toolbar diagnostic-history">
-          <label class="form-field"><span>诊断历史（最近 50 条）</span><select v-model="selectedDiagnosticRun" aria-label="诊断历史" :disabled="diagnosticStarting" @change="openDiagnosticHistory"><option value="">选择已有任务查看结果</option><option v-for="record in diagnosticHistory" :key="record.id" :value="record.id">{{ diagnosticHistoryLabel(record) }}</option></select></label>
+          <label class="form-field"><span>诊断历史（最近 50 条）</span><select v-model="selectedDiagnosticRun" aria-label="诊断历史" @change="openDiagnosticHistory"><option value="">选择已有任务查看结果</option><option v-for="record in diagnosticHistory" :key="record.id" :value="record.id">{{ diagnosticHistoryLabel(record) }}</option></select></label>
           <el-button size="small" :loading="diagnosticHistoryLoading" :disabled="diagnosticHistoryLoading" @click="refreshDiagnosticHistory">刷新历史</el-button>
           <small class="muted">查看历史只读取已保存结果。</small>
         </div>
@@ -254,7 +267,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
           <div class="diagnostic-progress" role="status" aria-live="polite"><span>已完成 {{ diagnosticRun.completedChecks }} / {{ diagnosticRun.totalChecks }} 项检查 · {{ diagnosticRun.totalDevices }} 台设备</span><progress :value="diagnosticRun.progressPercent" max="100" aria-label="网络诊断进度" /><span>{{ diagnosticRun.progressPercent }}%</span></div>
           <p v-if="diagnosticRun.failureReason" class="muted">{{ diagnosticRun.failureReason }}</p>
           <div class="table-wrap diagnostic-results"><table class="data-table"><thead><tr><th>设备</th><th>类型</th><th>状态</th><th>结果</th><th>总耗时</th><th>证据</th></tr></thead><tbody><template v-for="item in diagnosticRun.items" :key="item.id">
-            <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}</td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
+            <tr><td>{{ item.deviceName }}</td><td>{{ diagnosticKindLabel(item.kind) }}</td><td>{{ diagnosticStateLabel(item.state) }}</td><td>{{ item.detail || diagnosticOutcomeLabel(item.outcome) }}<div v-if="icmpDenied(item)" class="tcp-alternative"><p>主机未允许 ICMP。可使用设备登记端口执行 TCP 连通性检查，结果只表示该端口是否可连接。</p><el-button size="small" :aria-label="item.deviceName + ' 改用 TCP 端口检查'" :disabled="!isSuperAdmin() || diagnosticStarting || diagnosticActive" :loading="diagnosticStarting" @click="retryWithTcp(item)">改用 TCP 端口检查</el-button></div></td><td>{{ item.latencyMs == null ? '—' : item.latencyMs + ' ms' }}</td><td>{{ item.evidenceCount ? item.evidenceCount + ' 条 · ' + item.evidenceSources.join(', ') : '—' }}</td></tr>
             <tr v-if="item.kind === 'DNS'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + ' DNS 结果'">
               <template v-if="item.dns"><div class="trace-heading"><strong class="mono">查询 {{ item.dns.query }}</strong><span>{{ item.dns.resolutionMode === 'IP_LITERAL' ? '直接 IP 地址，未查询 DNS' : '系统 DNS 解析' }}</span><span class="muted">{{ new Date(item.dns.capturedMs).toLocaleString() }}</span></div>
               <ul v-if="item.dns.addresses.length" class="dns-addresses" aria-label="解析地址"><li v-for="address in item.dns.addresses" :key="address" class="mono">{{ address }}</li></ul><p v-else class="muted">没有取得解析地址。</p>
