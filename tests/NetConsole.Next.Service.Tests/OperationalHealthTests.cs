@@ -6,6 +6,7 @@ internal static class OperationalHealthTests
     public static async Task RunAsync()
     {
         MissingEvidenceIsUnknown();
+        CancelledTaskIsNotFault();
         WirelessFaultScanRotatesBeyondFirstPage();
         OnlyFreshVerifiedEvidenceCounts();
         InterfaceAndStaleEvidence();
@@ -21,7 +22,19 @@ internal static class OperationalHealthTests
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=16/16 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=17/17 PASS");
+    }
+    private static void CancelledTaskIsNotFault()
+    {
+        Assert(!OperationalHealthProjection.IsCollectionFailure("CANCELLED", "PARTIAL"),
+            "user-cancelled collection remains task history and does not become a fault warning");
+        Assert(OperationalHealthProjection.IsCollectionFailure("FAILED", "FAILED") &&
+            OperationalHealthProjection.IsCollectionFailure("TIMED_OUT", "PARTIAL") &&
+            OperationalHealthProjection.IsCollectionFailure("PARTIAL", "PARTIAL"),
+            "failed, timed-out and incomplete collection outcomes remain fault evidence");
+        Assert(!OperationalHealthProjection.IsCollectionFailure("SUCCEEDED", "COMPLETE") &&
+            !OperationalHealthProjection.IsCollectionFailure("RUNNING", "PENDING"),
+            "successful and active collection work does not become a fault");
     }
     private static void WirelessFaultScanRotatesBeyondFirstPage()
     {

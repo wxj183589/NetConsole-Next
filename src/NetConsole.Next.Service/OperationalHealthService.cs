@@ -28,6 +28,10 @@ internal static class OperationalHealthProjection
     public const long FreshnessWindowMs = 300_000;
     internal const int WirelessFaultResourcesPerScan = 10;
 
+    internal static bool IsCollectionFailure(string state, string? captureStatus) =>
+        state is not "CANCELLED" &&
+        (state is "FAILED" or "TIMED_OUT" || captureStatus is "FAILED" or "PARTIAL");
+
     internal static IReadOnlyList<string> SelectWirelessFaultResourceIds(
         IReadOnlyList<string> orderedResourceIds, int start, int maximum = WirelessFaultResourcesPerScan)
     {
@@ -215,7 +219,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             var definition = run.DefinitionId is null ? null : catalog.GetTaskDefinition(run.DefinitionId);
             if (definition?.ScopeSnapshot is not { } frozen || !visible.TryGetValue(frozen.DeviceId, out var device) ||
                 device.TerminalProfileId != frozen.ProfileId || device.SiteId != frozen.SiteId) continue;
-            if (run.State is "FAILED" or "TIMED_OUT" or "CANCELLED" || run.CaptureStatus is "FAILED" or "PARTIAL")
+            if (OperationalHealthProjection.IsCollectionFailure(run.State, run.CaptureStatus))
                 events.Add(new("task:" + run.Id, device.Id, device.SiteId, "COLLECTION_FAILURE", "WARNING", run.State,
                     run.EndedMs ?? run.StartedMs ?? run.QueuedMs ?? now, "TASK_RUN", run.Id,
                     "采集任务未完整完成；按完整采集计划分别核验，不据此判定设备离线。", FaultLifecycle.CollectionResource(definition)));
