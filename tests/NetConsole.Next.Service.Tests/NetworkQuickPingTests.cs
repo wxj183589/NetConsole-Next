@@ -77,6 +77,11 @@ internal static class NetworkQuickPingTests
                 using var deadline = new CancellationTokenSource(5000);
                 while (service.Get(id, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 }) await Task.Delay(10, deadline.Token);
                 Assert(service.Get(id, P2B5SiteScopeDecision.Global)?.Items.Single() is { State: "SUCCEEDED", QuickPing: { Sent: 3, Received: 3 } }, "real TCP sampling through inventory endpoint");
+                var history = service.List(actor, P2B5SiteScopeDecision.Global);
+                Assert(history.Single(item => item.Id == id).Targets is
+                    [{ DeviceId: var historyDeviceId, DeviceName: var historyDeviceName, SiteId: var historySiteId }] &&
+                    historyDeviceId == device && historyDeviceName == device && historySiteId == "local",
+                    "diagnostic history summaries retain exact device and Site association");
                 var longRun = service.Start(new([device], ["LONG_PING"], 500, IntervalMs: 1_000,
                     QuickPingProtocol: "TCP", LongPingDurationSeconds: 10), actor, P2B5SiteScopeDecision.Global);
                 using var longDeadline = new CancellationTokenSource(5_000);
@@ -86,6 +91,9 @@ internal static class NetworkQuickPingTests
                 using var cancelDeadline = new CancellationTokenSource(5_000);
                 while (service.Get(longRun.Id, P2B5SiteScopeDecision.Global) is not { ProgressPercent: 100 }) await Task.Delay(10, cancelDeadline.Token);
                 Assert(service.Get(longRun.Id, P2B5SiteScopeDecision.Global)?.Items.Single() is { Kind: "LONG_PING", State: "CANCELLED" }, "long ping cancellation is durably published");
+                Assert(service.List(actor, P2B5SiteScopeDecision.Global).Single(item => item.Id == longRun.Id).Targets is
+                    [{ DeviceId: var longPingDeviceId, SiteId: "local" }] && longPingDeviceId == device,
+                    "cancelled Long Ping history retains its device and Site association");
             }
             using var restarted = new NetworkDiagnosticsService(catalog);
             Assert(restarted.Get(id, actor, P2B5SiteScopeDecision.Global)?.Items.Single().QuickPing?.Samples.Count == 3, "complete samples survive restart");

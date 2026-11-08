@@ -55,7 +55,9 @@ internal sealed record NetworkDiagnosticRunSnapshot(
 internal sealed record NetworkDiagnosticRunSummary(
     string Id, string State, int TotalDevices, int TotalChecks, int CompletedChecks,
     int ProgressPercent, long CreatedMs, long? StartedMs, long? EndedMs,
-    IReadOnlyList<string> Kinds);
+    IReadOnlyList<string> Kinds, IReadOnlyList<NetworkDiagnosticTargetSummary>? Targets = null);
+
+internal sealed record NetworkDiagnosticTargetSummary(string DeviceId, string DeviceName, string SiteId);
 
 internal sealed class NetworkDiagnosticsService : IDisposable
 {
@@ -176,7 +178,12 @@ internal sealed class NetworkDiagnosticsService : IDisposable
                 .Take(limit).Select(item => new NetworkDiagnosticRunSummary(item.Id, item.State,
                     item.TotalDevices, item.TotalChecks, item.CompletedChecks, item.ProgressPercent,
                     item.CreatedMs, item.StartedMs, item.EndedMs,
-                    item.Items.Select(child => child.Kind).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()))
+                    item.Items.Select(child => child.Kind).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                    item.Items.GroupBy(child => child.DeviceId, StringComparer.Ordinal)
+                        .Select(group => group.First())
+                        .OrderBy(child => child.DeviceName, StringComparer.Ordinal)
+                        .Select(child => new NetworkDiagnosticTargetSummary(child.DeviceId, child.DeviceName, child.SiteId))
+                        .ToArray()))
                 .ToArray();
         }
     }
