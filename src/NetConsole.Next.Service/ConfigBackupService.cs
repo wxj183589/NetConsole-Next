@@ -657,7 +657,9 @@ internal sealed class ConfigBackupService(
             RegexOptions.CultureInvariant))
             throw new ConfigBackupException("CONFIG_BACKUP_SAVED_UNAVAILABLE", "设备没有可读取的保存配置，未生成备份。", 409);
         var directory = ProfileDirectory(profileId);
+        EnsureBackupDirectoryIsLocal(directory);
         Directory.CreateDirectory(directory);
+        EnsureBackupDirectoryIsLocal(directory);
         var version = Directory.EnumerateFiles(directory, "*.json")
             .Select(ReadSnapshot)
             .Where(item => item is not null && IsValidSnapshot(item) && item.ProfileId == profileId &&
@@ -682,6 +684,30 @@ internal sealed class ConfigBackupService(
         File.Move(manifestPart, manifest, true);
         return snapshot;
     }
+
+    private void EnsureBackupDirectoryIsLocal(string directory)
+    {
+        var root = Path.GetFullPath(settings.DataRoot);
+        var current = Path.GetFullPath(directory);
+        var relative = Path.GetRelativePath(root, current);
+        if (Path.IsPathRooted(relative) || relative == ".." ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            throw UnsafeBackupPath();
+
+        while (true)
+        {
+            if ((Directory.Exists(current) || File.Exists(current)) && IsReparse(current))
+                throw UnsafeBackupPath();
+            var parent = Path.GetDirectoryName(current);
+            if (parent is null || string.Equals(parent, current, OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) break;
+            current = parent;
+        }
+    }
+
+    private static ConfigBackupException UnsafeBackupPath() =>
+        new("CONFIG_BACKUP_STORAGE_PATH_UNSAFE", "配置备份目录包含链接或越界路径，未写入配置数据。", 409);
 
     private ConfigBackupSnapshot? FindSnapshot(string id)
     {

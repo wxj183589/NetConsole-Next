@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using NetConsole.Next.Service;
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -54,7 +55,72 @@ internal static class ConfigBackupTests
         await VerifyPrivateKeyRedaction(actor);
         VerifyStartupFileSupport();
         await VerifyStartupBodyCollection(actor);
+        await RejectReparseBackupDirectory(actor);
         Console.WriteLine("CONFIG_BACKUP_TESTS=11/11 PASS");
+    }
+
+    private static async Task RejectReparseBackupDirectory(WebUserIdentity actor)
+    {
+        using var fixture = new Fixture();
+        var profileDirectory = Path.Combine(fixture.Root, "backup", "config", fixture.Profile);
+        var outside = Path.Combine(Directory.GetParent(fixture.Root)!.FullName,
+            "next-config-backup-junction-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.GetDirectoryName(profileDirectory)!);
+        Directory.CreateDirectory(outside);
+        try
+        {
+            if (!TryCreateDirectoryLink(profileDirectory, outside))
+            {
+                Console.WriteLine("CONFIG_BACKUP_REPARSE_PATH=SKIPPED_NO_LINK_PERMISSION");
+                return;
+            }
+
+            var batch = await fixture.Backup(actor);
+            Assert(batch is { State: "PARTIAL" } && batch.Items.Single() is
+                { State: "FAILED", Error: "CONFIG_BACKUP_STORAGE_PATH_UNSAFE" },
+                "a backup profile directory reparse point must fail closed with a stable storage error");
+            Assert(!Directory.EnumerateFileSystemEntries(outside).Any(),
+                "backup output must never be written through a reparse point outside its data root");
+            Console.WriteLine("CONFIG_BACKUP_REPARSE_PATH=PASS");
+        }
+        finally
+        {
+            RemoveDirectoryLink(profileDirectory);
+            if (Directory.Exists(outside)) Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    private static bool TryCreateDirectoryLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c mklink /J \"{link}\" \"{target}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            });
+            if (process is null) return false;
+            process.WaitForExit();
+            return process.ExitCode == 0 && Directory.Exists(link);
+        }
+    }
+
+    private static void RemoveDirectoryLink(string path)
+    {
+        if (!Directory.Exists(path)) return;
+        try { Directory.Delete(path, recursive: false); }
+        catch (IOException) when (OperatingSystem.IsWindows()) { }
+        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows()) { }
     }
 
     private static void VerifyStartupFileSupport()
@@ -441,7 +507,8 @@ internal static class ConfigBackupTests
 
         public Fixture()
         {
-            var repository = new DirectoryInfo(AppContext.BaseDirectory);
+            var repository = new DirectoryInfo(File.Exists(Path.Combine(Environment.CurrentDirectory, "tools", "workspace_paths.py"))
+                ? Environment.CurrentDirectory : AppContext.BaseDirectory);
             while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
                 repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
             Root = Path.Combine(repository.Parent!.FullName, "test-data", "next-config-backup-" + Guid.NewGuid().ToString("N"));

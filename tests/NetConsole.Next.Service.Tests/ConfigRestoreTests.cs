@@ -177,7 +177,8 @@ internal static class ConfigRestoreTests
 
         public Fixture(IConfigRestoreWriter? writer = null)
         {
-            var repository = new DirectoryInfo(AppContext.BaseDirectory);
+            var repository = new DirectoryInfo(File.Exists(Path.Combine(Environment.CurrentDirectory, "tools", "workspace_paths.py"))
+                ? Environment.CurrentDirectory : AppContext.BaseDirectory);
             while (!File.Exists(Path.Combine(repository.FullName, "tools", "workspace_paths.py")))
                 repository = repository.Parent ?? throw new InvalidOperationException("Repository root unavailable.");
             Root = Path.Combine(repository.Parent!.FullName, "test-data", "next-config-restore-" + Guid.NewGuid().ToString("N"));
