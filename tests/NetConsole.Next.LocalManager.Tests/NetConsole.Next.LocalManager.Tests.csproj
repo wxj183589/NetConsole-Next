@@ -12,5 +12,6 @@
     <Compile Include="../../src/NetConsole.Next.LocalManager/PortableRuntime.cs" Link="PortableRuntime.cs" />
     <Compile Include="../../src/NetConsole.Next.LocalManager/DetachedWindowsProcess.cs" Link="DetachedWindowsProcess.cs" />
     <Compile Include="../../src/NetConsole.Next.LocalManager/LocalStorageDiagnostics.cs" Link="LocalStorageDiagnostics.cs" />
+    <Compile Include="../../src/NetConsole.Next.LocalManager/LocalServiceReadiness.cs" Link="LocalServiceReadiness.cs" />
   </ItemGroup>
 </Project>

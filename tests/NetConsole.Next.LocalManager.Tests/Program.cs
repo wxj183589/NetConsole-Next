@@ -144,6 +144,7 @@ try
     }
     var worker = await LocalDeploymentDoctor.RunAsync(root, 18771, healthyClient);
     Assert(worker.Checks.Single(c => c.Key == "WORKER").State == "PASS", "real worker imports and close handshake must pass without a device");
+    await LocalServiceReadinessTests.RunAsync();
     await PortableRuntimeTests.RunAsync(root);
     Console.WriteLine("LOCAL_DEPLOYMENT_DOCTOR_TESTS=13/13 PASS: legacy roots rejected before IO, doctor/root ancestor junction rejection, missing/file/inaccessible-marker boundaries, instance ownership, read-only catalog, health, SQLite, worker import/close, invalid/oversized/offline diagnostics");
 }

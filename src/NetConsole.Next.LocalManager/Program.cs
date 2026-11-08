@@ -168,7 +168,12 @@ static async Task<int> RunLocalOperationAsync(string command, string? config)
         {
             using var service = new ServiceController(serviceName);
             if (stop) StopService(service);
-            if (start) StartService(service);
+            if (start)
+            {
+                StartService(service);
+                using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
+                await LocalServiceReadiness.WaitForHealthyAsync(client, settings.WebPort, TimeSpan.FromSeconds(30));
+            }
             service.Refresh();
             Console.WriteLine($"{serviceName} (SCM): {service.Status}");
         }
