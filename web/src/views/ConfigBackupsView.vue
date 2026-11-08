@@ -23,6 +23,8 @@ const diff = ref<ConfigBackupDiff | null>(null)
 const loading = ref(false)
 const comparing = ref(false)
 const historyLoading = ref(false)
+const historyLoaded = ref(false)
+const historyCheckedMs = ref(0)
 const unavailable = ref('')
 const moduleAvailable = ref(false)
 const device = ref<DeviceInventoryItem | null>(null)
@@ -37,6 +39,20 @@ const hasDeviceContext = computed(() => Object.prototype.hasOwnProperty.call(rou
 const deviceLabel = computed(() => device.value ? `${device.value.name} · ${device.value.managementIp || device.value.managementAddress}` : selectedProfile.value?.host || '')
 const canCompare = computed(() => !!baseId.value && baseId.value !== targetId.value &&
   [baseId.value, targetId.value].every(id => history.value.some(item => item.id === id && kindOf(item) === configurationKind.value)))
+const backupReminder = computed(() => {
+  const label = kindLabel(configurationKind.value)
+  if (historyLoading.value) return { state: '正在检查', detail: `正在读取当前设备的${label}历史。` }
+  if (!historyLoaded.value) return { state: '状态待确认', detail: '尚未取得备份历史，请刷新后检查。' }
+  const latest = [...history.value].sort((a, b) => b.version - a.version)[0]
+  if (!latest) return { state: '尚无备份', detail: `当前设备尚无${label}记录，建议执行一次备份。` }
+  const capturedMs = latest.capturedMs
+  if ((latest.state && latest.state !== 'SUCCEEDED') || typeof capturedMs !== 'number' || !Number.isSafeInteger(capturedMs) || capturedMs <= 0 || capturedMs > historyCheckedMs.value)
+    return { state: '时间待核验', detail: '最新记录的状态或采集时间无法确认，建议重新备份。' }
+  const days = Math.floor((historyCheckedMs.value - capturedMs) / 86400000)
+  return days >= 7
+    ? { state: '建议更新备份', detail: `最新${label}备份已达 7 天提醒周期（${days} 天前），建议更新；已有记录仍可查看。` }
+    : { state: '已有近期备份', detail: `最新${label}：${time(capturedMs)}。` }
+})
 const batchFailure = computed(() => {
   const failed = batch.value?.items?.find(item => item.state === 'FAILED')
   if (!failed) return ''
@@ -55,6 +71,7 @@ function clearHistory(): void {
   ++historySequence; ++diffSequence; ++contentSequence
   content.value = null; contentLoading.value = false
   history.value = []; diff.value = null; baseId.value = ''; targetId.value = ''; historyLoading.value = false; comparing.value = false; restorePreview.value = null; restoreResult.value = null; restoring.value = false
+  historyLoaded.value = false; historyCheckedMs.value = 0
 }
 function clearTarget(): void {
   clearHistory(); ++backupSequence
@@ -80,6 +97,7 @@ async function loadHistory(): Promise<void> {
     if (sequence !== historySequence || context !== contextSequence) return
     const visible = next.filter(item => kindOf(item) === kind)
     history.value = visible; baseId.value = visible[1]?.id || ''; targetId.value = visible[0]?.id || ''
+    historyLoaded.value = true; historyCheckedMs.value = Date.now()
   } catch (cause) {
     if (sequence === historySequence && context === contextSequence) {
       unavailable.value = accessMessage(cause, '配置备份历史读取失败，请刷新重试')
@@ -250,8 +268,12 @@ onBeforeUnmount(() => { ++contextSequence; clearTarget() })
     <section v-if="selectedProfile && moduleAvailable" class="card">
       <div class="card__header"><div><h2>{{ deviceLabel }} · {{ kindLabel(configurationKind) }}版本历史</h2><small>仅显示当前 Site 可见的完整记录；各类别独立编号</small></div><select v-if="!hasDeviceContext" v-model="profileId" aria-label="备份设备" :disabled="loading" @change="changeProfile"><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.host }}</option></select></div>
       <div class="card__body table-wrap" :aria-busy="historyLoading">
+        <div class="toolbar" aria-label="备份提醒" role="status">
+          <strong>{{ backupReminder.state }}</strong><span class="muted">{{ backupReminder.detail }}</span>
+          <el-button v-if="isSuperAdmin" size="small" :disabled="loading || historyLoading" :loading="loading" @click="startBackup([profileId])">备份当前设备</el-button>
+        </div>
         <p class="muted">当前版本均为脱敏内容或配置指向，不可用于恢复写入。</p>
-        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" :loading="contentLoading" @click="viewContent(snapshot)">查看</el-button><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
+        <table class="data-table" aria-label="配置版本历史"><thead><tr><th>类别</th><th>版本</th><th>采集时间</th><th>大小</th><th>SHA-256</th><th>操作</th></tr></thead><tbody><tr v-for="snapshot in history" :key="snapshot.id"><td>{{ kindLabel(kindOf(snapshot)) }}</td><td>v{{ snapshot.version }}</td><td>{{ time(snapshot.capturedMs) }}</td><td>{{ size(snapshot.byteCount) }}</td><td class="mono">{{ snapshot.sha256?.slice(0, 16) }}…</td><td><el-button text size="small" :loading="contentLoading" @click="viewContent(snapshot)">查看</el-button><el-button text size="small" @click="download(snapshot)">下载</el-button><el-button v-if="isSuperAdmin && ['RUNNING', 'SAVED', 'STARTUP_BODY'].includes(kindOf(snapshot))" text size="small" :loading="restoring" @click="previewRestore(snapshot)">恢复预览</el-button></td></tr><tr v-if="!history.length"><td colspan="6" class="muted">{{ historyLoading ? '正在读取配置备份…' : !historyLoaded ? '记录尚未确认，请刷新重试' : '暂无' + kindLabel(configurationKind) + '记录' }}</td></tr></tbody></table>
       </div>
     </section>
     <section v-if="content" class="card" aria-label="配置内容">

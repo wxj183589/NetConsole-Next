@@ -88,6 +88,64 @@ describe('device configuration backup context', () => {
     expect(api.getConfigBackups).toHaveBeenLastCalledWith('profile-b', 'RUNNING')
   })
 
+  it('reminds about missing backups and backs up the inspected profile without changing batch selection', async () => {
+    api.getConfigBackups.mockResolvedValue([])
+    const { wrapper } = await render({})
+    await wrapper.get('select[aria-label=备份设备]').setValue('profile-b'); await flushPromises()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('当前设备尚无运行配置记录')
+    expect(wrapper.findAll('input[type=checkbox]').every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    await button(wrapper, '备份当前设备').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'RUNNING')
+  })
+
+  it('recommends updating a seven-day-old backup while preserving its history', async () => {
+    api.getConfigBackups.mockResolvedValue(snapshots('profile-b').map(item => ({ ...item, capturedMs: Date.now() - 8 * 86400000 })))
+    const { wrapper } = await render()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('最新运行配置备份已达 7 天提醒周期（8 天前）')
+    expect(wrapper.get('[aria-label=配置版本历史]').findAll('tbody tr')).toHaveLength(2)
+    expect(api.createConfigBackup).not.toHaveBeenCalled()
+  })
+
+  it('reports a recent backup and switches the reminder to the selected configuration category', async () => {
+    api.getConfigBackups.mockImplementation((id: string, kind: 'RUNNING' | 'SAVED' | 'STARTUP_INFO') => Promise.resolve(
+      kind === 'RUNNING' ? kindSnapshots(id, kind).map(item => ({ ...item, capturedMs: Date.now() - 3600000 })) : []))
+    const { wrapper } = await render()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('已有近期备份')
+    await wrapper.get('select[aria-label=配置类别]').setValue('STARTUP_INFO'); await flushPromises()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('当前设备尚无启动配置指向记录')
+    await button(wrapper, '备份当前设备').trigger('click'); await flushPromises()
+    expect(api.createConfigBackup).toHaveBeenCalledWith(['profile-b'], 'STARTUP_INFO')
+  })
+
+  it.each([null, 0, Number.NaN, Date.now() + 86400000])('does not call an unverified capture time %s a recent backup', async capturedMs => {
+    api.getConfigBackups.mockResolvedValue(snapshots('profile-b').map(item => ({ ...item, capturedMs })))
+    const { wrapper } = await render()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('时间待核验')
+    expect(wrapper.get('[aria-label=备份提醒]').text()).not.toContain('已有近期备份')
+  })
+
+  it('keeps pending and failed history reads distinct from never backed up', async () => {
+    const pending = deferred<ReturnType<typeof snapshots>>()
+    api.getConfigBackups.mockReturnValue(pending.promise)
+    const { wrapper } = await render()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('正在检查')
+    expect(button(wrapper, '备份当前设备').attributes('disabled')).toBeDefined()
+    pending.resolve(snapshots('profile-b')); await flushPromises()
+    api.getConfigBackups.mockRejectedValue(new ApiRequestError(500, 'temporary'))
+    await button(wrapper, '刷新').trigger('click'); await flushPromises()
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('状态待确认')
+    expect(wrapper.get('[aria-label=配置版本历史]').text()).toContain('记录尚未确认，请刷新重试')
+    expect(wrapper.get('[aria-label=备份提醒]').text()).not.toContain('尚无备份')
+  })
+
+  it('keeps reminders read-only for an ADMIN', async () => {
+    api.getConfigBackups.mockResolvedValue([])
+    const { wrapper } = await render({ deviceId: 'device-b' }, 'ADMIN')
+    expect(wrapper.get('[aria-label=备份提醒]').text()).toContain('尚无备份')
+    expect(button(wrapper, '备份当前设备')).toBeUndefined()
+    expect(api.createConfigBackup).not.toHaveBeenCalled()
+  })
+
   it('views an authorized snapshot and clears its contents when the device changes', async () => {
     api.downloadConfigBackup.mockResolvedValue({ text: async () => 'sysname example\npassword <REDACTED>' })
     const { wrapper } = await render({})
