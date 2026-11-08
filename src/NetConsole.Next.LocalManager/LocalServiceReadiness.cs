@@ -17,7 +17,9 @@ internal static class LocalServiceReadiness
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            requestTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+            var requestBudget = timeout - timer.Elapsed;
+            if (requestBudget <= TimeSpan.Zero) break;
+            requestTimeout.CancelAfter(requestBudget < TimeSpan.FromSeconds(2) ? requestBudget : TimeSpan.FromSeconds(2));
             try
             {
                 using var response = await client.GetAsync($"http://127.0.0.1:{port}/api/system/health",
@@ -50,7 +52,13 @@ internal static class LocalServiceReadiness
                 else lastState = $"health endpoint returned HTTP {(int)response.StatusCode}";
             }
             catch (HttpRequestException ex) { lastState = ex.GetType().Name; }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { lastState = "health request timed out"; }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A final request can run out of the shared budget after earlier probes
+                // returned a useful degraded state. Preserve that diagnosis at expiry.
+                if (lastState == "health endpoint has not responded")
+                    lastState = "health request timed out";
+            }
             catch (JsonException) { lastState = "health endpoint returned invalid JSON"; }
 
             var remaining = timeout - timer.Elapsed;
@@ -58,6 +66,7 @@ internal static class LocalServiceReadiness
             await Task.Delay(remaining < TimeSpan.FromMilliseconds(200) ? remaining : TimeSpan.FromMilliseconds(200), cancellationToken);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         throw new InvalidOperationException($"SERVICE_NOT_READY：服务控制器已报告运行，但服务未能在 {timeout.TotalSeconds:0} 秒内通过本机健康检查（{lastState}）。请运行本机诊断并查看服务日志。");
     }
 }

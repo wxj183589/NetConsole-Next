@@ -102,6 +102,14 @@ try
     using var malformedClient = new HttpClient(new ReplyHandler("[]"));
     var malformed = await LocalDeploymentDoctor.RunAsync(root, 18771, malformedClient, _ => Task.FromResult(true));
     Assert(malformed.State == "FAILED", "valid JSON of the wrong shape must return diagnosis rather than crash");
+    foreach (var invalidPid in new[] { "\"123\"", "true", "null", "[]", "{}", "2147483648", "1.5", "0", "-1" })
+    {
+        using var invalidPidClient = new HttpClient(new ReplyHandler(health.Replace("\"processId\":123", "\"processId\":" + invalidPid)));
+        var invalidPidDiagnosis = await LocalDeploymentDoctor.RunAsync(root, 18771, invalidPidClient, _ => Task.FromResult(true));
+        Assert(invalidPidDiagnosis.State == "FAILED" && invalidPidDiagnosis.ProcessId is null &&
+            invalidPidDiagnosis.Checks.Any(c => c.Key == "HEALTH" && c.State == "FAIL"),
+            "invalid health process IDs must return structured failed diagnosis without crashing or claiming process ownership");
+    }
     File.WriteAllText(marker, "wrong-marker");
     var unmarked = await LocalDeploymentDoctor.RunAsync(root, 18771, healthyClient, _ => throw new Exception("must not run"));
     Assert(unmarked.State == "FAILED", "unmarked root must fail without initialization");
@@ -146,7 +154,7 @@ try
     Assert(worker.Checks.Single(c => c.Key == "WORKER").State == "PASS", "real worker imports and close handshake must pass without a device");
     await LocalServiceReadinessTests.RunAsync();
     await PortableRuntimeTests.RunAsync(root);
-    Console.WriteLine("LOCAL_DEPLOYMENT_DOCTOR_TESTS=13/13 PASS: legacy roots rejected before IO, doctor/root ancestor junction rejection, missing/file/inaccessible-marker boundaries, instance ownership, read-only catalog, health, SQLite, worker import/close, invalid/oversized/offline diagnostics");
+    Console.WriteLine("LOCAL_DEPLOYMENT_DOCTOR_TESTS=14/14 PASS: legacy roots rejected before IO, doctor/root ancestor junction rejection, missing/file/inaccessible-marker boundaries, instance ownership, read-only catalog, health, SQLite, worker import/close, invalid/oversized/offline diagnostics, invalid process ID diagnosis");
 }
 finally
 {

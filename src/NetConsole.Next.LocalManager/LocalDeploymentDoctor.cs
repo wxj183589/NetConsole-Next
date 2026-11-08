@@ -77,7 +77,8 @@ internal static class LocalDeploymentDoctor
                 matchingInstance ? "Loopback service belongs to this data root." : "Port serves a different or unidentifiable instance.",
                 matchingInstance ? "" : "Check NETCONSOLE_NEXT_DATA_ROOT and NETCONSOLE_NEXT_WEB_PORT; do not stop an unrelated process."));
             if (!matchingInstance) return Finish();
-            if (value.TryGetProperty("processId", out var pid) && pid.TryGetInt32(out var numericPid) && numericPid > 0)
+            if (value.TryGetProperty("processId", out var pid) && pid.ValueKind == JsonValueKind.Number &&
+                pid.TryGetInt32(out var numericPid) && numericPid > 0)
                 processId = numericPid;
             checks.Add(new("HEALTH", Text("healthState") == "HEALTHY" && Text("serviceState") == "running" && processId.HasValue ? "PASS" : "FAIL",
                 "Service state: " + (Text("serviceState") ?? "UNKNOWN") + "; health: " + (Text("healthState") ?? "UNKNOWN") + ".",
