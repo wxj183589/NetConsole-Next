@@ -168,21 +168,23 @@ try {
       return { status: aggregateChanges.length || sourceChanges ? 'PASS' : 'PARTIAL', reason: aggregateChanges.length || sourceChanges ? undefined : 'NO_STORED_EFFECTIVE_CHANGES',
         resourceId, independentAcSources: runtime.sources.length, aggregateChanges: aggregateChanges.length, sourceChanges, csvBytes: Buffer.byteLength(csv), deviceCollectionStarted: false }
     })
-    await step('quickPingP95HistoryCsv', width, async () => {
+    await step('pingP95HistoryCsv', width, async () => {
       await page.goto(`${base}/tools`, { waitUntil: 'networkidle' })
       const panel = page.getByTestId('quick-ping-history-trend')
       await panel.waitFor()
-      const load = panel.getByRole('button', { name: '加载 Quick Ping 趋势', exact: true })
-      if (!await load.isEnabled()) return { status: 'PARTIAL', reason: 'NO_STORED_QUICK_PING_HISTORY', newProbeStarted: false }
+      const load = panel.getByRole('button', { name: '加载 Quick / Long Ping 趋势', exact: true })
+      if (!await load.isEnabled()) return { status: 'PARTIAL', reason: 'NO_STORED_PING_HISTORY', newProbeStarted: false }
       await load.click()
-      await panel.getByRole('button', { name: '加载 Quick Ping 趋势', exact: true }).waitFor()
-      const tables = panel.getByRole('table', { name: 'Quick Ping 跨任务趋势', exact: true })
-      if (!await tables.count()) return { status: 'PARTIAL', reason: 'NO_COMPLETED_SCOPED_QUICK_PING_POINTS', newProbeStarted: false }
+      await panel.getByRole('button', { name: '加载 Quick / Long Ping 趋势', exact: true }).waitFor()
+      const tables = panel.getByRole('table', { name: 'Quick / Long Ping 跨任务趋势', exact: true })
+      if (!await tables.count()) return { status: 'PARTIAL', reason: 'NO_COMPLETED_SCOPED_PING_POINTS', newProbeStarted: false }
       assert(await tables.first().getByRole('columnheader', { name: 'P95 RTT', exact: true }).isVisible(), 'P95 column missing')
       const csv = await download(panel.getByRole('button', { name: '导出趋势 CSV', exact: true }), `quick-ping-history-${width}.csv`)
-      assert(['p95_replied_ms_nearest_rank', 'actor', 'site_id', 'device_id', 'run_id', 'unsent_unknown', 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS'].every(value => csv.includes(value)), 'Ping CSV metrics/scope missing')
+      assert(['diagnostic_kind', 'p95_replied_ms_nearest_rank', 'actor', 'site_id', 'device_id', 'run_id', 'unsent_unknown', 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS'].every(value => csv.includes(value)), 'Ping CSV metrics/scope missing')
+      const rows = csvRecords(csv), kinds = [...new Set(rows.map(row => row.diagnostic_kind))]
+      assert(kinds.every(kind => ['QUICK_PING', 'LONG_PING'].includes(kind)), 'Ping CSV type identity missing')
       assert(csv.trim().split(/\r?\n/).length > 1, 'Ping CSV has no historical points')
-      return { trendGroups: await tables.count(), csvBytes: Buffer.byteLength(csv), newProbeStarted: false }
+      return { trendGroups: await tables.count(), kinds, longPingHistory: kinds.includes('LONG_PING') ? 'PASS' : 'NO_STORED_COMPLETED_LONG_PING_POINTS', csvBytes: Buffer.byteLength(csv), newProbeStarted: false }
     })
     await step('configurationHistory', width, async () => {
       await page.goto(`${base}/config-backups?deviceId=${encodeURIComponent(process.env.R76_CONFIG_DEVICE || 'r68-ac1')}`, { waitUntil: 'networkidle' })
