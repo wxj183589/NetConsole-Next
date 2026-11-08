@@ -1,9 +1,12 @@
 # R7.4 Final Acceptance
 
-Date: 2026-11-08  
-Agent: `codex-A`  
-Branch: `codex-A/netconsole-next-r3-dual-ac`  
-Current product HEAD before this report commit: `a86731b`  
+Date: 2026-11-08
+
+Agent: `codex-A`
+
+Branch: `codex-A/netconsole-next-r3-dual-ac`
+
+Current product HEAD before this report commit: `a86731b`
 Overall: **PARTIAL**
 
 ## Completed in this checkpoint
@@ -31,7 +34,7 @@ Overall: **PARTIAL**
 
 - Product commits: `0a39c5e`, `53af103`, `158eba3`, `a86731b`.
 - No push, remote merge or release publish.
-- Device configuration writes: 0. AC tasks appended read-only Tasks, Raw and Facts to the existing isolated `test-data/simulator-live-20261105` root. No original NetConsole data root was accessed.
+- Device configuration writes: 1 authorized running-configuration command on AC1 enabled `wlan ap-execute all exec-console` for all APs attached to that AC. AC1 accepted the command without an error response. `display current-configuration` and probe-view display help did not expose an effective-state readback, so FIT-AP remote login is not verified. No `save` was issued. AC read-only tasks appended Tasks, Raw and Facts to the existing isolated `test-data/simulator-live-20261105` root. No original NetConsole data root was accessed.
 - Existing untracked static assets under `wwwroot/app/assets` remain untouched and uncommitted.
 
 The currently running Service is the prior `build/r73-service/NetConsole.Next.Service.dll` (PID 33036), with Vite PID 32812 on port 5174. The new R7.4 server code has not been deployed into that process. Do not claim the live Service exposes Long Ping until a separate isolated R7.4 instance is built and started.

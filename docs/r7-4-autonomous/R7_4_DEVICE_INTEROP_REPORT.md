@@ -12,6 +12,7 @@ The VirtualBox Host-Only adapter was Up and the four endpoint TCP ports accepted
 - A fresh exact AP Serial/MAC identity was observed from both ACs: AC1 `R/M` / `RUNNING_MASTER`, AC2 `R/B` / `RUNNING_BACKUP`. The product probe verified each Observation against its current task Raw fact. No HA switch was performed.
 - SW's product task failed authentication before any command was captured. Read-only Catalog inspection found one enabled inventory-linked profile for this address; the other stored profile was not inventory-linked. No alternate credential was attempted.
 - FIT-AP TCP/Telnet negotiation reached a password prompt. The probe sent no username or password and did not authenticate.
+- After the user supplied the authorized command, AC1 accepted `wlan ap-execute all exec-console enable` from probe view. No save was issued. AC1's normal running-configuration output and available probe display help did not provide an effective-state readback; therefore AP-side remote-console availability and FIT-AP login remain **NOT_VERIFIED**. One device configuration write occurred on AC1 and none on AC2, SW or FIT-AP.
 
 Evidence:
 
@@ -19,4 +20,4 @@ Evidence:
 - `../../../reports/r72-product-lldp-scope-20261108-185958/summary.json`
 - `../../../reports/r71-device-20261108-190230/summary.json`
 
-Classification: AC1/AC2 **SIMULATOR_AUTH + SIMULATOR_READONLY PASS**; SW **SIMULATOR_TCP PASS / SIMULATOR_AUTH BLOCKED**; FIT-AP **SIMULATOR_TCP PASS / SIMULATOR_AUTH NOT_TESTED**. No `SIMULATOR_WRITE` or `SIMULATOR_RESTORE` was attempted.
+Classification: AC1/AC2 **SIMULATOR_AUTH + SIMULATOR_READONLY PASS**; AC1 Exec Console enable **SIMULATOR_WRITE COMMAND_ACCEPTED / EFFECTIVE_STATE_NOT_VERIFIED**; SW **SIMULATOR_TCP PASS / SIMULATOR_AUTH BLOCKED**; FIT-AP **SIMULATOR_TCP PASS / SIMULATOR_AUTH NOT_TESTED**. No restore was attempted and no startup configuration was saved.
