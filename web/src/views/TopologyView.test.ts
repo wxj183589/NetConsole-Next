@@ -36,6 +36,37 @@ describe('TopologyView', () => {
     expect(wrapper.get('[data-testid="topology-summary"]').text()).toContain('0 台资产')
   })
 
+  it('bounds LLDP fanout and preserves profile results when a request fails', async () => {
+    api.getH3cProfiles.mockResolvedValue(Array.from({ length: 11 }, (_, i) => ({ ...profile, id: `profile-${i}` })))
+    const pending: Array<{ resolve: (value: unknown) => void, reject: (reason: Error) => void }> = []
+    let active = 0; let peak = 0
+    api.getH3cLldpClaims.mockImplementation(() => {
+      active++; peak = Math.max(peak, active)
+      return new Promise((resolve, reject) => pending.push({ resolve, reject })).finally(() => { active-- })
+    })
+    const wrapper = render(); await flushPromises()
+    expect(pending).toHaveLength(4)
+    pending[0].reject(new Error('denied')); pending.slice(1, 4).forEach(item => item.resolve(claims)); await flushPromises()
+    expect(pending).toHaveLength(8)
+    pending.slice(4, 8).forEach(item => item.resolve(claims)); await flushPromises()
+    pending.slice(8).forEach(item => item.resolve(claims)); await flushPromises()
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(11)
+    expect(peak).toBe(4)
+    expect(wrapper.get('[aria-label="LLDP 关系表"]').findAll('tbody tr')).toHaveLength(10)
+    expect(wrapper.text()).toContain('LLDP 关系读取失败')
+  })
+
+  it('does not launch queued LLDP requests after leaving the page', async () => {
+    api.getH3cProfiles.mockResolvedValue(Array.from({ length: 20 }, (_, i) => ({ ...profile, id: `profile-${i}` })))
+    const pending: Array<(value: unknown) => void> = []
+    api.getH3cLldpClaims.mockImplementation(() => new Promise(resolve => pending.push(resolve)))
+    const wrapper = render(); await flushPromises()
+    expect(pending).toHaveLength(4)
+    wrapper.unmount()
+    pending.forEach(resolve => resolve(claims)); await flushPromises()
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(4)
+  })
+
   it('loads effective history, hides repeats and orders changes without asserting link health', async () => {
     const wrapper = render(); await flushPromises()
     api.getH3cLldpClaims.mockResolvedValue({ ...claims, relations: [

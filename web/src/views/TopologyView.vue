@@ -90,7 +90,17 @@ async function refresh(): Promise<void> {
     const [inventoryResult, profilesResult] = await Promise.all([getDeviceInventory({ page: 1, pageSize: 100 }), getH3cProfiles()])
     if (current !== generation) return
     inventory.value = inventoryResult
-    const relationResults = await Promise.allSettled(profilesResult.map(profile => getH3cLldpClaims(profile.id, { history: readHistory, limit: 1000 })))
+    // Bound requests even when inventory contains thousands of connection profiles.
+    const relationResults: PromiseSettledResult<H3cLldpClaims>[] = []
+    let nextProfile = 0
+    await Promise.all(Array.from({ length: Math.min(4, profilesResult.length) }, async () => {
+      while (current === generation && nextProfile < profilesResult.length) {
+        const index = nextProfile++
+        try {
+          relationResults[index] = { status: 'fulfilled', value: await getH3cLldpClaims(profilesResult[index].id, { history: readHistory, limit: 1000 }) }
+        } catch (reason) { relationResults[index] = { status: 'rejected', reason } }
+      }
+    }))
     if (current !== generation) return
     relationResults.forEach((result, index) => profileRelations(profilesResult[index], result))
     loadedMs.value = Date.now()
@@ -145,7 +155,7 @@ onBeforeUnmount(() => { ++generation; ++assetGeneration })
           <span class="summary-chip summary-chip--danger"><b>{{ summary.offlineDevices }}</b> 最近离线</span>
           <span class="summary-chip"><b>{{ summary.unknownStatus }}</b> 状态未知</span>
           <span class="summary-chip summary-chip--info"><b>{{ relationCount }}</b> 条 LLDP 关系</span>
-          <span class="summary-chip"><b>{{ siteCount }}</b> 个授权局点</span>
+          <span class="summary-chip"><b>{{ siteCount }}</b> 个当前页局点</span>
         </div>
         <div v-if="partialErrors.length" class="data-quality-note" role="status"><el-icon><Warning /></el-icon>{{ partialErrors.join('；') }}。已展示其他成功读取的关系。</div>
         <section class="card topology-scope-card">
