@@ -547,6 +547,7 @@ export interface QuickPingSnapshot {
   protocol: 'ICMP' | 'TCP'; destinationAddress: string; port: number | null
   requestedSamples: number; sent: number; received: number; lost: number; lossPercent: number | null
   minMs: number | null; maxMs: number | null; averageMs: number | null
+  p95Ms?: number | null
   samples: Array<{ sequence: number; capturedMs: number; status: string; latencyMs: number | null }>
 }
 export interface NetworkDiagnosticItem {

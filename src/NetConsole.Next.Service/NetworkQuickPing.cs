@@ -8,7 +8,19 @@ namespace NetConsole.Next.Service;
 internal sealed record QuickPingSample(int Sequence, long CapturedMs, string Status, long? LatencyMs);
 internal sealed record QuickPingSnapshot(string Protocol, string DestinationAddress, int? Port,
     int RequestedSamples, int Sent, int Received, int Lost, double? LossPercent,
-    long? MinMs, long? MaxMs, double? AverageMs, IReadOnlyList<QuickPingSample> Samples);
+    long? MinMs, long? MaxMs, double? AverageMs, IReadOnlyList<QuickPingSample> Samples)
+{
+    // Nearest-rank P95 uses replies only; deriving it also supports persisted snapshots from before this field existed.
+    public long? P95Ms
+    {
+        get
+        {
+            var replied = Samples.Where(sample => sample.Status == "REPLIED" && sample.LatencyMs is >= 0)
+                .Select(sample => sample.LatencyMs!.Value).Order().ToArray();
+            return replied.Length == 0 ? null : replied[(int)Math.Ceiling(replied.Length * .95) - 1];
+        }
+    }
+}
 
 internal interface IQuickPingProbe
 {

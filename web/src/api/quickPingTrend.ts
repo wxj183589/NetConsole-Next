@@ -3,17 +3,20 @@ import type { NetworkDiagnosticRun, QuickPingSnapshot } from './client'
 export interface QuickPingTrendPoint {
   runId: string; itemId: string; capturedMs: number; state: string; requested: number | null
   sent: number | null; received: number | null; lost: number | null; unsent: number | null
-  lossPercent: number | null; averageMs: number | null; latencies: number[]; metricsKnown: boolean
+  lossPercent: number | null; averageMs: number | null; p95Ms: number | null; latencies: number[]; metricsKnown: boolean
 }
 export interface QuickPingTrendGroup {
   key: string; actor: string; siteId: string; deviceId: string; deviceName: string
   protocol: string; endpoint: string; port: number | null; points: QuickPingTrendPoint[]
   sent: number | null; received: number | null; lost: number | null; unsent: number | null
-  lossPercent: number | null; averageMs: number | null; minMs: number | null; maxMs: number | null
+  lossPercent: number | null; averageMs: number | null; minMs: number | null; maxMs: number | null; p95Ms: number | null
 }
 const count = (n: unknown): n is number => Number.isInteger(n) && Number(n) >= 0
 const finiteLatency = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0
 const round = (n: number) => Math.round(n * 100) / 100
+// Nearest-rank percentile of actual replies, never an average of per-run percentiles.
+const p95 = (latencies: readonly number[]) => latencies.length
+  ? [...latencies].sort((a, b) => a - b)[Math.ceil(latencies.length * .95) - 1]! : null
 function point(run: NetworkDiagnosticRun, item: NetworkDiagnosticRun['items'][number], ping: QuickPingSnapshot | null | undefined): QuickPingTrendPoint {
   const sent = ping?.sent, received = ping?.received, lost = ping?.lost, requested = ping?.requestedSamples
   const samples = Array.isArray(ping?.samples) ? ping.samples : []
@@ -32,6 +35,7 @@ function point(run: NetworkDiagnosticRun, item: NetworkDiagnosticRun['items'][nu
     sent: known ? sent! : null, received: known ? received! : null, lost: known ? lost! : null,
     unsent: known ? requested! - sent! : null, lossPercent: known && sent ? round(lost! * 100 / sent) : null,
     averageMs: latencies.length ? round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null,
+    p95Ms: p95(latencies),
     latencies, metricsKnown: known }
 }
 
@@ -59,7 +63,7 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
     if (!group) {
       group = { key, actor: run.actor, siteId: item.siteId, deviceId: item.deviceId, deviceName: item.deviceName,
         protocol, endpoint, port, points: [], sent: null, received: null, lost: null, unsent: null,
-        lossPercent: null, averageMs: null, minMs: null, maxMs: null }
+        lossPercent: null, averageMs: null, minMs: null, maxMs: null, p95Ms: null }
       groups.set(key, group)
     }
     group.points.push(point(run, item, hasEndpoint ? ping : null))
@@ -76,6 +80,7 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
     group.averageMs = latencies.length ? round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
     group.minMs = latencies.length ? Math.min(...latencies) : null
     group.maxMs = latencies.length ? Math.max(...latencies) : null
+    group.p95Ms = p95(latencies)
   }
   return { groups: [...groups.values()].sort((a, b) => a.key.localeCompare(b.key)), pending, missingIdentity }
 }
@@ -83,12 +88,12 @@ export function buildQuickPingTrends(runs: readonly NetworkDiagnosticRun[]): { g
 export function quickPingTrendCsv(groups: readonly QuickPingTrendGroup[], context: { loadedMs: number; failedRuns: readonly string[] }): string {
   const header = ['actor', 'site_id', 'device_id', 'device_name', 'protocol', 'destination_address', 'port',
     'run_id', 'item_id', 'captured_utc', 'state', 'requested', 'sent', 'received', 'lost', 'unsent_unknown',
-    'loss_percent_sent_only', 'average_replied_ms', 'metrics_known', 'loaded_utc', 'failed_run_ids', 'export_scope']
+    'loss_percent_sent_only', 'average_replied_ms', 'p95_replied_ms_nearest_rank', 'metrics_known', 'loaded_utc', 'failed_run_ids', 'export_scope']
   const rows: Array<Array<string | number | boolean | null>> = [header]
   for (const group of groups) for (const point of group.points) rows.push([
     group.actor, group.siteId, group.deviceId, group.deviceName, group.protocol, group.endpoint, group.port,
     point.runId, point.itemId, new Date(point.capturedMs).toISOString(), point.state, point.requested,
-    point.sent, point.received, point.lost, point.unsent, point.lossPercent, point.averageMs, point.metricsKnown,
+    point.sent, point.received, point.lost, point.unsent, point.lossPercent, point.averageMs, point.p95Ms, point.metricsKnown,
     new Date(context.loadedMs).toISOString(), JSON.stringify(context.failedRuns), 'LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS',
   ])
   const cell = (value: string | number | boolean | null) => {

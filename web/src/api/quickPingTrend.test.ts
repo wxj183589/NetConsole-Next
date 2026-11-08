@@ -18,8 +18,17 @@ describe('Quick Ping history trends', () => {
     const { groups } = buildQuickPingTrends([run('a', [0]), run('b', [30, 30, 30], {}, { requestedSamples: 5 }), run('c', [null, null])])
     expect(groups).toHaveLength(1)
     expect(groups[0]).toMatchObject({ sent: 6, received: 4, lost: 2, unsent: 2, lossPercent: 33.33,
-      averageMs: 22.5, minMs: 0, maxMs: 30 })
+      averageMs: 22.5, minMs: 0, maxMs: 30, p95Ms: 30 })
     expect(groups[0]!.points[0]!.averageMs).toBe(0)
+    expect(groups[0]!.points[0]!.p95Ms).toBe(0)
+  })
+  it('ranks merged replies rather than averaging run percentiles and excludes loss', () => {
+    const { groups } = buildQuickPingTrends([run('base', Array.from({ length: 19 }, (_, i) => i + 1)),
+      run('outlier', [1000, null], {}, { p95Ms: 12345 })])
+    expect(groups[0]!.p95Ms).toBe(19)
+    expect(groups[0]!.points.find(point => point.runId === 'outlier')!.p95Ms).toBe(1000)
+    expect(buildQuickPingTrends([run('21', Array.from({ length: 21 }, (_, i) => i + 1))]).groups[0]!.p95Ms).toBe(20)
+    expect(buildQuickPingTrends([run('loss', [null, null])]).groups[0]!.p95Ms).toBeNull()
   })
   it('keeps exact actor/Site/device/protocol/address/port partitions independent', () => {
     const a = run('a', [1])
@@ -37,6 +46,7 @@ describe('Quick Ping history trends', () => {
     expect(groups).toHaveLength(2)
     const knownEndpoint = groups.find(group => group.protocol === 'TCP')!
     expect(knownEndpoint.averageMs).toBeNull()
+    expect(knownEndpoint.p95Ms).toBeNull()
     expect(knownEndpoint.sent).toBeNull()
     expect(knownEndpoint.points.find(point => point.runId === 'ok')!.averageMs).toBe(0)
     expect(groups.find(group => group.protocol === 'UNKNOWN')!.points[0]).toMatchObject({ averageMs: null, sent: null })
@@ -61,5 +71,6 @@ describe('Quick Ping history trends', () => {
     expect(csv).toContain('"UNKNOWN"')
     expect(csv).toContain('LOADED_SCOPED_HISTORY_ONLY_MAX_20_RUNS')
     expect(csv).toContain('failed')
+    expect(csv).toContain('p95_replied_ms_nearest_rank')
   })
 })

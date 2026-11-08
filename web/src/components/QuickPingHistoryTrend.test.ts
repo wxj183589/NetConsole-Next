@@ -25,6 +25,18 @@ describe('Quick Ping history workspace', () => {
     expect(wrapper.get('table').text()).toContain('0 ms')
     expect(wrapper.text()).toContain('仅含已发送样本')
     expect(wrapper.text()).toContain('operator · s1 · TCP · 192.0.2.1:22')
+    expect(wrapper.text()).toContain('P95 0 ms')
+    expect(wrapper.get('table th:last-child').text()).toBe('P95 RTT')
+    expect(wrapper.get('table td:last-child').text()).toBe('0 ms')
+  })
+  it('shows unknown P95 for all-loss history rather than a zero latency', async () => {
+    const result = row('one'), ping = result.items[0]!.quickPing!
+    ping.received = 0; ping.lost = 1
+    ping.samples[0]!.status = 'TIMED_OUT'; ping.samples[0]!.latencyMs = null
+    api.getNetworkDiagnostics.mockResolvedValueOnce(result)
+    const wrapper = render(); await load(wrapper)
+    expect(wrapper.text()).toContain('P95 UNKNOWN ms')
+    expect(wrapper.get('table td:last-child').text()).toBe('UNKNOWN ms')
   })
   it('marks partial unreadable history and keeps only successful records', async () => {
     api.getNetworkDiagnostics.mockRejectedValueOnce(new Error('unavailable'))

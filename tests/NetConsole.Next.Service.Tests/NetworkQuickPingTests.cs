@@ -12,7 +12,7 @@ internal static class NetworkQuickPingTests
         var checks = 0;
         var final = await NetworkQuickPing.RunAsync("fixture", 22, "ICMP", 3, 100, 100,
             probe, () => checks++, progress.Add, CancellationToken.None);
-        Assert(final is { Sent: 3, Received: 2, Lost: 1, LossPercent: 33.33, MinMs: 2, MaxMs: 4, AverageMs: 3 }, "loss and latency use actual replies only");
+        Assert(final is { Sent: 3, Received: 2, Lost: 1, LossPercent: 33.33, MinMs: 2, MaxMs: 4, AverageMs: 3, P95Ms: 4 }, "loss and latency use actual replies only");
         Assert(progress[0].Sent == 0 && progress[1].Sent == 1 && probe.Resolves == 1 && checks == 8, "immutable progress, pinned DNS and authority boundaries");
         var cancel = new CancellationTokenSource();
         try
@@ -37,10 +37,15 @@ internal static class NetworkQuickPingTests
         }
         var longRun = await NetworkQuickPing.RunForDurationAsync("fixture", 22, "TCP", 1, 1_000, 100,
             new Probe(), () => { }, _ => { }, CancellationToken.None);
-        Assert(longRun is { RequestedSamples: 1, Sent: 1 }, "duration-based long ping reports the bounded sample plan and completion");
+        Assert(longRun is { RequestedSamples: 1, Sent: 1, P95Ms: 2 }, "duration-based long ping reports the bounded sample plan and reply P95");
         var noReplies = await NetworkQuickPing.RunAsync("fixture", 22, "TCP", 2, 100, 100,
             new Probe { AllLost = true }, () => { }, _ => { }, CancellationToken.None);
-        Assert(noReplies is { LossPercent: 100, AverageMs: null, MinMs: null, MaxMs: null }, "missing latency remains unknown");
+        Assert(noReplies is { LossPercent: 100, AverageMs: null, MinMs: null, MaxMs: null, P95Ms: null }, "missing latency remains unknown");
+        var ranked = final with { Samples = Enumerable.Range(1, 20).Reverse().Select(value => new QuickPingSample(value, 1, "REPLIED", value == 20 ? 1_000 : value)).ToArray() };
+        Assert(ranked.P95Ms == 19 && progress[0].P95Ms is null && progress[1].P95Ms == 2, "nearest-rank P95 excludes the top 5 percent and preserves empty/progress boundaries");
+        var legacyJson = System.Text.Json.JsonSerializer.Serialize(final);
+        legacyJson = legacyJson.Replace(",\"P95Ms\":4", "");
+        Assert(System.Text.Json.JsonSerializer.Deserialize<QuickPingSnapshot>(legacyJson)?.P95Ms == 4, "old snapshots derive P95 from original replies");
         var revoked = 0;
         try
         {
@@ -50,7 +55,7 @@ internal static class NetworkQuickPingTests
         }
         catch (DeviceSiteScopeException) { }
         await LiveLoopbackHistoryAndScope();
-        Console.WriteLine("QUICK_PING_TESTS=7/7 PASS (loss, progress, cancellation, limits, unknown, revocation, real TCP/history/scope)");
+        Console.WriteLine("QUICK_PING_TESTS=9/9 PASS (loss, progress, cancellation, limits, unknown, revocation, real TCP/history/scope, P95 rank, legacy P95)");
     }
 
     private static async Task LiveLoopbackHistoryAndScope()
