@@ -10,8 +10,8 @@ using System.Text.RegularExpressions;
 
 namespace NetConsole.Next.Service;
 
-// Windows tracert uses ICMP. The OS executable avoids the host-specific API
-// denial observed with apphost and dotnet without elevating the Service.
+// Windows tracert uses ICMP. It runs under the Service's ordinary token;
+// host restrictions must remain explicit failures rather than fabricated hops.
 internal static class WindowsSystemTraceroute
 {
     internal static ProcessStartInfo Command(IPAddress destination, int timeoutMs)
@@ -147,6 +147,13 @@ internal static class WindowsSystemTraceroute
         var match = Regex.Match(line, @"^\s*(\d{1,2})\s+(.+)$", RegexOptions.CultureInvariant);
         if (!match.Success || !int.TryParse(match.Groups[1].Value, out var ttl) || ttl is < 1 or > NetworkTraceroute.MaximumHops) return null;
         var body = match.Groups[2].Value.Trim();
+        // tracert can exit 0 after an ICMP transmit failure. Preserve the native
+        // error so the product can classify code 5 as permission denied.
+        var nativeFailure = Regex.Match(body,
+            @"^(?:Transmit error\s*:\s*code|传输错误\s*[:：]\s*代码为)\s*(\d{1,5})\s*[.。]?\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (nativeFailure.Success && int.TryParse(nativeFailure.Groups[1].Value, out var nativeCode))
+            throw new PingException("System ICMP traceroute transmit failed.", new Win32Exception(nativeCode));
         // TryParse also accepts integer latency tokens as IPv4; require dot/colon.
         var addressMatch = Regex.Matches(body, @"(?<!\S)[^\s]+").Cast<Match>().LastOrDefault(m =>
             (m.Value.Contains('.') || m.Value.Contains(':')) && IPAddress.TryParse(m.Value, out _));

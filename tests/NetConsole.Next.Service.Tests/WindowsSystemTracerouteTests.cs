@@ -30,6 +30,7 @@ internal static class WindowsSystemTracerouteTests
             command.ArgumentList.SequenceEqual(new[] { "-d", "-4", "-h", "30", "-w", "1000", "192.0.2.9" }), "absolute executable, bounded arguments, no shell");
         if (OperatingSystem.IsWindows())
         {
+            await RejectsNativeFailure();
             await OwnedProcessStops("cancel");
             await OwnedProcessStops("deadline");
             await OwnedProcessStops("revoke");
@@ -45,6 +46,23 @@ internal static class WindowsSystemTracerouteTests
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script }) command.ArgumentList.Add(argument);
         return command;
+    }
+
+    private static async Task RejectsNativeFailure()
+    {
+        foreach (var message in new[] { " 1 Transmit error: code 5.", " 1 传输错误: 代码为5。" })
+        {
+            var pid = 0;
+            var published = 0;
+            try
+            {
+                await WindowsSystemTraceroute.RunProcessAsync(Fixture("[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::WriteLine('" + message + "')"),
+                    IPAddress.Loopback, 5000, () => { }, _ => published++, CancellationToken.None, value => pid = value);
+                throw new Exception("native error was accepted as a hop");
+            }
+            catch (PingException error) when (error.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 5 }) { }
+            Check(pid > 0 && Exited(pid) && published == 0, "zero-exit native denial must be classified without publishing a hop");
+        }
     }
 
     private static async Task OwnedProcessStops(string kind)

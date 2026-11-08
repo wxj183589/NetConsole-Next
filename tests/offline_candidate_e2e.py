@@ -429,7 +429,7 @@ def verify_scheduled_backups(candidate: Path, temporary: Path) -> None:
             assert target.commands == previous_commands and definition_count(root) == before + 1
             print("OFFLINE_DIAGNOSTIC_HISTORY=PASS (bounded summary discovery, explicit ADMIN Site authority/revocation, restart, no diagnostic admission)", flush=True)
             if trace_failure is None:
-                print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no CLI commands)", flush=True)
+                print("OFFLINE_TRACEROUTE=PASS (real Windows loopback ICMP, SUPERADMIN admission, structured TTL/hop persistence; no device CLI commands)", flush=True)
             else:
                 print("OFFLINE_TRACEROUTE=FAIL (" + trace_failure + "; required live ICMP gate)", flush=True)
 
