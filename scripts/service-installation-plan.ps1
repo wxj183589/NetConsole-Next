@@ -1,7 +1,9 @@
 function Get-InstallationPath {
     param([Parameter(Mandatory)] [string] $Path)
     # Reject Windows aliases before any filesystem operation, including marker reads.
-    if (-not [IO.Path]::IsPathFullyQualified($Path) -or $Path.StartsWith('\\') -or
+    # Explicit drive/root syntax also works on .NET Framework (Windows PowerShell 5.1).
+    # IsPathRooted alone would accept drive-relative and current-drive-rooted paths.
+    if ($Path -notmatch '^[A-Za-z]:[\\/]' -or $Path.StartsWith('\\') -or
         @($Path.Split([char[]]'\/') | Where-Object { $_ -notin @('.', '..') -and $_ -match '[. ]$' }).Count -gt 0) {
         throw 'Installation paths must be absolute local paths without namespace or trailing-dot aliases.'
     }

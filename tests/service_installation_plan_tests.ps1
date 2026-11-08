@@ -19,6 +19,12 @@ try {
     if ((Test-Path -LiteralPath $data) -or $plan.Mutated -or $plan.Environment -notcontains "NETCONSOLE_NEXT_DATA_ROOT=$data" -or
         $plan.Environment -notcontains 'NETCONSOLE_NEXT_WEB_PORT=18779') { throw 'Read-only plan or explicit SCM environment failed.' }
     $checks++
+    foreach ($unsafePath in @('relative\data', 'D:relative', 'D:', '\rooted', '/rooted', '\\server\share\data', '\\.\D:\data', 'FileSystem::D:\data', 'D:\trailing \data')) {
+        Assert-PlanRejected { Get-InstallationPath $unsafePath }
+    }
+    if ((Get-InstallationPath 'D:\absolute\data') -ne 'D:\absolute\data' -or
+        (Get-InstallationPath 'D:/absolute/data') -ne 'D:\absolute\data') { throw 'Absolute local drive paths must work on Windows PowerShell and pwsh.' }
+    $checks++
     Assert-PlanRejected { Get-ServiceInstallationPlan -ServiceExecutable $exe -DataRoot 'D:\NetConsoleData\do-not-open' }
     Assert-PlanRejected { Get-ServiceInstallationPlan -ServiceExecutable $exe -DataRoot 'D:\NetConsoleData-dev' }
     Assert-PlanRejected { Get-ServiceInstallationPlan -ServiceExecutable $exe -DataRoot 'D:\NetConsoleData.\do-not-open' }
@@ -47,7 +53,16 @@ try {
     $existing = Get-ServiceInstallationPlan -ServiceExecutable $exe -DataRoot $data
     if ($existing.DataRoot -ne $data -or (Get-Content -LiteralPath (Join-Path $data 'unrelated.txt')).Trim() -ne 'preserve') { throw 'Existing marked root changed.' }
     $checks++
-    Write-Output "Service installation plan: $checks/15 PASS; no SCM or registry writes."
+    $link = Join-Path $fixture 'linked-binary'
+    New-Item -ItemType Junction -Path $link -Target (Split-Path -Parent $exe) | Out-Null
+    try {
+        Assert-PlanRejected { Get-ServiceInstallationPlan -ServiceExecutable (Join-Path $link 'NetConsole.Next.Service.exe') -DataRoot $data }
+        Assert-PlanRejected { Get-ServiceInstallationPlan -ServiceExecutable $exe -DataRoot (Join-Path $link 'data') }
+    } finally {
+        # Delete only the fixture junction, without following its target.
+        [IO.Directory]::Delete($link)
+    }
+    Write-Output "Service installation plan: $checks/27 PASS; no SCM or registry writes."
 }
 finally {
     # Retire only this invocation's generated fixture, after checking the absolute boundary.
