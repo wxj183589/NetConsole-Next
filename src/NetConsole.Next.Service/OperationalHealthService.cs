@@ -7,10 +7,11 @@ internal sealed record OperationalMetric(string State, double? Value, string Uni
 internal sealed record OperationalDeviceHealth(string DeviceId, string Name, string SiteId, string? ProfileId,
     string State, OperationalMetric Reachability, OperationalMetric CpuPercent, OperationalMetric MemoryPercent,
     OperationalMetric InterfaceDown, OperationalMetric LldpNeighbors, IReadOnlyList<string> Warnings,
-    OperationalMetric? PingDelayMs = null, OperationalMetric? PacketLossPercent = null);
+    OperationalMetric? PingDelayMs = null, OperationalMetric? PacketLossPercent = null,
+    OperationalMetric? RouteReachability = null);
 internal sealed record OperationalFaultEvent(string Id, string DeviceId, string SiteId, string Kind,
     string Severity, string State, long AtMs, string EvidenceType, string EvidenceId, string Detail,
-    string? ResourceKey = null);
+    string? ResourceKey = null, string? SourceAuthority = null, string? CapturedScopeKey = null);
 internal sealed record OperationalHealthSnapshot(long AsOfMs, long FreshnessWindowMs, int Page, long TotalDevices,
     bool HasMore, IReadOnlyList<OperationalDeviceHealth> Devices, IReadOnlyList<OperationalFaultEvent> Events,
     IReadOnlyList<string> Limitations);
@@ -27,6 +28,18 @@ internal static class OperationalHealthProjection
     public const long FreshnessWindowMs = 300_000;
     public static string ProbeResource(string protocol, string address, int? port) =>
         JsonSerializer.Serialize(new object?[] { protocol, address, port });
+    public static OperationalMetric RouteMetric(NetworkDiagnosticItemSnapshot item, string runId,
+        DeviceInventoryItem device, long now)
+    {
+        if (item.Kind != "TRACEROUTE" || item.DeviceId != device.Id || item.SiteId != device.SiteId ||
+            item.State is not ("SUCCEEDED" or "FAILED") || item.EndedMs is not { } at || at > now ||
+            now - at > FreshnessWindowMs || item.TraceRoute is not { Hops.Count: > 0 } trace ||
+            trace.DestinationAddress != device.ManagementIp) return Unknown("route");
+        var reached = item.State == "SUCCEEDED" && item.Outcome == "OK" && trace.DestinationReached;
+        var failed = item.State == "FAILED" && item.Outcome is "TRACEROUTE_UNREACHABLE" or "TRACEROUTE_MAX_HOPS" && !trace.DestinationReached;
+        return reached || failed ? new("OBSERVED", reached ? 1 : 0, "route", at, [runId],
+            ProbeResource("TRACEROUTE", trace.DestinationAddress, null)) : Unknown("route");
+    }
     public static OperationalDeviceHealth Device(DeviceInventoryItem device,
         IReadOnlyList<H3cFactSnapshot> facts, long now)
     {
@@ -83,7 +96,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
         var diagnosticItems = actorUserId is null ? [] : diagnostics.List(actorUserId, scope, 20)
             .SelectMany(run => (diagnostics.Get(run.Id, actorUserId, scope)?.Items ?? [])
                 .Select(item => (RunId: run.Id, Item: item)))
-            .Where(pair => pair.Item.QuickPing is not null && pair.Item.EndedMs is { } end && end <= now &&
+            .Where(pair => (pair.Item.QuickPing is not null || pair.Item.TraceRoute is not null) && pair.Item.EndedMs is { } end && end <= now &&
                 now - end <= OperationalHealthProjection.FreshnessWindowMs && pair.Item.State is "SUCCEEDED" or "FAILED")
             .OrderByDescending(pair => pair.Item.EndedMs).ToArray();
         foreach (var device in inventory.Items)
@@ -108,18 +121,33 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                         ping.EndedMs!.Value, "DIAGNOSTIC", pingEvidence.RunId, $"{sample.Protocol} 探测样本存在丢失；不据此断定设备离线。",
                         OperationalHealthProjection.ProbeResource(sample.Protocol, sample.DestinationAddress, sample.Port)));
             }
+            var routeEvidence = diagnosticItems.FirstOrDefault(pair => pair.Item.Kind == "TRACEROUTE" &&
+                pair.Item.DeviceId == device.Id && pair.Item.SiteId == device.SiteId &&
+                pair.Item.TraceRoute?.DestinationAddress == device.ManagementIp);
+            if (routeEvidence.Item is { } route)
+            {
+                var metric = OperationalHealthProjection.RouteMetric(route, routeEvidence.RunId, device, now);
+                health = health with { RouteReachability = metric };
+                if (metric is { State: "OBSERVED", Value: 0 })
+                    events.Add(new("route:" + route.Id, device.Id, device.SiteId, "TRACEROUTE_ANOMALY", "WARNING", "OBSERVED",
+                        route.EndedMs!.Value, "DIAGNOSTIC", routeEvidence.RunId,
+                        route.Outcome == "TRACEROUTE_UNREACHABLE" ? "路由探测返回不可达；请查看具体跳点。" : "路由探测达到跳数上限，未取得目标应答。",
+                        metric.ResourceKey));
+            }
             devices.Add(health);
             foreach (var fact in facts.Where(f => f.IsCurrent && f.CollectedRawVerified &&
                 f.CapturedMs <= now && now - f.CapturedMs <= OperationalHealthProjection.FreshnessWindowMs &&
                 f.Status is not ("FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY") &&
                 f.Kind == "interface" && OperationalHealthProjection.LinkState(f.PayloadJson) == "DOWN"))
                 events.Add(new("interface:" + fact.Id, device.Id, device.SiteId, "INTERFACE_DOWN", "WARNING",
-                    "OBSERVED", fact.CapturedMs, "FACT", fact.Id, "接口链路观测为 DOWN；管理关闭也可能产生此状态。", fact.IdentityKey));
+                    "OBSERVED", fact.CapturedMs, "FACT", fact.Id, "接口链路观测为 DOWN；管理关闭也可能产生此状态。", fact.IdentityKey,
+                    fact.SourceAuthority, fact.CapturedScopeKey));
             if (health.Warnings.Contains("VERIFIED_EVIDENCE_STALE"))
             {
                 var latest = facts.Where(f => f.CollectedRawVerified && f.CapturedMs <= now).MaxBy(f => f.CapturedMs)!;
                 events.Add(new("stale:" + latest.Id, device.Id, device.SiteId, "EVIDENCE_STALE", "WARNING", "UNKNOWN",
-                    latest.CapturedMs, "FACT", latest.Id, "采集证据已超出新鲜度窗口，当前设备状态未知。"));
+                    latest.CapturedMs, "FACT", latest.Id, "采集证据已超出新鲜度窗口，当前设备状态未知。", null,
+                    latest.SourceAuthority, latest.CapturedScopeKey));
             }
         }
         foreach (var run in catalog.RecentTaskRuns(100, scope))

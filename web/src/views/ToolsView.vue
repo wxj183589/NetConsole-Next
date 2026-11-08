@@ -3,6 +3,7 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watc
 import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import SyslogWorkspace from '../components/SyslogWorkspace.vue'
+import QuickPingHistoryTrend from '../components/QuickPingHistoryTrend.vue'
 import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
@@ -194,6 +195,7 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
   <NcLayout title="工具集" description="宿主机外部终端注册与受控启动；程序运行在安装 NetConsole Next 的 Windows 宿主机桌面">
     <template #actions><el-button size="small" @click="refresh">刷新</el-button></template>
     <SyslogWorkspace :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" />
+    <QuickPingHistoryTrend :history="diagnosticHistory" :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" />
     <div class="card card--flat" style="margin-bottom:14px"><div class="card__body" style="line-height:1.8;color:var(--nc-text-secondary)">外部 SecureCRT、Xshell、PuTTY 不会在访问网页的笔记本上启动。服务只通过本机 Named Pipe 请求 Desktop Helper；密码、凭据引用和任意 shell 命令都不会进入启动参数。</div></div>
     <section class="card" style="margin-bottom:14px">
       <div class="card__header"><div><h2>网络诊断</h2><small>从 NetConsole 服务所在主机检查已登记设备；LLDP 读取当前局点内已验证的事实</small></div><span v-if="diagnosticRun" class="state-pill" :class="diagnosticRun.state === 'SUCCEEDED' ? 'good' : diagnosticRun.state === 'PARTIAL' ? 'warn' : ''">{{ diagnosticStateLabel(diagnosticRun.state) }} · {{ diagnosticRun.progressPercent }}%</span></div>

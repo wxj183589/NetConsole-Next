@@ -337,6 +337,14 @@ internal sealed class NetmikoWorkerH3cSshTransport : IH3cSshTransport
             description }, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<ConfigurationRestoreCapabilities> ProbeRestoreCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        if (!IsConnected) throw new H3cConnectionLostException();
+        var result = await RequestAsync(new { op = "probe_configuration_restore" }, cancellationToken).ConfigureAwait(false);
+        return result.Deserialize<ConfigurationRestoreCapabilities>(new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new H3cWorkerProtocolException();
+    }
+
     internal async Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken)
     {
         if (!IsConnected) throw new H3cConnectionLostException();

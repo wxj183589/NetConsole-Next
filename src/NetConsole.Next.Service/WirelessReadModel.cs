@@ -609,7 +609,7 @@ internal sealed partial class Catalog
             bool Usable(H3cFactSnapshot fact) => fact.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY") &&
                 H3cComwareParser.ParseWlanApAll(ReadOutput(fact.PayloadJson)).Count > 0;
             var apFact = Usable(latest) ? latest : QueryH3cFacts(profileId, apKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true)
-                .FirstOrDefault(Usable);
+                .FirstOrDefault(item => item.SourceAuthority == latest.SourceAuthority && item.CapturedScopeKey == latest.CapturedScopeKey && Usable(item));
             if (apFact is null) { if (selectedSource) warnings.Add("AP_COLLECTION_UNAVAILABLE"); continue; }
             var preserved = apFact.Id != latest.Id;
             if (preserved && selectedSource) warnings.Add("AP_COLLECTION_FAILED_PREVIOUS_EVIDENCE_PRESERVED");
@@ -618,15 +618,16 @@ internal sealed partial class Catalog
             const string addressKind = "command.display.wlan.ap.all.address";
             var addressFact = QueryH3cFacts(profileId, addressKind, history: false, limit: 1, scope: scope, requireCapturedScope: true)
                 .Concat(QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true))
-                .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source &&
+                .FirstOrDefault(item => item.CapturedMs == apFact.CapturedMs && item.Source == apFact.Source && item.CapturedScopeKey == apFact.CapturedScopeKey &&
                     item.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"));
             if (addressFact is null && apFact.CollectedRawVerified)
             {
                 var addresses = QueryH3cFacts(profileId, addressKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true);
                 var prior = QueryH3cFacts(profileId, apKind, history: true, limit: 1000, scope: scope, requireCapturedScope: true)
-                    .Where(item => item.CapturedMs < apFact.CapturedMs && item.CollectedRawVerified && Usable(item))
+                    .Where(item => item.CapturedMs < apFact.CapturedMs && item.SourceAuthority == apFact.SourceAuthority &&
+                        item.CapturedScopeKey == apFact.CapturedScopeKey && item.CollectedRawVerified && Usable(item))
                     .Select(item => (Ap: item, Address: addresses.FirstOrDefault(address => address.Source == item.Source &&
-                        address.CapturedMs == item.CapturedMs && address.CollectedRawVerified &&
+                        address.CapturedMs == item.CapturedMs && address.CapturedScopeKey == item.CapturedScopeKey && address.CollectedRawVerified &&
                         address.Status is not ("PARTIAL" or "FAILED" or "UNSUPPORTED" or "EMPTY"))))
                     .FirstOrDefault(pair => pair.Address is not null && ParseAddressFacts(pair.Address.PayloadJson).Count > 0);
                 if (prior.Address is not null)

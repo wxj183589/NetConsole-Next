@@ -177,7 +177,13 @@ internal sealed record H3cApFact(string Name, int? Id, string? State, string? Mo
 
 internal sealed record H3cApAddressFact(string Name, string? IpAddress, string? MacAddress);
 
-internal sealed record H3cRadioFact(string ApName, int? RadioId, int? Channel, string? Bandwidth, decimal? TxPower);
+internal sealed record H3cRadioFact(string ApName, int? RadioId, int? Channel, string? Bandwidth, decimal? TxPower)
+{
+    public string? State { get; init; }
+    public int? Clients { get; init; }
+    public decimal? UsagePercent { get; init; }
+    public string? RawChannel { get; init; }
+}
 
 internal sealed record H3cMeshLinkFact(string? PeerName, string? PeerMac, int? Rssi, string? Bssid,
     string? InterfaceName, string? LinkState, string? OnlineTime);
@@ -224,11 +230,31 @@ internal static partial class H3cComwareParser
     public static IReadOnlyList<H3cRadioFact> ParseWlanApAllRadio(string output)
     {
         var transcript = CliTranscriptParser.Parse(output, H3cCommandPolicy.DisplayWlanApAllRadio);
+        if (transcript.Status is CliTranscriptStatus.Unsupported or CliTranscriptStatus.PermissionDenied or CliTranscriptStatus.Paged ||
+            CliTranscriptParser.HasCommandBoundaryMismatch(output, H3cCommandPolicy.DisplayWlanApAllRadio))
+            return Array.Empty<H3cRadioFact>();
         var rows = new List<H3cRadioFact>();
+        var modernTable = false;
         foreach (var line in transcript.Output.Split('\n'))
         {
-            var parts = line.Trim().Split((char[]?)null, 5, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 5 || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var radioId) ||
+            var parts = line.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (string.Join(' ', parts) == "AP name RID State Channel BW Usage TxPower Clients")
+            { modernTable = true; continue; }
+            if (modernTable)
+            {
+                if (parts.Length != 8 || !int.TryParse(parts[1], out var rid) || rid <= 0 ||
+                    parts[2] is not ("Up" or "Down" or "UP" or "DOWN") ||
+                    !int.TryParse(parts[3].Replace("(auto)", "", StringComparison.Ordinal), out var ch) || ch <= 0 ||
+                    !int.TryParse(parts[4], out var bw) || bw <= 0 ||
+                    !decimal.TryParse(parts[5], NumberStyles.Number, CultureInfo.InvariantCulture, out var usage) || usage is < 0 or > 100 ||
+                    !decimal.TryParse(parts[6], NumberStyles.Number, CultureInfo.InvariantCulture, out var power) ||
+                    !int.TryParse(parts[7], out var clients) || clients < 0) continue;
+                rows.Add(new(parts[0], rid, ch, parts[4], power)
+                    { State = parts[2], Clients = clients, UsagePercent = usage, RawChannel = parts[3] });
+                continue;
+            }
+            // Legacy five-column export contract, without invented state/client evidence.
+            if (parts.Length != 5 || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var radioId) ||
                 !int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var channel)) continue;
             decimal? tx = decimal.TryParse(parts[4], NumberStyles.Number, CultureInfo.InvariantCulture, out var txValue) ? txValue : null;
             rows.Add(new(parts[0], radioId, channel, parts[3], tx));

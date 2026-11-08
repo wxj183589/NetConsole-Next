@@ -9,7 +9,7 @@ namespace NetConsole.Next.Service;
 internal sealed record CompleteConfigurationBackup(string Id, string ProfileId, string DeviceId, string SiteId,
     long CapturedMs, string TaskId, string RawSha256, long RawByteCount, string Model, string SoftwareVersion,
     string Integrity, bool Restorable, string State, string Host, int Port, string Protocol,
-    string RedactedSha256, long RedactedByteCount, int Version = 1, int FormatVersion = 1);
+    string RedactedSha256, long RedactedByteCount, int Version = 1, int FormatVersion = 1, bool SourceVerified = false);
 internal sealed record CompleteConfigurationView(CompleteConfigurationBackup Backup, string RedactedConfiguration);
 internal sealed record SimulatorDescriptionChangeRequest(string ProfileId, string ExpectedBackupId,
     string InterfaceName, string? Description);
@@ -20,6 +20,8 @@ internal sealed record SimulatorConfigurationChange(string Id, string ProfileId,
 internal interface ISimulatorConfigurationSession : IAsyncDisposable
 {
     bool SupportsNativeCheckpointRestore => false;
+    Task<ConfigurationRestoreCapabilities> ProbeRestoreCapabilitiesAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new ConfigurationRestoreCapabilities(false, false, null, "TRANSFER_UNVERIFIED"));
     Task<string> ReadAsync(string command, CancellationToken cancellationToken);
     Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken);
     Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken) =>
@@ -63,6 +65,8 @@ internal sealed class NetmikoConfigurationSessionFactory(Catalog catalog) : ISim
     private sealed class Session(NetmikoWorkerH3cSshTransport transport) : ISimulatorConfigurationSession
     {
         public Task<string> ReadAsync(string command, CancellationToken cancellationToken) => transport.ExecuteAsync(command, cancellationToken);
+        public Task<ConfigurationRestoreCapabilities> ProbeRestoreCapabilitiesAsync(CancellationToken cancellationToken) =>
+            transport.ProbeRestoreCapabilitiesAsync(cancellationToken);
         public Task SetDescriptionAsync(string interfaceName, string? description, CancellationToken cancellationToken) =>
             transport.ConfigureDescriptionAsync(interfaceName, description, cancellationToken);
         public Task<string> CommitConfigurationCheckpointAsync(CancellationToken cancellationToken) =>
@@ -143,7 +147,7 @@ internal sealed partial class SimulatorConfigurationService
         if (!Directory.Exists(directory)) return Array.Empty<CompleteConfigurationBackup>();
         return Directory.EnumerateFiles(directory, "*.json").Select(path => Read(Path.GetFileNameWithoutExtension(path), profileId))
             .Where(item => item is not null).Cast<CompleteConfigurationBackup>()
-            .Select(item => item with { Restorable = SameIdentity(item, target, device) })
+            .Select(item => item with { Restorable = false, SourceVerified = SameIdentity(item, target, device) })
             .OrderByDescending(item => item.CapturedMs).Take(100).ToArray();
     }
 
@@ -279,8 +283,8 @@ internal sealed partial class SimulatorConfigurationService
         var nextVersion = checked(Directory.EnumerateFiles(directory, "*.json")
             .Select(path => ReadManifest(Path.GetFileNameWithoutExtension(path), target.Id)?.Version ?? 0).DefaultIfEmpty(0).Max() + 1);
         var backup = new CompleteConfigurationBackup(id, target.Id, frozen.DeviceId, frozen.SiteId, Now(), execution.DefinitionId,
-            Hash(raw), raw.LongLength, model, software, "COMPLETE_HASH_VERIFIED", true, "SUCCEEDED", target.Host,
-            target.Port, target.TerminalProtocol, Hash(redacted), redacted.LongLength, nextVersion);
+            Hash(raw), raw.LongLength, model, software, "COMPLETE_HASH_VERIFIED", false, "SUCCEEDED", target.Host,
+            target.Port, target.TerminalProtocol, Hash(redacted), redacted.LongLength, nextVersion, SourceVerified: true);
         var manifest = JsonSerializer.SerializeToUtf8Bytes(backup, Json);
         lock (_storageGate)
         {
@@ -362,7 +366,7 @@ internal sealed partial class SimulatorConfigurationService
             var publicBytes = VerifiedBytes(item, true);
             var sanitized = ConfigBackupSanitizer.Sanitize(H3cCommandPolicy.DisplayCurrentConfiguration, original);
             if (Encoding.UTF8.GetString(publicBytes) != sanitized) return null;
-            return item with { Restorable = true };
+            return item with { Restorable = false, SourceVerified = true };
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ConfigRestoreException) { return null; }
     }

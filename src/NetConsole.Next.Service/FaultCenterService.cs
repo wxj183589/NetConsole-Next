@@ -7,7 +7,8 @@ namespace NetConsole.Next.Service;
 internal sealed record FaultTransition(long AtMs, string Action, string ActorUserId, string EvidenceId, string Detail);
 internal sealed record FaultIncident(string Id, string DeviceId, string ProfileId, string SiteId, string Kind,
     string ResourceKey, string Severity, string State, long FirstSeenMs, long LastSeenMs, string EvidenceType,
-    string EvidenceId, string Detail, int Occurrences, IReadOnlyList<FaultTransition> History);
+    string EvidenceId, string Detail, int Occurrences, IReadOnlyList<FaultTransition> History,
+    string? SourceAuthority = null, string? CapturedScopeKey = null);
 internal sealed record FaultPolicy(string DeviceId, string FaultId, TaskScopeSnapshot Target, bool Enabled,
     int IntervalMinutes, int MaximumAttempts, int Attempts, long? NextRunMs, string State, string? PlanId,
     string? RecoveryId, string? LastError);
@@ -107,15 +108,27 @@ internal static class FaultLifecycle
         plan.Items.Where(i => i.State != "SUCCEEDED").Any() &&
         plan.Items.Where(i => i.State != "SUCCEEDED").All(i => i.State is "FAILED" or "TIMED_OUT" && i.Error is
             nameof(H3cConnectionTimeoutException) or nameof(H3cCommandTimeoutException) or nameof(H3cConnectionLostException));
-    public static string Fingerprint(OperationalFaultEvent item, string? profileId = null) => Convert.ToHexString(SHA256.HashData(
-        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new[] { item.SiteId, item.DeviceId, profileId, item.Kind, item.ResourceKey ?? item.DeviceId })))).ToLowerInvariant();
+    internal static bool SameCollection(TaskDefinitionSnapshot? failed, TaskDefinitionSnapshot? candidate) =>
+        failed?.ScopeSnapshot is { } original && candidate?.ScopeSnapshot is { } current &&
+        failed.TaskType == candidate.TaskType && failed.Target == candidate.Target &&
+        failed.CommandPlan.SequenceEqual(candidate.CommandPlan, StringComparer.Ordinal) &&
+        original.DeviceId == current.DeviceId && original.ProfileId == current.ProfileId &&
+        original.SiteId == current.SiteId && original.Endpoint is not null && original.Endpoint == current.Endpoint;
+
+    public static string Fingerprint(OperationalFaultEvent item, string? profileId = null)
+    {
+        string?[] identity = [item.SiteId, item.DeviceId, profileId, item.Kind, item.ResourceKey ?? item.DeviceId];
+        if (item.SourceAuthority is not null || item.CapturedScopeKey is not null)
+            identity = [.. identity, item.SourceAuthority, item.CapturedScopeKey];
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(identity)))).ToLowerInvariant();
+    }
 
     public static FaultIncident Observe(FaultIncident? prior, OperationalFaultEvent item, string profileId, string actor, long now)
     {
         if (prior is null)
             return new(Fingerprint(item, profileId), item.DeviceId, profileId, item.SiteId, item.Kind, item.ResourceKey ?? item.DeviceId,
                 item.Severity, "OPEN", item.AtMs, item.AtMs, item.EvidenceType, item.EvidenceId, item.Detail, 1,
-                [new(now, "DETECTED", actor, item.EvidenceId, item.Detail)]);
+                [new(now, "DETECTED", actor, item.EvidenceId, item.Detail)], item.SourceAuthority, item.CapturedScopeKey);
         if (item.AtMs <= prior.LastSeenMs || item.EvidenceId == prior.EvidenceId ||
             prior.State == "RESOLVED" && item.AtMs <= prior.History.Last(h => h.Action == "RECOVERY_VERIFIED").AtMs) return prior;
         var reopened = prior.State == "RESOLVED";
@@ -127,7 +140,9 @@ internal static class FaultLifecycle
         item.History.Append(transition).TakeLast(50).ToArray();
 
     public static H3cFactSnapshot? FreshRecoveryFact(FaultIncident item, IReadOnlyList<H3cFactSnapshot> facts, long now) =>
-        facts.Where(f => f.IsCurrent && f.CollectedRawVerified && f.CapturedMs > item.LastSeenMs && f.CapturedMs <= now &&
+        facts.Where(f => item.SourceAuthority is not null && item.CapturedScopeKey is not (null or "UNSCOPED") &&
+            f.SourceAuthority == item.SourceAuthority && f.CapturedScopeKey == item.CapturedScopeKey &&
+            f.ProfileId == item.ProfileId && f.IsCurrent && f.CollectedRawVerified && f.CapturedMs > item.LastSeenMs && f.CapturedMs <= now &&
             now - f.CapturedMs <= OperationalHealthProjection.FreshnessWindowMs &&
             f.Status is not ("FAILED" or "PARTIAL" or "UNSUPPORTED" or "EMPTY") &&
             (item.Kind == "EVIDENCE_STALE" || item.Kind == "INTERFACE_DOWN" && f.Kind == "interface" &&
@@ -290,15 +305,16 @@ internal sealed class FaultCenterService : BackgroundService
             var now = Now(); string? evidence = null;
             var facts = _catalog.QueryH3cFacts(item.ProfileId, limit: 1000, scope: scope, requireCapturedScope: true);
             evidence = FaultLifecycle.FreshRecoveryFact(item, facts, now)?.Id;
-            if (item.Kind == "PROBE_PACKET_LOSS")
+            if (item.Kind is "PROBE_PACKET_LOSS" or "TRACEROUTE_ANOMALY")
             {
                 // The health projection already enforces current endpoint and finished, fresh diagnostic samples.
                 for (var page = 1; page <= 40; page++)
                 {
                     var snapshot = _health.Get(scope, page, actor.UserId);
                     var health = snapshot.Devices.FirstOrDefault(d => d.DeviceId == item.DeviceId);
-                    if (health?.PacketLossPercent is { State: "OBSERVED", Value: 0, CapturedMs: { } at } metric &&
-                        at > item.LastSeenMs && metric.ResourceKey == item.ResourceKey)
+                    var metric = item.Kind == "TRACEROUTE_ANOMALY" ? health?.RouteReachability : health?.PacketLossPercent;
+                    if (metric is { State: "OBSERVED", CapturedMs: { } at } &&
+                        metric.Value == (item.Kind == "TRACEROUTE_ANOMALY" ? 1 : 0) && at > item.LastSeenMs && metric.ResourceKey == item.ResourceKey)
                         evidence = metric.EvidenceIds.FirstOrDefault();
                     if (health is not null || !snapshot.HasMore) break;
                 }
@@ -308,14 +324,19 @@ internal sealed class FaultCenterService : BackgroundService
                 var runtime = _wireless.GetRuntimeState(item.ResourceKey, scope, nowMs: now);
                 evidence = FaultLifecycle.FreshApRecoveryEvidence(item, runtime, now);
             }
-            // A collection failure is resolved only by a later complete successful task with matching frozen identity.
+            // Only the failed collection's command plan can prove collection recovery.
             if (item.Kind == "COLLECTION_FAILURE")
+            {
+                var failedRun = _catalog.GetTaskRun(item.EvidenceId, scope);
+                var failedDefinition = failedRun?.DefinitionId is { } failedId ? _catalog.GetTaskDefinition(failedId) : null;
                 evidence = _catalog.RecentTaskRuns(100, scope).Where(r => r.State == "SUCCEEDED" && r.CaptureStatus == "COMPLETE" &&
                     r.EndedMs > item.LastSeenMs && r.EndedMs <= now && now - r.EndedMs <= OperationalHealthProjection.FreshnessWindowMs &&
-                    r.DefinitionId is not null && _catalog.GetTaskDefinition(r.DefinitionId)?.ScopeSnapshot is { } frozen &&
+                    r.DefinitionId is not null && FaultLifecycle.SameCollection(failedDefinition, _catalog.GetTaskDefinition(r.DefinitionId)) &&
+                    _catalog.GetTaskDefinition(r.DefinitionId)?.ScopeSnapshot is { } frozen &&
                     frozen.DeviceId == item.DeviceId && frozen.SiteId == item.SiteId && frozen.ProfileId == item.ProfileId &&
                     frozen.Endpoint is not null && frozen.Endpoint.Host == target.TerminalProfile?.Host && frozen.Endpoint.Port == target.TerminalProfile?.Port)
                     .MaxBy(r => r.EndedMs)?.Id;
+            }
             if (evidence is null)
             {
                 var blocked = item with { History = FaultLifecycle.Append(item, new(now, "VERIFICATION_BLOCKED", actor.UserId,

@@ -64,6 +64,46 @@ def jump_client():
 
 
 class NetmikoWorkerTests(unittest.TestCase):
+    def test_restore_probe_does_not_enable_server_or_write_device_files(self):
+        target = connection()
+        target.host, target.port = "192.168.56.3", 22
+        target.find_prompt.return_value = "[sw1]"
+        target.read_channel.side_effect = ["configuration replace file ?\n  flash:  Device name\n[sw1]configuration replace file ", ""]
+        target.remote_conn_pre = mock.Mock()
+        target.remote_conn_pre.get_transport.return_value.open_session.side_effect = module.paramiko.SSHException("subsystem unavailable")
+        worker = module.Worker(); worker.connection, worker.driver = target, "hp_comware"
+        with mock.patch.object(module.time, "sleep"):
+            result = worker.probe_configuration_restore({})
+        self.assertTrue(result["nativeFileReplaceAdvertised"])
+        self.assertFalse(result["sftpAvailable"])
+        self.assertEqual(result["transferState"], "SFTP_SUBSYSTEM_UNAVAILABLE")
+        self.assertEqual([item.args[0] for item in target.write_channel.call_args_list], ["configuration replace file ?", "\x15\n"])
+        target.send_config_set.assert_not_called()
+        target.send_command.assert_not_called()
+        target.exit_config_mode.assert_called_once()
+
+    def test_restore_probe_connected_sftp_is_still_write_unverified(self):
+        target = connection(); target.host, target.port = "192.168.56.2", 22
+        target.find_prompt.return_value = "[AC1]"
+        target.read_channel.side_effect = ["configuration replace file ?\n  flash:  Device name\n[AC1]configuration replace file ", ""]
+        target.remote_conn_pre = mock.Mock()
+        client = mock.Mock(); client.stat.return_value.st_size = 1234
+        worker = module.Worker(); worker.connection, worker.driver = target, "hp_comware"
+        with mock.patch.object(module.time, "sleep"), mock.patch.object(module.paramiko, "SFTPClient", return_value=client):
+            result = worker.probe_configuration_restore({})
+        self.assertTrue(result["sftpAvailable"])
+        self.assertEqual(result["startupFileBytes"], 1234)
+        self.assertEqual(result["transferState"], "SFTP_CONNECTED_WRITE_UNVERIFIED")
+        client.put.assert_not_called(); client.putfo.assert_not_called(); client.open.assert_not_called(); client.remove.assert_not_called()
+        client.close.assert_called_once()
+
+    def test_restore_probe_rejects_unauthorized_targets_and_jumps_before_cli(self):
+        for host, driver, jump in [("192.0.2.1", "hp_comware", None), ("192.168.56.3", "hp_comware_telnet", None), ("192.168.56.3", "hp_comware", mock.Mock())]:
+            target = connection(); target.host, target.port = host, 22
+            worker = module.Worker(); worker.connection, worker.driver, worker.jump_client = target, driver, jump
+            with self.assertRaises(ValueError): worker.probe_configuration_restore({})
+            target.config_mode.assert_not_called(); target.write_channel.assert_not_called()
+
     def test_checkpoint_commit_is_fixed_sw_command_without_automatic_confirmation(self):
         target = connection()
         target.host, target.port = "192.168.56.3", 22

@@ -15,7 +15,11 @@ internal sealed record H3cLldpRelation(
     long CapturedMs,
     string FactRevision,
     string RelationKey,
-    string ChangeKind);
+    string ChangeKind)
+{
+    public string SourceAuthority { get; init; } = "";
+    public string CapturedScopeKey { get; init; } = "UNSCOPED";
+}
 
 internal sealed record H3cLldpClaimsView(
     string ProfileId,
@@ -53,7 +57,8 @@ internal static class H3cLldpTopologyProjection
             result.Add(new(profileId, observation.LocalDeviceId, observation.LocalInterface,
                 observation.NeighborDevice, observation.NeighborPort, observation.NeighborManagementAddress,
                 observation.NeighborChassisId, observation.SiteId, fact.Source, fact.CapturedMs, fact.Id,
-                observation.RelationKey, changeKind));
+                observation.RelationKey, changeKind)
+                { SourceAuthority = fact.SourceAuthority, CapturedScopeKey = fact.CapturedScopeKey });
         }
         return result;
     }
@@ -85,7 +90,7 @@ internal static class H3cLldpTopologyProjection
             // names are only unique within one device; omitting this context
             // would merge identical ports from separate devices into one
             // history stream.
-            var relationKey = $"{Normalize(siteId)}|{NormalizeIdentity(localDeviceId)}|{Normalize(localInterface)}|{NormalizeIdentity(neighborIdentity)}";
+            var relationKey = $"{fact.SourceAuthority}|{fact.CapturedScopeKey}|{siteId}|{NormalizeIdentity(localDeviceId)}|{Normalize(localInterface)}|{NormalizeIdentity(neighborIdentity)}";
             observation = new(localDeviceId, siteId, localInterface, neighborDevice, neighborPort,
                 management, chassis, relationKey);
             return true;

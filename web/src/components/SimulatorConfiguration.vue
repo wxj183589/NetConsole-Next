@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import ConfigurationRestoreReadiness from './ConfigurationRestoreReadiness.vue'
 import { captureCompleteConfiguration, changeSimulatorDescription, compareCompleteConfigurations, previewCompleteConfigurationRestore, verifyNativeCheckpointRestore, getNativeCheckpointOperations, getCompleteConfigurations, getCompleteConfigurationView, getSimulatorConfigurationChanges, type CompleteConfigurationBackup, type CompleteConfigurationComparison, type CompleteConfigurationRestorePreview, type H3cCheckpointRestoreOperation, type SimulatorConfigurationChange } from '../api/client'
 
 const props = defineProps<{ profileId: string }>()
@@ -47,8 +48,8 @@ async function load(profile: string) {
   if (current !== generation) return
   backups.value = next; changes.value = operations; loaded.value = true
   checkpointOperations.value = checkpoints
-  if (!next.some(item => item.id === selected.value && item.restorable)) selected.value = next.find(item => item.restorable)?.id || ''
-  const valid = next.filter(item => item.restorable)
+  if (!next.some(item => item.id === selected.value && item.sourceVerified)) selected.value = next.find(item => item.sourceVerified)?.id || ''
+  const valid = next.filter(item => item.sourceVerified)
   if (!valid.some(item => item.id === afterId.value)) afterId.value = valid[0]?.id || ''
   if (!valid.some(item => item.id === beforeId.value)) beforeId.value = valid[1]?.id || valid[0]?.id || ''
 }
@@ -106,7 +107,7 @@ function apply() {
       <div class="toolbar"><el-button :disabled="busy" @click="run(load)">刷新完整备份</el-button><el-button :loading="busy" :disabled="busy" @click="capture">采集完整配置</el-button></div>
       <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="loaded && !backups.length" role="status">暂无通过完整性校验的完整备份，请采集当前配置。</p>
-      <label class="form-field"><span>写入前基线</span><select v-model="selected" aria-label="完整配置基线" :disabled="busy"><option value="">请选择已验证的完整备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.restorable">{{ new Date(item.capturedMs).toLocaleString() }} · {{ item.integrity }} · RESTORABLE={{ item.restorable }}</option></select></label>
+      <label class="form-field"><span>写入前基线</span><select v-model="selected" aria-label="完整配置基线" :disabled="busy"><option value="">请选择已验证的完整备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.sourceVerified">{{ new Date(item.capturedMs).toLocaleString() }} · {{ item.integrity }} · 原件校验={{ item.sourceVerified }} · 整机可恢复={{ item.restorable }}</option></select></label>
       <el-button :disabled="busy || !selected" @click="view">查看脱敏完整配置</el-button>
       <el-button :disabled="busy || !selected" @click="downloadBackup">下载脱敏完整配置</el-button>
       <el-button :disabled="busy || !selected" @click="previewRestore">读取当前配置并预览恢复</el-button>
@@ -122,8 +123,8 @@ function apply() {
       <h3>完整配置上下文比较</h3>
       <p>可比较任意两份当前设备的已验证历史备份。页面和导出仅包含脱敏内容，敏感值变化单独提示。</p>
       <div class="form-grid">
-        <label class="form-field"><span>比较源</span><select v-model="beforeId" aria-label="比较源备份" :disabled="busy"><option value="">请选择备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.restorable">v{{ item.version }} · {{ new Date(item.capturedMs).toLocaleString() }} · {{ item.id }}</option></select></label>
-        <label class="form-field"><span>比较目标</span><select v-model="afterId" aria-label="比较目标备份" :disabled="busy"><option value="">请选择备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.restorable">v{{ item.version }} · {{ new Date(item.capturedMs).toLocaleString() }} · {{ item.id }}</option></select></label>
+        <label class="form-field"><span>比较源</span><select v-model="beforeId" aria-label="比较源备份" :disabled="busy"><option value="">请选择备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.sourceVerified">v{{ item.version }} · {{ new Date(item.capturedMs).toLocaleString() }} · {{ item.id }}</option></select></label>
+        <label class="form-field"><span>比较目标</span><select v-model="afterId" aria-label="比较目标备份" :disabled="busy"><option value="">请选择备份</option><option v-for="item in backups" :key="item.id" :value="item.id" :disabled="!item.sourceVerified">v{{ item.version }} · {{ new Date(item.capturedMs).toLocaleString() }} · {{ item.id }}</option></select></label>
       </div>
       <el-button :disabled="busy || !beforeId || !afterId" @click="compare">比较完整配置</el-button>
       <el-button :disabled="busy || !comparison" @click="exportComparison">导出脱敏比较报告</el-button>
@@ -139,6 +140,7 @@ function apply() {
           <pre style="max-height:360px;overflow:auto;white-space:pre-wrap"><template v-for="(line, lineIndex) in item.lines" :key="lineIndex">{{ line.kind === 'ADDED' ? '+' : line.kind === 'REMOVED' ? '-' : ' ' }} {{ line.text }}{{ '\n' }}</template></pre>
         </article>
       </div>
+      <ConfigurationRestoreReadiness :profile-id="profileId" :backup-id="selected" />
       <h3>受控接口描述变更</h3>
       <div class="form-grid"><label class="form-field"><span>接口名称</span><input v-model="interfaceName" :disabled="busy" placeholder="GigabitEthernet1/0/1" /></label><label class="form-field"><span>新接口描述</span><input v-model="description" :disabled="busy || removeDescription" maxlength="80" /></label></div>
       <label class="check-row"><input v-model="removeDescription" type="checkbox" :disabled="busy" />清除该接口描述</label>

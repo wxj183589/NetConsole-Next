@@ -612,6 +612,8 @@ export interface H3cFact {
   capturedMs: number
   isCurrent: boolean
   payloadJson: string
+  sourceAuthority?: string
+  capturedScopeKey?: string
   collectedRawVerified?: boolean
   dataState?: string
   freshness?: string
@@ -627,6 +629,8 @@ export interface H3cLldpRelation {
   neighborChassisId?: string | null
   siteId: string
   source: string
+  sourceAuthority?: string
+  capturedScopeKey?: string
   capturedMs: number
   factRevision: string
   relationKey: string
@@ -1212,7 +1216,7 @@ export function getConfigBackupDiff(baseId: string, targetId: string): Promise<C
 export interface CompleteConfigurationBackup {
   id: string; profileId: string; deviceId: string; siteId: string; capturedMs: number
   taskId: string; rawSha256: string; rawByteCount: number; model: string; softwareVersion: string
-  integrity: string; restorable: boolean; state: string
+  integrity: string; restorable: boolean; sourceVerified: boolean; state: string
   host: string; port: number; protocol: string; redactedSha256: string; redactedByteCount: number; version: number; formatVersion: number
 }
 export interface SimulatorConfigurationChange {

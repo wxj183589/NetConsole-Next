@@ -25,7 +25,48 @@ internal static class H3cTaskFactPublicationTests
         await MultiCommandFailureKeepsEarlierRawBounded();
         await VlanTablePublishesWholeRevisionsWithRawAndScope();
         await CompleteLldpTablesReplaceOnlyScopedCollectedCurrent();
-        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=17/17 PASS");
+        await SameIdentityLldpAuthoritiesAndScopesRemainIndependent();
+        Console.WriteLine("H3C_TASK_FACT_PUBLICATION_TESTS=18/18 PASS");
+    }
+
+    private static async Task SameIdentityLldpAuthoritiesAndScopesRemainIndependent()
+    {
+        using var f = new Fixture();
+        const string header = "Local Interface Chassis ID Port ID System Name";
+        var output = header + "\nGE1/0/1 0011-2233-4455 GE2/0/1 SAME";
+        const string command = H3cCommandPolicy.DisplayLldpNeighborInformationList;
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string> { [command] = output }, 1000, "offline-A");
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string> { [command] = output }, 1000, "offline-B");
+        await using var scheduler = f.Scheduler(new Factory { Execute = _ => output });
+        var first = await f.Run(scheduler, command);
+        f.Execute("INSERT INTO sites VALUES('other','Other'); UPDATE device_inventory SET site_id='other'; " +
+            "UPDATE collection_sources SET site_id='other' WHERE kind<>'SYSLOG_UDP'");
+        await Task.Delay(20); var other = await f.Run(scheduler, command);
+        var current = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor");
+        Assert(current.Count == 4 && current.Select(x => x.IdentityKey).Distinct().Count() == 1 &&
+            current.Select(x => x.SourceAuthority).Distinct().Count() == 3 &&
+            current.Select(x => x.CapturedScopeKey).Distinct().Count() == 2,
+            "same-identity offline A/B and product observations at two Sites must independently retain Current");
+        output = header; await Task.Delay(20); await f.Run(scheduler, command);
+        current = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor");
+        Assert(current.Count == 3 && current.All(x => !x.Source.EndsWith(other.Id)) &&
+            current.Any(x => x.Source.EndsWith(first.Id)),
+            "complete empty table at Site B must retire only that collector/scope, preserving identical Site A and offline identities");
+        f.Catalog.PublishH3cTaskFacts(other.Id);
+        Assert(f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor").Count == 3,
+            "older same-Site replay cannot resurrect a retired identical relationship");
+        f.Execute("UPDATE device_inventory SET site_id='local'; UPDATE collection_sources SET site_id='local' WHERE kind<>'SYSLOG_UDP'");
+        output = header + "\nGE1/0/1 0011-2233-4455 GE2/0/1 SAME";
+        await Task.Delay(20); var returned = await f.Run(scheduler, command);
+        current = f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor");
+        Assert(current.Count == 3 && current.Count(x => x.SourceAuthority == "H3C_TASK_RAW") == 1 &&
+            current.Single(x => x.SourceAuthority == "H3C_TASK_RAW").Source.EndsWith(returned.Id) &&
+            f.Catalog.QueryH3cFacts(f.Profile, "lldp.neighbor", history: true).Count == 5,
+            "new collector run replaces same-scope Current without overwriting independent same-identity source/history");
+        var relations = f.Catalog.QueryH3cLldpRelations(f.Profile, false, 100, P2B5SiteScopeDecision.Global);
+        Assert(relations.Count == 3 && relations.Select(x => x.RelationKey).Distinct().Count() == 3 &&
+            relations.All(x => x.ChangeKind == "FIRST_SEEN"),
+            "topology Current keys and histories retain independent authority boundaries");
     }
 
     private static async Task CompleteLldpTablesReplaceOnlyScopedCollectedCurrent()
@@ -35,8 +76,8 @@ internal static class H3cTaskFactPublicationTests
         const string command = H3cCommandPolicy.DisplayLldpNeighborInformationList;
         await using var scheduler = f.Scheduler(new Factory { Execute = cmd => cmd == command ? output : Factory.Output(cmd) });
         // This offline row has a distinct identity. The table-retirement
-        // operation must leave it untouched; generic Current inheritance still
-        // keys on profile/kind/identity without separating source or scope.
+        // operation must leave it untouched; exact same-identity partitions are
+        // covered separately by SameIdentityLldpAuthoritiesAndScopesRemainIndependent.
         f.Catalog.ImportH3cOfflineReplay(f.Profile, new Dictionary<string, string>
             { [command] = "Local Interface Neighbor Sysname Neighbor Interface Management Address\nGE9/0/9 OFFLINE GE1/0/9 192.0.2.9" }, 1000);
         var first = await f.Run(scheduler, command);

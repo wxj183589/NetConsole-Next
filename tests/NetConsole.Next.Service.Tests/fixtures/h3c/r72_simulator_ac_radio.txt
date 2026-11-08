@@ -1,0 +1,18 @@
+Total number of APs: 1
+Total number of connected APs: 1
+Total number of connected manual APs: 0
+Total number of connected auto APs: 1
+Total number of connected common APs: 1
+Total number of connected WTUs: 0
+Total number of inside APs: 0
+Maximum supported APs: 60000
+Remaining APs: 59999
+Total AP licenses: 60000
+Local AP licenses: 60000
+Server AP licenses: 0
+Remaining local AP licenses: 59999
+Sync AP licenses: 0
+AP name                  RID State Channel          BW    Usage TxPower Clients
+                                                    (MHz) (%)   (dBm)   
+4c48-cb6e-0400           1   Down  36(auto)         80    0     20      0       
+4c48-cb6e-0400           2   Down  11(auto)         20    0     20      0       

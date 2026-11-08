@@ -7,7 +7,7 @@ import DevicesView from './DevicesView.vue'
 
 const api = vi.hoisted(() => ({
   getDeviceSites: vi.fn(), getDeviceGroups: vi.fn(), getTerminalDevices: vi.fn(), getDeviceInventory: vi.fn(),
-  getDeviceInventoryDetail: vi.fn(), getModuleStates: vi.fn(), getH3cOperationalCapabilities: vi.fn(),
+  getDeviceInventoryDetail: vi.fn(), getModuleStates: vi.fn(), getH3cOperationalCapabilities: vi.fn(), getH3cLldpClaims: vi.fn(),
 }))
 vi.mock('../api/client', async original => ({ ...await original<object>(), ...api }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
@@ -51,6 +51,7 @@ describe('device detail configuration backup entry', () => {
     api.getDeviceInventoryDetail.mockResolvedValue(detail())
     api.getModuleStates.mockResolvedValue([{ key: 'config-backups', enabled: true }])
     api.getH3cOperationalCapabilities.mockResolvedValue(capabilities())
+    api.getH3cLldpClaims.mockResolvedValue({ profileId: profile.id, scopeState: 'AUTHORIZED', relationCount: 0, relations: [] })
   })
   afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 

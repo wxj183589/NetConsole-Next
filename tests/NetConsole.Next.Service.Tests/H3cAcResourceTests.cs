@@ -67,7 +67,7 @@ internal static class H3cAcResourceTests
         do { await Task.Delay(10, timeout.Token); run = scheduler.Get(id)!; }
         while (run.State is not ("SUCCEEDED" or "FAILED" or "CANCELLED" or "TIMED_OUT"));
         var facts = fixture.Catalog.QueryH3cFacts(fixture.Profile);
-        Assert(run.State == "SUCCEEDED" && facts.Count == commands.Length + 1 && facts.All(item => item.CollectedRawVerified),
+        Assert(run.State == "SUCCEEDED" && facts.Count == commands.Length + 2 && facts.All(item => item.CollectedRawVerified),
             "every required/optional/overview command including Radio publishes a fact backed by the sealed multi-command Raw");
         foreach (var command in commands)
         {
@@ -78,6 +78,17 @@ internal static class H3cAcResourceTests
                 json.RootElement.GetProperty("capturedScope").GetProperty("profileId").GetString() == fixture.Profile &&
                 !string.IsNullOrEmpty(json.RootElement.GetProperty("output").GetString()),
                 "command facts retain exact command text, output and captured profile/Raw provenance");
+        }
+        var radio = facts.Single(item => item.Kind == "ap.radio");
+        using (var json = JsonDocument.Parse(radio.PayloadJson))
+        {
+            var row = json.RootElement;
+            Assert(row.GetProperty("apName").GetString() == "AP-ONE" && row.GetProperty("radioId").GetInt32() == 1 &&
+                row.GetProperty("channel").GetInt32() == 149 && row.GetProperty("bandwidth").GetString() == "80" &&
+                row.GetProperty("txPower").GetDecimal() == 17 && row.GetProperty("state").ValueKind == JsonValueKind.Null &&
+                row.GetProperty("clients").ValueKind == JsonValueKind.Null &&
+                row.GetProperty("rawProvenance").GetProperty("runId").GetString() == id,
+                "legacy five-column Radio also publishes a typed fact with exact values and Raw proof, preserving unknown state/client evidence");
         }
         var role = facts.Single(item => item.Kind == "controller.role");
         var capability = H3cOperationalCapabilities.Project(fixture.Profile, facts, role.CapturedMs);

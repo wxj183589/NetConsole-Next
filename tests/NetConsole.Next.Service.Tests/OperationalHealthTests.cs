@@ -8,15 +8,21 @@ internal static class OperationalHealthTests
         MissingEvidenceIsUnknown();
         OnlyFreshVerifiedEvidenceCounts();
         InterfaceAndStaleEvidence();
+        RouteReachedPreservesEvidence();
+        RouteRequiresExactResource();
+        RouteRequiresFreshTerminalEvidence();
+        RouteRequiresHopObservations();
+        RouteNonBusinessFailuresStayUnknown();
+        RouteExplicitFailuresAreObserved();
         await TransientFailureRecovers();
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=7/7 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=13/13 PASS");
     }
     private static DeviceInventoryItem Device() => new("device-a", "device a", "192.0.2.10", 22,
         "fixture", "H3C", "fixture", "SW", "SSH", "site-a", "", true, "DISCONNECTED", Now,
-        true, "REJECT", "UTF-8", "fixture failure", true, [], SiteId: "site-a", TerminalProfileId: "profile-a");
+        true, "REJECT", "UTF-8", "fixture failure", true, [], ManagementIp: "192.0.2.10", SiteId: "site-a", TerminalProfileId: "profile-a");
     private static H3cFactSnapshot Fact(string id, long at, bool verified = true,
         string json = "{\"linkStatus\":\"DOWN\"}", string status = "LIVE_VERIFIED") =>
         new(id, "profile-a", "interface", id, status, "H3C_SSH_READONLY", at, true, json) { CollectedRawVerified = verified };
@@ -48,6 +54,96 @@ internal static class OperationalHealthTests
         Assert(malformed.InterfaceDown.State == "UNKNOWN", "malformed payload must not synthesize a healthy interface total");
         var link = OperationalHealthProjection.Device(Device(), [Fact("up", Now, json: "{\"linkStatus\":\"UP\"}")], Now);
         Assert(link.InterfaceDown.Value == 0 && link.InterfaceDown.State == "OBSERVED", "zero means observed known interfaces only");
+    }
+    private static NetworkDiagnosticItemSnapshot Route() => new("route-item", "device-a", "device a", "site-a",
+        "TRACEROUTE", "SUCCEEDED", "OK", null, Now - 100, Now, 5, 2, ["ICMP_TRACEROUTE"],
+        new NetworkTracerouteSnapshot("192.0.2.10", true, 30,
+            [new(1, "192.0.2.1", "TTL_EXPIRED", 2), new(2, "192.0.2.10", "REACHED", 3)]));
+    private static void AssertUnknownRoute(NetworkDiagnosticItemSnapshot item, string message)
+    {
+        var metric = OperationalHealthProjection.RouteMetric(item, "route-run", Device(), Now);
+        Assert(metric.State == "UNKNOWN" && metric.Value is null && metric.Unit == "route" &&
+            metric.CapturedMs is null && metric.EvidenceIds.Count == 0 && metric.ResourceKey is null, message);
+    }
+    private static void RouteReachedPreservesEvidence()
+    {
+        var metric = OperationalHealthProjection.RouteMetric(Route() with { EndedMs = Now - 5 }, "route-run", Device(), Now);
+        Assert(metric.State == "OBSERVED" && metric.Value == 1 && metric.Unit == "route" && metric.CapturedMs == Now - 5 &&
+            metric.EvidenceIds.SequenceEqual(["route-run"]) && metric.ResourceKey == "[\"TRACEROUTE\",\"192.0.2.10\",null]",
+            "fresh successful destination arrival must yield one and preserve the exact run, capture time and route endpoint");
+    }
+    private static void RouteRequiresExactResource()
+    {
+        var valid = Route();
+        foreach (var mismatched in new[]
+        {
+            valid with { DeviceId = "device-b" },
+            valid with { DeviceId = "DEVICE-A" },
+            valid with { SiteId = "site-b" },
+            valid with { SiteId = "" },
+            valid with { TraceRoute = valid.TraceRoute! with { DestinationAddress = "192.0.2.11" } },
+            valid with { TraceRoute = valid.TraceRoute! with { DestinationAddress = "192.0.2.010" } },
+            valid with { Kind = "PING" }
+        }) AssertUnknownRoute(mismatched, "device display name, a different Site, endpoint aliases or another probe kind cannot bind route evidence to this resource");
+    }
+    private static void RouteRequiresFreshTerminalEvidence()
+    {
+        var valid = Route();
+        foreach (var at in new[] { Now, Now - OperationalHealthProjection.FreshnessWindowMs })
+        {
+            var observed = OperationalHealthProjection.RouteMetric(valid with { EndedMs = at }, "route-run", Device(), Now);
+            Assert(observed.State == "OBSERVED" && observed.Value == 1 && observed.CapturedMs == at,
+                "capture now and the exact inclusive freshness boundary remain usable");
+        }
+        foreach (var invalid in new[]
+        {
+            valid with { EndedMs = null },
+            valid with { EndedMs = Now + 1 },
+            valid with { EndedMs = Now - OperationalHealthProjection.FreshnessWindowMs - 1 },
+            valid with { State = "QUEUED" },
+            valid with { State = "RUNNING" },
+            valid with { State = "CANCELLED" },
+            valid with { State = "UNKNOWN" }
+        }) AssertUnknownRoute(invalid, "missing, future, stale or unfinished/cancelled route evidence must not produce a current value");
+    }
+    private static void RouteRequiresHopObservations()
+    {
+        var valid = Route();
+        AssertUnknownRoute(valid with { TraceRoute = null }, "success metadata without a route snapshot is not route evidence");
+        AssertUnknownRoute(valid with { TraceRoute = valid.TraceRoute! with { Hops = [] }, EvidenceCount = 100,
+            EvidenceSources = ["ICMP_TRACEROUTE", "PREFLIGHT_OK"] },
+            "nonzero evidence counters and preflight metadata cannot replace observed hops even when marked reached");
+        AssertUnknownRoute(valid with { State = "FAILED", Outcome = "TRACEROUTE_UNREACHABLE",
+            TraceRoute = valid.TraceRoute! with { DestinationReached = false, Hops = [] } },
+            "unreachable without any hop observation cannot create a route fault");
+    }
+    private static void RouteNonBusinessFailuresStayUnknown()
+    {
+        var partial = Route() with { State = "FAILED", TraceRoute = new NetworkTracerouteSnapshot("192.0.2.10", false, 30,
+            [new(1, "192.0.2.1", "TTL_EXPIRED", 2)]) };
+        foreach (var outcome in new string?[] { "ICMP_PERMISSION_DENIED", "ICMP_UNAVAILABLE", "CANCELLED", "TIMEOUT", "DNS_FAILED", "UNKNOWN", null })
+            AssertUnknownRoute(partial with { Outcome = outcome },
+                "permission, cancellation, tool availability and unknown probe failures with partial hops must not imply a business route outage");
+        AssertUnknownRoute(Route() with { TraceRoute = partial.TraceRoute }, "OK without destination arrival is not observed success");
+        AssertUnknownRoute(Route() with { Outcome = "TRACEROUTE_UNREACHABLE" }, "a success state and failure outcome conflict must remain unknown");
+        AssertUnknownRoute(partial with { Outcome = "TRACEROUTE_UNREACHABLE", TraceRoute = Route().TraceRoute },
+            "a reached destination and unreachable outcome conflict must not synthesize a fault");
+    }
+    private static void RouteExplicitFailuresAreObserved()
+    {
+        foreach (var outcome in new[] { "TRACEROUTE_UNREACHABLE", "TRACEROUTE_MAX_HOPS" })
+        {
+            IReadOnlyList<NetworkDiagnosticHopSnapshot> hops = outcome == "TRACEROUTE_UNREACHABLE"
+                ? [new(1, "192.0.2.1", "UNREACHABLE", 4)]
+                : Enumerable.Range(1, 30).Select(ttl => new NetworkDiagnosticHopSnapshot(ttl, null, "TIMED_OUT", null)).ToArray();
+            var failed = Route() with { State = "FAILED", Outcome = outcome, EndedMs = Now - 10,
+                TraceRoute = new NetworkTracerouteSnapshot("192.0.2.10", false, 30, hops) };
+            var metric = OperationalHealthProjection.RouteMetric(failed, "failed-route-run", Device(), Now);
+            Assert(metric.State == "OBSERVED" && metric.Value == 0 && metric.CapturedMs == Now - 10 &&
+                metric.EvidenceIds.SequenceEqual(["failed-route-run"]) &&
+                metric.ResourceKey == "[\"TRACEROUTE\",\"192.0.2.10\",null]",
+                "explicit unreachable or exhausted max-hop results with probe observations must yield zero for that endpoint only");
+        }
     }
     private static async Task TransientFailureRecovers()
     {

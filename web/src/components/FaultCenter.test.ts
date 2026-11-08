@@ -66,6 +66,13 @@ describe('FaultCenter', () => {
     expect(api.getFaults).toHaveBeenLastCalledWith(1, expect.objectContaining({ state: 'RESOLVED' }))
     wrapper.unmount()
   })
+  it('queries traceroute anomalies from the fault kind filter', async () => {
+    const wrapper = render(false); await flushPromises()
+    await wrapper.get('[aria-label="故障类型"]').setValue('TRACEROUTE_ANOMALY')
+    await wrapper.find('form').trigger('submit'); await flushPromises()
+    expect(api.getFaults).toHaveBeenLastCalledWith(1, expect.objectContaining({ kind: 'TRACEROUTE_ANOMALY' }))
+    wrapper.unmount()
+  })
   it('clears stale records on history error and renders an empty scope', async () => {
     const wrapper = render(); await flushPromises()
     api.getFaults.mockRejectedValueOnce(new Error('store unavailable'))

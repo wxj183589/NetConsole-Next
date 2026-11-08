@@ -12,7 +12,31 @@ internal static class H3cLldpTopologyTests
         OfflineFixtureProjectsScopedRelation();
         SimulatorSwitchListRetainsColumnsAndRejectsLegends();
         LegacyApBannerReplayRetainsEndpointsWithoutCompleteTableProof();
-        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=5/5 PASS");
+        ActualAcRadioTablePreservesDownAndZeroClients();
+        Console.WriteLine("H3C_LLDP_TOPOLOGY_TESTS=6/6 PASS");
+    }
+
+    private static void ActualAcRadioTablePreservesDownAndZeroClients()
+    {
+        var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "h3c", "r72_simulator_ac_radio.txt"));
+        var rows = H3cComwareParser.ParseWlanApAllRadio(output);
+        Assert(rows.Count == 2 && rows.All(row => row.State == "Down" && row.Clients == 0 && row.UsagePercent == 0) &&
+            rows[0].RadioId == 1 && rows[0].Channel == 36 && rows[0].RawChannel == "36(auto)" &&
+            rows[0].Bandwidth == "80" && rows[0].TxPower == 20 && rows[1].Channel == 11,
+            "real AC RID/state table must retain Down, zero clients, auto channel and correct power columns");
+        Assert(H3cComwareParser.ParseWlanApAllRadio(output + "\n-- More --").Count == 0 &&
+            H3cComwareParser.ParseWlanApAllRadio("Permission denied").Count == 0,
+            "paged/denied Radio evidence cannot turn into usable rows");
+        using var fixture = new Fixture();
+        var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), "192.0.2.31", 22,
+            "fixture", "FIXTURE_REFERENCE", "", true, 0, 0);
+        fixture.Catalog.CreateH3cDeviceProfile(profile);
+        fixture.Catalog.ImportH3cOfflineReplay(profile.Id,
+            new Dictionary<string, string> { [H3cCommandPolicy.DisplayWlanApAllRadio] = output }, 1000);
+        var facts = fixture.Catalog.QueryH3cFacts(profile.Id, "ap.radio");
+        Assert(facts.Count == 2 && facts.All(fact => !fact.CollectedRawVerified) &&
+            facts.All(fact => JsonDocument.Parse(fact.PayloadJson).RootElement.GetProperty("state").GetString() == "Down"),
+            "offline Radio replay publishes exact scoped radio facts without manufacturing live verification");
     }
 
     private static void LegacyApBannerReplayRetainsEndpointsWithoutCompleteTableProof()

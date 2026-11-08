@@ -36,7 +36,7 @@ internal static class SimulatorConfigurationTests
     {
         using var fixture = new Fixture();
         var backup = await fixture.Capture();
-        Assert(backup.Restorable && backup.RawByteCount > 0 && backup.RawSha256.Length == 64 &&
+        Assert(!backup.Restorable && backup.SourceVerified && backup.RawByteCount > 0 && backup.RawSha256.Length == 64 &&
             backup.Model == "WA6638" && backup.SoftwareVersion.Contains("3507P26"), "complete backup must retain integrity and verified device identity");
         Assert(File.ReadAllText(fixture.Raw(backup)).Contains("SYNTHETIC_SECRET"), "private original must retain required restore bytes");
         var view = fixture.Service.View(backup.Id, Actor, P2B5SiteScopeDecision.Global)!;
@@ -252,7 +252,7 @@ internal static class SimulatorConfigurationTests
         fixture.Sql("UPDATE device_inventory SET id='replacement-device'");
         await Reject(() => fixture.Change(backup, "safe"), "CONFIG_COMPLETE_IDENTITY_MISMATCH");
         Assert(fixture.Factory.Writes == 0, "backup of replaced inventory identity must not authorize a write");
-        Assert(!fixture.Service.List(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Any(item => item.Restorable),
+        Assert(!fixture.Service.List(fixture.Profile, Actor, P2B5SiteScopeDecision.Global).Any(item => item.SourceVerified),
             "list must not advertise an old inventory identity as restorable");
     }
 

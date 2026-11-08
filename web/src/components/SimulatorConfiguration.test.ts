@@ -4,9 +4,9 @@ import SimulatorConfiguration from './SimulatorConfiguration.vue'
 
 const api = vi.hoisted(() => ({ captureCompleteConfiguration: vi.fn(), changeSimulatorDescription: vi.fn(), compareCompleteConfigurations: vi.fn(), previewCompleteConfigurationRestore: vi.fn(), verifyNativeCheckpointRestore: vi.fn(), getNativeCheckpointOperations: vi.fn(), getCompleteConfigurations: vi.fn(), getCompleteConfigurationView: vi.fn(), getSimulatorConfigurationChanges: vi.fn() }))
 vi.mock('../api/client', () => api)
-const backup = { id: 'complete-a', profileId: 'a', capturedMs: 1000, integrity: 'VERIFIED', restorable: true }
+const backup = { id: 'complete-a', profileId: 'a', capturedMs: 1000, integrity: 'VERIFIED', restorable: false, sourceVerified: true }
 const comparison = { before: backup, after: { ...backup, id: 'complete-b' }, originalConfigurationChanged: true, sensitiveValuesChanged: true, addedLines: 1, removedLines: 1, truncated: false, contexts: [{ context: 'interface GigabitEthernet1/0/1', categories: ['INTERFACE'], addedLines: 1, removedLines: 1, sensitiveValuesChanged: false, truncated: false, lines: [{ kind: 'REMOVED', text: ' description before' }, { kind: 'ADDED', text: ' description after' }] }, { context: 'vlan 10', categories: ['VLAN'], addedLines: 1, removedLines: 0, sensitiveValuesChanged: false, truncated: false, lines: [{ kind: 'ADDED', text: 'vlan 10' }] }] }
-function render() { return mount(SimulatorConfiguration, { props: { profileId: 'a' }, global: { stubs: { 'el-button': { template: '<button><slot /></button>' } } } }) }
+function render() { return mount(SimulatorConfiguration, { props: { profileId: 'a' }, global: { stubs: { ConfigurationRestoreReadiness: true, 'el-button': { template: '<button><slot /></button>' } } } }) }
 function button(wrapper: ReturnType<typeof render>, name: string) { return wrapper.findAll('button').find(item => item.text() === name)! }
 describe('simulator configuration changes', () => {
   it('shows storage admission failure and keeps existing history available', async () => {
@@ -48,7 +48,7 @@ describe('simulator configuration changes', () => {
     wrapper.unmount()
   })
   it('never selects an incomplete backup for a write baseline', async () => {
-    api.getCompleteConfigurations.mockResolvedValue([{ ...backup, restorable: false }])
+    api.getCompleteConfigurations.mockResolvedValue([{ ...backup, sourceVerified: false }])
     const wrapper = render()
     await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
     expect(wrapper.get('select').element.value).toBe('')
@@ -59,7 +59,7 @@ describe('simulator configuration changes', () => {
     const wrapper = render()
     await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
     await wrapper.findAll('input[type="checkbox"]')[1].setValue(true)
-    api.getCompleteConfigurations.mockResolvedValue([{ ...backup, restorable: false }])
+    api.getCompleteConfigurations.mockResolvedValue([{ ...backup, sourceVerified: false }])
     await button(wrapper, '刷新完整备份').trigger('click'); await flushPromises()
     expect((wrapper.get('select[aria-label="完整配置基线"]').element as HTMLSelectElement).value).toBe('')
     expect((wrapper.findAll('input[type="checkbox"]')[1].element as HTMLInputElement).checked).toBe(false)

@@ -12,6 +12,7 @@ internal static class FaultCenterTests
         AggregatesAndDeduplicates();
         ReopensOnlyNewFaultEvidence();
         RecoveryRequiresExactFreshVerifiedResource();
+        RecoveryAndAggregationKeepSourceScope();
         ApRecoveryRequiresLiveMasterAndAllSources();
         HistoryIsBounded();
         PersistenceSurvivesRestart();
@@ -22,15 +23,34 @@ internal static class FaultCenterTests
         ProcessingAndReopenedPersistWithRoleGuards();
         SummaryUsesFilteredScopeBeforePagination();
         await BackgroundRecoveryIsFairAndDoesNotWriteBlockedHistory();
+        await UnrelatedTaskSuccessCannotResolveCollectionFailure();
         RecollectionRetriesOnlyKnownTransientFailures();
+        CollectionRecoveryRequiresSameCommandPlan();
         await FutureDisabledAndExhaustedPoliciesDoNotConnect();
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=18/18 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=21/21 PASS");
+    }
+    private static void CollectionRecoveryRequiresSameCommandPlan()
+    {
+        var scope = new TaskScopeSnapshot(1, "actor", "device-a", "profile-a", "site-a", Now, "GLOBAL", new("192.0.2.10", 22));
+        var failed = new TaskDefinitionSnapshot("failed", "H3C_READONLY", "profile-a", "display lldp neighbor-information list",
+            30000, true, "NONE", scope, ["display lldp neighbor-information list", "display lldp neighbor-information verbose"]);
+        var retry = failed with { Id = "retry", ScopeSnapshot = scope with { CreatedMs = Now + 1 } };
+        Assert(FaultLifecycle.SameCollection(failed, retry), "new definition of the same frozen collection is valid");
+        Assert(!FaultLifecycle.SameCollection(failed, retry with { Commands = ["display version"] }),
+            "version success cannot resolve a failed LLDP collection");
+        Assert(!FaultLifecycle.SameCollection(failed, retry with { Commands = failed.CommandPlan.Reverse().ToArray() }),
+            "command order is part of the collection plan");
+        Assert(!FaultLifecycle.SameCollection(failed, retry with { TaskType = "OTHER" }) &&
+            !FaultLifecycle.SameCollection(failed, retry with { ScopeSnapshot = scope with { SiteId = "other-site" } }) &&
+            !FaultLifecycle.SameCollection(failed, retry with { ScopeSnapshot = scope with { Endpoint = new("192.0.2.11", 22) } }) &&
+            !FaultLifecycle.SameCollection(null, retry), "missing or changed collection identity cannot verify recovery");
     }
     private static OperationalFaultEvent Event(string evidence = "fact-a", long at = Now, string resource = "GE1/0/1") =>
-        new(evidence, "device-a", "site-a", "INTERFACE_DOWN", "WARNING", "OBSERVED", at, "FACT", evidence, "DOWN", resource);
+        new(evidence, "device-a", "site-a", "INTERFACE_DOWN", "WARNING", "OBSERVED", at, "FACT", evidence, "DOWN", resource,
+            "H3C_SSH_READONLY", "scope-a");
     private static FaultIncident Incident() => FaultLifecycle.Observe(null, Event(), "profile-a", "actor", Now);
     private static void AggregatesAndDeduplicates()
     {
@@ -57,12 +77,28 @@ internal static class FaultCenterTests
     {
         var item = Incident();
         H3cFactSnapshot Fact(string id, long at, string key = "GE1/0/1", bool verified = true, string link = "UP", string status = "STALE") =>
-            new(id, "profile-a", "interface", key, status, "H3C_SSH_READONLY", at, true, JsonSerializer.Serialize(new { linkStatus = link })) { CollectedRawVerified = verified };
+            new(id, "profile-a", "interface", key, status, "H3C_SSH_READONLY", at, true, JsonSerializer.Serialize(new { linkStatus = link })) { CollectedRawVerified = verified, CapturedScopeKey = "scope-a" };
         Assert(FaultLifecycle.FreshRecoveryFact(item, [Fact("wrong", Now + 1, "GE1/0/2"), Fact("fixture", Now + 1, verified: false),
             Fact("future", Now + 200), Fact("old", Now), Fact("partial", Now + 1, status: "PARTIAL"), Fact("down", Now + 1, link: "DOWN")], Now + 100) is null,
             "wrong interface, fixture, future, old, partial and unchanged faults cannot prove recovery");
         Assert(FaultLifecycle.FreshRecoveryFact(item, [Fact("up", Now + 1)], Now + 100)?.Id == "up", "Raw verified newer same interface UP is accepted even with legacy STALE label");
         Assert(FaultLifecycle.FreshRecoveryFact(item, [Fact("stale-up", Now + 1)], Now + 400000) is null, "expired observations cannot prove current recovery");
+    }
+    private static void RecoveryAndAggregationKeepSourceScope()
+    {
+        var item = Incident();
+        var fact = new H3cFactSnapshot("up", "profile-a", "interface", "GE1/0/1", "STALE", "H3C_SSH_READONLY", Now + 1,
+            true, "{\"linkStatus\":\"UP\"}") { CollectedRawVerified = true, CapturedScopeKey = "scope-a" };
+        foreach (var wrong in new[] { fact with { Source = "OTHER_AUTHORITY" }, fact with { CapturedScopeKey = "scope-b" },
+            fact with { CapturedScopeKey = "UNSCOPED" }, fact with { ProfileId = "other-profile" }, fact with { IsCurrent = false } })
+            Assert(FaultLifecycle.FreshRecoveryFact(item, [wrong], Now + 2) is null, "other source/scope/profile or historical evidence cannot resolve incident");
+        Assert(FaultLifecycle.FreshRecoveryFact(item with { SourceAuthority = null, CapturedScopeKey = null }, [fact], Now + 2) is null,
+            "legacy incidents with unknown source/scope require new scoped observations");
+        Assert(FaultLifecycle.Fingerprint(Event() with { SourceAuthority = "OTHER_AUTHORITY" }, "profile-a") != item.Id &&
+            FaultLifecycle.Fingerprint(Event() with { CapturedScopeKey = "scope-b" }, "profile-a") != item.Id,
+            "same interface failures from independent source or frozen scope cannot aggregate");
+        Assert(item.SourceAuthority == fact.SourceAuthority && item.CapturedScopeKey == fact.CapturedScopeKey,
+            "durable incident retains exact source and captured scope provenance");
     }
     private static void HistoryIsBounded()
     {
@@ -187,7 +223,7 @@ internal static class FaultCenterTests
     {
         using var f = new BusinessFixture();
         var blocked = Enumerable.Range(0, 30).Select(n => f.Item with { Id = "interface-" + n, ResourceKey = "GE1/0/" + (n + 1) }).ToArray();
-        var collection = f.Item with { Id = "zz-collection", Kind = "COLLECTION_FAILURE" };
+        var collection = f.Item with { Id = "zz-collection", Kind = "COLLECTION_FAILURE", EvidenceType = "TASK_RUN", EvidenceId = f.FailedCollection() };
         f.SeedIncidents(blocked.Append(collection).ToArray());
         await f.CompleteCollection();
         using var service = f.Service();
@@ -201,6 +237,19 @@ internal static class FaultCenterTests
         Assert(interfaces.Summary!.Open == 30 && interfaces.Items.All(i => i.History.Count == 1),
             "collection success cannot recover interface faults or append repetitive blocked history");
         Assert(f.Factory.Calls == 0, "automatic verification only inspects local evidence");
+    }
+    private static async Task UnrelatedTaskSuccessCannotResolveCollectionFailure()
+    {
+        using var f = new BusinessFixture();
+        var collection = f.Item with { Kind = "COLLECTION_FAILURE", EvidenceType = "TASK_RUN",
+            EvidenceId = f.FailedCollection("display lldp neighbor-information list") };
+        f.SeedIncidents([collection]);
+        await f.CompleteCollection();
+        using var service = f.Service();
+        var result = service.Verify(collection.Id, f.Actor, P2B5SiteScopeDecision.Global);
+        Assert(result.State == "RECOVERY_NOT_VERIFIED" && result.Incident.State == "OPEN" &&
+            result.Incident.History.All(h => h.Action != "RECOVERY_VERIFIED"),
+            "successful version task cannot resolve the same device's failed LLDP collection through the service entry point");
     }
     private static void RecollectionRetriesOnlyKnownTransientFailures()
     {
@@ -288,6 +337,16 @@ internal static class FaultCenterTests
         }
         public void Seed(FaultPolicy? policy) => new FaultCenterStore(_files.Root).Commit(new(1, [Item], policy is null ? [] : [policy]));
         public void SeedIncidents(IReadOnlyList<FaultIncident> incidents) => new FaultCenterStore(_files.Root).Commit(new(1, incidents, []));
+        public string FailedCollection(string command = H3cCommandPolicy.DisplayVersion)
+        {
+            const string definition = "failed-collection";
+            _catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", Item.ProfileId, command,
+                TimeSpan.FromSeconds(30), scopeSnapshot: Policy.Target);
+            var run = _catalog.CreateTaskRun(definition);
+            _catalog.TransitionTaskRun(run, "CONNECTING");
+            _catalog.TransitionTaskRun(run, "FAILED", "CONNECTION_TIMEOUT");
+            return run;
+        }
         public async Task CompleteCollection()
         {
             var definition = "verified-collection";

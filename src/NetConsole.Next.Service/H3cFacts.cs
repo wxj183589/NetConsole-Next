@@ -18,6 +18,8 @@ internal sealed record H3cFactSnapshot(
     string PayloadJson)
 {
     public bool CollectedRawVerified { get; init; }
+    public string SourceAuthority => Catalog.H3cFactAuthority(Source);
+    public string CapturedScopeKey { get; init; } = "UNSCOPED";
     // The catalog keeps the original STALE status for schema compatibility. These
     // derived fields make the evidence boundary explicit to API and UI consumers.
     public string DataState => Status switch
@@ -81,13 +83,18 @@ internal sealed partial class Catalog
     {
         foreach (var fact in facts)
         {
+            var authority = H3cFactAuthority(fact.Source);
+            var scopeKey = ReadFactScopeKey(db, transaction, fact.PayloadJson);
             // A revision is immutable, even for historical late arrivals. Validate
             // before changing Current; the transaction rolls back the whole batch.
             using (var existing = db.CreateCommand())
             {
                 existing.Transaction = transaction;
                 existing.CommandText = @"SELECT source,status,payload_json FROM h3c_facts
-                    WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity AND captured_ms=$captured";
+                    WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity AND captured_ms=$captured
+                      AND authority_key=$authority AND scope_key=$scope";
+                existing.Parameters.AddWithValue("$authority", authority);
+                existing.Parameters.AddWithValue("$scope", scopeKey);
                 existing.Parameters.AddWithValue("$profile", fact.ProfileId);
                 existing.Parameters.AddWithValue("$kind", fact.Kind);
                 existing.Parameters.AddWithValue("$identity", fact.IdentityKey);
@@ -105,7 +112,9 @@ internal sealed partial class Catalog
             using var newest = db.CreateCommand();
             newest.Transaction = transaction;
             newest.CommandText = @"SELECT MAX(captured_ms) FROM h3c_facts
-                WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity";
+                WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity AND authority_key=$authority AND scope_key=$scope";
+            newest.Parameters.AddWithValue("$authority", authority);
+            newest.Parameters.AddWithValue("$scope", scopeKey);
             newest.Parameters.AddWithValue("$profile", fact.ProfileId);
             newest.Parameters.AddWithValue("$kind", fact.Kind);
             newest.Parameters.AddWithValue("$identity", fact.IdentityKey);
@@ -116,12 +125,11 @@ internal sealed partial class Catalog
                 using var table = db.CreateCommand();
                 table.Transaction = transaction;
                 table.CommandText = @"SELECT 1 FROM h3c_facts WHERE profile_id=$profile AND kind='lldp.table'
-                    AND captured_ms>$captured AND json_extract(payload_json,'$.capturedScope')=$scope LIMIT 1";
+                    AND captured_ms>$captured AND authority_key=$authority AND scope_key=$scope LIMIT 1";
                 table.Parameters.AddWithValue("$profile", fact.ProfileId);
                 table.Parameters.AddWithValue("$captured", fact.CapturedMs);
-                using var payload = JsonDocument.Parse(fact.PayloadJson);
-                table.Parameters.AddWithValue("$scope", payload.RootElement.TryGetProperty("capturedScope", out var scope)
-                    ? scope.GetRawText() : string.Empty);
+                table.Parameters.AddWithValue("$scope", scopeKey);
+                table.Parameters.AddWithValue("$authority", authority);
                 if (table.ExecuteScalar() is not null) advance = false;
             }
             if (advance)
@@ -129,7 +137,9 @@ internal sealed partial class Catalog
             {
                 clear.Transaction = transaction;
                 clear.CommandText = @"UPDATE h3c_facts SET is_current=0
-                    WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity";
+                    WHERE profile_id=$profile AND kind=$kind AND identity_key=$identity AND authority_key=$authority AND scope_key=$scope";
+                clear.Parameters.AddWithValue("$authority", authority);
+                clear.Parameters.AddWithValue("$scope", scopeKey);
                 clear.Parameters.AddWithValue("$profile", fact.ProfileId);
                 clear.Parameters.AddWithValue("$kind", fact.Kind);
                 clear.Parameters.AddWithValue("$identity", fact.IdentityKey);
@@ -159,16 +169,14 @@ internal sealed partial class Catalog
             retire.Transaction = transaction;
             retire.CommandText = @"UPDATE h3c_facts SET is_current=0
                 WHERE profile_id=$profile AND kind='lldp.neighbor' AND is_current=1
-                  AND source GLOB 'H3C_TASK_RAW:*' AND captured_ms<$captured
-                  AND json_extract(payload_json,'$.capturedScope')=$scope
+                  AND authority_key=$authority AND captured_ms<$captured AND scope_key=$scope
                   AND NOT EXISTS(SELECT 1 FROM h3c_facts newer
                     WHERE newer.profile_id=$profile AND newer.kind='lldp.table'
-                      AND newer.identity_key=$identity AND newer.captured_ms>$captured)";
+                      AND newer.authority_key=$authority AND newer.scope_key=$scope AND newer.captured_ms>$captured)";
             retire.Parameters.AddWithValue("$profile", table.ProfileId);
             retire.Parameters.AddWithValue("$captured", table.CapturedMs);
-            retire.Parameters.AddWithValue("$identity", table.IdentityKey);
-            using var payload = JsonDocument.Parse(table.PayloadJson);
-            retire.Parameters.AddWithValue("$scope", payload.RootElement.GetProperty("capturedScope").GetRawText());
+            retire.Parameters.AddWithValue("$authority", H3cFactAuthority(table.Source));
+            retire.Parameters.AddWithValue("$scope", ReadFactScopeKey(db, transaction, table.PayloadJson));
             retire.ExecuteNonQuery();
         }
     }
@@ -184,7 +192,7 @@ internal sealed partial class Catalog
         if (!history) filters.Add("is_current=1");
         if (!string.IsNullOrWhiteSpace(kind)) filters.Add("kind=$kind");
         command.CommandText = $@"SELECT id,profile_id,kind,identity_key,status,source,captured_ms,is_current,payload_json,
-            {H3cFactRawVerificationPredicate("h3c_facts")}
+            {H3cFactRawVerificationPredicate("h3c_facts")},scope_key
             FROM h3c_facts WHERE {string.Join(" AND ", filters)}
             ORDER BY captured_ms DESC,kind,identity_key,source,id LIMIT $limit";
         command.Parameters.AddWithValue("$profile", profileId);
@@ -196,7 +204,7 @@ internal sealed partial class Catalog
         while (reader.Read())
             rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetInt32(7) != 0, reader.GetString(8))
-                { CollectedRawVerified = reader.GetInt64(9) != 0 });
+                { CollectedRawVerified = reader.GetInt64(9) != 0, CapturedScopeKey = reader.GetString(10) });
         return rows;
     }
 
@@ -216,7 +224,7 @@ internal sealed partial class Catalog
                 if (provenance is not null) node["rawProvenance"] = JsonSerializer.SerializeToNode(provenance, jsonOptions);
                 json = node.ToJsonString(jsonOptions);
             }
-            var idInput = $"{profileId}|{kind}|{identity}|{source}|{capturedMs}";
+            var idInput = $"{profileId}|{kind}|{identity}|{source}|{capturedMs}|{(scope is null ? "UNSCOPED" : JsonSerializer.Serialize(scope, jsonOptions))}";
             var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idInput))).ToLowerInvariant()[..32];
             facts.Add(new(id, profileId, kind, identity, status, source, capturedMs, true, json));
         }
@@ -298,6 +306,12 @@ internal sealed partial class Catalog
             // set. Offline imports and partial/unrecognized output cannot.
             if (provenance is not null && scope is not null && table.Status == "PARSED")
                 Add("lldp.table", JsonSerializer.Serialize(scope, jsonOptions), table);
+        }
+
+        if (outputs.TryGetValue(H3cCommandPolicy.DisplayWlanApAllRadio, out var radioOutput))
+        {
+            foreach (var radio in H3cComwareParser.ParseWlanApAllRadio(radioOutput))
+                Add("ap.radio", $"{radio.ApName}|{radio.RadioId}", radio);
         }
 
         foreach (var command in H3cAcResources.RequiredCommands.Concat(H3cAcResources.OptionalCommands)

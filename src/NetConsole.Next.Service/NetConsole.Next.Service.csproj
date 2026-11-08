@@ -43,6 +43,8 @@
     <Content Include="../../scripts/install-service.ps1" Link="deployment/install-service.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../scripts/service-installation-plan.ps1" Link="deployment/service-installation-plan.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../scripts/uninstall-service.ps1" Link="deployment/uninstall-service.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../scripts/update-service.ps1" Link="deployment/update-service.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../docs/LOCAL_MANAGER_OPERATIONS.md" Link="deployment/LOCAL_MANAGER_OPERATIONS.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../docs/WINDOWS_SERVICE_INSTALLATION.md" Link="deployment/README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Update="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

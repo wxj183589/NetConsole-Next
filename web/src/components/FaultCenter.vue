@@ -112,7 +112,7 @@ onBeforeUnmount(() => { generation++ })
       <form class="fault-center__filters" @submit.prevent="load()">
         <label>故障状态 <select v-model="state" aria-label="故障状态"><option value="">全部</option><option>OPEN</option><option>ACKNOWLEDGED</option><option>PROCESSING</option><option>RESOLVED</option><option>REOPENED</option></select></label>
         <label>设备 ID <input v-model.trim="deviceId" aria-label="设备 ID" placeholder="精确设备 ID"></label>
-        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
+        <label>故障类型 <select v-model="kind" aria-label="故障类型"><option value="">全部</option><option>INTERFACE_DOWN</option><option>COLLECTION_FAILURE</option><option>EVIDENCE_STALE</option><option>PROBE_PACKET_LOSS</option><option>TRACEROUTE_ANOMALY</option><option>AP_OFFLINE</option><option>AP_CONFLICT</option></select></label>
         <label>起始时间 <input v-model="from" aria-label="起始时间" type="datetime-local"></label><label>截止时间 <input v-model="to" aria-label="截止时间" type="datetime-local"></label>
         <button :disabled="busy" type="submit">查询故障</button><button :disabled="busy" type="button" @click="resetFilters">重置故障筛选</button><button v-if="props.canRecover" :disabled="busy" type="button" @click="synchronize">同步当前证据</button>
       </form>

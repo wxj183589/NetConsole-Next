@@ -10,12 +10,14 @@ internal static class H3cFactScopeTests
         LateSamplesCannotRollBackCurrent();
         ExactReplayDoesNotWriteOrPromoteHistory();
         ConflictingRevisionRollsBackWholeBatch();
-        EqualTimestampSourcesCannotHideContradiction();
+        EqualTimestampSourcesKeepIndependentCurrent();
+        SameIdentityScopePartitionsAndEndpointRoundTrip();
+        LegacyAuthorityMigrationIsIdempotentAndPreservesRetirement();
         CapturedScopeSurvivesRestartAndFiltersBeforeLimit();
         SiteMoveCannotRelabelFactsOrHistory();
         EndpointOrDeviceRebindCannotRelabelFacts();
         LegacyFactsRemainGlobalDiagnosticsOnly();
-        Console.WriteLine("H3C_FACT_SCOPE_TESTS=8/8 PASS");
+        Console.WriteLine("H3C_FACT_SCOPE_TESTS=10/10 PASS");
     }
 
     private static void LateSamplesCannotRollBackCurrent()
@@ -55,15 +57,83 @@ internal static class H3cFactScopeTests
         Assert(f.Rows() == before, "a conflicting historical revision must also remain immutable");
     }
 
-    private static void EqualTimestampSourcesCannotHideContradiction()
+    private static void EqualTimestampSourcesKeepIndependentCurrent()
     {
         using var f = new Fixture(); f.Import(1000);
-        f.Catalog.ImportH3cOfflineReplay(f.Profile, Fixture.Outputs(), 1000, "another-offline-source");
-        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 3 && f.Catalog.QueryH3cFacts(f.Profile, history: true).Count == 6,
-            "identical equal-time evidence can retain provenance without changing Current");
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, Fixture.Outputs("R/B"), 1000, "another-offline-source");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 6 &&
+            f.Catalog.QueryH3cFacts(f.Profile).Select(x => x.SourceAuthority).Distinct().Count() == 2,
+            "contradictory equal-time evidence from independent sources must coexist as independent Current");
         var before = f.Rows();
-        ExpectConflict(() => f.Catalog.ImportH3cOfflineReplay(f.Profile, Fixture.Outputs("R/B"), 1000, "third-source"));
-        Assert(f.Rows() == before, "a different source label cannot bypass same-time contradiction checks");
+        ExpectConflict(() => f.Catalog.ImportH3cOfflineReplay(f.Profile, Fixture.Outputs("I"), 1000, "another-offline-source"));
+        Assert(f.Rows() == before, "same authority/scope/revision contradiction must remain immutable and atomic");
+        f.Import(2000, "I");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 6 &&
+            f.Catalog.QueryH3cFacts(f.Profile).Where(x => x.SourceAuthority == "another-offline-source").All(x => x.CapturedMs == 1000),
+            "a newer source-A sample cannot demote same-identity Current from source B");
+    }
+
+    private static void SameIdentityScopePartitionsAndEndpointRoundTrip()
+    {
+        using var f = new Fixture(); f.Import(1000);
+        f.Execute("INSERT INTO sites VALUES('other','Other'); UPDATE device_inventory SET site_id='other'; " +
+            "UPDATE collection_sources SET site_id='other' WHERE kind<>'SYSLOG_UDP'");
+        f.Import(1000, "R/B"); // Equal source/timestamp, different captured scope is a separate revision.
+        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 6 &&
+            f.Catalog.QueryH3cFacts(f.Profile).Select(x => x.CapturedScopeKey).Distinct().Count() == 2 &&
+            f.Catalog.QueryH3cFacts(f.Profile, scope: Fixture.Scope("other")).Count == 3,
+            "same-identity equal-time cross-Site facts remain independent; scoped reads expose only authorized exact proof");
+        f.Execute("UPDATE h3c_device_profiles SET port=2222"); f.Import(2000, "I");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 9 &&
+            f.Catalog.QueryH3cFacts(f.Profile, scope: Fixture.Scope("other")).All(x => x.CapturedMs == 2000),
+            "a frozen endpoint creates its own partition and cannot relabel old evidence");
+        f.Execute("UPDATE h3c_device_profiles SET port=22"); f.Import(3000, "R/M");
+        Assert(f.Catalog.QueryH3cFacts(f.Profile).Count == 9 &&
+            f.Catalog.QueryH3cFacts(f.Profile, scope: Fixture.Scope("other")).All(x => x.CapturedMs == 3000) &&
+            f.Catalog.QueryH3cFacts(f.Profile, history: true).Count == 12,
+            "returning to an exact prior endpoint advances only that partition and preserves all histories");
+    }
+
+    private static void LegacyAuthorityMigrationIsIdempotentAndPreservesRetirement()
+    {
+        using var f = new Fixture(); f.Import(1000);
+        f.Catalog.ImportH3cOfflineReplay(f.Profile, Fixture.Outputs("R/B"), 2000, "another-source");
+        // Recreate the actual v26 table shape, with global Current having hidden
+        // source A. The old catalog is synthetic; no real root is copied.
+        f.Execute(@"CREATE TABLE legacy_facts(id TEXT PRIMARY KEY,profile_id TEXT NOT NULL REFERENCES h3c_device_profiles(id),
+            kind TEXT NOT NULL,identity_key TEXT NOT NULL,status TEXT NOT NULL,source TEXT NOT NULL,
+            captured_ms INTEGER NOT NULL,is_current INTEGER NOT NULL,payload_json TEXT NOT NULL,
+            UNIQUE(profile_id,kind,identity_key,source,captured_ms));
+            INSERT INTO legacy_facts SELECT id,profile_id,kind,identity_key,status,source,captured_ms,
+                CASE WHEN source='another-source' THEN 1 ELSE 0 END,payload_json FROM h3c_facts;
+            DROP TABLE h3c_facts; ALTER TABLE legacy_facts RENAME TO h3c_facts;
+            DELETE FROM schema_versions WHERE version=27;
+            INSERT INTO h3c_facts SELECT 'old-lldp',profile_id,'lldp.neighbor','same-neighbor','STALE','H3C_TASK_RAW:old',100,0,payload_json
+                FROM h3c_facts LIMIT 1;
+            INSERT INTO h3c_facts SELECT 'complete-empty',profile_id,'lldp.table','table','STALE','H3C_TASK_RAW:new',200,1,payload_json
+                FROM h3c_facts WHERE id='old-lldp';
+            INSERT INTO h3c_facts SELECT 'unscoped-legacy',profile_id,'legacy','unknown','STALE','legacy',100,1,'{}'
+                FROM h3c_facts LIMIT 1;");
+        var catalog = new Catalog(f.Settings); catalog.Initialize();
+        var history = catalog.QueryH3cFacts(f.Profile, history: true);
+        Assert(history.Count == 9 && history.Single(x => x.Id == "old-lldp").IsCurrent == false &&
+            catalog.QueryH3cFacts(f.Profile, "command.display.wlan.ap.all").Count == 2 &&
+            history.Single(x => x.Id == "unscoped-legacy").CapturedScopeKey == "UNSCOPED",
+            "migration restores independent source Current, retains complete-table retirement and never invents legacy scope");
+        Assert(catalog.QueryH3cFacts(f.Profile, "legacy", scope: Fixture.Scope("local")).Count == 0 &&
+            f.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_h3c_facts_authority_%'") == "3",
+            "unscoped migration remains inaccessible to Site claims and installs all authority indexes");
+        var before = f.Rows(); new Catalog(f.Settings).Initialize();
+        Assert(f.Rows() == before && f.Scalar("SELECT COUNT(*) FROM schema_versions WHERE version=27") == "1",
+            "repeated catalog initialization must not recompute Current or mutate migrated history");
+        try
+        {
+            f.Execute("UPDATE h3c_facts SET is_current=1 WHERE id='old-lldp'; " +
+                "INSERT INTO h3c_facts SELECT 'duplicate',profile_id,kind,identity_key,status,source,captured_ms+1,1,payload_json " +
+                "FROM h3c_facts WHERE id='old-lldp'");
+            throw new InvalidOperationException("independent Current uniqueness must be enforced");
+        }
+        catch (SqliteException ex) { Assert(ex.SqliteErrorCode == 19, "duplicate Current must fail by index constraint"); }
     }
 
     private static void CapturedScopeSurvivesRestartAndFiltersBeforeLimit()
@@ -97,7 +167,6 @@ internal static class H3cFactScopeTests
         var relabeled = resource with { Observations = resource.Observations.Select(x => x with { SourceSiteId = "other" }).ToArray() };
         Assert(f.Catalog.QueryWirelessRuntimeHistory(relabeled, Fixture.Scope("other"), 10).Samples.Count == 0,
             "history SQL must independently reject captured Site mismatch");
-        ExpectConflict(() => f.Import(1000));
         f.Import(3000, "R/B");
         var current = read.GetSnapshot(Fixture.Scope("other")).ApResources.Single();
         var history = read.GetRuntimeState(current.Id, Fixture.Scope("other"), nowMs: 3500)!;

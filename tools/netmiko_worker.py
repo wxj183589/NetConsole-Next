@@ -426,6 +426,65 @@ class Worker:
             self.close()
             raise
 
+    def probe_configuration_restore(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Read-only capability proof; never enables a server or stages a file."""
+        if self.connection is None:
+            raise RuntimeError("worker is not connected")
+        endpoint = (str(getattr(self.connection, "host", "")), int(getattr(self.connection, "port", 0)))
+        if (endpoint not in {("192.168.56.2", 22), ("192.168.56.3", 22), ("192.168.56.5", 22)} or
+                self.driver != "hp_comware" or self.jump_client is not None or self.jump_channel is not None):
+            raise ValueError("restore capability probe requires an authorized direct SSH simulator")
+        output = ""
+        try:
+            self.connection.config_mode()
+            prompt = self.connection.find_prompt().strip()
+            if not re.fullmatch(r"\[[^\r\n\[\]]{1,250}\]", prompt):
+                raise ValueError("restore help requires a bounded system-view prompt")
+            self.connection.write_channel("configuration replace file ?")
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                output += self.connection.read_channel()
+                if len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
+                    raise OutputLimitError("restore help exceeded worker limit")
+                if prompt + "configuration replace file " in output:
+                    break
+                time.sleep(.1)
+            # Clear the incomplete command before returning to user view.
+            self.connection.write_channel("\x15\n")
+            time.sleep(.2)
+            self.connection.read_channel()
+            self.connection.exit_config_mode()
+        except Exception:
+            self.close()
+            raise
+        advertised = bool(re.search(r"(?m)^\s*flash:\s+Device name\s*$", output))
+        result = {"nativeFileReplaceAdvertised": advertised, "sftpAvailable": False,
+                  "startupFileBytes": None, "transferState": "SFTP_SUBSYSTEM_UNAVAILABLE"}
+        channel = None
+        client = None
+        try:
+            transport = self.connection.remote_conn_pre.get_transport()
+            channel = transport.open_session(timeout=8)
+            channel.settimeout(8)
+            channel.invoke_subsystem("sftp")
+            client = paramiko.SFTPClient(channel)
+            # A successful subsystem handshake proves transfer availability;
+            # it does not prove write rights or native restore behavior.
+            result["sftpAvailable"] = True
+            result["transferState"] = "SFTP_CONNECTED_WRITE_UNVERIFIED"
+            try:
+                result["startupFileBytes"] = client.stat("flash:/startup.cfg").st_size
+            except (OSError, paramiko.SSHException):
+                pass
+        except (OSError, EOFError, paramiko.SSHException):
+            pass
+        finally:
+            if client is not None:
+                client.close()
+            elif channel is not None:
+                channel.close()
+        return result
+
     def shell_read(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.connection is None or not self.interactive:
             raise RuntimeError("worker interactive channel is not open")
@@ -541,6 +600,8 @@ def main() -> int:
                 result = worker.configure_description(request)
             elif operation == "commit_configuration_checkpoint":
                 result = worker.commit_configuration_checkpoint(request)
+            elif operation == "probe_configuration_restore":
+                result = worker.probe_configuration_restore(request)
             elif operation == "shell_read":
                 result = worker.shell_read(request)
             elif operation == "shell_write":

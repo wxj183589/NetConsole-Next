@@ -97,6 +97,7 @@ builder.Services.AddSingleton<RuntimeStatus>();
 builder.Services.AddSingleton<RuntimeResources>();
 builder.Services.AddSingleton<FileLogDiagnostics>();
 builder.Services.AddHostedService<ServiceRunLifecycle>();
+builder.Services.AddHostedService<LocalRuntimeControl>();
 builder.Services.AddHostedService<ProcessResourceMonitor>();
 builder.Services.AddHostedService<UdpSyslogWorker>();
 builder.Services.AddHostedService<RawIntegrityAuditService>();
@@ -997,6 +998,7 @@ app.MapPost("/api/system/simulator-config/checkpoints/verify", async (HttpContex
 });
 app.MapFaultCenter();
 app.MapConfigBackupScheduleActions();
+app.MapConfigurationRestoreReadiness();
 app.MapPost("/api/system/complete-configuration/targets", (HttpContext context, CompleteConfigurationTargetRequest request, CompleteConfigurationTargets targets) =>
 {
     if (!IsSuperAdmin(context)) return Results.StatusCode(403);

@@ -7,7 +7,12 @@ using System.Text.Json;
 
 const string serviceName = "NetConsoleNext";
 
-if (args.Length == 0 || args[0] is "help" or "--help" or "-h")
+if (args.Length == 0) return await RunManagerMenuAsync();
+
+if (args[0] is "launch" or "portable-start" or "portable-stop" or "portable-restart" or "portable-status" or "diagnose")
+    return args.Length <= 2 ? await RunLocalOperationAsync(args[0], args.Length == 2 ? args[1] : null) : InvalidArguments();
+
+if (args[0] is "help" or "--help" or "-h")
 {
     PrintHelp();
     return 0;
@@ -93,6 +98,10 @@ catch (System.ServiceProcess.TimeoutException ex)
 static void PrintHelp()
 {
     Console.WriteLine("NetConsole Next Local Manager");
+    Console.WriteLine("  (no arguments)            Open the local start/open/stop/restart/diagnose menu");
+    Console.WriteLine("  launch [settings.json]    Start installed service or owned portable instance and open Web");
+    Console.WriteLine("  portable-start|portable-stop|portable-restart|portable-status [settings.json]");
+    Console.WriteLine("  diagnose [settings.json]  Check the configured instance, worker, log limits and free space");
     Console.WriteLine("  status                    Show local Windows service state");
     Console.WriteLine("  start                     Start the local Windows service");
     Console.WriteLine("  stop                      Stop the local Windows service");
@@ -108,6 +117,77 @@ static void PrintHelp()
     Console.WriteLine("  credential set <REF> [data-root] Store/update an H3C DPAPI secret");
     Console.WriteLine("  credential revoke <REF> [data-root] Revoke an H3C DPAPI secret");
     Console.WriteLine("  web-password reset [data-root]  Reset a local Web user password (Windows administrator)");
+}
+
+static async Task<int> RunManagerMenuAsync()
+{
+    while (true)
+    {
+        Console.WriteLine("NetConsole Next 本机管理：1 启动并打开  2 停止  3 重启并打开  4 诊断  5 状态  0 退出管理器");
+        var command = Console.ReadLine()?.Trim();
+        if (command is null or "0") return 0;
+        var operation = command switch
+        {
+            "1" => "launch", "2" => "menu-stop", "3" => "menu-restart",
+            "4" => "diagnose", "5" => "menu-status", _ => null
+        };
+        if (operation is null) { Console.WriteLine("请选择 0–5。"); continue; }
+        await RunLocalOperationAsync(operation, null);
+    }
+}
+
+static async Task<int> RunLocalOperationAsync(string command, string? config)
+{
+    try
+    {
+        var settings = LocalManagerSettings.Load(config);
+        if (command == "diagnose")
+        {
+            using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false });
+            var deployment = await LocalDeploymentDoctor.RunAsync(settings.DataRoot, settings.WebPort, client);
+            var storage = LocalStorageDiagnostics.Run(settings.DataRoot);
+            Console.WriteLine(JsonSerializer.Serialize(new { deployment, storage }, PortableRuntime.JsonOptions));
+            return deployment.State == "PASS" && storage.State == "PASS" ? 0 : 1;
+        }
+        // Explicit portable commands always target a receipt-verified child. The simple
+        // entry prefers SCM when installed and never falls back after SCM access denial.
+        var useScm = false;
+        if (!command.StartsWith("portable-", StringComparison.Ordinal) && OperatingSystem.IsWindows())
+        {
+            var services = ServiceController.GetServices();
+            try
+            {
+                foreach (var installed in services)
+                    if (installed.ServiceName.Equals(serviceName, StringComparison.OrdinalIgnoreCase)) useScm = true;
+            }
+            finally { foreach (var service in services) service.Dispose(); }
+        }
+        var stop = command is "portable-stop" or "portable-restart" or "menu-stop" or "menu-restart";
+        var start = command is "portable-start" or "portable-restart" or "launch" or "menu-restart";
+        if (useScm && OperatingSystem.IsWindows())
+        {
+            using var service = new ServiceController(serviceName);
+            if (stop) StopService(service);
+            if (start) StartService(service);
+            service.Refresh();
+            Console.WriteLine($"{serviceName} (SCM): {service.Status}");
+        }
+        else
+        {
+            var runtime = new PortableRuntime(settings);
+            if (stop) Console.WriteLine(JsonSerializer.Serialize(await runtime.StopAsync(), PortableRuntime.JsonOptions));
+            if (start) Console.WriteLine(JsonSerializer.Serialize(await runtime.StartAsync(), PortableRuntime.JsonOptions));
+            if (!stop && !start) Console.WriteLine(JsonSerializer.Serialize(await runtime.StatusAsync(), PortableRuntime.JsonOptions));
+        }
+        return command is "launch" or "menu-restart" ? OpenWeb(settings.WebPort.ToString()) : 0;
+    }
+    catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or
+        ArgumentException or JsonException or System.ComponentModel.Win32Exception or OperationCanceledException or
+        System.ServiceProcess.TimeoutException or PlatformNotSupportedException)
+    {
+        Console.Error.WriteLine("Local Manager: " + ex.Message);
+        return 1;
+    }
 }
 
 static int InvalidArguments()

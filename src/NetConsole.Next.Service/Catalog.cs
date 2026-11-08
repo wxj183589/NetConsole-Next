@@ -183,6 +183,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         ApplyV24Migration(db);
         ApplyV25Migration(db);
         ApplyV26Migration(db);
+        ApplyV27Migration(db);
         RecoverInterruptedZteCollectionRuns();
         RecoverDeviceBatchOperations(db);
         RecoverConfigRestoreOperations(db);

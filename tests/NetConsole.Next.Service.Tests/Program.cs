@@ -117,6 +117,8 @@ else if (args.Length > 0 && args[0] == "--h3c-operational-capability-tests")
     H3cOperationalCapabilityTests.Run();
 else if (args.Length > 0 && args[0] == "--checkpoint-restore-tests")
     await H3cCheckpointRestoreTests.RunAsync();
+else if (args.Length > 0 && args[0] == "--restore-readiness-tests")
+    await ConfigurationRestoreReadinessTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--quick-ping-tests")
     await NetworkQuickPingTests.RunAsync();
 else if (args.Length > 0 && args[0] == "--simulator-config-tests")
@@ -168,6 +170,7 @@ internal static class SchedulerTests
         await OperationalHealthTests.RunAsync();
         await NetworkQuickPingTests.RunAsync();
         await H3cCheckpointRestoreTests.RunAsync();
+        await ConfigurationRestoreReadinessTests.RunAsync();
         H3cOperationalCapabilityTests.Run();
         await EnforcesQueueAndConcurrencyLimits();
         await CancelsQueuedAndRunningRequests();

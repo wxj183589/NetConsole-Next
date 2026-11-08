@@ -52,6 +52,21 @@ describe('H3C VLAN collected snapshots', () => {
     expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
   })
 
+  it('shows actual AC Radio Down and zero clients without claiming business recovery', async () => {
+    api.getH3cFacts.mockResolvedValue([fact('radio', { kind: 'ap.radio' }, {
+      apName: '4c48-cb6e-0400', radioId: 1, state: 'Down', rawChannel: '36(auto)',
+      channel: 36, bandwidth: 80, txPower: 20, clients: 0,
+    })])
+    const wrapper = render(); await flushPromises()
+    const radio = wrapper.get('.radio-facts')
+    expect(radio.findAll('tbody td').map(cell => cell.text()).slice(0, 5)).toEqual([
+      '4c48-cb6e-0400', '1', 'Down', '36(auto) / 80', '20 / 0',
+    ])
+    expect(radio.text()).toContain('不代表无线业务恢复')
+    expect(radio.text()).toContain('H3C_TASK_RAW:radio')
+    expect(api.startH3cTaskDefinition).not.toHaveBeenCalled()
+  })
+
   it('keeps whole historical snapshots separate and filters history from current mode', async () => {
     const older = fact('older', { isCurrent: false, capturedMs: 1_700_000_000_000 }, { vlans: [{ ...row, name: '历史 VLAN' }] })
     api.getH3cFacts.mockResolvedValue([older, fact()])

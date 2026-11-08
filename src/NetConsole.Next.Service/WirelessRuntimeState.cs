@@ -273,11 +273,12 @@ internal sealed partial class Catalog
             command.CommandText = $@"SELECT ap.id,ap.status,ap.source,ap.captured_ms,ap.payload_json,addr.payload_json,
                 EXISTS(SELECT 1 FROM h3c_facts identity WHERE identity.profile_id=ap.profile_id AND identity.kind='device.identity'
                     AND identity.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND identity.captured_ms<=ap.captured_ms
-                    AND identity.source=ap.source AND {versionProof}),
+                    AND identity.source=ap.source AND identity.scope_key=ap.scope_key AND {versionProof}),
                 ({H3cFactRawVerificationPredicate("ap")} AND {H3cFactRawVerificationPredicate("addr")}),
                 {H3cFactRawVerificationPredicate("ap")}
                 FROM h3c_facts ap LEFT JOIN h3c_facts addr ON addr.profile_id=ap.profile_id
                     AND addr.kind='command.display.wlan.ap.all.address' AND addr.source=ap.source AND addr.captured_ms=ap.captured_ms
+                    AND addr.scope_key=ap.scope_key
                     AND addr.status NOT IN ('FAILED','UNSUPPORTED','EMPTY','PARTIAL') AND {addrProof}
                 WHERE ap.profile_id=$profile AND ap.kind='command.display.wlan.ap.all' AND {apProof}
                 ORDER BY ap.captured_ms DESC,ap.id DESC LIMIT $limit";

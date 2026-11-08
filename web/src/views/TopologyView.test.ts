@@ -90,6 +90,21 @@ describe('TopologyView', () => {
     } finally { click.mockRestore(); vi.unstubAllGlobals() }
   })
 
+  it('filters exact evidence authority without merging identical neighbor claims', async () => {
+    api.getH3cLldpClaims.mockResolvedValue({ ...claims, relations: [
+      { ...claims.relations[0], sourceAuthority: 'H3C_TASK_RAW', capturedScopeKey: '["site-1"]', relationKey: 'live' },
+      { ...claims.relations[0], source: 'OFFLINE_IMPORT:A', sourceAuthority: 'OFFLINE_IMPORT:A', capturedScopeKey: '["site-1"]', relationKey: 'offline' },
+    ] })
+    const wrapper = render(); await flushPromises()
+    const table = () => wrapper.get('[aria-label="LLDP 关系表"]')
+    expect(table().findAll('tbody tr')).toHaveLength(2)
+    await wrapper.get('[aria-label="LLDP 证据来源"]').setValue('OFFLINE_IMPORT:A')
+    expect(table().findAll('tbody tr')).toHaveLength(1)
+    expect(table().text()).toContain('OFFLINE_IMPORT:A')
+    expect(table().text()).not.toContain('H3C_TASK_RAW:1')
+    expect(api.getH3cLldpClaims).toHaveBeenCalledTimes(1)
+  })
+
   it('discards an older refresh response instead of replacing the latest evidence', async () => {
     let first!: (value: unknown) => void
     api.getDeviceInventory.mockReturnValueOnce(new Promise(resolve => { first = resolve }))
