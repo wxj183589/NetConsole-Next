@@ -20,11 +20,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["start", "stop", "signal"])
     parser.add_argument("--pid", type=int)
-    parser.add_argument("--report-prefix", default="r70", choices=["r70", "r71", "r72", "r73"])
+    parser.add_argument("--report-prefix", default="r70", choices=["r70", "r71", "r72", "r73", "r74", "r75"])
     parser.add_argument("--web-port", type=int, default=18771)
     parser.add_argument("--syslog-port", type=int, default=0)
     parser.add_argument("--data-root", default=str(workspace_path("test-data", "simulator-live-20261105")))
     parser.add_argument("--expected-dll", default=str(workspace_path("build", "r70-service", "NetConsole.Next.Service.dll")))
+    parser.add_argument("--netmiko-worker")
     args = parser.parse_args()
     evidence = workspace_path("reports", f"{args.report_prefix}-console-control.json")
     data_root = Path(args.data_root).resolve()
@@ -88,14 +89,19 @@ def main():
         pass
     else:
         raise RuntimeError("Service port already has an owner; refusing duplicate start")
+    worker = Path(args.netmiko_worker).resolve() if args.netmiko_worker else REPO / "tools" / "netmiko_worker.py"
+    if args.netmiko_worker:
+        worker.relative_to(workspace_path("build").resolve())
+        if not worker.is_file():
+            raise FileNotFoundError(worker)
     env = {**os.environ, "NETCONSOLE_NEXT_DATA_ROOT": str(data_root),
         "NETCONSOLE_NEXT_WEB_PORT": str(args.web_port), "NETCONSOLE_NEXT_SYSLOG_PORT": str(args.syslog_port), "NETCONSOLE_NEXT_H3C_ENABLED": "1",
-        "NETCONSOLE_NEXT_NETMIKO_WORKER": str(REPO / "tools" / "netmiko_worker.py")}
+        "NETCONSOLE_NEXT_NETMIKO_WORKER": str(worker)}
     info = subprocess.STARTUPINFO()
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 0
     with workspace_path("reports", f"{args.report_prefix}-service.log").open("ab") as out, workspace_path("reports", f"{args.report_prefix}-service.err.log").open("ab") as err:
-        proc = subprocess.Popen(["dotnet", str(dll)], cwd=REPO / "src" / "NetConsole.Next.Service", env=env,
+        proc = subprocess.Popen(["dotnet", str(dll)], cwd=dll.parent, env=env,
             stdin=subprocess.DEVNULL, stdout=out, stderr=err, creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=info)
     for _ in range(60):
         if proc.poll() is not None:
@@ -105,6 +111,8 @@ def main():
                 health = json.load(response)
             if health["processId"] != proc.pid:
                 raise RuntimeError("Health belongs to another process")
+            if health.get("healthState") != "HEALTHY" or health.get("serviceState") != "running":
+                raise RuntimeError("Service process started but application health is not HEALTHY")
             workspace_path("reports", f"{args.report_prefix}-start-health.json").write_text(json.dumps(health, indent=2), encoding="utf-8")
             print(json.dumps({"pid": proc.pid, "healthState": health["healthState"], "dll": str(dll)}))
             return 0
