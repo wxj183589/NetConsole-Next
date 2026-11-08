@@ -25,13 +25,14 @@ internal static class FaultCenterTests
         SummaryUsesFilteredScopeBeforePagination();
         await BackgroundRecoveryIsFairAndDoesNotWriteBlockedHistory();
         await UnrelatedTaskSuccessCannotResolveCollectionFailure();
+        await DistinctCollectionFailuresRemainIndependent();
         RecollectionRetriesOnlyKnownTransientFailures();
         CollectionRecoveryRequiresSameCommandPlan();
         await FutureDisabledAndExhaustedPoliciesDoNotConnect();
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=22/22 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=23/23 PASS");
     }
     private static void LldpRecoveryRequiresExactCompleteNewTable()
     {
@@ -57,6 +58,11 @@ internal static class FaultCenterTests
         Assert(FaultLifecycle.SameCollection(failed, retry), "new definition of the same frozen collection is valid");
         Assert(!FaultLifecycle.SameCollection(failed, retry with { Commands = ["display version"] }),
             "version success cannot resolve a failed LLDP collection");
+        Assert(FaultLifecycle.CollectionResource(failed) == FaultLifecycle.CollectionResource(retry) &&
+            FaultLifecycle.CollectionResource(failed) != FaultLifecycle.CollectionResource(retry with { Commands = ["display version"] }) &&
+            FaultLifecycle.CollectionResource(failed) != FaultLifecycle.CollectionResource(retry with { ScopeSnapshot = scope with { SiteId = "other" } }) &&
+            FaultLifecycle.CollectionResource(failed) != FaultLifecycle.CollectionResource(retry with { ScopeSnapshot = scope with { Endpoint = new("192.0.2.11", 22) } }),
+            "stable resource ignores admission ID/time while preserving the complete plan and frozen target");
         Assert(!FaultLifecycle.SameCollection(failed, retry with { Commands = failed.CommandPlan.Reverse().ToArray() }),
             "command order is part of the collection plan");
         Assert(!FaultLifecycle.SameCollection(failed, retry with { TaskType = "OTHER" }) &&
@@ -254,6 +260,29 @@ internal static class FaultCenterTests
             "collection success cannot recover interface faults or append repetitive blocked history");
         Assert(f.Factory.Calls == 0, "automatic verification only inspects local evidence");
     }
+    private static async Task DistinctCollectionFailuresRemainIndependent()
+    {
+        using var f = new BusinessFixture();
+        _ = f.FailedCollection(H3cCommandPolicy.DisplayVersion);
+        _ = f.FailedCollection(H3cCommandPolicy.DisplayLldpNeighborInformationList);
+        var legacy = f.Item with { Id = "legacy-device-collection", Kind = "COLLECTION_FAILURE", ResourceKey = f.Item.DeviceId, EvidenceType = "TASK_RUN", EvidenceId = "old-unavailable-run" };
+        f.SeedIncidents([legacy]);
+        using var service = f.Service();
+        service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+        var initial = service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "COLLECTION_FAILURE").Items;
+        Assert(initial.Count == 3 && initial.Select(x => x.ResourceKey).Distinct().Count() == 3 &&
+            JsonSerializer.Serialize(initial.Single(x => x.Id == legacy.Id)) == JsonSerializer.Serialize(legacy), "normal sync splits complete plans and preserves old device-aggregated history unchanged");
+        await Task.Delay(20);
+        await f.CompleteCollection();
+        var outcomes = initial.Where(x => x.Id != legacy.Id).Select(x => service.Verify(x.Id, f.Actor, P2B5SiteScopeDecision.Global)).ToArray();
+        Assert(outcomes.Count(x => x.State == "RECOVERY_VERIFIED") == 1 && outcomes.Count(x => x.State == "RECOVERY_NOT_VERIFIED") == 1,
+            "version-only successful Raw resolves one collection plan while the other remains open");
+        Assert(JsonSerializer.Serialize(service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "COLLECTION_FAILURE").Items.Single(x => x.Id == legacy.Id)) == JsonSerializer.Serialize(legacy),
+            "new plan verification cannot silently resolve or merge old ambiguous device incidents");
+        service.Sync(f.Actor, P2B5SiteScopeDecision.Global, 1);
+        Assert(service.Query(f.Actor, P2B5SiteScopeDecision.Global, kind: "COLLECTION_FAILURE").Items.Count == 3,
+            "re-reading the same failed runs cannot create more plan incidents");
+    }
     private static async Task UnrelatedTaskSuccessCannotResolveCollectionFailure()
     {
         using var f = new BusinessFixture();
@@ -355,7 +384,7 @@ internal static class FaultCenterTests
         public void SeedIncidents(IReadOnlyList<FaultIncident> incidents) => new FaultCenterStore(_files.Root).Commit(new(1, incidents, []));
         public string FailedCollection(string command = H3cCommandPolicy.DisplayVersion)
         {
-            const string definition = "failed-collection";
+            var definition = "failed-collection-" + Guid.NewGuid().ToString("N");
             _catalog.CreateTaskDefinition(definition, "H3C_SSH_READONLY", Item.ProfileId, command,
                 TimeSpan.FromSeconds(30), scopeSnapshot: Policy.Target);
             var run = _catalog.CreateTaskRun(definition);

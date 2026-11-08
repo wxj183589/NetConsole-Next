@@ -115,6 +115,14 @@ internal static class FaultLifecycle
         original.DeviceId == current.DeviceId && original.ProfileId == current.ProfileId &&
         original.SiteId == current.SiteId && original.Endpoint is not null && original.Endpoint == current.Endpoint;
 
+    internal static string CollectionResource(TaskDefinitionSnapshot definition)
+    {
+        var frozen = definition.ScopeSnapshot;
+        var identity = JsonSerializer.Serialize(new object?[] { definition.TaskType, definition.Target, definition.CommandPlan,
+            frozen?.DeviceId, frozen?.ProfileId, frozen?.SiteId, frozen?.Endpoint?.Host, frozen?.Endpoint?.Port });
+        return "collection-plan:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+    }
+
     public static string Fingerprint(OperationalFaultEvent item, string? profileId = null)
     {
         string?[] identity = [item.SiteId, item.DeviceId, profileId, item.Kind, item.ResourceKey ?? item.DeviceId];
@@ -330,6 +338,11 @@ internal sealed class FaultCenterService : BackgroundService
             {
                 var failedRun = _catalog.GetTaskRun(item.EvidenceId, scope);
                 var failedDefinition = failedRun?.DefinitionId is { } failedId ? _catalog.GetTaskDefinition(failedId) : null;
+                // Legacy incidents keep their recorded device resource. New plan
+                // incidents cannot be reinterpreted if a definition is edited.
+                if (item.ResourceKey.StartsWith("collection-plan:", StringComparison.Ordinal) &&
+                    (failedDefinition is null || FaultLifecycle.CollectionResource(failedDefinition) != item.ResourceKey))
+                    failedDefinition = null;
                 evidence = _catalog.RecentTaskRuns(100, scope).Where(r => r.State == "SUCCEEDED" && r.CaptureStatus == "COMPLETE" &&
                     r.EndedMs > item.LastSeenMs && r.EndedMs <= now && now - r.EndedMs <= OperationalHealthProjection.FreshnessWindowMs &&
                     r.DefinitionId is not null && FaultLifecycle.SameCollection(failedDefinition, _catalog.GetTaskDefinition(r.DefinitionId)) &&

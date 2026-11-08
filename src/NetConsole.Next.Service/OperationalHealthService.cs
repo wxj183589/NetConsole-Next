@@ -204,7 +204,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
             if (run.State is "FAILED" or "TIMED_OUT" or "CANCELLED" || run.CaptureStatus is "FAILED" or "PARTIAL")
                 events.Add(new("task:" + run.Id, device.Id, device.SiteId, "COLLECTION_FAILURE", "WARNING", run.State,
                     run.EndedMs ?? run.StartedMs ?? run.QueuedMs ?? now, "TASK_RUN", run.Id,
-                    "采集任务未完整完成；不据此判定设备离线。"));
+                    "采集任务未完整完成；按完整采集计划分别核验，不据此判定设备离线。", FaultLifecycle.CollectionResource(definition)));
         }
         // Reuse the same scoped, verified wireless runtime that drives the AP
         // workbench. Keep source identity and Raw references in its drill-down.
