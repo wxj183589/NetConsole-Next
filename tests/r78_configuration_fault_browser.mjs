@@ -61,6 +61,8 @@ try {
     const response = await responsePending, body = await response.json()
     check(response.status() === 200 && body.total === 1 && body.items[0].id === ready.faultId, `EXACT_FILTERED_API_${width}`)
     await faults.getByText('CONFIGURATION_CHANGED', { exact: true }).waitFor()
+    check(await faults.getByRole('cell').filter({ hasText: '待处理' }).count() === 1 &&
+      await faults.getByLabel('故障状态', { exact: true }).locator('option[value="OPEN"]').innerText() === '待处理', `READABLE_FAULT_STATE_${width}`)
     check((await faults.innerText()).includes('配置已稳定，不表示已回滚'), `STABILITY_EXPLANATION_${width}`)
     const link = faults.getByRole('link', { name: '查看脱敏配置证据', exact: true })
     check((await link.getAttribute('href')).includes('/backups/after/view?profileId=r73-storage-profile'), `EXACT_BACKUP_LINK_${width}`)
@@ -81,6 +83,18 @@ try {
     await page.screenshot({ path: path.join(output, `config-fault-${width}.png`), fullPage: true })
     const actual = await page.evaluate(() => document.documentElement.scrollWidth)
     result.layouts.push({ width, actual }); check(actual <= width + 1, `NO_OVERFLOW_${width}`)
+    const deviceLink = faults.getByRole('link', { name: '查看故障设备详情', exact: true })
+    const deviceUrl = new URL(await deviceLink.getAttribute('href'), ready.base)
+    check(deviceUrl.pathname === '/devices' && deviceUrl.searchParams.get('deviceId') === body.items[0].deviceId &&
+      !deviceUrl.searchParams.has('q'), `EXACT_FAULT_DEVICE_LINK_${width}`)
+    const detailResponsePending = page.waitForResponse(value => new URL(value.url()).pathname ===
+      '/api/system/devices/' + encodeURIComponent(body.items[0].deviceId) && value.request().method() === 'GET')
+    await deviceLink.click()
+    const detailResponse = await detailResponsePending, detail = await detailResponse.json()
+    await page.getByRole('dialog', { name: '设备详情 / 审计', exact: true }).waitFor()
+    check(detailResponse.ok() && detail.item.id === body.items[0].deviceId, `FAULT_DEVICE_DETAIL_${width}`)
+    await page.screenshot({ path: path.join(output, `fault-device-${width}.png`), fullPage: true })
+    await page.goto(ready.base + '/', { waitUntil: 'networkidle' })
   }
   check(result.errors.length === 0 && result.mutations.length === 1 && result.mutations[0] === '/api/auth/login', 'NO_ERRORS_OR_DEVICE_MUTATIONS')
   result.state = 'PASS'

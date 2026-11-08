@@ -68,3 +68,7 @@ dotnet D:\study\NetConsole-Next-Workspace\build\r78-config-fault-agent\bin\NetCo
 - 浏览器首轮 2560 宽度失败是脚本对已展开历史重复点击，随后改为确认展开状态再验证，原失败证据保留。
 
 该候选创建于本地配置提交之前，包含明确未提交增量，不宣称 clean-commit 正式发布。
+
+## 最终主集成补充（2026-11-09）
+
+最终Service harness PASS：健康26、故障30、完整配置28；Web450、Worker60 PASS。ea85c54中文状态/精确deviceId入口浏览器23项双视口通过：reports/r78-config-fault-browser-2026-11-08T17-58-18-088Z/result.json；配置证据仍是合成fixture。自有回环TCP监听器故障/恢复/复发12项通过：reports/r78-live-ping-fault-bbce467c2b13/result.json，SERVICE_E2E_ACTUAL_LOOPBACK_TCP；暂停不采样、续跑不借旧样本，0设备写入。不能代替模拟器故障或无线业务验证。后台有界轮巡限制不变，当前PID43524，完整DLL门禁ICMP失败，整体PARTIAL。
