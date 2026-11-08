@@ -1,15 +1,21 @@
-# R6 下一任务池
+# R7.6 下一任务池
+
+日期：2026-11-08。检查点基线 `89705fd`。仅本地提交/集成，禁止 push、remote merge 和 release publish。九工作流归属见 `docs/r7-6-autonomous/R7_6_WORK_POOL.md`；运行状态见 `AUTONOMOUS_RUN_STATE.json`，使用前重新验证 PID。
 
 | 优先级 | 任务 | 状态 | 下一步/验收 |
 | --- | --- | --- | --- |
-| P0 | 工作台真实无线与任务汇总 | COMPLETED_LOCAL | Dashboard 使用真实 AC/AP API；2/2 定向测试及 Web 全量测试通过 |
-| P1 | 智能配置 dry-run | COMPLETED_LOCAL | H3C 接口描述/Access VLAN 模板、变量校验、命令预览；5/5 C# + 2 Vue tests |
-| P1 | 拓扑与资产工作台 | COMPLETED_LOCAL_READONLY | 真实库存和 LLDP claims；加载/空/错误/部分失败；4 Vue tests |
-| P1 | 配置恢复预览和 dry-run | COMPLETED_LOCAL_SAFE | 配置备份页接入 preview/execute API；40 Vue tests，409 writer 阻断明确显示 |
-| P0 | AC/AP 无线完整工作台与双 AC 运行态 | PARTIAL | 保持 Site scope 和 UNKNOWN/CONFLICT；补实际 AP ownership 与 HA 证据 |
-| P1 | 配置恢复 writer、失败回滚 | BLOCKED_EXTERNAL | 现有预览 fail-closed；等待授权 writer 合同和现场恢复验收 |
-| P1 | 智能配置设备适配和批量执行 | NOT_IMPLEMENTED | 在 dry-run 稳定后定义白名单写入、差异验证和回滚 |
-| P1 | LLDP/拓扑/资产工作台 | PARTIAL | 复用现有 API 和 verified facts，补页面交互及空/错误状态 |
-| P2 | 跨机器 TLS、安装、升级回滚 | BLOCKED_EXTERNAL | 目标 Windows 环境可用后执行部署门禁 |
+| P0 | Long Ping 生命周期、历史与 CSV | PASS / SERVICE_E2E | 暂停/恢复/取消、P95、重启历史、Quick/Long 独立分组在 HTTP/双分辨率浏览器通过；不代表远端或多日运行 |
+| P0 | 丢包采样的历史证据上下文 | IN_PROGRESS | fault agent 实现，独立审查；采样时刻以前同 Site/设备/目标/采集范围 Raw facts；无客户端到 AP 事实时 UNKNOWN |
+| P0 | 最新候选与数据完整性 | NEXT | 产品代码测试后重新构建；受控停止/恢复；保留单数据库检查点和 19 个静态资源 |
+| P0 | AC/AP 无线工作台 | PARTIAL | 当前 AC 只读采集和 AP 历史 CSV 已实现；当前无有效变化，不虚构 HA/变化记录 |
+| P0 | 统一故障中心 | PARTIAL | 取消误报已修复；合成权限/持久化测试通过，待现场故障/恢复与复发证据 |
+| P0 | SW / FIT-AP 原生接入 | BLOCKED | 获取有效凭据后只读核对；不得重复失败认证、猜密码或把 AC 命令接受当作 AP 登录成功 |
+| P0 | 双 AC HA 与移动终端关联 | NOT_TESTED | 切换恢复点、客户端连续性测量、可靠关联事实 |
+| P0 | 配置恢复完整闭环 | PARTIAL | 模拟器和预检通过；仍需设备 writer、完整配置回读、业务验证及失败回滚 |
+| P1 | 完整候选 Traceroute | PARTIAL | APPHOST/显式 DLL 完整离线门禁均 ICMP_PERMISSION_DENIED；窄诊断不能替代完整门禁 |
+| P1 | Windows 部署 / LocalManager | PARTIAL | 离线计划及就绪修复通过；待 elevated SCM、独立主机升级/回滚/卸载 |
+| P1 | 原版专业能力迁移 | PARTIAL | 复用事实和历史合同，继续 Mesh/轨交专业报表；旧仓只读参考 |
+| P1 | 长稳与性能 | NOT_TESTED | 现有仅 300 秒；补有界无人值守、资源/Raw/队列/重启检查，不能写成 24 小时 |
+| P1 | 最终报告与交接 | IN_PROGRESS | 13 项报告 + 工作池已建立；本批完成后更新精确源码/候选/测试/运行版本，DevStatus 只新增交接文件 |
 
-完整历史任务与验收依据见 `docs/full-day-autonomous/NEXT_TASK_BACKLOG.md`。
+旧 R6/R6.1 待办由本表替代。历史验收保留在对应日期文档，不能将旧数字或候选身份写作当前验证结果。

@@ -1,31 +1,81 @@
 {
-  "project": "NetConsole-Next-R6.1-Autonomous-Full-Product-Continuation",
-  "date": "2026-11-07",
-  "codexThreadId": "01a1a80b-08b3-7862-b637-ed9f1f68984c",
+  "project": "NetConsole-Next-R7.6-Full-Product-Development",
+  "date": "2026-11-08",
+  "codexThreadId": "01a1ba51-04f2-71a2-ac64-17bb40048093",
   "branch": "codex-A/netconsole-next-r3-dual-ac",
-  "currentHead": "2a5dadd",
-  "productCommit": "fdf9b20",
+  "checkpointBaseHead": "89705fd322f90cf889705704cb3432c0e1d5dcb1",
   "overallStatus": "PARTIAL",
-  "completedThisTurn": [
-    "Dashboard reads real AC Domain and AP Resource APIs",
-    "Wireless API failures are isolated from health, inventory and task data",
-    "Failed task count and wireless availability are visible without fabricated values",
-    "Dashboard tests 2/2; Web tests 211/211; typecheck and build PASS",
-    "Smart configuration dry-run templates and server validation; SMART_CONFIG_TESTS=5/5",
-    "Topology and asset workbench backed by inventory and LLDP claims APIs",
-    "Configuration restore preview and dry-run UI with explicit fail-closed writer state"
+  "runtime": {
+    "url": "http://127.0.0.1:18771/",
+    "pidAtCheckpoint": 49344,
+    "candidate": "build/r76-candidate-integrated-91d0a63",
+    "productVersion": "1.0.0+7099775c7ded206d2b04d40faf4930e4d59c9297",
+    "dataRoot": "test-data/simulator-live-20261105",
+    "worker": "candidate/tools/netmiko/netmiko_worker.py",
+    "viteUrl": "http://127.0.0.1:5174/",
+    "vitePidAtCheckpoint": 32812,
+    "health": "HEALTHY",
+    "sqliteIntegrity": "ok",
+    "rawFinalized": 140,
+    "rawIncomplete": 0,
+    "rawMissing": 0,
+    "recoveryIssues": 0
+  },
+  "protectedAssets": {
+    "count": 19,
+    "manifest": "reports/r76-protected-assets.json"
+  },
+  "databaseCheckpoint": {
+    "path": "test-data/r76-runtime-checkpoint-20261108/catalog.db",
+    "sha256": "5fba203ba26a99caa2f9c05229646415f0e9bd1b64b048975f352e180098173f",
+    "integrity": "ok"
+  },
+  "completedBatches": [
+    "Long Ping pause/resume/cancel, P95, guarded runtime, restart history and Quick/Long CSV grouping",
+    "AC one-click readonly collection and AP effective-change CSV",
+    "Cancelled diagnostic does not create a false failure fault",
+    "Configuration backup ancestor reparse guards and LocalManager readiness/PS5.1 fixes",
+    "Windows system ICMP traceroute parser, codepage, native errors and owned-child lifecycle",
+    "AC1/AC2 product readonly captures, 12 verified Raw/Facts; no device writes",
+    "Actual HTTP and two-resolution browser acceptance; nine specialist reports"
   ],
-  "uncommittedAtCheckpoint": ["DevStatus handoff only"],
-  "activeWorkstreams": ["wireless business and dual AC evidence", "configuration writer and rollback contract", "browser GUI acceptance"],
+  "tests": {
+    "web": "35 files / 370 tests PASS",
+    "typecheck": "PASS",
+    "serviceFullHarness": "EXIT 0; reports/r76-service-full-final.log",
+    "longPingHttp": "13 checks PASS; reports/r76-long-ping-http-25e00169234f/result.json",
+    "featureHttp": "40 checks PASS; reports/r72-feature-http-20261108-220844-e695e3.json",
+    "longPingBrowser": "Both viewports PASS; reports/r76-long-ping-browser-2026-11-08T14-09-52-034Z/result.json",
+    "broadBrowser": "Both viewports PASS; reports/r76-broad-browser-final-20261108/result.json",
+    "sharedBrowser": "PARTIAL: AP history contains no effective changes; reports/r76-browser-final-20261108/result.json",
+    "offlineCandidate": "APPHOST and explicit DLL EXIT 1: required Traceroute ICMP_PERMISSION_DENIED",
+    "icmpComparison": "18 narrow probes plus stage diagnosis; not a replacement for full offline gate",
+    "longRunning": "Historical 300-second soak only; no 8-24-hour claim"
+  },
+  "activeBatch": {
+    "task": "Long Ping loss-sample historical evidence context",
+    "owner": "/root/r76_fault_center",
+    "status": "IN_PROGRESS_NOT_DEPLOYED",
+    "reviewOwner": "/root/r76_config_closure",
+    "constraints": [
+      "No future facts",
+      "Exact Site/device/target/capturedScope",
+      "Filter time before LIMIT",
+      "No reliable client-to-AP association means UNKNOWN",
+      "No device writes"
+    ]
+  },
   "externalPending": [
-    "Dual AC failover and live AP ownership evidence",
-    "Real device, Linux and bastion interoperability",
-    "Configuration restore writer and rollback acceptance",
-    "Smart configuration device execution and complete topology/asset workbench",
-    "Cross-machine TLS and installer upgrade/rollback acceptance"
+    "SW valid credentials; do not repeat failed profile",
+    "FIT-AP valid credentials and effective exec-console/read-only identity evidence",
+    "Dual AC failover, live client/AP association and service continuity",
+    "Device restore writer, full readback, business validation and rollback",
+    "Full Host ICMP permission failure diagnosis",
+    "Elevated Windows SCM and independent-machine upgrade/rollback",
+    "8-24-hour unattended operation"
   ],
   "remotePush": "FORBIDDEN",
   "remoteMerge": "FORBIDDEN",
-  "release": "FORBIDDEN",
-  "nextRecommendedTask": "Add browser E2E for SmartConfig, Topology and ConfigRestore states, then pursue safe simulator authentication and dual-AC evidence"
+  "releasePublish": "FORBIDDEN",
+  "nextRecommendedTask": "Integrate and test PingLossEvidence; rebuild outside source wwwroot, validate candidate, restore shared runtime and update handoff"
 }
