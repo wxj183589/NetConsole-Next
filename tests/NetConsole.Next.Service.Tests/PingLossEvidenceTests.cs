@@ -201,7 +201,8 @@ internal static class PingLossEvidenceTests
             Settings = new() { DataRoot = Root, SyslogBind = IPAddress.Loopback, SyslogPort = 0, WebPort = 18771, SyslogReceiveBufferBytes = 4 * 1024 * 1024 };
             Catalog = new(Settings); Catalog.Initialize();
             if (preserveRoot && (Catalog.QueryManagedDeviceInventory().Items.Count != 0 ||
-                Scalar("SELECT COUNT(*) FROM task_runs") != "0" || Scalar("SELECT COUNT(*) FROM h3c_facts") != "0" ||
+                Scalar("SELECT COUNT(*) FROM task_runs WHERE task_type <> 'CORE_SERVICE' OR state <> 'STOPPED'") != "0" ||
+                Scalar("SELECT COUNT(*) FROM h3c_facts") != "0" ||
                 (Directory.Exists(Path.Combine(Root, "diagnostics")) && Directory.EnumerateFileSystemEntries(Path.Combine(Root, "diagnostics")).Any())))
                 throw new InvalidOperationException("Export refuses an existing business or diagnostic fixture.");
             Catalog.CreateH3cDeviceProfile(new(Profile, "192.0.2.71", 22, "fixture", "FIXTURE_REFERENCE",

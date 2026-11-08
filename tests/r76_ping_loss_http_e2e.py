@@ -24,7 +24,7 @@ from tools.workspace_paths import workspace_path
 
 def task_count(root):
     with closing(sqlite3.connect(root / 'catalog.db')) as db:
-        return db.execute('SELECT COUNT(*) FROM task_runs').fetchone()[0]
+        return db.execute("SELECT COUNT(*) FROM task_runs WHERE task_type <> 'CORE_SERVICE'").fetchone()[0]
 
 
 def prepare(dll, tests_dll, root, output):
