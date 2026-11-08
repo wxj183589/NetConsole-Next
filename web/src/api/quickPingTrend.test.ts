@@ -39,6 +39,37 @@ describe('Quick Ping history trends', () => {
       run('icmp', [2], {}, { protocol: 'ICMP', port: null })]
     expect(buildQuickPingTrends(runs).groups).toHaveLength(7)
   })
+  it('rejects samples outside run and item time boundaries without reusing an older success', () => {
+    for (const boundary of ['created', 'run-start', 'item-start', 'run-end', 'item-end']) {
+      const invalid = run(boundary, [999])
+      if (boundary === 'created') invalid.items[0]!.quickPing!.samples[0]!.capturedMs = 999
+      if (boundary === 'run-start') invalid.startedMs = 1001
+      if (boundary === 'item-start') invalid.items[0]!.startedMs = 1001
+      if (boundary === 'run-end') {
+        invalid.endedMs = 2000; invalid.items[0]!.endedMs = 3000
+        invalid.items[0]!.quickPing!.samples[0]!.capturedMs = 2001
+      }
+      if (boundary === 'item-end') {
+        invalid.endedMs = 3000
+        invalid.items[0]!.quickPing!.samples[0]!.capturedMs = 2001
+      }
+      const group = buildQuickPingTrends([run('valid', [0]), invalid]).groups[0]!
+      expect(group).toMatchObject({ sent: null, averageMs: null, p95Ms: null })
+      expect(group.points.find(point => point.runId === boundary)).toMatchObject({
+        metricsKnown: false, sent: null, lossPercent: null, averageMs: null, p95Ms: null, latencies: [],
+      })
+      expect(group.points.find(point => point.runId === 'valid')!.p95Ms).toBe(0)
+    }
+  })
+  it('accepts samples exactly at valid time boundaries and preserves legacy snapshots without ends', () => {
+    const value = run('edge', [0, null], { startedMs: 1000, endedMs: 1001 })
+    value.items[0]!.startedMs = 1000; value.items[0]!.endedMs = 1001
+    expect(buildQuickPingTrends([value]).groups[0]).toMatchObject({ sent: 2, received: 1, lost: 1, p95Ms: 0 })
+    value.endedMs = null; value.items[0]!.endedMs = null
+    expect(buildQuickPingTrends([value]).groups[0]!.sent).toBe(2)
+    value.startedMs = Number.NaN
+    expect(buildQuickPingTrends([value]).groups[0]!.sent).toBeNull()
+  })
   it('does not fill missing or inconsistent metrics with zero or an older success', () => {
     const missing = run('missing', []); missing.items[0]!.quickPing = null
     const invalid = run('invalid', [2], {}, { sent: 2 })

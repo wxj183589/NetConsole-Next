@@ -21,10 +21,17 @@ function point(run: NetworkDiagnosticRun, item: NetworkDiagnosticRun['items'][nu
   const sent = ping?.sent, received = ping?.received, lost = ping?.lost, requested = ping?.requestedSamples
   const samples = Array.isArray(ping?.samples) ? ping.samples : []
   const replied = samples.filter(sample => sample.status === 'REPLIED' && finiteLatency(sample.latencyMs))
-  const known = count(sent) && count(received) && count(lost) && count(requested) && sent <= requested &&
+  const starts = [run.createdMs, run.startedMs, item.startedMs].filter(value => value != null)
+  const ends = [run.endedMs, item.endedMs].filter(value => value != null)
+  const timestampsKnown = [...starts, ...ends].every(value => Number.isFinite(value) && value > 0)
+  const startedMs = Math.max(...starts), endedMs = ends.length ? Math.min(...ends) : Infinity
+  // A completed run cannot use observations from before admission or after either completion boundary.
+  // Older snapshots without an end timestamp keep their original compatibility behavior.
+  const known = timestampsKnown && startedMs <= endedMs &&
+    count(sent) && count(received) && count(lost) && count(requested) && sent <= requested &&
     received + lost === sent && samples.length === sent && replied.length === received &&
     samples.every(sample => Number.isInteger(sample.sequence) && sample.sequence > 0 && sample.sequence <= requested &&
-      Number.isFinite(sample.capturedMs) && sample.capturedMs > 0 &&
+      Number.isFinite(sample.capturedMs) && sample.capturedMs >= startedMs && sample.capturedMs <= endedMs &&
       (sample.status === 'REPLIED' ? finiteLatency(sample.latencyMs) :
         ['TIMED_OUT', 'UNREACHABLE'].includes(sample.status) && sample.latencyMs == null)) &&
     new Set(samples.map(sample => sample.sequence)).size === sent
