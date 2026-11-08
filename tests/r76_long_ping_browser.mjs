@@ -159,7 +159,7 @@ try {
     check(running.items[0].quickPing.destinationAddress === '127.0.0.1', `LONG_PING_${width}_ACTUAL_LOOPBACK_REPLIES`)
     await clickMutation('暂停长期 Ping', route + '/long-ping/pause')
     const paused = await until(route, value => value.items[0].state === 'PAUSED')
-    await page.locator('.diagnostic-results').getByText('已暂停', { exact: true }).waitFor()
+    await page.locator('.diagnostic-results > table > tbody > tr:not(.trace-row) > td:nth-child(3)').filter({ hasText: /^已暂停$/ }).waitFor()
     await screenshot('long-ping-paused', width)
     await new Promise(resolve => setTimeout(resolve, 2200))
     check(JSON.stringify((await api(route)).items[0].quickPing) === JSON.stringify(paused.items[0].quickPing),
@@ -179,7 +179,7 @@ try {
     const starts = trace.filter(item => item.pathname === '/api/system/diagnostics/runs').length
     await page.reload({ waitUntil: 'networkidle' })
     await page.getByLabel('诊断历史', { exact: true }).selectOption(created.id)
-    await page.locator('.diagnostic-results').getByText('已取消', { exact: true }).waitFor()
+    await page.locator('.diagnostic-results > table > tbody > tr:not(.trace-row) > td:nth-child(3)').filter({ hasText: /^已取消$/ }).waitFor()
     check(trace.filter(item => item.pathname === '/api/system/diagnostics/runs').length === starts, `LONG_PING_${width}_REOPEN_HISTORY_DOES_NOT_PROBE`)
     await screenshot('long-ping-history', width)
     await configure('QUICK_PING')
