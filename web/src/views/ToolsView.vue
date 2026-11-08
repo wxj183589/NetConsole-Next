@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import NcLayout from '../components/NcLayout.vue'
 import SyslogWorkspace from '../components/SyslogWorkspace.vue'
 import QuickPingHistoryTrend from '../components/QuickPingHistoryTrend.vue'
+import PingLossEvidence from '../components/PingLossEvidence.vue'
 import { ApiRequestError, getHostTools, getTerminalDevices, getDeviceInventory, updateHostTool, launchHostTool, startNetworkDiagnostics, listNetworkDiagnostics, getNetworkDiagnostics, cancelNetworkDiagnostics, setLongPingPaused, type HostTool, type TerminalDevice, type DeviceInventoryItem, type NetworkDiagnosticKind, type NetworkDiagnosticRun, type NetworkDiagnosticRunSummary } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
@@ -257,7 +258,9 @@ watch(() => [auth.user?.username, auth.user?.role], () => { clearDiagnosticSelec
             <tr v-if="item.kind === 'QUICK_PING' || item.kind === 'LONG_PING'" class="trace-row"><td colspan="6"><section class="trace-route" :aria-label="item.deviceName + (item.kind === 'LONG_PING' ? ' 长期 Ping 结果' : ' Quick Ping 结果')">
               <template v-if="item.quickPing"><div class="trace-heading"><strong>{{ item.quickPing.protocol }} · {{ item.quickPing.destinationAddress }}{{ item.quickPing.port ? ':' + item.quickPing.port : '' }}</strong><span>采样 {{ item.quickPing.sent }}/{{ item.quickPing.requestedSamples }}</span><span :class="['state-pill', item.quickPing.lost ? 'warn' : 'good']">丢失率 {{ item.quickPing.lossPercent ?? 'UNKNOWN' }}%</span><span>最小 / 平均 / 最大 {{ item.quickPing.minMs ?? '—' }} / {{ item.quickPing.averageMs ?? '—' }} / {{ item.quickPing.maxMs ?? '—' }} ms</span><span>P95 {{ item.quickPing.p95Ms ?? 'UNKNOWN' }} ms</span></div>
               <div class="quick-ping-samples" aria-label="采样时间线"><span v-for="sample in item.quickPing.samples" :key="sample.sequence" :class="['quick-ping-sample', sample.status === 'REPLIED' ? 'good' : 'lost']" :title="'#' + sample.sequence + ' · ' + new Date(sample.capturedMs).toLocaleTimeString() + ' · ' + sample.status">{{ sample.latencyMs == null ? '×' : sample.latencyMs + 'ms' }}</span></div>
-              <small class="muted">丢失率按已完成采样计算；取消后未执行的采样不计为丢失。TCP 结果代表端口连通性。</small></template><p v-else class="muted">等待采样结果。</p>
+              <small class="muted">丢失率按已完成采样计算；取消后未执行的采样不计为丢失。TCP 结果代表端口连通性。</small>
+              <PingLossEvidence v-if="item.kind === 'LONG_PING'" :run-id="diagnosticRun.id" :item="item" :identity-key="`${auth.user?.username ?? ''}:${auth.user?.role ?? ''}`" />
+              </template><p v-else class="muted">等待采样结果。</p>
             </section></td></tr>
             <tr v-if="item.kind === 'TRACEROUTE'" class="trace-row"><td colspan="6"><section :aria-label="item.deviceName + ' Traceroute 路径'" class="trace-route">
               <div class="trace-heading"><strong>逐跳路径</strong><span v-if="item.traceRoute" class="mono">目标 {{ item.traceRoute.destinationAddress }}</span><span v-if="item.traceRoute">{{ item.traceRoute.probeKind === 'WINDOWS_SYSTEM_ICMP_TRACERT' ? 'Windows 系统 ICMP' : 'ICMP' }}</span><span :class="['state-pill', item.traceRoute?.destinationReached ? 'good' : 'warn']">{{ item.traceRoute?.destinationReached ? '已到达目标' : item.state === 'QUEUED' ? '等待探测' : item.state === 'RUNNING' ? '正在探测路径' : '未到达目标' }}</span><span v-if="item.traceRoute" class="muted">已记录 {{ item.traceRoute.hops.length }} / {{ item.traceRoute.maxHops }} 跳</span></div>

@@ -858,6 +858,19 @@ app.MapGet("/api/system/diagnostics/runs/{id}", (HttpContext context, string id,
     try { return diagnostics.Get(id, CurrentIdentity(context).UserId, CurrentSiteScope(context)) is { } run ? Results.Ok(run) : Results.NotFound(); }
     catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: StatusCodes.Status403Forbidden); }
 });
+app.MapGet("/api/system/diagnostics/runs/{id}/items/{itemId}/loss-evidence/{sequence:int}",
+    (HttpContext context, string id, string itemId, int sequence, NetworkDiagnosticsService diagnostics, Catalog rawCatalog) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    if (DeviceSiteScopeGuard(context) is { } denied) return denied;
+    try
+    {
+        return PingLossEvidence.Get(rawCatalog, diagnostics, id, itemId, sequence,
+            CurrentIdentity(context).UserId, CurrentSiteScope(context)) is { } evidence
+            ? Results.Ok(evidence) : Results.NotFound();
+    }
+    catch (DeviceSiteScopeException ex) { return Results.Json(new { error = ex.Code }, statusCode: StatusCodes.Status403Forbidden); }
+});
 app.MapPost("/api/system/diagnostics/runs/{id}/cancel", (HttpContext context, string id,
     NetworkDiagnosticsService diagnostics) =>
 {
