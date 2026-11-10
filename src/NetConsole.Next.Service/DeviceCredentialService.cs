@@ -31,6 +31,18 @@ internal static class H3cDeviceCredentialService
         WindowsDpapiCredentialVault.Set(dataRoot, reference, password);
     }
 
+    internal static void EnsureWindowsDpapiAvailable(bool isWindows)
+    {
+        if (!isWindows)
+            throw new PlatformNotSupportedException("Device credential storage requires Windows DPAPI.");
+    }
+
+    internal static string StorageFailureMessage(Exception exception) => exception switch
+    {
+        PlatformNotSupportedException => "Device credential storage requires Windows DPAPI.",
+        _ => $"Credential storage is unavailable ({exception.GetType().Name}).",
+    };
+
     public static bool Revoke(string dataRoot, string reference)
     {
         if (!OperatingSystem.IsWindows()) return false;

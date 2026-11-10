@@ -650,6 +650,16 @@ app.MapPost("/api/system/devices", (HttpContext context, DeviceInventoryWriteReq
     catch (ArgumentException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "REQUEST_VALIDATION_FAILED"); return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "SITE_OR_GROUP_NOT_FOUND"); return Results.NotFound(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "CONFLICT", request.Id ?? "devices", null, Array.Empty<string>(), "DEVICE_CONFLICT"); return Results.Conflict(new { error = ex.Message }); }
+    catch (PlatformNotSupportedException ex)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+        return Results.Problem(H3cDeviceCredentialService.StorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or CryptographicException)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREATE_FAILED", "FAILED", request.Id ?? "devices", null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+        return Results.Problem(H3cDeviceCredentialService.StorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 });
 app.MapPost("/api/system/devices/connectivity-test", async (HttpContext context,
     DeviceConnectivityTestRequest request, DeviceConnectivityService connectivity, Catalog rawCatalog,
@@ -683,8 +693,16 @@ app.MapPut("/api/system/devices/{id}/credential", (HttpContext context, string i
         return Results.BadRequest(new { error = ex.Message });
     }
     catch (KeyNotFoundException) { return Results.NotFound(); }
-    catch (PlatformNotSupportedException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable); }
-    catch (IOException ex) { return Results.Problem($"Credential storage is unavailable ({ex.GetType().Name}).", statusCode: StatusCodes.Status503ServiceUnavailable); }
+    catch (PlatformNotSupportedException ex)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "FAILED", id, null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+        return Results.Problem(H3cDeviceCredentialService.StorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or CryptographicException)
+    {
+        rawCatalog.TryRecordDeviceAuditEvent(actor, "DEVICE_CREDENTIAL_REPLACE", "FAILED", id, null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+        return Results.Problem(H3cDeviceCredentialService.StorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 });
 app.MapPut("/api/system/devices/{id}", (HttpContext context, string id, DeviceInventoryWriteRequest request, Catalog rawCatalog) =>
 {
