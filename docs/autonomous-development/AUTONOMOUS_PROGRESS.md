@@ -39,7 +39,7 @@ GIT_DIFF_CHECK=PASS
 
 - Draft PR：[#49](https://github.com/wxj183589/NetConsole-Next/pull/49)
 - Head：`codex-A/device-credential-dpapi-20261111` / `62fcd16895add61b9fb86d2d805cdc54ccd5539a`
-- PR 状态：`OPEN + DRAFT`；当前无 Review、无 inline thread；GitHub Actions 两项运行中，尚未以 CI 结果宣告通过。
+- PR 状态：`OPEN + DRAFT`；当前无 Review、无 inline thread；GitHub Actions 两项已完成且均为 `success`。
 - DPAPI 修复未整批移植到 R3：该分支以 `main` 的设备凭据工作流为基础，而 R3 使用现有 Catalog/DeviceRecord 凭据边界；直接合并会带入大量旧主线差异。R3 凭据权威迁移需另行定义 schema、迁移和真实数据门禁，本检查点不冒险扩大范围。
 
 ## 未关闭事项
