@@ -1446,8 +1446,8 @@ if (settings.H3cEnabled)
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Host);
         var siteId = string.IsNullOrWhiteSpace(request.SiteId) ? "local" : request.SiteId.Trim();
         if (DeviceSiteScopeGuard(context, siteId) is { } denied) return denied;
-        if (string.IsNullOrWhiteSpace(request.Host) || string.IsNullOrWhiteSpace(request.Username))
-            return Results.BadRequest(new { error = "设备地址和用户名不能为空。" });
+        if (string.IsNullOrWhiteSpace(request.Host))
+            return Results.BadRequest(new { error = "设备地址不能为空。" });
         if (string.IsNullOrWhiteSpace(request.Password))
             return Results.BadRequest(new { error = "设备密码不能为空。" });
         var protocol = request.Protocol?.Trim().ToUpperInvariant() switch
@@ -1458,6 +1458,8 @@ if (settings.H3cEnabled)
             _ => null
         };
         if (protocol is null) return Results.BadRequest(new { error = "连接协议必须是 SSH、TELNET 或 AUTO。" });
+        if (protocol is not "TELNET" && string.IsNullOrWhiteSpace(request.Username))
+            return Results.BadRequest(new { error = "SSH 连接需要用户名；Telnet 密码模式可以留空。" });
         var port = request.Port ?? (protocol == "TELNET" ? 23 : 22);
         if (port is < 1 or > 65535) return Results.BadRequest(new { error = "端口必须在 1 到 65535 之间。" });
         var id = Guid.NewGuid().ToString("N");
@@ -1465,7 +1467,7 @@ if (settings.H3cEnabled)
         {
             var inventory = request.Inventory ?? new DeviceInventoryWriteRequest(null, request.Host.Trim(), request.Host.Trim(),
                 "H3C", "", "NETWORK_DEVICE", siteId, null, "", true, null);
-            credentials.CreateOrUpdate(new(id, request.Host.Trim(), port, request.Username.Trim(),
+            credentials.CreateOrUpdate(new(id, request.Host.Trim(), port, request.Username?.Trim() ?? string.Empty,
                 string.Empty, string.Empty, true, 0, 0,
                 H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback,
                 request.Password, SiteId: siteId), inventory, CurrentIdentity(context).Username);

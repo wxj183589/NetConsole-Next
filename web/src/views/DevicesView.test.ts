@@ -149,11 +149,11 @@ describe('device detail configuration backup entry', () => {
     expect(button(wrapper, '查看配置备份').attributes('disabled')).toBeDefined()
   })
 
-  it('does not offer an unrelated or hidden connection profile', async () => {
+  it('does not offer an unrelated or hidden connection setup', async () => {
     const value = detail(); value.terminalProfile.id = 'connection-a'
     api.getDeviceInventoryDetail.mockResolvedValue(value)
     const { wrapper } = await render()
-    expect(wrapper.text()).toContain('该设备尚未关联可用的连接资料')
+    expect(wrapper.text()).toContain('该设备尚未配置连接')
     expect(button(wrapper, '查看配置备份').attributes('disabled')).toBeDefined()
     expect(api.getH3cOperationalCapabilities).not.toHaveBeenCalled()
   })

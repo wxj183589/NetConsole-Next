@@ -12,9 +12,16 @@ SERVICE_RUNTIME_BUILD=PASS
 SERVICE_RECOVERY=NOT_VERIFIED
 UPGRADE_DATA_PRESERVATION=NOT_VERIFIED
 R3_2_D=OUT_OF_SCOPE_BY_USER
+SCM_REGISTRATION=NOT_RUN_ADMIN_REQUIRED
+SCM_START=NOT_RUN_ADMIN_REQUIRED
+SCM_STOP=NOT_RUN_ADMIN_REQUIRED
+SCM_RESTART=NOT_RUN_ADMIN_REQUIRED
+SCM_UNREGISTER=NOT_RUN_ADMIN_REQUIRED
 ```
 
 当前环境为 Windows，PowerShell 7.6.9，.NET SDK 10.0.402，当前会话不是管理员（`IsAdmin=false`）。服务 Release 构建成功，但真实 SCM 安装、启动、停止、异常恢复和升级保留数据不能在非管理员会话中安全执行。
+
+本轮运行状态证据：`D:\study\NetConsole-Next-Workspace\reports\r3.2-blocker-runtime-20261115-004027\runtime-state.json`。其中确认 `NetConsoleNext` SCM 注册不存在；PID 43524 是另一个隔离 R7.8 候选实例，不属于本轮测试进程。
 
 ## 已验证
 

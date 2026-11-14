@@ -189,7 +189,7 @@ describe('inventory batch connection tests', () => {
     expect(api.getH3cTaskPlanReport).toHaveBeenCalledTimes(1)
   })
 
-  it.each([[404, '设备或任务不存在'], [409, '当前仅支持已关联可用连接资料的独立 H3C 设备']])('reports preflight failure %s without reporting success or polling', async (status, message) => {
+  it.each([[404, '设备或任务不存在'], [409, '当前仅支持已配置连接的独立 H3C 设备']])('reports preflight failure %s without reporting success or polling', async (status, message) => {
     api.createDeviceConnectionTests.mockRejectedValue(new ApiRequestError(Number(status), 'preflight'))
     const { wrapper } = await render(); await start(wrapper)
     expect(result(wrapper).text()).toContain(message)

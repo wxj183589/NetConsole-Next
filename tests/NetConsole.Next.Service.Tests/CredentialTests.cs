@@ -34,6 +34,12 @@ internal static class CredentialTests
                 string.Empty, true, 0, 0, Password: "first-secret"));
             catalog.CreateH3cDeviceProfile(new(secondId, "192.0.2.11", 22, "reader", sharedReference,
                 string.Empty, true, 0, 0, Password: "second-secret"));
+            var passwordOnlyTelnetId = Guid.NewGuid().ToString("N");
+            catalog.CreateH3cDeviceProfile(new(passwordOnlyTelnetId, "192.0.2.12", 23, string.Empty,
+                "DEVICE_" + passwordOnlyTelnetId.ToUpperInvariant(), string.Empty, true, 0, 0,
+                TerminalProtocol: "TELNET", Password: "telnet-secret"));
+            Assert(catalog.GetH3cDeviceProfile(passwordOnlyTelnetId)!.Username == string.Empty,
+                "password-only Telnet profiles must not require a username");
             Assert(catalog.GetNetmikoVendor(firstId) == "h3c", "legacy H3C inventory selects H3C");
             using (var inventoryDb = new SqliteConnection(new SqliteConnectionStringBuilder
             {

@@ -1187,7 +1187,8 @@ internal sealed partial class Catalog(RuntimeSettings settings)
             Uri.CheckHostName(profile.Host) == UriHostNameType.Unknown)
             throw new ArgumentException("H3C host must be a valid IP address or DNS hostname.", nameof(profile));
         if (profile.Port is < 1 or > 65535) throw new ArgumentOutOfRangeException(nameof(profile), "H3C SSH port must be 1-65535.");
-        if (string.IsNullOrWhiteSpace(profile.Username) || profile.Username.Length > 64 ||
+        var usernameRequired = !string.Equals(profile.TerminalProtocol, "TELNET", StringComparison.OrdinalIgnoreCase);
+        if ((usernameRequired && string.IsNullOrWhiteSpace(profile.Username)) || profile.Username.Length > 64 ||
             profile.Username.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')))
             throw new ArgumentException("H3C username contains unsupported characters.", nameof(profile));
         var credentialReference = string.IsNullOrWhiteSpace(profile.CredentialReference)

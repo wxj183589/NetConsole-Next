@@ -8,7 +8,7 @@
 TASK=NETCONSOLE_NEXT_AUTONOMOUS_CONTINUATION
 BRANCH=codex-A/netconsole-next-r3-dual-ac
 PRODUCT_BASE=84e53533e5197aa4075c53f98cf5fb0775189a05
-PRODUCT_COMMIT=6a6239c79dcb67b7fe386d4ec9bf90610980bfc4
+PRODUCT_COMMIT=TO_BE_SET_AFTER_LOCAL_COMMIT
 STATUS=PARTIAL
 R3_PUSH=NO
 REMOTE_MAIN_MERGE=NO
@@ -63,14 +63,14 @@ R3_PUSH=NO
 REMOTE_MAIN_MERGE=NO
 RELEASE=NO
 R3_2_A=PARTIAL_ADMIN_REQUIRED
-R3_2_B=PARTIAL_AC1_AC2_ONLY
-R3_2_C=PARTIAL_GLOBAL_MUTEX_BLOCKED
+R3_2_B=PARTIAL_REAL_SW_FIT_AP_LOGIN_PASS_FACT_PERSISTENCE_NOT_VERIFIED
+R3_2_C=PARTIAL_EXISTING_ISOLATED_SERVICE_MUTEX_BLOCKED
 R3_2_D=OUT_OF_SCOPE_BY_USER
 ```
 
-本检查点完成了 Windows 环境和 LocalManager/SCM 计划审计、AC1/AC2 与 SW/FIT-AP 只读互操作探测、无线 Syslog AP 精确关联和 link-up 故障恢复代码收口。真实管理员 SCM、SW/FIT-AP 完整认证、产品 Service HTTP 级 Syslog→Raw→OperationalHealth→FaultCenter→UI 链路仍保持真实状态，不用夹具替代。
+本检查点完成了 Windows 环境和 LocalManager/SCM 计划审计、SW 直接用户名密码 SSH 登录、FIT-AP 主用 AC 确认与 Password-only Telnet 登录、无线 Syslog AP 精确关联和 link-up 故障恢复代码收口。AC1 的远程控制台命令已在隔离模拟 AC 上执行，但状态字段复查仍为 Disabled；产品端自动检查主用 AC、控制台状态和一次性开启动作，以及 Service HTTP 级 Syslog→Raw→OperationalHealth→FaultCenter→UI 链路仍保持真实状态，不用夹具替代。
 
-本轮新增报告：`R3_2_A_WINDOWS_RUNTIME.md`、`R3_2_B_H3C_INTEROPERABILITY.md`、`R3_2_C_WIRELESS_FAULT_E2E.md`、`R3_2_FINAL_ACCEPTANCE.md`。服务级 E2E 隔离证据保存在 `reports/r3.2-c-e2e-20261115-000539`；H3C 只读证据保存在 `reports/r3.2-b-h3c-20261114-235450`。
+本轮新增报告：`R3_2_A_WINDOWS_RUNTIME.md`、`R3_2_B_H3C_INTEROPERABILITY.md`、`R3_2_C_WIRELESS_FAULT_E2E.md`、`R3_2_FINAL_ACCEPTANCE.md`。服务级 E2E 隔离证据保存在 `reports/r3.2-c-e2e-20261115-000539`；真实 H3C 登录证据保存在 `reports/r3.2-direct-connection-20261115-004737`、`reports/r3.2-ac-ap-ownership-20261115-004807`、`reports/r3.2-ac-enable-console-20261115-0054` 和 `reports/r3.2-fit-ap-post-console-20261115-0058`。
 
 服务端第一次并发启动两项 Release 定向测试时共享输出文件，出现一次编译文件占用；串行重跑后通过，不计为产品失败，但保留为环境执行注意事项。
 

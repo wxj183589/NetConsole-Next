@@ -9,10 +9,11 @@ R3_2_C_STATUS=PARTIAL
 WIRELESS_SYSLOG_PROJECTION=PASS
 AP_IDENTITY_ASSOCIATION=PASS_EXACT_ONLY
 FAULT_RECOVERY_RULE=PASS_UNIT_AND_FULL_REGRESSION
-SERVICE_HTTP_E2E=BLOCKED_GLOBAL_SINGLE_INSTANCE_MUTEX
+SERVICE_HTTP_E2E=BLOCKED_EXISTING_ISOLATED_SERVICE_MUTEX
 RAW_TO_OPERATIONAL_HEALTH_E2E=NOT_VERIFIED
 OPERATIONAL_HEALTH_TO_FAULT_CENTER_E2E=NOT_VERIFIED
 BROWSER_E2E=NOT_RUN_GLOBAL_SINGLE_INSTANCE_MUTEX
+EXISTING_RUNTIME_HEALTH=PASS_READ_ONLY_ONLY
 ```
 
 ## 本轮实现
@@ -43,4 +44,6 @@ BROWSER_E2E=NOT_RUN_GLOBAL_SINGLE_INSTANCE_MUTEX
 `D:\study\NetConsole-Next-Workspace\build\r78-handoff-candidate\NetConsole.Next.Service.dll`
 
 本轮没有停止、复用或向该实例发送 Syslog。隔离尝试日志为 `service.stderr.log`，明确记录 `Another NetConsole Next service instance is already running.`；没有创建 token、没有监听端口、没有写入该候选 Raw 或 FaultCenter。待维护窗口结束并确认实例归属后，需重新执行：UDP down → sealed Raw → OperationalHealth → FaultCenter open → UDP up → FaultCenter resolved → UI evidence drill-down。
+
+本轮只读检查确认该已有候选的 `/api/system/health` 为 `HEALTHY`、SQLite `ok`、Raw `176 finalized / 0 incomplete / 0 missing`，但它来自 R7.8 构建，不是当前 `6a6239c` 产品代码；因此这些健康字段只能作为现有隔离运行实例的完整性证据，不能提升为当前 R3.2 HTTP E2E PASS。当前运行快照见 `D:\study\NetConsole-Next-Workspace\reports\r3.2-blocker-runtime-20261115-004027\runtime-state.json`。
 
