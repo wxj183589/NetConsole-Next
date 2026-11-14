@@ -45,6 +45,50 @@ internal static class OperationalHealthProjection
             .Select(index => orderedResourceIds[(offset + index) % orderedResourceIds.Count]).ToArray();
     }
 
+    internal static IReadOnlyList<OperationalFaultEvent> WirelessSyslogEvents(
+        IReadOnlyList<SyslogEntry> entries, IReadOnlyList<DeviceInventoryItem> devices, long now)
+    {
+        var byAddress = devices.Where(device => string.Equals(device.DeviceType, "AC", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(device.ManagementIp))
+            .GroupBy(device => device.ManagementIp, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+        var result = new List<OperationalFaultEvent>();
+        foreach (var entry in entries.Where(item => item.ReceivedMs <= now && now - item.ReceivedMs <= FreshnessWindowMs &&
+                     item.EventType is "MESH_LINKDOWN" or "MESH_ACTIVELINK_SWITCH" or "MESH_LINKUP" &&
+                     byAddress.ContainsKey(item.SenderIp)))
+        {
+            var device = byAddress[entry.SenderIp];
+            var peer = MeshPeer(entry.Message);
+            var resource = $"mesh:{entry.SenderIp}:{entry.EventType}:{peer ?? "UNKNOWN"}";
+            var severity = entry.EventType == "MESH_LINKUP" ? "INFO" : "WARNING";
+            var kind = entry.EventType switch
+            {
+                "MESH_LINKDOWN" => "WIRELESS_MESH_LINK_DOWN",
+                "MESH_ACTIVELINK_SWITCH" => "WIRELESS_MESH_ACTIVE_LINK_SWITCH",
+                _ => "WIRELESS_MESH_LINK_UP"
+            };
+            result.Add(new("syslog:" + entry.RawReference + ":" + entry.Line, device.Id, device.SiteId, kind,
+                severity, "OBSERVED", entry.ReceivedMs, "SYSLOG", entry.RawReference + ":" + entry.Line,
+                $"已收到经 Raw 校验的无线 Mesh Syslog（{entry.EventType}）；具体载荷请查看原始记录。", resource,
+                "syslog-local", "local"));
+        }
+        return result;
+    }
+
+    private static string? MeshPeer(string message)
+    {
+        var marker = message.IndexOf("peer MAC", StringComparison.OrdinalIgnoreCase);
+        if (marker < 0) return null;
+        var equals = message.IndexOf('=', marker);
+        if (equals < 0) return null;
+        var value = message[(equals + 1)..].TrimStart();
+        var end = value.IndexOfAny([' ', ',', ';', '\r', '\n']);
+        var candidate = end < 0 ? value : value[..end];
+        var normalized = WirelessProjectionEngine.NormalizeMac(candidate);
+        return normalized.Length == 0 ? null : normalized;
+    }
+
     internal static HashSet<string>? CompleteLldpNeighbors(H3cFactSnapshot fact)
     {
         if (fact.Kind != "lldp.table" || !fact.CollectedRawVerified || !fact.IsCurrent ||
@@ -207,6 +251,7 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
         var inventory = catalog.QueryManagedDeviceInventory(page, 25, scope: scope);
         var devices = new List<OperationalDeviceHealth>();
         var events = new List<OperationalFaultEvent>();
+        var limitations = new List<string>();
         var visible = inventory.Items.ToDictionary(d => d.Id, StringComparer.Ordinal);
         var diagnosticItems = actorUserId is null ? [] : diagnostics.List(actorUserId, scope, 20)
             .SelectMany(run => (diagnostics.Get(run.Id, actorUserId, scope)?.Items ?? [])
@@ -294,6 +339,15 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                     run.EndedMs ?? run.StartedMs ?? run.QueuedMs ?? now, "TASK_RUN", run.Id,
                     "采集任务未完整完成；按完整采集计划分别核验，不据此判定设备离线。", FaultLifecycle.CollectionResource(definition)));
         }
+        try
+        {
+            var syslog = catalog.QuerySyslog(new(FromMs: now - OperationalHealthProjection.FreshnessWindowMs,
+                ToMs: now, Limit: 500), scope);
+            events.AddRange(OperationalHealthProjection.WirelessSyslogEvents(syslog.Items, inventory.Items, now));
+            if (syslog.Partial) limitations.Add("无线 Syslog 事件仅使用已完成校验的 sealed Raw 分段；部分分段不可读时保留已读事件并标记 PARTIAL。");
+        }
+        catch (Exception ex) when (ex is TaskScopeRevokedException or IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
+        { limitations.Add($"无线 Syslog 事件暂不可用（{ex.GetType().Name}）；不以缺失日志推断故障。"); }
         // Reuse the same scoped, verified wireless runtime that drives the AP
         // workbench. Keep source identity and Raw references in its drill-down.
         var wirelessSnapshot = wireless.GetSnapshot(scope);
@@ -328,13 +382,13 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
         }
         return new(now, OperationalHealthProjection.FreshnessWindowMs, page, inventory.Total, inventory.HasMore,
             devices, events.OrderByDescending(e => e.AtMs).Take(100).ToArray(),
-            ["仅汇总当前页授权设备；最多读取 100 项近期任务、每设备 1000 条 Current Facts、显示 100 项事件。",
+            new[] { "仅汇总当前页授权设备；最多读取 100 项近期任务、每设备 1000 条 Current Facts、显示 100 项事件。",
              "CPU、内存和缺少证据的指标为 UNKNOWN；接口和 LLDP 仅代表已观测条目。",
              "Ping 仅读取最近 20 个授权诊断任务中 5 分钟内的有效采样，含运行中的 Long Ping；暂停和取消不提供确认或恢复证据，同协议与端口采用最新任务。无线故障每次检查本页最多 10 个 AP，并在后续调用间轮转。",
              "Ping 连续 3 次有效丢失确认丢包事件；末尾连续 3 次有效应答且均晚于事件才可核验恢复，累计丢包率仍保留。",
              "LLDP 消失仅对照同来源与捕获范围的最近 1000 个独立邻居身份的最后观测和完整 Current 表；身份超限会遗漏事件。",
              "配置变化仅对授权模拟器的连续完整备份检测，最新备份须在 5 分钟内；UNKNOWN、损坏及缺失版本不确认变化或稳定。",
-             "连接会话关闭或采集失败不代表设备离线。"]);
+             "连接会话关闭或采集失败不代表设备离线。" }.Concat(limitations).Distinct(StringComparer.Ordinal).ToArray());
     }
 }
 

@@ -7,6 +7,7 @@ internal static class OperationalHealthTests
     {
         MissingEvidenceIsUnknown();
         CancelledTaskIsNotFault();
+        WirelessSyslogEventsRequireExactAcIdentity();
         WirelessFaultScanRotatesBeyondFirstPage();
         OnlyFreshVerifiedEvidenceCounts();
         InterfaceAndStaleEvidence();
@@ -31,7 +32,30 @@ internal static class OperationalHealthTests
         await AuthenticationDoesNotRetry();
         await RetryBoundAndRevocation();
         await CancellationStopsRetries();
-        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=26/26 PASS");
+        Console.WriteLine("OPERATIONAL_HEALTH_TESTS=27/27 PASS");
+    }
+
+    private static void WirelessSyslogEventsRequireExactAcIdentity()
+    {
+        var ac = Device() with { DeviceType = "AC", ManagementIp = "192.0.2.10" };
+        var entries = new[]
+        {
+            new SyslogEntry(Now, "192.0.2.10", 514, 23, 5,
+                "%%10WMESH/5/MESH_LINKDOWN: peer MAC = 0200-0000-0001, reason: radio", "raw/mesh.ndjson", 7,
+                "WMESH", "MESH_LINKDOWN"),
+            new SyslogEntry(Now, "192.0.2.11", 514, 23, 5, "WMESH/5/MESH_LINKDOWN: peer MAC = 0200-0000-0002",
+                "raw/mesh.ndjson", 8, "WMESH", "MESH_LINKDOWN"),
+            new SyslogEntry(Now - OperationalHealthProjection.FreshnessWindowMs - 1, "192.0.2.10", 514, 23, 5,
+                "WMESH/5/MESH_LINKDOWN: peer MAC = 0200-0000-0003", "raw/mesh.ndjson", 9, "WMESH", "MESH_LINKDOWN"),
+            new SyslogEntry(Now, "192.0.2.10", 514, 23, 5, "WMESH/5/MESH_LINKUP: peer MAC = 0200-0000-0001",
+                "raw/mesh.ndjson", 10, "WMESH", "MESH_LINKUP")
+        };
+        var events = OperationalHealthProjection.WirelessSyslogEvents(entries, [ac], Now);
+        Assert(events.Count == 2 && events[0].Kind == "WIRELESS_MESH_LINK_DOWN" && events[0].Severity == "WARNING" &&
+            events[0].EvidenceType == "SYSLOG" && events[0].SourceAuthority == "syslog-local" &&
+            events[0].ResourceKey == "mesh:192.0.2.10:MESH_LINKDOWN:02:00:00:00:00:01" &&
+            events[1].Kind == "WIRELESS_MESH_LINK_UP" && events[1].Severity == "INFO",
+            "only fresh sealed-Syslog events from one exact AC identity become wireless evidence; foreign, stale and ambiguous senders are rejected");
     }
     private static NetworkDiagnosticItemSnapshot Probe(params string[] statuses)
     {
