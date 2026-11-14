@@ -30,4 +30,3 @@
 | Syslog 查询与封装 Raw 证据 | PASS | `SyslogQuery: 8/8 PASS`、`SyslogEvents: 6/6 PASS` |
 | 既有无线任务与 observation 发布 | PASS | `WIRELESS_TASK_CONTRACT_TESTS=5/5` 及无线组测试 |
 | 真实 AC Syslog、MESH 链路切换、长时运行 | NOT_VERIFIED | 本批未接入真实设备或真实 Syslog 接收端 |
-

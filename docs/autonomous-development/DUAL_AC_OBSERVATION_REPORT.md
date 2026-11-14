@@ -31,4 +31,3 @@ R3 已完成“同一物理 AP 的双 AC 观察保留、按来源计算当前状
 | AC 资源与事实 scope | PASS | `H3C_AC_RESOURCE_TESTS=4/4`、`H3C_FACT_SCOPE_TESTS=10/10` |
 | HA/failover/recovery 真实设备验收 | NOT_VERIFIED | 本批未连接双 AC 真实环境 |
 | 真实跨采集周期 8–24 小时历史 | NOT_VERIFIED | 未执行长时运行 |
-

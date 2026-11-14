@@ -8,28 +8,46 @@
 TASK=NETCONSOLE_NEXT_AUTONOMOUS_CONTINUATION
 BRANCH=codex-A/netconsole-next-r3-dual-ac
 PRODUCT_BASE=84e53533e5197aa4075c53f98cf5fb0775189a05
-PRODUCT_COMMIT=a9027d86281bf1a9da250becd866a431805cf134
+PRODUCT_COMMIT=e39c0f94cf2dd3162246e8bd6ba2ac2464c4122d
 STATUS=PARTIAL
 R3_PUSH=NO
 REMOTE_MAIN_MERGE=NO
 RELEASE=NO
 ```
 
-本检查点把现有 AP identity review/lifecycle 只读接口接入无线工作台。页面随 AP 精确身份和投影修订读取当前 Site claims 可见的核验状态、生命周期、Raw/Observation 证据引用和阻断原因；迟到响应不会覆盖新的 AP 选择。页面不自动确认、替换或推断离线，也不扩大 Site 范围。
+本检查点先完成 R3.1 H3C 凭据权威收敛，再继续无线业务闭环。生产 DI 现在使用设备绑定的 Windows DPAPI vault；采集、终端和完整配置读取统一经 `IH3cCredentialAuthority`，profile 写入具备迁移门禁、失败脱敏审计和跨 DPAPI/Catalog 补偿。旧 Catalog 明文不会自动批量迁移，必须逐设备显式重录。此前 AP identity review/lifecycle 只读接口仍保留：页面随 AP 精确身份和投影修订读取当前 Site claims 可见的核验状态、生命周期、Raw/Observation 证据引用和阻断原因；迟到响应不会覆盖新的 AP 选择。
 
 主要修改：
 
 - `web/src/api/client.ts`：补充身份核验和生命周期响应类型及读取 API。
 - `web/src/views/WirelessView.vue`：增加 AP 身份核验卡片、证据和阻断原因展示、生命周期状态映射及竞态保护。
 - `web/src/views/WirelessView.test.ts`：增加候选身份、生命周期和精确证据展示回归。
+- `src/NetConsole.Next.Service/H3cCredentialAuthority.cs`：增加 DPAPI authority、旧 Catalog 迁移门禁及写入补偿。
+- `src/NetConsole.Next.Service/Program.cs`：H3C profile 写入统一走 authority，存储失败返回脱敏 503 并写入失败审计。
+- `src/NetConsole.Next.Service/H3cSsh.cs`、`SimulatorConfigurationService.cs`：采集、终端和完整配置读取切换到统一 authority。
+- `src/NetConsole.Next.Service/OperationalHealthService.cs`：将 sealed Syslog 无线 MESH 事件接入现有 OperationalHealth/FaultCenter 证据链，限定精确 AC、freshness、Raw 引用和脱敏详情。
+- `tests/NetConsole.Next.Service.Tests/OperationalHealthTests.cs`：增加无线 Syslog 精确 AC 身份、freshness、peer MAC 和 severity 回归。
+- `docs/autonomous-development/CREDENTIAL_AUTHORITY_REPORT.md`、`CREDENTIAL_MIGRATION_DECISION.md`、`R3_DPAPI_INTEGRATION_REPORT.md`：记录权威、迁移和集成边界。
+- `docs/autonomous-development/AP_IDENTITY_LIFECYCLE_REPORT.md`、`DUAL_AC_OBSERVATION_REPORT.md`、`WIRELESS_FAULT_INTEGRATION_REPORT.md`：记录生命周期、双 AC 观察和故障证据闭环。
 
 ## 验证结果
 
 ```text
 WEB_WIRELESS_VITEST=PASS (25/25)
 WEB_TYPECHECK=PASS
+WEB_FULL_VITEST=PASS (36 files / 451 tests)
+WEB_BUILD=PASS (Vite + terminal bundle)
 SERVICE_WIRELESS_TESTS=PASS (group contract; cache 4/4; replacement 3/3; identity contract 3/3; projection; runtime 14/14)
 SERVICE_IDENTITY_LIFECYCLE_TESTS=PASS (5/5)
+DPAPI_AUTHORITY_TESTS=PASS (explicit migration gate; device-bound key; Catalog redaction; provider resolution; revoke)
+H3C_CONNECTION_POLICY_TESTS=PASS (8 groups)
+SIMULATOR_CONFIGURATION_TESTS=PASS (28/28)
+H3C_ONBOARD_SITE_TESTS=PASS
+WIRELESS_SYSLOG_FAULT_CHAIN=PASS (OperationalHealth 27/27; FaultCenter 30/30; SyslogQuery 8/8; SyslogEvents 6/6)
+WIRELESS_DUAL_AC_SCOPE=PASS (projection/runtime/identity/task/AC-resource/fact-scope contracts)
+SERVICE_FULL_REGRESSION=PASS (default SchedulerTests; Release build 0 errors/0 warnings)
+R3_FULL_REGRESSION_DOC=PASS (R3_FULL_REGRESSION.md)
+RUNTIME_HANDOFF_DOC=PASS (RUNTIME_HANDOFF.md)
 GIT_DIFF_CHECK=PASS
 ```
 
@@ -46,9 +64,12 @@ GIT_DIFF_CHECK=PASS
 
 - 真实设备、双 AC HA/failover/recovery、Windows SCM、8–24 小时运行、GUI 安装和原生 125%：`NOT_VERIFIED` 或 `PENDING`，不以离线夹具替代。
 - AP identity 权威写入虽已有受隔离临时根保护的服务端合同和定向测试，生产 schema-backed authority、merge/split、replacement revoke 和跨进程并发仍未关闭。
+- H3C 旧 Catalog 明文的真实数据迁移未执行；ZTE、Linux、Jump Host 仍是独立凭据存储边界，不能宣称全产品凭据已统一。
+- 无线 Syslog 目前只验证 sealed 本地 Raw 与离线/代码合同；真实 AC MESH 事件、双 AC HA/failover/recovery、长时状态历史和真实 FaultCenter 恢复仍为 `NOT_VERIFIED`。
+- 本轮前端构建生成的 `wwwroot/app/assets` 静态资源未纳入产品提交，既有未跟踪资源未修改、未清理；构建后的 `wwwroot/index.html` 已恢复到提交前引用，避免把构建副作用混入本批。
 - `git fetch github` 本轮因网络连接被重置，`github/main` 未宣称已刷新；R3 不 Push、不合并远端 main、不发布。
 - 主仓库既有 19 个未跟踪静态资源未修改、未暂存、未清理。
 
 ## 下一任务
 
-先观察 Draft PR #49 的 CI 结果并处理明确失败；随后在不改变 R3 无线事实边界的前提下，继续评审 AP identity 权威写入的生产持久化边界，或选择可由现有证据直接验证的无线业务缺口。任何真实设备和生产数据动作仍需单独门禁。
+执行 R3 服务端与前端全量回归并形成 `R3_FULL_REGRESSION.md`、`RUNTIME_HANDOFF.md`；随后继续评审 AP identity 权威写入的生产持久化边界。任何真实设备和生产数据动作仍需单独门禁。

@@ -31,4 +31,3 @@ R3 已具备可复核的 AP 身份核验、生命周期状态和证据引用链�
 ## 数据与安全边界
 
 生命周期写入文件使用原子临时文件替换，并拒绝 `D:\NetConsoleData`、`D:\NetConsoleData-dev`、Reparse Point 和非临时根。当前实现只适合作为隔离候选 authority；在生产化前仍需定义正式 schema、迁移、并发、备份、回滚和 merge/split 审批门禁。
-
