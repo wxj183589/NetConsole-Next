@@ -1,6 +1,6 @@
 # NetConsole-Next 自主连续开发进度
 
-更新时间：2026-11-14（Asia/Shanghai）
+更新时间：2026-11-15（Asia/Shanghai）
 
 ## 当前检查点
 
@@ -8,7 +8,7 @@
 TASK=NETCONSOLE_NEXT_AUTONOMOUS_CONTINUATION
 BRANCH=codex-A/netconsole-next-r3-dual-ac
 PRODUCT_BASE=84e53533e5197aa4075c53f98cf5fb0775189a05
-PRODUCT_COMMIT=e39c0f94cf2dd3162246e8bd6ba2ac2464c4122d
+PRODUCT_COMMIT=6a6239c79dcb67b7fe386d4ec9bf90610980bfc4
 STATUS=PARTIAL
 R3_PUSH=NO
 REMOTE_MAIN_MERGE=NO
@@ -50,6 +50,27 @@ R3_FULL_REGRESSION_DOC=PASS (R3_FULL_REGRESSION.md)
 RUNTIME_HANDOFF_DOC=PASS (RUNTIME_HANDOFF.md)
 GIT_DIFF_CHECK=PASS
 ```
+
+## R3.2 检查点
+
+```text
+TASK=NETCONSOLE_NEXT_R3_2_WINDOWS_H3C_WIRELESS
+PHASE=R3.2
+SCOPE=A+B+C
+PRODUCT_COMMIT=6a6239c79dcb67b7fe386d4ec9bf90610980bfc4
+STATUS=PARTIAL
+R3_PUSH=NO
+REMOTE_MAIN_MERGE=NO
+RELEASE=NO
+R3_2_A=PARTIAL_ADMIN_REQUIRED
+R3_2_B=PARTIAL_AC1_AC2_ONLY
+R3_2_C=PARTIAL_GLOBAL_MUTEX_BLOCKED
+R3_2_D=OUT_OF_SCOPE_BY_USER
+```
+
+本检查点完成了 Windows 环境和 LocalManager/SCM 计划审计、AC1/AC2 与 SW/FIT-AP 只读互操作探测、无线 Syslog AP 精确关联和 link-up 故障恢复代码收口。真实管理员 SCM、SW/FIT-AP 完整认证、产品 Service HTTP 级 Syslog→Raw→OperationalHealth→FaultCenter→UI 链路仍保持真实状态，不用夹具替代。
+
+本轮新增报告：`R3_2_A_WINDOWS_RUNTIME.md`、`R3_2_B_H3C_INTEROPERABILITY.md`、`R3_2_C_WIRELESS_FAULT_E2E.md`、`R3_2_FINAL_ACCEPTANCE.md`。服务级 E2E 隔离证据保存在 `reports/r3.2-c-e2e-20261115-000539`；H3C 只读证据保存在 `reports/r3.2-b-h3c-20261114-235450`。
 
 服务端第一次并发启动两项 Release 定向测试时共享输出文件，出现一次编译文件占用；串行重跑后通过，不计为产品失败，但保留为环境执行注意事项。
 
