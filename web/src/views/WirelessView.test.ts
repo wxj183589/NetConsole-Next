@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   getWirelessAcDomains: vi.fn(), getWirelessApGroup: vi.fn(), getWirelessApGroups: vi.fn(),
   getWirelessApResources: vi.fn(), getWirelessCollectionManifest: vi.fn(),
   getWirelessCollectionManifests: vi.fn(), getWirelessRuntimeState: vi.fn(),
+  getWirelessIdentityReview: vi.fn(), getWirelessIdentityLifecycle: vi.fn(),
 }))
 vi.mock('../api/client', () => api)
 vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn() } }))
@@ -61,6 +62,8 @@ describe('AP group source identity', () => {
     api.getWirelessCollectionManifests.mockResolvedValue(page([]))
     api.getWirelessApGroups.mockResolvedValue(page([]))
     api.getWirelessApGroup.mockImplementation(async (id: string) => detail(group(id)))
+    api.getWirelessIdentityReview.mockResolvedValue({ resourceId: 'physical-ap', identityStatus: 'CONFIRMED', identityRevision: 'identity-revision', scopeStatus: 'FULL', canConfirm: false, canReject: false, decisionBlockReason: 'IDENTITY_ALREADY_CONFIRMED', conflictReason: null, evidenceRefs: ['raw:identity'] })
+    api.getWirelessIdentityLifecycle.mockResolvedValue({ resourceId: 'physical-ap', state: 'PENDING_REVIEW', revision: 'lifecycle-revision', replacementResourceId: null, evidenceRefs: ['raw:identity'], reason: null, actor: null, decidedMs: null, sourceRevision: 'identity-revision', history: [] })
   })
 
   function observedResource(revision: string): WirelessApResource {
@@ -107,6 +110,24 @@ describe('AP group source identity', () => {
     expect(wrapper.findAll('.wireless-stats .stat-card')[2].find('.stat-card__value').text()).toBe('运行主')
     expect(wrapper.find('.wireless-members').text()).toContain('运行备')
     wrapper.unmount()
+  })
+
+  it('shows identity review evidence and lifecycle state without inventing a decision', async () => {
+    api.getWirelessApResources.mockResolvedValue(page([observedResource('identity-ref')]));
+    api.getWirelessIdentityReview.mockResolvedValue({ resourceId: 'physical-ap', identityStatus: 'CANDIDATE', identityRevision: 'identity-revision', scopeStatus: 'FULL', canConfirm: false, canReject: true, decisionBlockReason: 'INCOMPLETE_EXACT_EVIDENCE', conflictReason: null, evidenceRefs: ['fact:serial', 'fact:mac'] })
+    api.getWirelessIdentityLifecycle.mockResolvedValue({ resourceId: 'physical-ap', state: 'PENDING_REVIEW', revision: 'lifecycle-revision', replacementResourceId: null, evidenceRefs: ['fact:serial', 'fact:mac'], reason: null, actor: null, decidedMs: null, sourceRevision: 'identity-revision', history: [] })
+
+    const wrapper = render()
+    await flushPromises()
+
+    const card = wrapper.get('.wireless-identity')
+    expect(card.text()).toContain('AP 身份核验')
+    expect(card.text()).toContain('候选')
+    expect(card.text()).toContain('待核验')
+    expect(card.text()).toContain('fact:serial / fact:mac')
+    expect(card.text()).toContain('INCOMPLETE_EXACT_EVIDENCE')
+    expect(api.getWirelessIdentityReview).toHaveBeenCalledWith('physical-ap')
+    expect(api.getWirelessIdentityLifecycle).toHaveBeenCalledWith('physical-ap')
   })
 
   it('exports loaded effective history and blocks export after its refresh fails', async () => {

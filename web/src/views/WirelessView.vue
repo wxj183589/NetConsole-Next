@@ -19,6 +19,8 @@ import {
   getWirelessApResources,
   getWirelessCollectionManifest,
   getWirelessCollectionManifests,
+  getWirelessIdentityLifecycle,
+  getWirelessIdentityReview,
   getWirelessRuntimeState,
   type WirelessAcDomain,
   type WirelessApGroup,
@@ -26,6 +28,8 @@ import {
   type WirelessApResource,
   type WirelessCollectionManifest,
   type WirelessCollectionManifestDetail,
+  type WirelessIdentityLifecycle,
+  type WirelessIdentityReview,
   type WirelessRuntimeState,
   type WirelessTaskPlan,
   type H3cTaskPlan,
@@ -84,8 +88,13 @@ const stateFilter = ref('')
 const runtimeState = ref<WirelessRuntimeState | null>(null)
 const runtimeLoading = ref(false)
 const runtimeError = ref('')
+const identityReview = ref<WirelessIdentityReview | null>(null)
+const identityLifecycle = ref<WirelessIdentityLifecycle | null>(null)
+const identityLoading = ref(false)
+const identityError = ref('')
 let runtimeGeneration = 0
 let runtimeController: AbortController | null = null
+let identityGeneration = 0
 let refreshGeneration = 0
 let groupGeneration = 0
 let groupDetailGeneration = 0
@@ -160,6 +169,7 @@ watch([selectedDomainId, selectedAcId], () => {
   collectionDetail.value = null; collectionDetailError.value = ''; ++collectionDetailGeneration
 })
 watch([() => selectedResource.value?.id, () => selectedResource.value?.projectionRevision, selectedDomainId, selectedAcId], () => { void loadRuntime() })
+watch([() => selectedResource.value?.id, () => selectedResource.value?.projectionRevision, selectedDomainId, selectedAcId], () => { void loadIdentityState() })
 
 async function loadRuntime(): Promise<void> {
   const generation = ++runtimeGeneration
@@ -179,7 +189,29 @@ async function loadRuntime(): Promise<void> {
     if (generation === runtimeGeneration) runtimeError.value = cause instanceof Error ? cause.message : '状态历史读取失败'
   } finally { if (generation === runtimeGeneration) runtimeLoading.value = false }
 }
-onBeforeUnmount(() => { ++runtimeGeneration; runtimeController?.abort(); ++taskDetailGeneration; clearTimeout(taskPoll) })
+async function loadIdentityState(): Promise<void> {
+  const generation = ++identityGeneration
+  identityReview.value = null
+  identityLifecycle.value = null
+  identityLoading.value = false
+  identityError.value = ''
+  const resource = selectedResource.value
+  if (!resource) { identityLoading.value = false; return }
+  identityLoading.value = true
+  const [reviewResult, lifecycleResult] = await Promise.allSettled([
+    getWirelessIdentityReview(resource.id),
+    getWirelessIdentityLifecycle(resource.id),
+  ])
+  if (generation !== identityGeneration) return
+  const failures: string[] = []
+  if (reviewResult.status === 'fulfilled') identityReview.value = reviewResult.value
+  else failures.push('身份核验')
+  if (lifecycleResult.status === 'fulfilled') identityLifecycle.value = lifecycleResult.value
+  else failures.push('生命周期')
+  if (failures.length) identityError.value = `${failures.join('、')}读取失败，当前不显示未经核验的身份结论。`
+  identityLoading.value = false
+}
+onBeforeUnmount(() => { ++runtimeGeneration; ++identityGeneration; runtimeController?.abort(); ++taskDetailGeneration; clearTimeout(taskPoll) })
 const domainApCount = computed(() => visibleResources.value.length)
 const scopeLabel = computed(() => selectedDomain.value?.siteScopeStatus || '—')
 const runtimeLabel = computed(() => {
@@ -359,6 +391,11 @@ async function refresh(): Promise<void> {
   ++runtimeGeneration
   runtimeController?.abort()
   runtimeState.value = null
+  ++identityGeneration
+  identityReview.value = null
+  identityLifecycle.value = null
+  identityLoading.value = false
+  identityError.value = ''
   loading.value = true
   error.value = ''
   groupError.value = ''
@@ -411,10 +448,10 @@ async function refresh(): Promise<void> {
 }
 function formatTime(ms?: number | null): string { return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—' }
 function stateClass(state: string): string {
-  return ['RUNNING_MASTER', 'RUNNING_BACKUP', 'CONFIRMED'].includes(state) ? 'good' : ['UNKNOWN', 'STALE', 'CANDIDATE', 'EVIDENCE_PENDING'].includes(state) ? 'warn' : ['OFFLINE', 'CONFLICT'].includes(state) ? 'bad' : 'neutral'
+  return ['RUNNING_MASTER', 'RUNNING_BACKUP', 'CONFIRMED', 'ACCEPTED'].includes(state) ? 'good' : ['UNKNOWN', 'STALE', 'CANDIDATE', 'EVIDENCE_PENDING', 'PENDING_REVIEW'].includes(state) ? 'warn' : ['OFFLINE', 'CONFLICT', 'REJECTED', 'SUPERSEDED'].includes(state) ? 'bad' : 'neutral'
 }
 function stateText(state: string): string {
-  return ({ RUNNING_MASTER: '运行主', RUNNING_BACKUP: '运行备', OFFLINE: '离线', UNKNOWN: '未知', STALE: '过期', CONFLICT: '冲突', CANDIDATE: '候选', CONFIRMED: '已确认', EVIDENCE_PENDING: '证据待定' } as Record<string, string>)[state] || state
+  return ({ RUNNING_MASTER: '运行主', RUNNING_BACKUP: '运行备', OFFLINE: '离线', UNKNOWN: '未知', STALE: '过期', CONFLICT: '冲突', CANDIDATE: '候选', CONFIRMED: '已确认', EVIDENCE_PENDING: '证据待定', PENDING_REVIEW: '待核验', ACCEPTED: '已接受', REJECTED: '已拒绝', SUPERSEDED: '已替换' } as Record<string, string>)[state] || state
 }
 function outcomeText(outcome: string): string {
   return ({ SUCCESS: '有效采集', FAILED: '采集失败', EMPTY: '空表', PARTIAL: '采集不完整', UNSUPPORTED: '命令不支持',
@@ -559,6 +596,25 @@ onActivated(() => {
             </section>
             <section class="card"><div class="card__header"><h2>AP 来源状态</h2><span class="state-pill info">{{ selectedResource ? viewObservations(selectedResource).length : 0 }} 条来源</span></div><el-alert v-if="selectedResource?.stateConflictReason" title="来源状态存在冲突，请核对各 AC 的原始观察" type="warning" :closable="false" /><div v-if="selectedResource" class="wireless-observation-list"><article v-for="observation in viewObservations(selectedResource)" :key="observation.id" class="wireless-observation"><div><strong>{{ observation.sourceAcDeviceId }}</strong><span class="state-pill" :class="stateClass(observation.normalizedState)">{{ stateText(observation.normalizedState) }}</span></div><small>最近采集 {{ formatTime(observation.capturedMs) }}</small><details class="wireless-observation__evidence"><summary>采集证据</summary><dl><dt>来源站点</dt><dd>{{ observation.sourceSiteId }}</dd><dt>设备原始状态</dt><dd>{{ observation.rawState }}</dd><dt>状态关联</dt><dd>{{ observation.relationStatus }}</dd><dt>解析版本</dt><dd>{{ observation.parserRevision }}</dd><dt>事实引用</dt><dd><code>{{ observation.rawManifestRef }}</code></dd></dl></details></article></div><div v-else class="empty-state"><div><strong>选择一条 AP</strong><small>查看每台 AC 独立采集到的运行状态。</small></div></div></section>
           </div>
+          <section v-if="selectedResource" class="card wireless-identity" v-loading="identityLoading">
+            <div class="card__header"><h2>AP 身份核验</h2><span class="state-pill" :class="stateClass(identityLifecycle?.state || identityReview?.identityStatus || selectedResource.identityStatus)">{{ stateText(identityLifecycle?.state || identityReview?.identityStatus || selectedResource.identityStatus) }}</span></div>
+            <el-alert v-if="identityError" :title="identityError" type="warning" :closable="false" show-icon />
+            <template v-else-if="identityReview">
+              <div class="wireless-state-values wireless-identity-values">
+                <div><small>当前身份</small><strong>{{ stateText(identityReview.identityStatus) }}</strong><span>{{ identityReview.scopeStatus }}</span></div>
+                <div><small>生命周期</small><strong>{{ stateText(identityLifecycle?.state || 'PENDING_REVIEW') }}</strong><span>{{ identityLifecycle?.actor || '尚无决策' }}</span></div>
+                <div><small>精确证据</small><strong>{{ identityReview.evidenceRefs.length }} 条</strong><span>{{ identityReview.canConfirm ? '满足确认前置条件' : '仍需人工核验' }}</span></div>
+              </div>
+              <dl class="wireless-identity-provenance">
+                <dt>核验修订</dt><dd><code>{{ identityReview.identityRevision }}</code></dd>
+                <dt>冲突原因</dt><dd>{{ identityReview.conflictReason || '无' }}</dd>
+                <dt>阻断原因</dt><dd>{{ identityReview.decisionBlockReason || '无' }}</dd>
+                <dt>证据引用</dt><dd><code>{{ identityReview.evidenceRefs.join(' / ') || '暂无可见证据' }}</code></dd>
+                <dt>生命周期修订</dt><dd><code>{{ identityLifecycle?.revision || '尚无持久决策' }}</code></dd>
+              </dl>
+              <p class="wireless-runtime-note">此处只展示当前 Site claims 可见的精确 Serial/MAC、Observation 和 Raw 引用；不会因缺少证据自动确认、替换或推断离线。</p>
+            </template>
+          </section>
           <section v-if="selectedResource" class="card wireless-runtime" v-loading="runtimeLoading">
             <div class="card__header"><h2>状态与最近变化</h2><div class="wireless-toolbar"><span class="state-pill" :class="stateClass(runtimeState?.normalizedState || 'UNKNOWN')">{{ stateText(runtimeState?.normalizedState || 'UNKNOWN') }}</span><el-button size="small" :disabled="runtimeLoading || !!runtimeError || !runtimeState || runtimeState.resourceId !== selectedResource.id" @click="exportRuntimeHistory">导出 AP 状态历史 CSV</el-button></div></div>
             <el-alert v-if="runtimeError" :title="'状态历史读取失败：' + runtimeError" type="error" :closable="false" show-icon />
@@ -623,6 +679,10 @@ onActivated(() => {
 .wireless-member-card code { color: var(--nc-text); font-size: 10px; }
 .wireless-table tr { cursor: pointer; }
 .wireless-table tr.selected td { background: var(--nc-primary-soft); }
+.wireless-identity-values { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 14px; }
+.wireless-identity-provenance { display: grid; grid-template-columns: minmax(100px, 0.25fr) minmax(0, 1fr); gap: 7px 12px; margin: 0 14px 12px; font-size: 11px; }
+.wireless-identity-provenance dt { color: var(--nc-text-muted); }
+.wireless-identity-provenance dd { margin: 0; overflow-wrap: anywhere; }
 .wireless-toolbar input { width: 190px; border: 1px solid var(--nc-border); border-radius: 5px; padding: 6px 8px; color: var(--nc-text); background: var(--nc-surface); font-size: 11px; }
 .source-tag { display: inline-block; margin: 1px 3px 1px 0; border-radius: 4px; padding: 2px 4px; color: var(--nc-primary); background: var(--nc-primary-soft); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
 .wireless-group-list, .wireless-observation-list { padding: 0 14px 14px; }

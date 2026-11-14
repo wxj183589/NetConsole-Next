@@ -843,6 +843,43 @@ export interface WirelessApResource {
   observations: WirelessObservation[]
 }
 
+export interface WirelessIdentityReview {
+  resourceId: string
+  identityStatus: string
+  identityRevision: string
+  scopeStatus: string
+  canConfirm: boolean
+  canReject: boolean
+  decisionBlockReason?: string | null
+  conflictReason?: string | null
+  evidenceRefs: string[]
+}
+
+export interface WirelessIdentityLifecycleEvent {
+  fromState: string
+  toState: string
+  sourceRevision: string
+  revision: string
+  replacementResourceId?: string | null
+  evidenceRefs: string[]
+  reason: string
+  actor: string
+  decidedMs: number
+}
+
+export interface WirelessIdentityLifecycle {
+  resourceId: string
+  state: string
+  revision: string
+  replacementResourceId?: string | null
+  evidenceRefs: string[]
+  reason?: string | null
+  actor?: string | null
+  decidedMs?: number | null
+  sourceRevision?: string | null
+  history: WirelessIdentityLifecycleEvent[]
+}
+
 export interface WirelessApGroup {
   id: string
   sourceAcDeviceId: string
@@ -1340,6 +1377,12 @@ export function getWirelessApResources(params: { page?: number; pageSize?: numbe
 }
 export function getWirelessApResource(id: string): Promise<WirelessApResource> {
   return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}`)
+}
+export function getWirelessIdentityReview(id: string): Promise<WirelessIdentityReview> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/identity-review`)
+}
+export function getWirelessIdentityLifecycle(id: string): Promise<WirelessIdentityLifecycle> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/identity-lifecycle`)
 }
 export function getWirelessRuntimeState(id: string, params: { sourceAcId?: string; domainId?: string } = {}, signal?: AbortSignal): Promise<WirelessRuntimeState> {
   return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/runtime-state`, params), { signal })
