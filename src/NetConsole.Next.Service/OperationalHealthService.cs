@@ -47,6 +47,11 @@ internal static class OperationalHealthProjection
 
     internal static IReadOnlyList<OperationalFaultEvent> WirelessSyslogEvents(
         IReadOnlyList<SyslogEntry> entries, IReadOnlyList<DeviceInventoryItem> devices, long now)
+        => WirelessSyslogEvents(entries, devices, [], now);
+
+    internal static IReadOnlyList<OperationalFaultEvent> WirelessSyslogEvents(
+        IReadOnlyList<SyslogEntry> entries, IReadOnlyList<DeviceInventoryItem> devices,
+        IReadOnlyList<WirelessApResourceView> resources, long now)
     {
         var byAddress = devices.Where(device => string.Equals(device.DeviceType, "AC", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(device.ManagementIp))
@@ -60,7 +65,12 @@ internal static class OperationalHealthProjection
         {
             var device = byAddress[entry.SenderIp];
             var peer = MeshPeer(entry.Message);
-            var resource = $"mesh:{entry.SenderIp}:{entry.EventType}:{peer ?? "UNKNOWN"}";
+            var exactResources = peer is null ? [] : resources.Where(resource =>
+                resource.Observations.Any(observation => observation.SourceAcDeviceId == device.Id &&
+                    observation.SourceSiteId == device.SiteId && observation.NormalizedMacSet.Contains(peer, StringComparer.Ordinal)))
+                .ToArray();
+            var resource = exactResources.Length == 1 ? $"ap:{exactResources[0].Id}" :
+                $"mesh:{entry.SenderIp}:{peer ?? "UNKNOWN"}";
             var severity = entry.EventType == "MESH_LINKUP" ? "INFO" : "WARNING";
             var kind = entry.EventType switch
             {
@@ -70,7 +80,9 @@ internal static class OperationalHealthProjection
             };
             result.Add(new("syslog:" + entry.RawReference + ":" + entry.Line, device.Id, device.SiteId, kind,
                 severity, "OBSERVED", entry.ReceivedMs, "SYSLOG", entry.RawReference + ":" + entry.Line,
-                $"已收到经 Raw 校验的无线 Mesh Syslog（{entry.EventType}）；具体载荷请查看原始记录。", resource,
+                exactResources.Length == 1
+                    ? $"已收到经 Raw 校验的无线 Mesh Syslog（{entry.EventType}）；已按发送 AC、站点和精确 MAC 关联 AP 资源。具体载荷请查看原始记录。"
+                    : $"已收到经 Raw 校验的无线 Mesh Syslog（{entry.EventType}）；AP 身份未能形成唯一精确关联，具体载荷请查看原始记录。", resource,
                 "syslog-local", "local"));
         }
         return result;
@@ -339,21 +351,24 @@ internal sealed class OperationalHealthService(Catalog catalog, WirelessReadMode
                     run.EndedMs ?? run.StartedMs ?? run.QueuedMs ?? now, "TASK_RUN", run.Id,
                     "采集任务未完整完成；按完整采集计划分别核验，不据此判定设备离线。", FaultLifecycle.CollectionResource(definition)));
         }
+        // Resolve AP identities from the same scoped projection used by the
+        // wireless workbench before publishing Syslog events. A missing or
+        // ambiguous MAC remains an explicit UNKNOWN resource.
+        var wirelessSnapshot = wireless.GetSnapshot(scope);
+        var wirelessResources = wirelessSnapshot.ApResources
+            .Where(r => r.Observations.Any(o => visible.ContainsKey(o.SourceAcDeviceId)))
+            .OrderBy(r => r.Id, StringComparer.Ordinal).ToArray();
         try
         {
             var syslog = catalog.QuerySyslog(new(FromMs: now - OperationalHealthProjection.FreshnessWindowMs,
                 ToMs: now, Limit: 500), scope);
-            events.AddRange(OperationalHealthProjection.WirelessSyslogEvents(syslog.Items, inventory.Items, now));
+            events.AddRange(OperationalHealthProjection.WirelessSyslogEvents(syslog.Items, inventory.Items, wirelessResources, now));
             if (syslog.Partial) limitations.Add("无线 Syslog 事件仅使用已完成校验的 sealed Raw 分段；部分分段不可读时保留已读事件并标记 PARTIAL。");
         }
         catch (Exception ex) when (ex is TaskScopeRevokedException or IOException or UnauthorizedAccessException or InvalidDataException or Microsoft.Data.Sqlite.SqliteException)
         { limitations.Add($"无线 Syslog 事件暂不可用（{ex.GetType().Name}）；不以缺失日志推断故障。"); }
         // Reuse the same scoped, verified wireless runtime that drives the AP
         // workbench. Keep source identity and Raw references in its drill-down.
-        var wirelessSnapshot = wireless.GetSnapshot(scope);
-        var wirelessResources = wirelessSnapshot.ApResources
-            .Where(r => r.Observations.Any(o => visible.ContainsKey(o.SourceAcDeviceId)))
-            .OrderBy(r => r.Id, StringComparer.Ordinal).ToArray();
         var scanStart = Interlocked.Add(ref _wirelessFaultScanCursor, OperationalHealthProjection.WirelessFaultResourcesPerScan) -
             OperationalHealthProjection.WirelessFaultResourcesPerScan;
         var selectedIds = OperationalHealthProjection.SelectWirelessFaultResourceIds(

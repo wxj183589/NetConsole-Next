@@ -176,6 +176,30 @@ internal static class FaultLifecycle
         runtime.Sources.All(s => s.LatestOutcome == "SUCCESS" && s.Current?.VerificationLevel == "LIVE_VERIFIED" &&
             s.Current.CapturedMs > item.LastSeenMs && s.Current.CapturedMs <= now && now - s.Current.CapturedMs <= runtime.FreshnessWindowMs) &&
         runtime.Sources.Any(s => s.SourceAcDeviceId == item.DeviceId && s.SourceSiteId == item.SiteId) ? runtime.SourceRevision : null;
+
+    internal static string? FreshWirelessSyslogRecoveryEvidence(FaultIncident item,
+        OperationalFaultEvent recovery, long now) =>
+        item.Kind is "WIRELESS_MESH_LINK_DOWN" or "WIRELESS_MESH_ACTIVE_LINK_SWITCH" &&
+        recovery.Kind == "WIRELESS_MESH_LINK_UP" && recovery.Severity == "INFO" &&
+        recovery.EvidenceType == "SYSLOG" && recovery.DeviceId == item.DeviceId &&
+        recovery.SiteId == item.SiteId && recovery.ResourceKey == item.ResourceKey &&
+        recovery.SourceAuthority == item.SourceAuthority && recovery.CapturedScopeKey == item.CapturedScopeKey &&
+        recovery.AtMs > item.LastSeenMs && recovery.AtMs <= now &&
+        now - recovery.AtMs <= OperationalHealthProjection.FreshnessWindowMs
+            ? recovery.EvidenceId : null;
+
+    internal static FaultIncident ResolveFromWirelessSyslog(FaultIncident item,
+        OperationalFaultEvent recovery, string actor, long now, string evidenceId) =>
+        item with
+        {
+            State = "RESOLVED",
+            LastSeenMs = recovery.AtMs,
+            EvidenceType = recovery.EvidenceType,
+            EvidenceId = evidenceId,
+            Detail = recovery.Detail,
+            History = Append(item, new(now, "RECOVERY_VERIFIED", actor, evidenceId,
+                "无线 Mesh Syslog 已按同一 AC、站点和 AP 资源确认链路恢复。"))
+        };
 }
 
 internal sealed class FaultCenterService : BackgroundService
@@ -239,10 +263,24 @@ internal sealed class FaultCenterService : BackgroundService
             Available();
             var next = _store.Current.Incidents.ToDictionary(i => i.Id, StringComparer.Ordinal);
             var changed = false;
-            foreach (var item in snapshot.Events.Where(e => e.Severity != "INFO").OrderBy(e => e.AtMs))
+            foreach (var item in snapshot.Events.OrderBy(e => e.AtMs).ThenBy(e => e.Id, StringComparer.Ordinal))
             {
                 var device = snapshot.Devices.FirstOrDefault(d => d.DeviceId == item.DeviceId);
                 if (device?.ProfileId is null) continue;
+
+                if (item.Kind == "WIRELESS_MESH_LINK_UP")
+                {
+                    foreach (var recoveryOld in next.Values.Where(candidate => candidate.ProfileId == device.ProfileId &&
+                        candidate.State != "RESOLVED" &&
+                        FaultLifecycle.FreshWirelessSyslogRecoveryEvidence(candidate, item, snapshot.AsOfMs) is not null).ToArray())
+                    {
+                        var evidence = FaultLifecycle.FreshWirelessSyslogRecoveryEvidence(recoveryOld, item, snapshot.AsOfMs)!;
+                        next[recoveryOld.Id] = FaultLifecycle.ResolveFromWirelessSyslog(recoveryOld, item, actorId, snapshot.AsOfMs, evidence);
+                        changed = true;
+                    }
+                    continue;
+                }
+                if (item.Severity == "INFO") continue;
                 var id = FaultLifecycle.Fingerprint(item, device.ProfileId);
                 next.TryGetValue(id, out var old);
                 var updated = FaultLifecycle.Observe(old, item, device.ProfileId, actorId, snapshot.AsOfMs);

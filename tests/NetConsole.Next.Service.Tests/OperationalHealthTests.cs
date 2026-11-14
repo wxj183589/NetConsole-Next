@@ -53,9 +53,18 @@ internal static class OperationalHealthTests
         var events = OperationalHealthProjection.WirelessSyslogEvents(entries, [ac], Now);
         Assert(events.Count == 2 && events[0].Kind == "WIRELESS_MESH_LINK_DOWN" && events[0].Severity == "WARNING" &&
             events[0].EvidenceType == "SYSLOG" && events[0].SourceAuthority == "syslog-local" &&
-            events[0].ResourceKey == "mesh:192.0.2.10:MESH_LINKDOWN:02:00:00:00:00:01" &&
+            events[0].ResourceKey == "mesh:192.0.2.10:02:00:00:00:00:01" &&
             events[1].Kind == "WIRELESS_MESH_LINK_UP" && events[1].Severity == "INFO",
             "only fresh sealed-Syslog events from one exact AC identity become wireless evidence; foreign, stale and ambiguous senders are rejected");
+        var observation = new WirelessApObservationView("observation", "ap-resource", ac.Id, "domain", ac.SiteId,
+            "AP", "serial", ["02:00:00:00:00:01"], null, null, "RUN", "RUNNING", "DEVICE", Now - 1, Now,
+            "raw:ap", "parser", "revision", "MATCHED");
+        var resource = new WirelessApResourceView("ap-resource", "AP", "CONFIRMED", "serial", ["02:00:00:00:00:01"],
+            [observation.Id], ["domain"], "FULL", Now - 1, Now, "source", "projection", null, [observation]);
+        var associated = OperationalHealthProjection.WirelessSyslogEvents(entries, [ac], [resource], Now);
+        Assert(associated[0].ResourceKey == "ap:ap-resource" && associated[1].ResourceKey == "ap:ap-resource" &&
+            associated[0].Detail.Contains("精确 MAC", StringComparison.Ordinal),
+            "a single AP observation with the same AC, Site and exact normalized MAC becomes the stable AP resource");
     }
     private static NetworkDiagnosticItemSnapshot Probe(params string[] statuses)
     {

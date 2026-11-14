@@ -10,6 +10,7 @@ internal static class FaultCenterTests
     public static async Task RunAsync()
     {
         AggregatesAndDeduplicates();
+        WirelessSyslogRecoveryRequiresSameResourceAndFreshness();
         ReopensOnlyNewFaultEvidence();
         RecoveryRequiresExactFreshVerifiedResource();
         RecoveryAndAggregationKeepSourceScope();
@@ -39,7 +40,7 @@ internal static class FaultCenterTests
         await AuthenticationStopsAutomaticPolicy();
         await ChangedEndpointBlocksAutomaticPolicy();
         await RecollectionRevocationStopsPolicy();
-        Console.WriteLine("FAULT_CENTER_TESTS=30/30 PASS");
+        Console.WriteLine("FAULT_CENTER_TESTS=31/31 PASS");
     }
     private static void SameRunProbeAdvancesAndReopensOnlyNewSamples()
     {
@@ -237,6 +238,31 @@ internal static class FaultCenterTests
     private static OperationalFaultEvent Event(string evidence = "fact-a", long at = Now, string resource = "GE1/0/1") =>
         new(evidence, "device-a", "site-a", "INTERFACE_DOWN", "WARNING", "OBSERVED", at, "FACT", evidence, "DOWN", resource,
             "H3C_SSH_READONLY", "scope-a");
+
+    private static void WirelessSyslogRecoveryRequiresSameResourceAndFreshness()
+    {
+        var down = new OperationalFaultEvent("down", "device-a", "site-a", "WIRELESS_MESH_LINK_DOWN", "WARNING",
+            "OBSERVED", Now, "SYSLOG", "down", "down", "syslog-local", "local");
+        var item = FaultLifecycle.Observe(null, down, "profile-a", "actor", Now);
+        var up = down with { Id = "up", Kind = "WIRELESS_MESH_LINK_UP", Severity = "INFO", AtMs = Now + 1,
+            EvidenceId = "up", Detail = "up" };
+        Assert(FaultLifecycle.FreshWirelessSyslogRecoveryEvidence(item, up, Now + 2) == "up",
+            "same exact wireless resource with a newer fresh link-up proves recovery");
+        foreach (var rejected in new[]
+        {
+            up with { ResourceKey = "mesh:other" },
+            up with { DeviceId = "device-b" },
+            up with { SourceAuthority = "other" },
+            up with { AtMs = Now }
+        })
+            Assert(FaultLifecycle.FreshWirelessSyslogRecoveryEvidence(item, rejected, Now + 2) is null,
+                "wireless recovery cannot cross resource, source or freshness boundaries");
+        Assert(FaultLifecycle.FreshWirelessSyslogRecoveryEvidence(item, up, Now + OperationalHealthProjection.FreshnessWindowMs + 2) is null,
+            "wireless recovery expires outside the freshness window");
+        var resolved = FaultLifecycle.ResolveFromWirelessSyslog(item, up, "actor", Now + 2, "up");
+        Assert(resolved.State == "RESOLVED" && resolved.LastSeenMs == Now + 1 &&
+            resolved.History.Last().Action == "RECOVERY_VERIFIED", "wireless recovery is recorded as a durable resolved transition");
+    }
     private static FaultIncident Incident() => FaultLifecycle.Observe(null, Event(), "profile-a", "actor", Now);
     private static void AggregatesAndDeduplicates()
     {
