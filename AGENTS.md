@@ -16,4 +16,5 @@
 - `worktrees`、`test-data`、`build`、`diagnostic`、`release`、`poc` 和 `reports` 只能使用工作区根下的同名目录。路径通过 `tools/workspace_paths.py` 生成，禁止在 `D:\study` 公共目录创建 Next 专属输出。
 - Git Worktree 只能用 Git 原生命令管理。dirty Worktree、未推送提交、独立 PoC、真实数据和 SQLite 数据库不得清理或回收。
 - NetConsole-Next 不使用旧 NetConsole 的 `D:\study\NetConsole-Workspace`、`D:\NetConsoleData` 或 `D:\NetConsoleData-dev`；旧项目的独立存储策略不因本规则改变。
-- 完整布局、迁移边界和回归要求见 `docs/WORKSPACE_LAYOUT.md`。
+- 完整布局、历史例外、回收门禁和提交边界见 `docs/WORKSPACE_LAYOUT.md` 与 `docs/WORKSPACE_OPERATIONS.md`。
+- 从主仓库根目录运行 `python -m scripts.check_workspace_layout` 做只读布局审计；发现 dirty、未登记、越界或 Reparse Point 时不得批量清理。

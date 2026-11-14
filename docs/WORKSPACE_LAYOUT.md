@@ -26,3 +26,13 @@ Windows 默认通过 `NETCONSOLE_NEXT_WORKSPACE_ROOT` 覆盖根目录；未设�
 Git Worktree 必须使用 `git worktree add`、`git worktree move`、`git worktree repair` 和 `git worktree remove` 管理。dirty Worktree 不得回收；未提交修改、未推送提交、真实数据、SQLite 数据库和研究成果不得按缓存处理。
 
 NetConsole-Next 使用独立数据 Authority，不得读取或修改旧 NetConsole 的 `D:\NetConsoleData`、`D:\NetConsoleData-dev`，也不改变旧 NetConsole 的 `D:\study\NetConsole-Workspace` 存储策略。历史报告保留原路径作为审计证据，不表示旧目录仍可作为新输出目标。
+
+## 生命周期与历史例外
+
+目录命名、临时产物、Worktree 回收、Reparse Point、Git 提交边界和历史目录的保留规则统一见 [`WORKSPACE_OPERATIONS.md`](WORKSPACE_OPERATIONS.md)。
+
+当前 Workspace 中的 `.vs`、`architecture-replanning`、`temp` 和嵌套 `NetConsole-Next-Workspace` 属于历史例外，只能审计和保留，禁止作为新输出目录。布局检查使用：
+
+```powershell
+python -m scripts.check_workspace_layout
+```
