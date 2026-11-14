@@ -16,6 +16,9 @@ internal sealed class RuntimeSettings
     public int TerminalIdleTimeoutSeconds { get; init; } = 900;
     public bool TerminalDevelopmentSimulationEnabled { get; init; }
     public bool H3cDevelopmentEnvironmentCredentialsEnabled { get; init; }
+    // Compatibility default for Password-only FIT-AP Telnet. It is supplied
+    // only by the process environment and is never returned by an API.
+    public string? FitApDefaultPassword { get; init; }
     public long CompleteConfigMaxStoredBytes { get; init; } = 1024L * 1024 * 1024;
     public int CompleteConfigMaxBackupsPerProfile { get; init; } = 1_000;
 
@@ -72,6 +75,7 @@ internal sealed class RuntimeSettings
             TerminalDevelopmentSimulationEnabled = IsDevelopmentEnvironment() &&
                 Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_TERMINAL_DEV_SIMULATION") == "1",
             H3cDevelopmentEnvironmentCredentialsEnabled = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_H3C_DEV_ENV_CREDENTIALS") == "1",
+            FitApDefaultPassword = Environment.GetEnvironmentVariable("NETCONSOLE_NEXT_FIT_AP_DEFAULT_PASSWORD"),
             CompleteConfigMaxStoredBytes = ParseBoundedLong("NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_STORED_BYTES", 1024L * 1024 * 1024, 1024L * 1024, 100L * 1024 * 1024 * 1024),
             CompleteConfigMaxBackupsPerProfile = ParseBoundedInt("NETCONSOLE_NEXT_COMPLETE_CONFIG_MAX_BACKUPS_PER_PROFILE", 1_000, 1, 100_000),
             ArchiveMaxRunningJobs = ParseBoundedInt("NETCONSOLE_NEXT_ARCHIVE_MAX_RUNNING_JOBS", 1, 1, 4),

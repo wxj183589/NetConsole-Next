@@ -50,3 +50,11 @@ RELEASE=NO
 3. 关闭单实例阻断后，用当前产品 Service 重新验收 sealed Raw/Facts、双 AC、MESH 链路变化、故障生成与恢复；独立 worker 登录结果不能替代产品持久化证据。
 4. 若要生产化 AP lifecycle authority，先补正式 schema、跨进程并发、merge/split、replacement revoke、迁移、备份和回滚门禁。
 
+## FIT-AP 远程连接专项交接
+
+- 已实现无线页“远程连接”和“连接设置”：默认 Telnet 23、Password-only、空用户名；密码可由运行环境默认值提供，也可按全局/AC/AP 范围覆盖，API 只返回是否已配置。
+- 已实现新鲜唯一主用 AC 解析、同一 AC 观察中的 AP 管理地址匹配、控制台状态识别、`all` 范围开启动作的显式确认和直接临时 FIT-AP 终端会话。
+- 连接会先采集 `display version`，将结果写入 FIT-AP 专用 sealed Raw，再登记 `fit_ap_facts`；事实查询 API 和无线设置弹窗的最近版本反馈已接通。
+- 服务端和前端回归均通过；当前产品 HTTP 真实设备录制、浏览器 E2E 和现有互斥 Service 释放后的重新验收仍为 `NOT_VERIFIED`。不要把历史独立 worker 登录证据写成当前产品 Raw/Facts PASS。
+- 默认密码环境变量的具体值不进入代码、配置文件、日志、报告或提交；FIT-AP 仍不创建普通设备库存条目。
+

@@ -56,6 +56,8 @@ builder.Services.AddSingleton<TaskSiteScopeAuthorizer>();
 builder.Services.AddSingleton<ITaskScopeAuthorizer>(sp => sp.GetRequiredService<TaskSiteScopeAuthorizer>());
 builder.Services.AddSingleton<WirelessReadModelService>();
 builder.Services.AddSingleton<WirelessTaskService>();
+builder.Services.AddSingleton<FitApConnectionSettingsStore>();
+builder.Services.AddSingleton<FitApRemoteConsoleService>();
 builder.Services.AddSingleton<WirelessIdentityLifecycleService>();
 builder.Services.AddSingleton<H3cCapabilityService>();
 builder.Services.AddSingleton<ZteCollectionService>();
@@ -2049,6 +2051,84 @@ app.MapGet("/api/system/wireless/ap-resources/{id}", (HttpContext context, strin
         var item = snapshot.ApResources.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal));
         return item is null ? WirelessResourceNotVisible() : Results.Ok(item);
     }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/remote-console", (HttpContext context, HttpRequest request, string id,
+    FitApRemoteConsoleService fitAp, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(fitAp.Inspect(id, CurrentSiteScope(context), QueryValue(request, "acDeviceId"))); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/remote-console/settings", (HttpContext context, HttpRequest request, string id,
+    FitApRemoteConsoleService fitAp, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(fitAp.GetSettings(id, CurrentSiteScope(context), QueryValue(request, "acDeviceId"))); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapPut("/api/system/wireless/ap-resources/{id}/remote-console/settings", (HttpContext context, HttpRequest httpRequest, string id,
+    FitApConnectionSettingsRequest request, FitApRemoteConsoleService fitAp, Catalog catalog,
+    P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "FIT_AP_SETTINGS_PERMISSION_DENIED", id);
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(fitAp.SaveSettings(request, id, CurrentSiteScope(context), QueryValue(httpRequest, "acDeviceId"))); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapPost("/api/system/wireless/ap-resources/{id}/remote-console/enable", async (HttpContext context, string id,
+    FitApEnableRequest request, FitApRemoteConsoleService fitAp, Catalog catalog, P2B5SiteScopeStore scopes) =>
+{
+    if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, catalog, "FIT_AP_REMOTE_CONSOLE_PERMISSION_DENIED", id);
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var result = await fitAp.EnableAsync(id, CurrentSiteScope(context), CurrentIdentity(context).Username,
+            request.ConfirmAllAp, context.RequestAborted, request.ActiveAcDeviceId);
+        return Results.Ok(result);
+    }
+    catch (FitApRemoteConsoleException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
+    catch (H3cAuthenticationFailedException) { return Results.Conflict(new { error = "ACTIVE_AC_AUTHENTICATION_FAILED" }); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapPost("/api/system/wireless/ap-resources/{id}/remote-console/session", async (HttpContext context, string id,
+    FitApRemoteConsoleSessionRequest request, FitApRemoteConsoleService fitAp, TerminalSessionManager terminal, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try
+    {
+        var result = await fitAp.CreateSessionAsync(id, CurrentSiteScope(context), CurrentIdentity(context).Username, terminal, request.ActiveAcDeviceId);
+        return Results.Created($"/api/system/terminal/sessions/{result.SessionId}", result);
+    }
+    catch (FitApRemoteConsoleException ex) { return Results.Json(new { error = ex.Code, detail = ex.Message }, statusCode: ex.StatusCode); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
+    { return WirelessAuthorityUnavailable(ex); }
+});
+
+app.MapGet("/api/system/wireless/ap-resources/{id}/remote-console/facts", (HttpContext context, string id,
+    FitApRemoteConsoleService fitAp, P2B5SiteScopeStore scopes) =>
+{
+    if (WirelessScopeGuard(context, scopes) is { } denied) return denied;
+    try { return Results.Ok(fitAp.GetFacts(id, CurrentSiteScope(context))); }
+    catch (KeyNotFoundException) { return WirelessResourceNotVisible(); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or Microsoft.Data.Sqlite.SqliteException)
     { return WirelessAuthorityUnavailable(ex); }
 });

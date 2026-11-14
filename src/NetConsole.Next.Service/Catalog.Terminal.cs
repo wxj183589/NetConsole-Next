@@ -178,7 +178,10 @@ internal sealed partial class Catalog
         var session = GetTerminalSession(sessionId);
         return session is not null && (scope.IsGlobal || scope.IsAuthorized &&
             (session.Mode == "LINUX_INTERACTIVE" ? session.SiteName is not null && DeviceSiteScope.Allows(scope, session.SiteName) :
-                session.Protocol is "SSH" or "TELNET" && H3cProfileIsInScope(session.TargetId, scope)));
+                session.Protocol is "SSH" or "TELNET" &&
+                (session.TargetId.StartsWith("fit-ap:", StringComparison.Ordinal)
+                    ? session.SiteName is not null && DeviceSiteScope.Allows(scope, session.SiteName)
+                    : H3cProfileIsInScope(session.TargetId, scope))));
     }
 
     public TerminalSessionPage QueryTerminalSessions(TerminalSessionQuery query, P2B5SiteScopeDecision? scope = null)
@@ -204,7 +207,7 @@ internal sealed partial class Catalog
             var scopeParameters = new List<(string Name, object? Value)>();
             var scopeFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "source.site_id");
             var linuxFilter = DeviceSiteScope.BuildSqlFilter(scope, scopeParameters, "terminal_sessions.site_name", "$linuxScopeSite");
-            where.Add($"((mode='LINUX_INTERACTIVE' AND {linuxFilter}) OR (mode='RESTRICTED_READONLY' AND protocol IN ('SSH','TELNET') AND EXISTS (SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=terminal_sessions.target_id AND {scopeFilter})))");
+            where.Add($"((mode='LINUX_INTERACTIVE' AND {linuxFilter}) OR (mode='RESTRICTED_READONLY' AND protocol IN ('SSH','TELNET') AND ((target_id LIKE 'fit-ap:%' AND {linuxFilter}) OR EXISTS (SELECT 1 FROM h3c_device_profiles profile JOIN collection_sources source ON source.id=profile.source_id WHERE profile.id=terminal_sessions.target_id AND {scopeFilter}))))");
             DeviceSiteScope.AddParameters(command, scopeParameters);
         }
         var filter = where.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", where);

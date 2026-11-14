@@ -10,7 +10,9 @@ internal interface IH3cCredentialAuthority
     bool HasPassword(H3cDeviceProfileSnapshot profile);
     bool HasPassword(string profileId);
     void SetPassword(H3cDeviceProfileSnapshot profile, string password);
+    void SetPassword(string profileId, string password);
     bool RevokePassword(H3cDeviceProfileSnapshot profile);
+    bool RevokePassword(string profileId);
 }
 
 [SuppressMessage("Interoperability", "CA1416", Justification = "Every public operation checks Windows before calling the DPAPI vault.")]
@@ -31,8 +33,14 @@ internal sealed class WindowsDpapiH3cCredentialAuthority(string dataRoot) : IH3c
     public void SetPassword(H3cDeviceProfileSnapshot profile, string password) =>
         WritePassword(KeyFor(profile), password);
 
+    public void SetPassword(string profileId, string password) =>
+        WritePassword(KeyFor(profileId), password);
+
     public bool RevokePassword(H3cDeviceProfileSnapshot profile) =>
         RemovePassword(KeyFor(profile));
+
+    public bool RevokePassword(string profileId) =>
+        RemovePassword(KeyFor(profileId));
 
     private string? ReadPassword(string key)
     {
@@ -91,9 +99,18 @@ internal sealed class CatalogH3cCredentialAuthority(Catalog catalog) : IH3cCrede
     public void SetPassword(H3cDeviceProfileSnapshot profile, string password) =>
         catalog.UpdateH3cCredential(profile.Id, password, clearPassword: false);
 
+    public void SetPassword(string profileId, string password) =>
+        catalog.UpdateH3cCredential(profileId, password, clearPassword: false);
+
     public bool RevokePassword(H3cDeviceProfileSnapshot profile)
     {
         catalog.UpdateH3cCredential(profile.Id, null, clearPassword: true);
+        return true;
+    }
+
+    public bool RevokePassword(string profileId)
+    {
+        catalog.UpdateH3cCredential(profileId, null, clearPassword: true);
         return true;
     }
 }

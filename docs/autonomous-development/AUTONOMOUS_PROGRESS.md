@@ -94,3 +94,9 @@ R3_2_D=OUT_OF_SCOPE_BY_USER
 ## 下一任务
 
 执行 R3 服务端与前端全量回归并形成 `R3_FULL_REGRESSION.md`、`RUNTIME_HANDOFF.md`；随后继续评审 AP identity 权威写入的生产持久化边界。任何真实设备和生产数据动作仍需单独门禁。
+
+## FIT-AP 远程连接专项（当前工作树）
+
+当前分支已补齐 FIT-AP 默认 Password-only Telnet、全局/AC/AP 连接设置优先级、最新主用 AC 唯一解析、远程控制台显式确认、直接临时终端会话、版本 Raw/Facts 持久化和无线页入口。默认密码仅从 `NETCONSOLE_NEXT_FIT_AP_DEFAULT_PASSWORD` 运行环境注入；密码不会进入 API、Raw、Facts、日志或文档。
+
+服务端 Release 编译、无线专项、FIT-AP 设置与 Raw/Facts 定向测试、完整服务端回归以及前端类型检查和 36 个文件/451 项测试均已通过。当前产品 HTTP 真实设备录制和浏览器 E2E 仍因已有 Service 单实例互斥未执行；真实 SW 与 FIT-AP 独立 worker 证据沿用 R3.2-B 报告，不升级为当前产品持久化 PASS。详见 `FIT_AP_REMOTE_CONSOLE.md`。

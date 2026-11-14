@@ -2598,6 +2598,16 @@ internal sealed partial class Catalog(RuntimeSettings settings)
         if (parts.Length < 3 || parts[0] != "raw")
             throw new InvalidDataException("Raw segment path is outside a supported source folder.");
         if (sourceId == "syslog-local" && parts[1] == "syslog") return;
+        if (sourceId.StartsWith("fit-ap:", StringComparison.Ordinal))
+        {
+            var resourceId = sourceId["fit-ap:".Length..];
+            var expectedFolder = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(resourceId)))
+                .ToLowerInvariant()[..24];
+            if (string.IsNullOrWhiteSpace(resourceId) || resourceId.Any(char.IsControl) ||
+                parts.Length < 4 || parts[1] != "fit-ap" || parts[2] != expectedFolder)
+                throw new InvalidDataException("FIT-AP Raw content source identity does not match its isolated source folder.");
+            return;
+        }
         if (!sourceId.StartsWith("h3c-", StringComparison.Ordinal) || parts[1] != "h3c" || parts.Length < 4 ||
             !Guid.TryParseExact(sourceId[4..], "N", out _) || parts[2] != sourceId[4..])
             throw new InvalidDataException("Raw content source identity does not match its isolated source folder.");

@@ -20,6 +20,14 @@ internal sealed class RawSegmentWriterFactory : IRawSegmentWriterFactory
 
     public RawSegmentWriter CreateH3c(Catalog catalog, string profileId) =>
         new(catalog, "h3c-" + profileId, Path.Combine("h3c", profileId));
+
+    public RawSegmentWriter CreateFitAp(Catalog catalog, string resourceId)
+    {
+        if (string.IsNullOrWhiteSpace(resourceId) || resourceId.Any(char.IsControl))
+            throw new ArgumentException("FIT-AP resource id is invalid.", nameof(resourceId));
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(resourceId))).ToLowerInvariant()[..24];
+        return new(catalog, "fit-ap:" + resourceId, Path.Combine("fit-ap", key));
+    }
 }
 
 // Append-only P0 raw writer. Roll at 4MiB, seal before indexing; retain files on catalog errors.
@@ -69,6 +77,11 @@ internal sealed class RawSegmentWriter
                  category.Replace('\\', '/') == $"h3c/{profileId:N}")
         {
             category = Path.Combine("h3c", profileId.ToString("N"));
+        }
+        else if (sourceId.StartsWith("fit-ap:", StringComparison.Ordinal) &&
+                 category.Replace('\\', '/').StartsWith("fit-ap/", StringComparison.Ordinal))
+        {
+            category = Path.Combine("fit-ap", category.Replace('\\', '/')["fit-ap/".Length..]);
         }
         else throw new ArgumentException("Raw source id and category do not identify a supported source.", nameof(sourceId));
         _sourceId = sourceId;
@@ -148,6 +161,57 @@ internal sealed class RawSegmentWriter
                 json.WriteString("capture_status", captureStatus);
                 json.WriteNumber("output_byte_count", outputBytes.Length);
                 json.WriteString("output_sha256", outputShaHex);
+                json.WriteBase64String("output_utf8_base64", outputBytes);
+                json.WriteEndObject();
+            }
+            _stagedBytes.Write(_jsonBytes.WrittenSpan);
+            _stagedBytes.WriteByte((byte)'\n');
+            _bytes = _jsonBytes.WrittenCount + 1;
+            _first = _last = capturedMs;
+            _records = 1;
+            return outputSha;
+        }
+        finally { _operationGate.Release(); }
+    }
+
+    public byte[] AppendFitApCommand(string resourceId, string captureId, string sourceAcDeviceId,
+        string siteId, string apName, string host, string command, string output, long capturedMs,
+        string captureStatus)
+    {
+        _operationGate.Wait();
+        try
+        {
+            if (_sourceId != "fit-ap:" + resourceId || !Guid.TryParseExact(captureId, "N", out _) ||
+                !H3cCommandPolicy.IsAllowed(command))
+                throw new ArgumentException("FIT-AP Raw identity or command is invalid.");
+            if (captureStatus is not ("COMPLETE" or "PARTIAL"))
+                throw new ArgumentException("FIT-AP capture status is invalid.");
+            if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl))
+                throw new ArgumentException("FIT-AP host is invalid.", nameof(host));
+            _catalog.EnsureFitApRawSource(_sourceId, resourceId, siteId);
+            EnsureOpenForAppend();
+            if (_records != 0) throw new InvalidOperationException("A FIT-AP result segment accepts exactly one command result.");
+            var outputBytes = Encoding.UTF8.GetBytes(H3cDiagnosticCapture.Sanitize(output));
+            if (outputBytes.Length > H3cRawOutput.MaximumBytesFor(command))
+                throw new InvalidDataException("FIT-AP output exceeds the supported Raw limit.");
+            var outputSha = SHA256.HashData(outputBytes);
+            _jsonBytes.Clear();
+            using (var json = new Utf8JsonWriter(_jsonBytes))
+            {
+                json.WriteStartObject();
+                json.WriteString("record_type", "fit_ap_command");
+                json.WriteNumber("captured_ms", capturedMs);
+                json.WriteString("source_id", _sourceId);
+                json.WriteString("resource_id", resourceId);
+                json.WriteString("source_ac_device_id", sourceAcDeviceId);
+                json.WriteString("site_id", siteId);
+                json.WriteString("ap_name", apName);
+                json.WriteString("task_run_id", captureId);
+                json.WriteString("device_host", host);
+                json.WriteString("command", command);
+                json.WriteString("capture_status", captureStatus);
+                json.WriteNumber("output_byte_count", outputBytes.Length);
+                json.WriteString("output_sha256", Convert.ToHexString(outputSha).ToLowerInvariant());
                 json.WriteBase64String("output_utf8_base64", outputBytes);
                 json.WriteEndObject();
             }

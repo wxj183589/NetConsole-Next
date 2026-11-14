@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, inject, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { routerKey, type Router } from 'vue-router'
 import NcLayout from '../components/NcLayout.vue'
 import WirelessOperationalCapabilities from '../components/WirelessOperationalCapabilities.vue'
 import { wirelessObservationsCsv } from '../api/wirelessExport'
@@ -22,6 +23,12 @@ import {
   getWirelessIdentityLifecycle,
   getWirelessIdentityReview,
   getWirelessRuntimeState,
+  getFitApRemoteConsole,
+  getFitApFacts,
+  getFitApConnectionSettings,
+  saveFitApConnectionSettings,
+  enableFitApRemoteConsole,
+  createFitApRemoteSession,
   type WirelessAcDomain,
   type WirelessApGroup,
   type WirelessApGroupDetail,
@@ -35,7 +42,12 @@ import {
   type H3cTaskPlan,
   type WirelessTaskSummary,
   type WirelessTaskReport,
+  type FitApRemoteConsolePreflight,
+  type FitApConnectionSettingsResponse,
+  type FitApFact,
 } from '../api/client'
+
+const router = inject(routerKey, { push: async (_location: Parameters<Router['push']>[0]) => undefined } as Pick<Router, 'push'>)
 
 const loading = ref(false)
 const taskDomains = ref<string[]>([])
@@ -92,6 +104,17 @@ const identityReview = ref<WirelessIdentityReview | null>(null)
 const identityLifecycle = ref<WirelessIdentityLifecycle | null>(null)
 const identityLoading = ref(false)
 const identityError = ref('')
+const remoteConsoleLoading = ref(false)
+const remoteConsoleError = ref('')
+const remoteConsole = ref<FitApRemoteConsolePreflight | null>(null)
+const fitApFacts = ref<FitApFact[]>([])
+const fitApSelectedAcId = ref('')
+const fitSettingsDialog = ref(false)
+const fitSettingsLoading = ref(false)
+const fitSettingsResponse = ref<FitApConnectionSettingsResponse | null>(null)
+const fitSettingsScope = ref<'GLOBAL' | 'AC' | 'AP'>('AP')
+const fitSettingsPassword = ref('')
+const fitSettingsForm = reactive({ protocol: 'TELNET', port: 23, authMode: 'PASSWORD_ONLY', username: '' })
 let runtimeGeneration = 0
 let runtimeController: AbortController | null = null
 let identityGeneration = 0
@@ -122,6 +145,8 @@ const visibleResources = computed(() => resources.value.filter(resource => {
 }))
 const pagedResources = computed(() => visibleResources.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 const selectedResource = computed(() => visibleResources.value.find(resource => resource.id === selectedResourceId.value) || pagedResources.value[0] || null)
+const fitApCandidates = computed(() => remoteConsole.value?.candidates || [])
+const hasMultipleFitApCandidates = computed(() => fitApCandidates.value.length > 1)
 const visibleGroups = computed(() => groups.value.filter(group => !selectedAcId.value || group.sourceAcDeviceIds.includes(selectedAcId.value)))
 function groupSource(group: WirelessApGroup): string {
   if (group.groupScope === 'DOMAIN') return `Domain 来源 · ${group.sourceAcDomainId}`
@@ -458,6 +483,144 @@ function outcomeText(outcome: string): string {
     PARSE_FAILED: '解析失败', UNKNOWN: '未知状态', CONFLICT: '来源冲突', CLOCK_SKEW: '采集时间异常', NOT_COLLECTED: '未采集' } as Record<string, string>)[outcome] || outcome
 }
 
+function fitSettingsTarget(): string | undefined {
+  if (fitSettingsScope.value === 'AP') return selectedResource.value?.id
+  if (fitSettingsScope.value === 'AC') return remoteConsole.value?.activeAc?.acDeviceId || fitApSelectedAcId.value || undefined
+  return undefined
+}
+function fitSettingsRecord(): FitApConnectionSettingsResponse['effective'] | undefined {
+  return fitSettingsResponse.value?.overrides.find(item => item.scope === fitSettingsScope.value) || fitSettingsResponse.value?.effective
+}
+function applyFitSettingsForm(): void {
+  const current = fitSettingsRecord()
+  fitSettingsForm.protocol = current?.protocol || 'TELNET'
+  fitSettingsForm.port = current?.port || 23
+  fitSettingsForm.authMode = current?.authMode || 'PASSWORD_ONLY'
+  fitSettingsForm.username = current?.username || ''
+  fitSettingsPassword.value = ''
+}
+async function inspectFitAp(resource: WirelessApResource): Promise<FitApRemoteConsolePreflight | null> {
+  remoteConsoleLoading.value = true
+  remoteConsoleError.value = ''
+  try {
+    const result = await getFitApRemoteConsole(resource.id)
+    if (selectedResourceId.value === resource.id) {
+      remoteConsole.value = result
+      fitApSelectedAcId.value = result.activeAc?.acDeviceId || ''
+    }
+    void loadFitApFacts(resource.id)
+    return result
+  } catch (cause) {
+    remoteConsoleError.value = cause instanceof Error ? cause.message : 'FIT-AP 连接状态读取失败'
+    return null
+  } finally { remoteConsoleLoading.value = false }
+}
+async function loadFitApFacts(resourceId: string): Promise<void> {
+  try {
+    const facts = await getFitApFacts(resourceId)
+    if (selectedResourceId.value === resourceId) fitApFacts.value = facts
+  } catch {
+    if (selectedResourceId.value === resourceId) fitApFacts.value = []
+  }
+}
+async function resolveFitApAc(): Promise<void> {
+  const resource = selectedResource.value
+  if (!resource || !fitApSelectedAcId.value) {
+    ElMessage.warning('请先选择一个当前候选主用 AC。')
+    return
+  }
+  remoteConsoleLoading.value = true
+  try {
+    const result = await getFitApRemoteConsole(resource.id, fitApSelectedAcId.value)
+    remoteConsole.value = result
+    if (result.activeAcStatus === 'SELECTION_INVALID') fitApSelectedAcId.value = ''
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '主用 AC 选择失败')
+  } finally { remoteConsoleLoading.value = false }
+}
+function fitApFactSummary(fact: FitApFact): string {
+  try {
+    const payload = JSON.parse(fact.payloadJson) as Record<string, unknown>
+    return [payload.vendor, payload.model, payload.version, payload.release]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      .join(' ') || fact.kind
+  } catch {
+    return fact.kind
+  }
+}
+async function openFitSettings(resource: WirelessApResource): Promise<void> {
+  if (selectedResourceId.value !== resource.id) fitApSelectedAcId.value = ''
+  selectedResourceId.value = resource.id
+  fitSettingsDialog.value = true
+  fitSettingsLoading.value = true
+  fitSettingsResponse.value = null
+  remoteConsole.value = await inspectFitAp(resource)
+  try {
+    fitSettingsResponse.value = await getFitApConnectionSettings(resource.id, fitApSelectedAcId.value || undefined)
+    applyFitSettingsForm()
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '连接设置读取失败')
+  } finally { fitSettingsLoading.value = false }
+}
+async function saveFitSettings(): Promise<void> {
+  const resource = selectedResource.value
+  const targetId = fitSettingsTarget()
+  if (!resource || (fitSettingsScope.value !== 'GLOBAL' && !targetId)) {
+    ElMessage.warning(fitSettingsScope.value === 'AC' ? '当前无法唯一确定主用 AC，暂不能保存 AC 级设置。' : '请选择一个 AP。')
+    return
+  }
+  fitSettingsLoading.value = true
+  try {
+    fitSettingsResponse.value = await saveFitApConnectionSettings(resource.id, {
+      scope: fitSettingsScope.value, targetId, protocol: fitSettingsForm.protocol, port: fitSettingsForm.port,
+      authMode: fitSettingsForm.authMode, username: fitSettingsForm.authMode === 'PASSWORD_ONLY' ? '' : fitSettingsForm.username,
+      ...(fitSettingsPassword.value ? { password: fitSettingsPassword.value } : {}),
+    }, fitApSelectedAcId.value || undefined)
+    fitSettingsPassword.value = ''
+    applyFitSettingsForm()
+    ElMessage.success('连接设置已保存')
+    remoteConsole.value = await inspectFitAp(resource)
+  } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '连接设置保存失败') }
+  finally { fitSettingsLoading.value = false }
+}
+async function connectFitAp(resource: WirelessApResource): Promise<void> {
+  selectedResourceId.value = resource.id
+  remoteConsoleLoading.value = true
+  remoteConsoleError.value = ''
+  try {
+    let preflight = await getFitApRemoteConsole(resource.id, fitApSelectedAcId.value || undefined)
+    remoteConsole.value = preflight
+    if (preflight.activeAcStatus === 'AMBIGUOUS') {
+      await openFitSettings(resource)
+      ElMessage.info(`当前 AP 有多个最新主用 AC 观测，请选择一个后再连接：${preflight.candidates.map(item => item.acName).join(' / ')}`)
+      return
+    }
+    if (preflight.failureReason === 'FIT_AP_PASSWORD_UNAVAILABLE') {
+      await openFitSettings(resource)
+      ElMessage.info('请先输入 FIT-AP 密码；密码只用于当前会话或安全存储。')
+      return
+    }
+    if (preflight.enableRequired) {
+      await ElMessageBox.confirm(
+        `当前主用 AC 未确认 FIT-AP 远程控制台已开启。系统将执行已验证的 AC 侧全 AP 开启命令，可能影响该 AC 管理的其他 AP。继续吗？`,
+        '开启 FIT-AP 远程控制台', { type: 'warning', confirmButtonText: '确认开启', cancelButtonText: '取消' })
+      await enableFitApRemoteConsole(resource.id, true, preflight.activeAc?.acDeviceId || fitApSelectedAcId.value || undefined)
+      preflight = await getFitApRemoteConsole(resource.id, preflight.activeAc?.acDeviceId || fitApSelectedAcId.value || undefined)
+      remoteConsole.value = preflight
+    }
+    if (preflight.failureReason && preflight.failureReason !== 'FIT_AP_PASSWORD_UNAVAILABLE') {
+      ElMessage.warning(`暂不能连接：${preflight.failureReason}`)
+      return
+    }
+    const session = await createFitApRemoteSession(resource.id, preflight.activeAc?.acDeviceId || fitApSelectedAcId.value || undefined)
+    await router.push({ path: '/terminal', query: { sessionId: session.sessionId } })
+  } catch (cause) {
+    if (cause !== 'cancel') remoteConsoleError.value = cause instanceof Error ? cause.message : 'FIT-AP 连接失败'
+    if (cause instanceof Error && cause.message) ElMessage.error(cause.message)
+  } finally { remoteConsoleLoading.value = false }
+}
+watch(fitSettingsScope, () => { if (fitSettingsDialog.value) applyFitSettingsForm() })
+
 onMounted(() => { void refresh(); void loadTaskHistory() })
 onActivated(() => {
   // KeepAlive activates on first mount too. Reload all evidence on later visits.
@@ -559,7 +722,7 @@ onActivated(() => {
 
           <section class="card wireless-collection"><div class="card__header"><h2>采集记录</h2><span class="state-pill info">Raw provenance</span></div><div v-if="collectionManifests.length" class="wireless-collection-list"><button v-for="manifest in collectionManifests" :key="manifest.id" class="wireless-collection-row" :class="{ selected: collectionDetail?.manifest.id === manifest.id }" type="button" @click="selectCollectionManifest(manifest)"><span><strong>{{ manifest.sourceRevision }}</strong><small>{{ manifest.sourceAcDeviceIds.join(' / ') }} · {{ formatTime(manifest.lastCapturedMs) }}</small></span><span>{{ manifest.observationCount }} 条 Observation</span></button></div><div v-else class="empty-state"><div><strong>{{ collectionError ? '采集记录读取失败' : '暂无采集记录' }}</strong><small>{{ collectionError || '当前 AC 作用域没有可见的跨 AC collection manifest。' }}</small></div></div><div v-if="collectionDetailLoading" class="wireless-collection-detail muted-text">正在读取采集记录…</div><div v-else-if="collectionDetailError" class="wireless-collection-detail bad-text">{{ collectionDetailError }}</div><div v-else-if="collectionDetail" class="wireless-collection-detail"><div class="card__header"><h3>{{ collectionDetail.manifest.sourceRevision }}</h3><span class="state-pill info">{{ collectionDetail.manifest.status }}</span></div><div class="wireless-collection-detail__meta"><span>来源 AC <code>{{ collectionDetail.manifest.sourceAcDeviceIds.join(' / ') }}</code></span><span>Observation <code>{{ collectionDetail.items.length }}</code></span><span>Scope <code>{{ collectionDetail.manifest.scopeStatus }}</code></span></div><div class="wireless-collection-item" v-for="item in collectionDetail.items.slice(0, 20)" :key="item.observationId"><span><strong>{{ item.sourceAcDeviceId }}</strong><small>{{ item.sourceAcDomainId }} · {{ formatTime(item.capturedMs) }}</small></span><span><code>{{ item.rawManifestRef }}</code> · {{ item.outcome }}</span></div></div></section>
 
-          <section class="card"><div class="card__header"><div><h2>FIT-AP</h2><p class="wireless-subtitle">FIT-AP 由当前主用 AC 管理；远程控制台需先确认主用 AC 和控制台状态，不在设备库存中单独新增。</p></div><div class="wireless-toolbar"><input v-model="search" aria-label="搜索 AP" placeholder="Serial / MAC / 名称搜索" /><select v-model="stateFilter" aria-label="筛选 AP 状态"><option value="">所有状态</option><option v-for="state in ['RUNNING_MASTER', 'RUNNING_BACKUP', 'OFFLINE', 'UNKNOWN', 'STALE', 'CONFLICT']" :key="state" :value="state">{{ stateText(state) }}</option></select><span class="state-pill info">{{ visibleResources.length }} 条</span><el-button size="small" :disabled="loading || !visibleResources.some(resource => viewObservations(resource).length)" @click="exportObservations">导出当前 AP 观察 CSV</el-button></div></div><div v-if="visibleResources.length" class="table-wrap"><table class="data-table wireless-table"><thead><tr><th>物理 AP</th><th>Serial</th><th>完整 MAC</th><th>来源 AC</th><th>AP 组</th><th>状态</th><th>身份</th><th>最近观察</th></tr></thead><tbody><tr v-for="resource in pagedResources" :key="resource.id" :class="{ selected: selectedResource?.id === resource.id }" @click="selectedResourceId = resource.id"><td><span class="device-name">{{ resource.displayName }}</span><span class="device-subline mono">{{ resource.id }}</span></td><td class="mono">{{ resource.serialEvidence || '—' }}</td><td class="mono">{{ resource.normalizedMacSet.join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" class="source-tag">{{ observation.sourceAcDeviceId }}</span></td><td>{{ viewObservations(resource).map(observation => observation.apGroup).filter(Boolean).join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" :class="['state-pill', stateClass(observation.normalizedState)]">{{ stateText(observation.normalizedState) }}</span></td><td><span :class="['state-pill', stateClass(resource.identityStatus)]">{{ stateText(resource.identityStatus) }}</span></td><td>{{ formatTime(resource.lastSeenMs) }}</td></tr></tbody></table></div><div v-else class="empty-state"><div><strong>暂无可见 AP Observation</strong><small>当前筛选下没有 AP，请调整搜索或状态筛选。</small></div></div></section>
+          <section class="card"><div class="card__header"><div><h2>FIT-AP</h2><p class="wireless-subtitle">FIT-AP 由当前主用 AC 管理；远程连接会先核对最新主用 AC 和控制台状态，不在设备库存中单独新增。</p></div><div class="wireless-toolbar"><input v-model="search" aria-label="搜索 AP" placeholder="Serial / MAC / 名称搜索" /><select v-model="stateFilter" aria-label="筛选 AP 状态"><option value="">所有状态</option><option v-for="state in ['RUNNING_MASTER', 'RUNNING_BACKUP', 'OFFLINE', 'UNKNOWN', 'STALE', 'CONFLICT']" :key="state" :value="state">{{ stateText(state) }}</option></select><span class="state-pill info">{{ visibleResources.length }} 条</span><el-button size="small" :disabled="loading || !visibleResources.some(resource => viewObservations(resource).length)" @click="exportObservations">导出当前 AP 观察 CSV</el-button><el-button size="small" :disabled="!selectedResource" @click="selectedResource && openFitSettings(selectedResource)">连接设置</el-button></div></div><div v-if="visibleResources.length" class="table-wrap"><table class="data-table wireless-table"><thead><tr><th>物理 AP</th><th>Serial</th><th>完整 MAC</th><th>来源 AC</th><th>AP 组</th><th>状态</th><th>身份</th><th>最近观察</th><th>操作</th></tr></thead><tbody><tr v-for="resource in pagedResources" :key="resource.id" :class="{ selected: selectedResource?.id === resource.id }" @click="selectedResourceId = resource.id"><td><span class="device-name">{{ resource.displayName }}</span><span class="device-subline mono">{{ resource.id }}</span></td><td class="mono">{{ resource.serialEvidence || '—' }}</td><td class="mono">{{ resource.normalizedMacSet.join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" class="source-tag">{{ observation.sourceAcDeviceId }}</span></td><td>{{ viewObservations(resource).map(observation => observation.apGroup).filter(Boolean).join(' / ') || '—' }}</td><td><span v-for="observation in viewObservations(resource)" :key="observation.id" :class="['state-pill', stateClass(observation.normalizedState)]">{{ stateText(observation.normalizedState) }}</span></td><td><span :class="['state-pill', stateClass(resource.identityStatus)]">{{ stateText(resource.identityStatus) }}</span></td><td>{{ formatTime(resource.lastSeenMs) }}</td><td><el-button size="small" type="primary" :loading="remoteConsoleLoading && selectedResource?.id === resource.id" @click.stop="connectFitAp(resource)">远程连接</el-button></td></tr></tbody></table></div><div v-else class="empty-state"><div><strong>暂无可见 AP Observation</strong><small>当前筛选下没有 AP，请调整搜索或状态筛选。</small></div></div></section>
 
           <el-pagination v-if="visibleResources.length > pageSize" v-model:current-page="page" :page-size="pageSize" :total="visibleResources.length" layout="total, prev, pager, next" />
           <div class="wireless-bottom-grid">
@@ -646,6 +809,33 @@ onActivated(() => {
       </main>
     </div>
     <WirelessOperationalCapabilities :domain-id="selectedDomainId" :resource-id="selectedResource?.id || ''" />
+    <div v-if="fitSettingsDialog" class="fit-ap-settings-modal" role="dialog" aria-modal="true" aria-labelledby="fit-ap-settings-title">
+      <div class="fit-ap-settings-modal__panel">
+      <div class="fit-ap-settings-modal__header"><h2 id="fit-ap-settings-title">FIT-AP 连接设置</h2><button type="button" aria-label="关闭" @click="fitSettingsDialog = false">×</button></div>
+      <div v-loading="fitSettingsLoading" class="fit-ap-settings">
+        <p class="wireless-runtime-note">填写 IP 之外的连接参数由无线业务自动带入；FIT-AP 不作为普通设备单独登记。</p>
+        <div v-if="remoteConsole" class="fit-ap-connection-summary">
+          <span>当前 AP：<strong>{{ remoteConsole.apName }}</strong></span>
+          <span>主用 AC：<strong>{{ remoteConsole.activeAc?.acName || '未确定' }}</strong></span>
+          <span>管理地址：<strong>{{ remoteConsole.activeAc?.managementIp || '未确定' }}</strong></span>
+          <span>默认连接：{{ remoteConsole.connection.source }} · {{ remoteConsole.connection.protocol }} {{ remoteConsole.connection.port }} · {{ remoteConsole.connection.passwordConfigured ? '密码已配置' : '密码未配置' }}</span>
+          <span>最近只读版本：<strong>{{ fitApFacts[0] ? fitApFactSummary(fitApFacts[0]) : '尚未采集' }}</strong><small v-if="fitApFacts[0]"> · {{ formatTime(fitApFacts[0].capturedMs) }}</small></span>
+        </div>
+        <div v-if="hasMultipleFitApCandidates" class="fit-ap-connection-summary">
+          <label class="fit-ap-settings__field"><span>主用 AC</span><select v-model="fitApSelectedAcId"><option value="">请选择当前候选</option><option v-for="candidate in fitApCandidates" :key="candidate.acDeviceId" :value="candidate.acDeviceId">{{ candidate.acName }} · {{ stateText(candidate.normalizedState) }} · {{ formatTime(candidate.capturedMs) }}</option></select></label>
+          <div class="fit-ap-settings-modal__footer"><el-button size="small" :disabled="!fitApSelectedAcId" :loading="remoteConsoleLoading" @click="resolveFitApAc">确认主用 AC</el-button></div>
+        </div>
+        <label class="fit-ap-settings__field"><span>应用范围</span><select v-model="fitSettingsScope"><option value="AP">当前 AP</option><option value="AC" :disabled="!remoteConsole?.activeAc">当前主用 AC</option><option value="GLOBAL">全部 FIT-AP</option></select></label>
+        <label class="fit-ap-settings__field"><span>协议</span><select v-model="fitSettingsForm.protocol"><option value="TELNET">Telnet</option><option value="SSH">SSH</option></select></label>
+        <label class="fit-ap-settings__field"><span>端口</span><input v-model.number="fitSettingsForm.port" type="number" min="1" max="65535" /></label>
+        <label class="fit-ap-settings__field"><span>登录方式</span><select v-model="fitSettingsForm.authMode"><option value="PASSWORD_ONLY">仅密码</option><option value="USERNAME_PASSWORD">用户名和密码</option></select></label>
+        <label v-if="fitSettingsForm.authMode === 'USERNAME_PASSWORD'" class="fit-ap-settings__field"><span>用户名</span><input v-model="fitSettingsForm.username" autocomplete="off" /></label>
+        <label class="fit-ap-settings__field"><span>密码</span><input v-model="fitSettingsPassword" type="password" autocomplete="new-password" placeholder="留空表示保持当前密码" /></label>
+        <p class="wireless-runtime-note">密码不会显示在页面、日志或会话记录中；不填写密码时使用已有安全存储。</p>
+      </div>
+      <div class="fit-ap-settings-modal__footer"><el-button @click="fitSettingsDialog = false">取消</el-button><el-button v-if="remoteConsole?.activeAc" type="success" :loading="remoteConsoleLoading" @click="selectedResource && connectFitAp(selectedResource)">远程连接</el-button><el-button type="primary" :loading="fitSettingsLoading" @click="saveFitSettings">保存设置</el-button></div>
+      </div>
+    </div>
   </NcLayout>
 </template>
 
@@ -661,6 +851,17 @@ onActivated(() => {
 .wireless-tree__member { padding: 7px 10px 7px 20px; font-size: 12px; }
 .tree-branch { display: inline-block; width: 15px; color: var(--nc-text-muted); }
 .wireless-main { min-width: 0; display: grid; gap: 14px; }
+.fit-ap-settings { display: grid; gap: 12px; }
+.fit-ap-settings-modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgb(4 12 22 / 55%); }
+.fit-ap-settings-modal__panel { width: min(480px, 100%); border: 1px solid var(--nc-border); border-radius: 8px; padding: 16px; background: var(--nc-surface); box-shadow: 0 16px 50px rgb(0 0 0 / 30%); }
+.fit-ap-settings-modal__header, .fit-ap-settings-modal__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fit-ap-settings-modal__header { margin-bottom: 12px; }
+.fit-ap-settings-modal__header h2 { margin: 0; font-size: 16px; }
+.fit-ap-settings-modal__header button { border: 0; color: var(--nc-text-secondary); background: transparent; font-size: 22px; cursor: pointer; }
+.fit-ap-settings-modal__footer { justify-content: flex-end; margin-top: 14px; }
+.fit-ap-settings__field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 10px; color: var(--nc-text-secondary); font-size: 12px; }
+.fit-ap-settings__field input, .fit-ap-settings__field select { min-height: 32px; border: 1px solid var(--nc-border); border-radius: 5px; padding: 5px 8px; color: var(--nc-text); background: var(--nc-surface); }
+.fit-ap-connection-summary { display: grid; gap: 5px; border: 1px solid var(--nc-border); border-radius: 6px; padding: 10px; color: var(--nc-text-secondary); font-size: 12px; }
 .wireless-task, .wireless-task-history { padding: 14px; }
 .wireless-task-quick { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .wireless-task-row button { border: 0; background: transparent; color: var(--nc-text); cursor: pointer; padding: 8px 0; text-align: left; }

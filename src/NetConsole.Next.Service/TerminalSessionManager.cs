@@ -38,6 +38,47 @@ internal sealed class TerminalSessionManager : IAsyncDisposable
         lock (_creationGate) return CreateReadonly(request);
     }
 
+    internal string CreateDirect(string targetId, string targetName, string host, int port,
+        string username, string password, string protocol, string siteName, string operatorIdentity)
+    {
+        lock (_creationGate)
+        {
+            if (_sessions.Count >= MaximumSessions)
+                throw new InvalidOperationException("The terminal session limit has been reached.");
+            if (string.IsNullOrWhiteSpace(targetId) || !targetId.StartsWith("fit-ap:", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(targetName) || string.IsNullOrWhiteSpace(host) ||
+                port is < 1 or > 65535 || string.IsNullOrEmpty(password) ||
+                !string.Equals(protocol, "TELNET", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("FIT-AP direct sessions require a Telnet target, address, port and password.");
+            if (!System.Net.IPAddress.TryParse(host, out _))
+                throw new ArgumentException("FIT-AP direct session address must be a valid IP address.", nameof(host));
+
+            var profile = new H3cDeviceProfileSnapshot(Guid.NewGuid().ToString("N"), host, port,
+                username ?? string.Empty, "FIT_AP_SESSION", string.Empty, true, 0, 0,
+                TerminalProtocol: "TELNET", DeviceType: "hp_comware_telnet", SiteId: siteName);
+            var id = Guid.NewGuid().ToString("N");
+            var recording = new TerminalRecordingWriter(_settings.DataRoot, id);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var snapshot = new TerminalSessionSnapshot(id, targetId, targetName, "TELNET", "RESTRICTED_READONLY",
+                host, port, null, null, "CONNECTING", now, null, now, null, null, null, null,
+                recording.RelativePath, 0, null, false, operatorIdentity, siteName);
+            try
+            {
+                _catalog.CreateTerminalSession(snapshot);
+                var runtime = new TerminalSessionRuntime(this, _catalog, _credentials, _settings.DataRoot,
+                    snapshot, profile, null, recording, directPassword: password);
+                if (!_sessions.TryAdd(id, runtime)) throw new InvalidOperationException("Terminal session id collision.");
+                runtime.Start();
+                return id;
+            }
+            catch
+            {
+                recording.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                throw;
+            }
+        }
+    }
+
     private string CreateReadonly(TerminalSessionRequest request)
     {
         if (request.Mode != "RESTRICTED_READONLY")
@@ -185,6 +226,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
     private readonly IH3cCredentialProvider _credentials;
     private readonly string _dataRoot;
     private readonly H3cDeviceProfileSnapshot? _profile;
+    private readonly string? _directPassword;
     private readonly TerminalSerialConfiguration? _serial;
     private readonly TerminalRecordingWriter _recording;
     private readonly bool _allowProtocolFallback;
@@ -210,7 +252,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
     internal TerminalSessionRuntime(TerminalSessionManager owner, Catalog catalog, IH3cCredentialProvider credentials,
         string dataRoot, TerminalSessionSnapshot snapshot, H3cDeviceProfileSnapshot? profile,
         TerminalSerialConfiguration? serial, TerminalRecordingWriter recording, bool allowProtocolFallback = false,
-        LinuxServerSnapshot? linuxServer = null, int idleTimeoutSeconds = 900)
+        LinuxServerSnapshot? linuxServer = null, int idleTimeoutSeconds = 900, string? directPassword = null)
     {
         _owner = owner;
         _catalog = catalog;
@@ -218,6 +260,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
         _dataRoot = dataRoot;
         Snapshot = snapshot;
         _profile = profile;
+        _directPassword = directPassword;
         _serial = serial;
         _recording = recording;
         _allowProtocolFallback = allowProtocolFallback;
@@ -385,7 +428,7 @@ internal sealed class TerminalSessionRuntime : IAsyncDisposable
                 ? new SimulatedSerialTerminalTransport(_serial.PortName)
                 : new SerialTerminalTransport(_serial);
         var profile = _profile ?? throw new InvalidOperationException("Terminal device profile is missing.");
-        var password = _credentials.GetPassword(profile);
+        var password = _directPassword ?? _credentials.GetPassword(profile);
         if (string.IsNullOrEmpty(password)) throw new H3cCredentialUnavailableException();
         return Snapshot.Protocol switch
         {

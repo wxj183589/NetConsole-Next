@@ -11,7 +11,7 @@ H3C_AC2=PASS_DIRECT_USERNAME_PASSWORD_READONLY
 H3C_SW=PASS_DIRECT_USERNAME_PASSWORD_READONLY
 H3C_FIT_AP=PASS_PRIMARY_AC_ACTION_AND_PASSWORD_ONLY_TELNET_READONLY
 H3C_FIT_AP_REMOTE_STATUS_FIELD=DISABLED_AFTER_RECHECK
-H3C_FACT_PERSISTENCE=NOT_VERIFIED
+H3C_FACT_PERSISTENCE=IMPLEMENTED_CODE_TARGETED_TEST_PASS_CURRENT_HTTP_NOT_VERIFIED
 AC1_ISOLATED_TEST_WRITE=1_EXEC_CONSOLE_ENABLE
 GUESSED_CREDENTIALS=0
 ```
@@ -68,6 +68,8 @@ wlan ap-execute name 4c48-cb6e-0400 exec-console enable
 
 以上报告不包含用户名、密码或密码内容；测试密码只在运行时以内存变量使用。
 
+当前产品实现已补齐 FIT-AP 专用 Raw/Facts 路径：远程连接前先采集 `display version`，将单命令结果写入隔离的 `raw/fit-ap/<resource-hash>` 段并登记 `fit_ap_facts`，无线页可通过事实查询 API 显示最近版本。该链路已有服务端定向测试和完整服务端回归覆盖；由于已有 Service 单实例互斥，当前运行中的产品 HTTP 真实设备闭环仍未重新录制。
+
 ## 边界
 
-以上是独立 worker 的真实设备证据，不等同于当前 NetConsole Service 已将输出写入 sealed Raw、H3C Facts 和无线投影，因此 `H3C_FACT_PERSISTENCE=NOT_VERIFIED`。本轮仅在隔离模拟 AC1 执行了用户明确授权的远程控制台配置动作，没有修改生产 AC、生产数据或真实开发数据，也没有执行保存、重启、切换或长稳测试。
+以上真实设备证据不等同于当前 NetConsole Service 已完成 HTTP 级实时设备录制；当前代码已实现并测试 sealed Raw/FIT-AP Facts，但真实产品端回归仍为 `NOT_VERIFIED_CURRENT_HTTP`。本轮仅在隔离模拟 AC1 执行了用户明确授权的远程控制台配置动作，没有修改生产 AC、生产数据或真实开发数据，也没有执行保存、重启、切换或长稳测试。

@@ -1378,6 +1378,77 @@ export function getWirelessApResources(params: { page?: number; pageSize?: numbe
 export function getWirelessApResource(id: string): Promise<WirelessApResource> {
   return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}`)
 }
+export interface FitApConnectionSettings {
+  scope: string
+  targetId?: string | null
+  protocol: string
+  port: number
+  authMode: string
+  username: string
+  passwordConfigured: boolean
+  source: string
+  updatedMs?: number | null
+  defaultPasswordConfigured: boolean
+}
+export interface FitApConnectionSettingsResponse {
+  effective: FitApConnectionSettings
+  overrides: FitApConnectionSettings[]
+}
+export interface FitApRemoteConsoleCandidate {
+  acDeviceId: string
+  acName: string
+  siteId: string
+  apName: string
+  managementIp?: string | null
+  rawState: string
+  normalizedState: string
+  capturedMs: number
+  observationId: string
+}
+export interface FitApRemoteConsolePreflight {
+  resourceId: string
+  apName: string
+  serialEvidence?: string | null
+  activeAcStatus: string
+  activeAc: FitApRemoteConsoleCandidate | null
+  candidates: FitApRemoteConsoleCandidate[]
+  remoteConsoleState: string
+  enableRequired: boolean
+  enableScope: string
+  failureReason?: string | null
+  connection: FitApConnectionSettings
+}
+export interface FitApFact {
+  id: string
+  resourceId: string
+  sourceAcDeviceId: string
+  siteId: string
+  apName: string
+  kind: string
+  status: string
+  capturedMs: number
+  rawRelativePath: string
+  rawSha256: string
+  payloadJson: string
+}
+export function getFitApRemoteConsole(id: string, acDeviceId?: string): Promise<FitApRemoteConsolePreflight> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console`, { acDeviceId }))
+}
+export function getFitApFacts(id: string): Promise<FitApFact[]> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console/facts`)
+}
+export function getFitApConnectionSettings(id: string, acDeviceId?: string): Promise<FitApConnectionSettingsResponse> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console/settings`, { acDeviceId }))
+}
+export function saveFitApConnectionSettings(id: string, payload: Record<string, unknown>, acDeviceId?: string): Promise<FitApConnectionSettingsResponse> {
+  return request(queryPath(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console/settings`, { acDeviceId }), { method: 'PUT', body: JSON.stringify(payload) })
+}
+export function enableFitApRemoteConsole(id: string, confirmAllAp: boolean, activeAcDeviceId?: string): Promise<Record<string, unknown>> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console/enable`, { method: 'POST', body: JSON.stringify({ confirmAllAp, activeAcDeviceId }) })
+}
+export function createFitApRemoteSession(id: string, activeAcDeviceId?: string): Promise<{ sessionId: string; resourceId: string; apName: string; activeAcName: string; latestFact?: FitApFact | null }> {
+  return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/remote-console/session`, { method: 'POST', body: JSON.stringify({ activeAcDeviceId }) })
+}
 export function getWirelessIdentityReview(id: string): Promise<WirelessIdentityReview> {
   return request(`/api/system/wireless/ap-resources/${encodeURIComponent(id)}/identity-review`)
 }

@@ -312,6 +312,18 @@ async function refreshAll(): Promise<void> { loading.value = true; try { [device
 function handleWindowResize(): void { void fitVisibleTerminals() }
 let initialized = false
 let lastRequestedPath = ''
+async function openExistingSession(sessionId: string): Promise<void> {
+  const session = await getTerminalSession(sessionId)
+  if (session.mode !== 'RESTRICTED_READONLY' || !['SSH', 'TELNET'].includes(session.protocol)) {
+    ElMessage.error('该会话不是可在此页面打开的网络终端会话')
+    return
+  }
+  const existing = tabs.find(tab => tab.sessionId === session.id)
+  if (existing) { activeId.value = existing.id; return }
+  const tab: TerminalTab = reactive({ id: crypto.randomUUID(), label: `${session.targetName} · ${session.protocol}`, targetId: session.targetId, protocol: session.protocol, mode: 'RESTRICTED_READONLY', sessionId: session.id, inputBuffer: '', connected: false, socketGeneration: 0 })
+  tabs.push(tab); activeId.value = tab.id; await nextTick(); mountTerminal(tab)
+  try { await connectSocket(tab) } catch (cause) { tab.terminal?.writeln(`\r\n\x1b[31m${cause instanceof Error ? cause.message : '连接失败'}\x1b[0m`); ElMessage.error('终端会话打开失败') }
+}
 async function openRequestedTarget(): Promise<void> {
   if (route.path !== '/terminal' || lastRequestedPath === route.fullPath) return
   lastRequestedPath = route.fullPath
@@ -321,6 +333,11 @@ async function openRequestedTarget(): Promise<void> {
     const server = linuxServers.value.find(item => item.id === linuxId)
     if (server) await openLinuxServer(server)
     else ElMessage.error('Linux 服务器不存在或当前账户无权访问')
+    return
+  }
+  const sessionId = String(route.query.sessionId || '')
+  if (sessionId) {
+    try { await openExistingSession(sessionId) } catch (cause) { ElMessage.error(cause instanceof Error ? cause.message : '终端会话不存在或已结束') }
     return
   }
   const device = devices.value.find(item => item.id === String(route.query.deviceId || ''))

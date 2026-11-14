@@ -67,6 +67,7 @@ else if (args.Length > 0 && args[0] == "--wireless-tests")
 {
     WirelessTests.Run();
     WirelessRuntimeTests.Run();
+    FitApRemoteConsoleTests.Run();
 }
 else if (args.Length > 0 && args[0] == "--wireless-identity-contract-tests")
     WirelessIdentityContractTests.Run();
@@ -210,6 +211,7 @@ internal static class SchedulerTests
         P2B5SiteScopeTests.Run();
         WirelessTests.Run();
         WirelessRuntimeTests.Run();
+        FitApRemoteConsoleTests.Run();
         await TaskSiteScopeTests.RunAsync();
         await DeviceConnectionTests.RunAsync();
         await InteractiveScopeTests.RunAsync();

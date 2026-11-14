@@ -38,8 +38,8 @@ FIT_AP_AC_CONSOLE_ACTION=EXECUTED_ISOLATED_AC1
 FIT_AP_REMOTE_STATUS_FIELD=DISABLED_AFTER_RECHECK
 FIT_AP_AUTH=PASS_PASSWORD_ONLY_EMPTY_USERNAME
 FIT_AP_READONLY_COMMAND=PASS_DISPLAY_VERSION
-FIT_AP_RAW_FACTS=NOT_VERIFIED
-FIT_AP_AUTO_AC_CONSOLE_UI_FLOW=NOT_VERIFIED
+FIT_AP_RAW_FACTS=IMPLEMENTED_TARGETED_TEST_CURRENT_HTTP_NOT_VERIFIED
+FIT_AP_AUTO_AC_CONSOLE_UI_FLOW=IMPLEMENTED_CODE_CURRENT_HTTP_NOT_VERIFIED
 WINDOWS_SCM_PRIVILEGE=BLOCKED_ADMIN_PRIVILEGE
 WINDOWS_SCM_REGISTER=NOT_RUN_ADMIN_REQUIRED
 WINDOWS_SCM_START=NOT_RUN_ADMIN_REQUIRED
@@ -63,8 +63,8 @@ COMMITS=541f471,d76f883
 PUSH=NO
 MAIN_MERGE=NO
 RELEASE=NO
-BLOCKERS=ADMIN_REQUIRED;CURRENT_CODE_HTTP_E2E_MUTEX;FIT_AP_AUTO_AC_CONSOLE_UI_FLOW_NOT_VERIFIED
-NOT_VERIFIED=SCM_LIFECYCLE;UPGRADE_PRESERVATION;SW_RAW_FACTS;FIT_AP_RAW_FACTS;CURRENT_CODE_SYSLOG_HTTP_E2E;FIT_AP_AUTO_AC_CONSOLE_UI_FLOW
+BLOCKERS=ADMIN_REQUIRED;CURRENT_CODE_HTTP_E2E_MUTEX;FIT_AP_CURRENT_HTTP_RAW_FACTS_AND_BROWSER_NOT_VERIFIED
+NOT_VERIFIED=SCM_LIFECYCLE;UPGRADE_PRESERVATION;SW_RAW_FACTS;FIT_AP_CURRENT_HTTP_RAW_FACTS;CURRENT_CODE_SYSLOG_HTTP_E2E;FIT_AP_BROWSER_E2E
 FINAL_STATUS=PARTIAL
 ```
 
@@ -88,12 +88,12 @@ ROOT_D_STUDY_FILES_CREATED=0
 
 产品层面，设备连接页已改为 IP、协议、端口、用户名、密码的直接输入，Telnet Password-only 允许空用户名；保存后自动测试，编辑设备也使用同一组连接字段。内部安全存储仍由服务端透明处理，用户不需要选择 Credential Vault、Credential Reference 或认证 Authority。FIT-AP 继续由无线业务 AC 视图管理，不在设备库存中单独新增。
 
-R3.2 不能标记为全量 PASS：A 受管理员权限阻断，当前代码 HTTP Syslog 链路受已有隔离 Service 的单实例互斥阻断，产品端“检查主用 AC → 一键开启远程控制台”的完整 UI/API 闭环以及 sealed Raw/Facts 持久化仍未验证。自动化测试、构建通过不替代这些真实环境验收。
+R3.2 不能标记为全量 PASS：A 受管理员权限阻断，当前代码 HTTP 真实设备链路受已有隔离 Service 的单实例互斥阻断。产品端“检查主用 AC → 一键开启远程控制台 → Telnet 会话 → sealed Raw/Facts”的代码、API 和定向测试已完成，但当前运行实例上的真实 HTTP 录制和浏览器录制仍未验证。自动化测试、构建通过不替代这些真实环境验收。
 
 R3.2-D 的 8–24 小时稳定性按用户要求明确排除，不作为本轮失败项，也不作为已完成项。
 
 ## 后续门禁
 
 1. 在管理员维护窗口确认现有 `NetConsole.Next.Service` 实例归属，再执行 canonical Windows SCM lifecycle 和升级数据保留脚本。
-2. 补齐产品端 FIT-AP 的主用 AC 检查、远程控制台状态显示和一次性确认动作；动作必须限定当前 AP/主用 AC，不得静默执行 `all`，并将成功/未确认状态区分记录。
-3. 关闭单实例阻断后，重新执行当前代码的真实 HTTP E2E、sealed Raw/Facts、Syslog/FaultCenter/UI 证据链；禁止使用独立 worker 结果冒充产品持久化 PASS。
+2. 关闭单实例阻断后，重新执行当前代码的真实 HTTP FIT-AP E2E 和浏览器录制；动作必须限定当前主用 AC，`all` 范围必须有明确确认，并将成功/未确认状态区分记录。
+3. 同一维护窗口内重新执行 sealed Raw/Facts、Syslog/FaultCenter/UI 证据链；禁止使用独立 worker 结果冒充产品持久化 PASS。
