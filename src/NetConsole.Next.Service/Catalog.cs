@@ -110,6 +110,7 @@ internal sealed partial class Catalog(RuntimeSettings settings)
     public bool Available { get; private set; }
     public bool RawWriteAvailable { get; private set; }
     public string? StorageFailure { get; private set; }
+    internal Func<string, bool>? H3cCredentialConfiguredResolver { get; set; }
     public bool RecoveryWasInterrupted { get; private set; }
     public int InterruptedTaskRuns { get; private set; }
     private string RecoveryMarkerPath => Path.Combine(settings.DataRoot, ".raw-recovery-in-progress");

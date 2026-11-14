@@ -511,7 +511,7 @@ internal sealed partial class Catalog
         if (!string.IsNullOrWhiteSpace(deviceType)) command.Parameters.AddWithValue("$deviceType", deviceType.Trim());
     }
 
-    private static DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader, P2B5SiteScopeDecision? scope)
+    private DeviceInventoryItem ReadManagedInventoryItem(SqliteDataReader reader, P2B5SiteScopeDecision? scope)
     {
         var id = reader.GetString(0); var name = reader.GetString(1); var ip = reader.GetString(2);
         var type = reader.GetString(5); var enabled = reader.GetInt32(10) != 0;
@@ -523,6 +523,8 @@ internal sealed partial class Catalog
         var port = reader.IsDBNull(15) ? 0 : reader.GetInt32(15);
         var username = reader.IsDBNull(16) ? "—" : reader.GetString(16);
         var credentialConfigured = reader.GetInt32(26) != 0;
+        if (profileId is not null && H3cCredentialConfiguredResolver is not null)
+            credentialConfigured = H3cCredentialConfiguredResolver(profileId);
         var policy = reader.IsDBNull(18) ? "—" : reader.GetString(18);
         var encoding = reader.IsDBNull(19) ? "—" : reader.GetString(19);
         var protocol = reader.IsDBNull(20) ? "—" : reader.GetString(20);

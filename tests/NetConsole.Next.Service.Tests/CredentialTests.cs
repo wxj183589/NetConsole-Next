@@ -154,6 +154,57 @@ internal static class CredentialTests
                 "deleting one Site Jump Host must leave other Sites unchanged");
             Console.WriteLine("CREDENTIAL_TESTS=5/5 PASS");
             Console.WriteLine("JUMP_HOST_TESTS=PASS (Site isolation, safe views, retention, explicit clear, authenticated rotation, fingerprint deletion, endpoint changes, Telnet bypass)");
+            RunDpapiAuthorityTests();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static void RunDpapiAuthorityTests()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.WriteLine("DPAPI_AUTHORITY_TESTS=NOT_RUN (Windows only)");
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "next-dpapi-authority-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var settings = new RuntimeSettings
+            {
+                DataRoot = root, WebPort = 18771, SyslogPort = 0,
+                SyslogBind = IPAddress.Loopback, SyslogReceiveBufferBytes = 4 * 1024 * 1024
+            };
+            var catalog = new Catalog(settings);
+            catalog.Initialize();
+            var profileId = Guid.NewGuid().ToString("N");
+            var profile = new H3cDeviceProfileSnapshot(profileId, "192.0.2.40", 22, "reader",
+                "DEVICE_" + profileId.ToUpperInvariant(), string.Empty, true, 0, 0, Password: "legacy-secret");
+            catalog.CreateH3cDeviceProfile(profile);
+            var authority = new WindowsDpapiH3cCredentialAuthority(root);
+            var service = new H3cProfileCredentialService(catalog, authority);
+
+            var legacyBlocked = false;
+            try { service.CreateOrUpdate(profile with { Password = null }); }
+            catch (H3cCredentialMigrationRequiredException) { legacyBlocked = true; }
+            Assert(legacyBlocked, "legacy Catalog credentials must require explicit migration");
+
+            service.CreateOrUpdate(profile with { Password = "migrated-secret" });
+            var saved = catalog.GetH3cDeviceProfile(profileId)!;
+            Assert(authority.GetPassword(saved) == "migrated-secret", "DPAPI must be the runtime credential source");
+            Assert(catalog.GetH3cCredentialPassword(profileId) is null, "Catalog must not retain the migrated secret");
+            Assert(new DeviceRecordH3cCredentialProvider(catalog, authority).GetPassword(saved) == "migrated-secret",
+                "production provider must resolve the device-bound DPAPI secret");
+
+            service.UpdateCredential(profileId, null, clearPassword: true);
+            Assert(!authority.HasPassword(saved) && authority.GetPassword(saved) is null,
+                "explicit clear must revoke the DPAPI secret");
+            Console.WriteLine("DPAPI_AUTHORITY_TESTS=PASS (explicit migration gate, device-bound key, Catalog redaction, provider resolution, revoke)");
         }
         finally
         {

@@ -37,11 +37,12 @@ internal interface ISimulatorConfigurationSessionFactory
 // Reuses the same Netmiko worker, worker budget and catalog host-key policy as
 // the collector. Configuration reads deliberately bypass the sanitized Raw
 // sink: the private original and the public redacted copy are separate files.
-internal sealed class NetmikoConfigurationSessionFactory(Catalog catalog) : ISimulatorConfigurationSessionFactory
+internal sealed class NetmikoConfigurationSessionFactory(Catalog catalog, IH3cCredentialProvider? credentials = null) : ISimulatorConfigurationSessionFactory
 {
     public async Task<ISimulatorConfigurationSession> OpenAsync(H3cDeviceProfileSnapshot profile, CancellationToken cancellationToken)
     {
-        var password = catalog.GetH3cCredentialPassword(profile.Id) ?? throw new H3cCredentialUnavailableException();
+        var password = (credentials ?? new DeviceRecordH3cCredentialProvider(catalog)).GetPassword(profile)
+            ?? throw new H3cCredentialUnavailableException();
         var transport = new NetmikoWorkerH3cSshTransport(profile, password, catalog: catalog);
         string? correlation = null;
         try
@@ -91,11 +92,11 @@ internal sealed partial class SimulatorConfigurationService
     private static readonly Regex DescriptionPattern = new(@"\A[A-Za-z0-9][A-Za-z0-9 _.,:/()\-]{0,79}\z", RegexOptions.CultureInvariant);
 
     public SimulatorConfigurationService(Catalog catalog, RuntimeSettings settings,
-        ISimulatorConfigurationSessionFactory? sessions = null)
+        ISimulatorConfigurationSessionFactory? sessions = null, IH3cCredentialProvider? credentials = null)
     {
         _catalog = catalog;
         _scopes = new(catalog, new P2B5SiteScopeStore(settings));
-        _sessions = sessions ?? new NetmikoConfigurationSessionFactory(catalog);
+        _sessions = sessions ?? new NetmikoConfigurationSessionFactory(catalog, credentials);
         _root = Path.Combine(settings.DataRoot, "backup", "config-complete");
         _settings = settings;
     }

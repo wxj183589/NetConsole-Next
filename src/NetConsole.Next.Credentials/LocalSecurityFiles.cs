@@ -104,6 +104,13 @@ public static class WindowsDpapiCredentialVault
         finally { if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext); }
     }
 
+    public static bool Contains(string dataRoot, string reference)
+    {
+        EnsurePlatform();
+        ValidateReference(reference);
+        return ReadEntries(dataRoot).ContainsKey(reference);
+    }
+
     public static void Set(string dataRoot, string reference, string secret)
     {
         EnsurePlatform();

@@ -40,7 +40,15 @@ builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = Tim
 var webBind = settings.WebBindAddress.IndexOf(':') >= 0 ? $"[{settings.WebBindAddress}]" : settings.WebBindAddress;
 builder.WebHost.UseUrls($"http://{webBind}:{settings.WebPort}");
 builder.Services.AddSingleton(settings);
-builder.Services.AddSingleton<Catalog>();
+builder.Services.AddSingleton<IH3cCredentialAuthority>(_ => new WindowsDpapiH3cCredentialAuthority(settings.DataRoot));
+builder.Services.AddSingleton<Catalog>(sp =>
+{
+    var catalog = new Catalog(settings);
+    var authority = sp.GetRequiredService<IH3cCredentialAuthority>();
+    catalog.H3cCredentialConfiguredResolver = authority.HasPassword;
+    return catalog;
+});
+builder.Services.AddSingleton<H3cProfileCredentialService>();
 builder.Services.AddSingleton<P2B3ReadRepository>();
 builder.Services.AddSingleton<P2B4WriteRepository>();
 builder.Services.AddSingleton<P2B5SiteScopeStore>();
@@ -59,7 +67,8 @@ builder.Services.AddSingleton<IRawSegmentWriterFactory, RawSegmentWriterFactory>
 builder.Services.AddSingleton<IH3cCredentialProvider>(sp =>
     builder.Environment.IsDevelopment() && settings.H3cDevelopmentEnvironmentCredentialsEnabled
         ? new EnvironmentH3cCredentialProvider(enabled: true)
-        : new DeviceRecordH3cCredentialProvider(sp.GetRequiredService<Catalog>()));
+        : new DeviceRecordH3cCredentialProvider(sp.GetRequiredService<Catalog>(),
+            sp.GetRequiredService<IH3cCredentialAuthority>()));
 builder.Services.AddSingleton<H3cConnectionTestService>();
 builder.Services.AddSingleton<NetmikoJumpHostProbe>();
 builder.Services.AddSingleton<TerminalSessionManager>();
@@ -1431,7 +1440,8 @@ if (settings.H3cEnabled)
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         { return Results.StatusCode(StatusCodes.Status499ClientClosedRequest); }
     });
-    app.MapPost("/api/system/h3c/profiles/onboard", (HttpContext context, H3cOnboardRequest request, Catalog rawCatalog) =>
+    app.MapPost("/api/system/h3c/profiles/onboard", (HttpContext context, H3cOnboardRequest request, Catalog rawCatalog,
+        H3cProfileCredentialService credentials) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Host);
         var siteId = string.IsNullOrWhiteSpace(request.SiteId) ? "local" : request.SiteId.Trim();
@@ -1455,7 +1465,7 @@ if (settings.H3cEnabled)
         {
             var inventory = request.Inventory ?? new DeviceInventoryWriteRequest(null, request.Host.Trim(), request.Host.Trim(),
                 "H3C", "", "NETWORK_DEVICE", siteId, null, "", true, null);
-            rawCatalog.CreateH3cDeviceProfile(new(id, request.Host.Trim(), port, request.Username.Trim(),
+            credentials.CreateOrUpdate(new(id, request.Host.Trim(), port, request.Username.Trim(),
                 string.Empty, string.Empty, true, 0, 0,
                 H3cHostKeyPolicy.Automatic, false, "AUTO", protocol, request.AllowTelnetFallback,
                 request.Password, SiteId: siteId), inventory, CurrentIdentity(context).Username);
@@ -1465,16 +1475,29 @@ if (settings.H3cEnabled)
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+        catch (H3cCredentialMigrationRequiredException ex)
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREATE_FAILED", "FAILED", id,
+                null, Array.Empty<string>(), "CREDENTIAL_MIGRATION_REQUIRED");
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception ex) when (IsH3cCredentialStorageFailure(ex))
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREATE_FAILED", "FAILED", id,
+                null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+            return Results.Problem(H3cCredentialStorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         { return Results.Conflict(new { error = $"Profile could not be saved ({ex.GetType().Name})." }); }
     });
-    app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog) =>
+    app.MapPost("/api/system/h3c/profiles", (HttpContext context, H3cProfileRequest request, Catalog rawCatalog,
+        H3cProfileCredentialService credentials) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_WRITE_PERMISSION_DENIED", request.Id);
         try
         {
-            rawCatalog.CreateH3cDeviceProfile(new(request.Id, request.Host, request.Port, request.Username,
+            credentials.CreateOrUpdate(new(request.Id, request.Host, request.Port, request.Username,
                 request.CredentialReference, request.HostKeySha256, request.Enabled, 0, 0,
                 request.HostKeyUpdatePolicy, request.AllowLegacyAlgorithms, request.TerminalEncoding,
                 request.TerminalProtocol, request.AllowTelnetFallback, request.Password, request.ClearPassword));
@@ -1483,6 +1506,18 @@ if (settings.H3cEnabled)
                 : Results.NotFound();
         }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (H3cCredentialMigrationRequiredException ex)
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREATE_FAILED", "FAILED", request.Id,
+                null, Array.Empty<string>(), "CREDENTIAL_MIGRATION_REQUIRED");
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception ex) when (IsH3cCredentialStorageFailure(ex))
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREATE_FAILED", "FAILED", request.Id,
+                null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+            return Results.Problem(H3cCredentialStorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         {
@@ -1505,20 +1540,33 @@ if (settings.H3cEnabled)
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     });
     app.MapPut("/api/system/h3c/profiles/{id}/credential", (HttpContext context, string id,
-        H3cCredentialRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes) =>
+        H3cCredentialRequest request, Catalog rawCatalog, P2B5SiteScopeStore scopes,
+        H3cProfileCredentialService credentials) =>
     {
         if (!IsSuperAdmin(context)) return DevicePermissionDenied(context, rawCatalog, "H3C_PROFILE_CREDENTIAL_PERMISSION_DENIED", id);
         var scope = scopes.Resolve(CurrentIdentity(context));
         if (!scope.IsAuthorized || !rawCatalog.H3cProfileIsInScope(id, scope)) return Results.NotFound();
         try
         {
-            rawCatalog.UpdateH3cCredential(id, request.Password, request.ClearPassword);
+            credentials.UpdateCredential(id, request.Password, request.ClearPassword);
             return rawCatalog.GetH3cDeviceProfile(id) is { } profile
                 ? Results.Ok(profile.ToView())
                 : Results.NotFound();
         }
         catch (KeyNotFoundException) { return Results.NotFound(); }
         catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+        catch (H3cCredentialMigrationRequiredException ex)
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREDENTIAL_FAILED", "FAILED", id,
+                null, Array.Empty<string>(), "CREDENTIAL_MIGRATION_REQUIRED");
+            return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception ex) when (IsH3cCredentialStorageFailure(ex))
+        {
+            rawCatalog.TryRecordDeviceAuditEvent(CurrentIdentity(context).Username, "H3C_PROFILE_CREDENTIAL_FAILED", "FAILED", id,
+                null, Array.Empty<string>(), "CREDENTIAL_STORAGE_UNAVAILABLE");
+            return Results.Problem(H3cCredentialStorageFailureMessage(ex), statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     });
     app.MapGet("/api/system/h3c/profiles/{id}/host-key-history", (HttpContext context, string id, Catalog rawCatalog, int? limit) =>
         !IsSuperAdmin(context)
@@ -2463,6 +2511,13 @@ static WebUserIdentity CurrentIdentity(HttpContext context) =>
 static P2B5SiteScopeDecision CurrentSiteScope(HttpContext context) =>
     context.Items[P2B5SiteScopeHttpContextKeys.Decision] as P2B5SiteScopeDecision ?? P2B5SiteScopeDecision.Global;
 static bool IsSuperAdmin(HttpContext context) => string.Equals(CurrentIdentity(context).Role, "SUPERADMIN", StringComparison.OrdinalIgnoreCase);
+static bool IsH3cCredentialStorageFailure(Exception exception) => exception is
+    PlatformNotSupportedException or IOException or InvalidDataException or UnauthorizedAccessException or CryptographicException;
+static string H3cCredentialStorageFailureMessage(Exception exception) => exception switch
+{
+    PlatformNotSupportedException => "设备凭据存储需要 Windows DPAPI。",
+    _ => $"设备凭据存储不可用（{exception.GetType().Name}）。"
+};
 static IResult DevicePermissionDenied(HttpContext context, Catalog catalog, string action, string subjectId = "devices")
 {
     try

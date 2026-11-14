@@ -121,9 +121,17 @@ internal sealed class UnavailableH3cCredentialProvider : IH3cCredentialProvider
 // key for compatibility with the existing terminal and ZTE abstractions.
 internal sealed class DeviceRecordH3cCredentialProvider(Catalog catalog) : IH3cCredentialProvider
 {
+    private readonly IH3cCredentialAuthority? _authority = null;
+
+    public DeviceRecordH3cCredentialProvider(Catalog catalog, IH3cCredentialAuthority authority)
+        : this(catalog) => _authority = authority;
+
     public string? GetPassword(string reference) => null;
-    public string? GetPassword(H3cDeviceProfileSnapshot profile) => catalog.GetH3cCredentialPassword(profile.Id);
-    public string? GetPassword(string profileId, string reference) => catalog.GetH3cCredentialPassword(profileId);
+    public string? GetPassword(H3cDeviceProfileSnapshot profile) =>
+        _authority?.GetPassword(profile) ?? catalog.GetH3cCredentialPassword(profile.Id);
+    public string? GetPassword(string profileId, string reference) =>
+        _authority?.GetPassword(profileId)
+        ?? catalog.GetH3cCredentialPassword(profileId);
 }
 
 internal interface IH3cSshTransportFactory
