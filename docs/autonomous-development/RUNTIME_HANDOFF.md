@@ -8,7 +8,7 @@
 PROJECT=NetConsole-Next
 PHASE=R3.2-Windows-Runtime-H3C-Interop-Wireless-Fault-E2E
 BRANCH=codex-A/netconsole-next-r3-dual-ac
-PRODUCT_COMMIT=541f471
+PRODUCT_COMMIT=58febd2
 R3_PUSH=NO
 REMOTE_MAIN_MERGE=NO
 RELEASE=NO
