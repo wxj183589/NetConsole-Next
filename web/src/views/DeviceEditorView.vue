@@ -248,7 +248,7 @@ watch(() => form.siteId, (value, previous) => {
   if (value && value !== previous) { if (!isEdit.value) form.groupId = ''; void refreshGroups() }
 })
 watch([() => form.managementAddress, () => form.port], () => {
-  if (!isEdit.value) clearHostKeyConfirmation()
+  clearHostKeyConfirmation()
 })
 watch([isEdit, editingId], ([edit, id], [previousEdit, previousId]) => {
   if (edit && id && (edit !== previousEdit || id !== previousId)) void loadDetail()

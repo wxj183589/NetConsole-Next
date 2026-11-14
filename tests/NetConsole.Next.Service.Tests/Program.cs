@@ -1400,6 +1400,15 @@ internal static class SchedulerTests
 
     private static void VerifiesDeviceCredentialProvisioningAndReplacement()
     {
+        H3cDeviceCredentialService.EnsureWindowsDpapiAvailable(true);
+        AssertThrows<PlatformNotSupportedException>(() => H3cDeviceCredentialService.EnsureWindowsDpapiAvailable(false));
+        Assert(H3cDeviceCredentialService.StorageFailureMessage(new PlatformNotSupportedException("C:\\secret-path")) ==
+               "Device credential storage requires Windows DPAPI.",
+            "non-Windows credential errors must be converted to a stable message without exposing exception text");
+        Assert(H3cDeviceCredentialService.StorageFailureMessage(new IOException("C:\\secret-path")) ==
+               "Credential storage is unavailable (IOException).",
+            "credential filesystem errors must expose only the exception type, never paths or secrets");
+
         if (!OperatingSystem.IsWindows())
         {
             Console.WriteLine("SKIP: device credential DPAPI workflow requires Windows");
